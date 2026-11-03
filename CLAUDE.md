@@ -6,6 +6,10 @@ Hard fork de Prime Agent (MIT), transformé en harness d'agent de code cache-fir
 - Conventions de code héritées d'upstream : `AGENTS.md`.
 - Travail découpé en tickets dans `docs/tickets/`. Ne traiter que le ticket demandé.
 
+## Références
+
+- AGENTS.md:183 est obsolète : le modèle ne voit qu’un tool, python_repl ; bash() et edit() sont des fonctions du kernel.
+
 ## Règles
 
 1. **Périmètre** : ne modifier que ce que le ticket demande. Si un blocage impose de sortir du périmètre, s'arrêter et le signaler au lieu de modifier.
