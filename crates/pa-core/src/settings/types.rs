@@ -312,6 +312,9 @@ pub struct Settings {
     pub shell_path: Option<String>,
     pub quiet_startup: Option<bool>,
     pub shell_command_prefix: Option<String>,
+    /// yusAgent (YA-02): `kernel.envAllowlist`, the extra ambient vars the
+    /// kernel and `bash()` see (`crate::kernel::env_allowlist`).
+    pub kernel: Option<crate::kernel::env_allowlist::KernelSettings>,
     pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,

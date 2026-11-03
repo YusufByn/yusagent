@@ -6,6 +6,7 @@
 
 pub mod bootstrap;
 pub mod cancellation;
+pub mod env_allowlist;
 pub mod live_kernels;
 pub mod manager;
 pub mod orphan_journal;
