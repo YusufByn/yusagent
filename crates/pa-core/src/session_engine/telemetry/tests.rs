@@ -1390,6 +1390,13 @@ fn a_disable_on_a_fresh_install_never_mints_the_install_id() {
         !crate::settings::SettingsManager::create(dir.path(), &agent_dir).get_telemetry_enabled(),
         "the opt-out lands"
     );
+    // yusAgent (YA-01): off is also the default, so check the saved value.
+    assert_eq!(
+        crate::settings::SettingsManager::create(dir.path(), &agent_dir)
+            .telemetry_enabled_setting(),
+        Some(false),
+        "the opt-out is persisted"
+    );
     assert!(
         !agent_dir.join("telemetry.json").exists(),
         "the opt-out never creates the install-id state"

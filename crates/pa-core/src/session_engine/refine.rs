@@ -855,6 +855,16 @@ mod tests {
                 cooldown_ms: 5,
             }
         );
+        // yusAgent (YA-01): with off defaults, only explicit `true` values
+        // prove the switches are read.
+        let on = crate::settings::AutoRefineSettings {
+            enabled: Some(true),
+            compact: Some(true),
+            ..Default::default()
+        };
+        let gates = AutoRefineGates::from_settings(Some(&on));
+        assert!(gates.enabled);
+        assert!(gates.compact);
     }
 
     #[test]

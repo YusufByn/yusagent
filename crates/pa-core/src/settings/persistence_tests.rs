@@ -147,6 +147,9 @@ fn harness_refinements_persist_without_clobbering_other_settings() {
     );
     manager.set_harness_refinements(true).unwrap();
     assert!(manager.reopen().get_harness_refinements());
+    // With an off default, a saved false only reads back distinctly after a true.
+    manager.set_harness_refinements(false).unwrap();
+    assert!(!manager.reopen().get_harness_refinements());
 }
 
 #[test]
@@ -181,6 +184,13 @@ fn harness_refinements_ignore_project_overrides_and_resolve_global_wrong_types()
     )
     .unwrap();
     // yusAgent (YA-01): a wrong type resolves to the fork default (off).
+    assert!(!manager.reopen().get_harness_refinements());
+    // With an off default, only a string "true" proves the wrong type is ignored.
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"harnessRefinements":"true"}"#,
+    )
+    .unwrap();
     assert!(!manager.reopen().get_harness_refinements());
 }
 
