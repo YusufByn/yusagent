@@ -91,7 +91,9 @@ class Provider(http.server.ThreadingHTTPServer):
 
 def child_task(body):
     users = [message for message in body.get('messages', []) if message.get('role') == 'user']
-    text = '\n'.join(texts(users[-1].get('content'))).strip() if users else ''
+    # yusAgent (T03, YA-04): the child's kickoff carries an `<environment>` text part.
+    text = '\n'.join(part for part in texts(users[-1].get('content'))
+                     if not part.startswith('<environment>')).strip() if users else ''
     tasks = {f'[task from parent]\n\n{task}': task for task in ALL_TASKS}
     return tasks.get(text)
 
