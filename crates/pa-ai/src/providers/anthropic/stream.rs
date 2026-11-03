@@ -294,8 +294,10 @@ async fn run_stream(
                             if let Some(id) = message.get("id").and_then(|value| value.as_str()) {
                                 output.response_id = Some(id.to_string());
                             }
+                            // yusAgent (T04, YA-13): the counts sit under `message.usage`.
+                            let usage = message.get("usage").unwrap_or(&Value::Null);
                             let get = |field: &str| {
-                                message
+                                usage
                                     .get(field)
                                     .and_then(|value| value.as_u64())
                                     .unwrap_or(0)
@@ -304,10 +306,11 @@ async fn run_stream(
                             output.usage.output = get("output_tokens");
                             output.usage.cache_read = get("cache_read_input_tokens");
                             output.usage.cache_write = get("cache_creation_input_tokens");
+                            read_usage_details(usage, &mut output.usage);
                             output.usage.total_tokens =
                                 crate::types::usage_total_tokens(&output.usage);
                             if cache_control.is_some() && uses_anthropic_cache_pricing {
-                                let creation = message
+                                let creation = usage
                                     .get("cache_creation")
                                     .and_then(|value| value.as_object())
                                     .map(|map| AnthropicCacheCreationUsage {
@@ -602,6 +605,7 @@ async fn run_stream(
                             if let Some(cache_write) = get("cache_creation_input_tokens") {
                                 output.usage.cache_write = cache_write;
                             }
+                            read_usage_details(usage, &mut output.usage);
                             if cache_control.is_some() && uses_anthropic_cache_pricing {
                                 if let Some(creation) = usage
                                     .get("cache_creation")
@@ -697,6 +701,28 @@ async fn run_stream(
     }
 
     Ok(())
+}
+
+/// yusAgent (T04, YA-13): the usage fields upstream does not read, from a `message_start`
+/// `message.usage` or a `message_delta` `usage`: the thinking tokens
+/// (`output_tokens_details.thinking_tokens`, final `message_delta` only) and the 1 h share of
+/// the cache write (`cache_creation.ephemeral_1h_input_tokens`). The counts are cumulative, so
+/// an absent field keeps the value already read.
+fn read_usage_details(usage: &Value, out: &mut crate::types::Usage) {
+    if let Some(thinking) = usage
+        .get("output_tokens_details")
+        .and_then(|details| details.get("thinking_tokens"))
+        .and_then(Value::as_u64)
+    {
+        out.reasoning = Some(thinking);
+    }
+    if let Some(one_hour) = usage
+        .get("cache_creation")
+        .and_then(|creation| creation.get("ephemeral_1h_input_tokens"))
+        .and_then(Value::as_u64)
+    {
+        out.cache_write_1h = Some(one_hour);
+    }
 }
 
 fn recalculate_cost(model: &Model, output: &mut AssistantMessage, cache_write_cost: Option<f64>) {

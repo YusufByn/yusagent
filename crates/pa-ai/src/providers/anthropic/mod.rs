@@ -26,6 +26,9 @@ pub use stream::stream_anthropic;
 
 #[cfg(test)]
 mod stream_tests;
+// yusAgent (T04, YA-13): usage read from `message_start` and `message_delta`.
+#[cfg(test)]
+mod usage_tests;
 
 pub const API_ANTHROPIC_MESSAGES: &str = "anthropic-messages";
 
