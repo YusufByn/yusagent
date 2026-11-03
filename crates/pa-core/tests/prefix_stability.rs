@@ -36,6 +36,10 @@ const PROMPTS: [&str; 3] = [
     "PREFIX-PROMPT-3: run one more cell.",
 ];
 
+/// The third cell: reads `x` from the second cell, then the conversation log path and a
+/// bundled skill through the kernel env.
+const THIRD_CELL: &str = "import os\nprint(x + 1)\nprint(os.environ['PRIME_AGENT_CONVERSATION_LOG'].endswith('.jsonl'), os.path.isfile(os.path.expandvars('$PRIME_AGENT_BUNDLED_SKILLS_DIR/edit/SKILL.md')))";
+
 /// Requests the scenario sends: two tool calls then text, text, one tool call then text.
 const EXPECTED_REQUESTS: usize = 6;
 
@@ -254,7 +258,8 @@ fn plan(api: Api, body: &[u8]) -> Reply {
     match (stage, tool_results) {
         (1, 0) => Reply::Tool("print(1)"),
         (1, 1) => Reply::Tool("x = 2\nprint(x)"),
-        (3, 2) => Reply::Tool("print(x + 1)"),
+        // yusAgent (T03, YA-04): the kernel carries what the prompt no longer does.
+        (3, 2) => Reply::Tool(THIRD_CELL),
         (1, _) => Reply::Text("Two cells ran."),
         (3, _) => Reply::Text("One more cell ran."),
         _ => Reply::Text("Answer without a tool."),
@@ -695,11 +700,12 @@ async fn prefix_scenario(api: Api) {
         api.name()
     );
     assert_prefix_stable(api, &bodies);
-    // The cells really ran in one kernel: `x` set by the second cell is read by the third.
+    // The cells really ran in one kernel: `x` set by the second cell is read by the third, which
+    // also finds the log path and a bundled skill through the kernel env.
     let last = request_object(api, bodies.len(), bodies.last().expect("a request"));
     assert_eq!(
         tool_outputs(api, &last),
-        ["1", "2", "3"],
+        ["1", "2", "3\nTrue True"],
         "{}: kernel outputs",
         api.name()
     );

@@ -199,6 +199,7 @@ Même règle que YA-01 : aucun test supprimé ni affaibli. Chaque modification p
 - Un serveur HTTP local joue le modèle, au format Anthropic Messages ou OpenAI Responses, et garde chaque corps de requête octet pour octet. La réponse ne dépend que de la requête : étape du prompt (marqueur `PREFIX-PROMPT-n`) et nombre de résultats de tool déjà présents.
 - Session réelle : `create_session` avec `real_stream_fn` (`provider_adapter.rs`), donc prompt système, tools, conversion des messages et adaptateur du harness. Les tool calls passent par le vrai `python_repl`.
 - Scénario : trois prompts, six requêtes (deux tool calls puis texte ; texte ; un tool call puis texte).
+- Les sorties des cellules prouvent que le vrai kernel a tourné : `1`, `2`, puis `3` (variable de la cellule 2) et `True True` (`PRIME_AGENT_CONVERSATION_LOG` se termine par `.jsonl`, `$PRIME_AGENT_BUNDLED_SKILLS_DIR/edit/SKILL.md` existe).
 - Entre la requête N et N+1 : chaque clé hors conversation (prompt système, tools, paramètres) est identique octet par octet ; pour Responses, le premier élément d'`input` (le prompt système) aussi. Les messages de N sont un préfixe exact de ceux de N+1, seul le déplacement de `cache_control` est toléré.
 - Le corps reçu doit être du JSON compact : sa re-sérialisation (`preserve_order`) redonne les mêmes octets. Comparer les valeurs re-sérialisées revient donc à comparer les octets reçus.
 - En cas d'échec : l'adaptateur, la paire de requêtes, la clé ou le message en cause, l'octet de la première différence et le contexte des deux côtés.
