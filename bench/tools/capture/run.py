@@ -54,6 +54,15 @@ CASES = [
     ("compact-anthropic", "anthropic-messages", "long",
      ["--inflate-from-turn", "1", "--inflate-tokens", "199000"], "agent-k", [PROMPT, PROMPT_2],
      None),
+    # T04 (YA-13) : message_delta ne porte que output_tokens, l'entrée vient du
+    # message_start (correctif de l'usage Anthropic).
+    ("usage-split-anthropic", "anthropic-messages", "basic", ["--usage-split"], "agent-u",
+     [PROMPT], None),
+    # T04 (YA-13) : compaction avec /refine automatique réactivé (coupé par défaut
+    # depuis YA-01), pour journaliser un appel `refine`.
+    ("refine-anthropic", "anthropic-messages", "long",
+     ["--inflate-from-turn", "1", "--inflate-tokens", "199000"], "agent-f", [PROMPT, PROMPT_2],
+     {"harnessRefinements": True, "autoRefine": {"enabled": True, "compact": True}}),
 ]
 
 # Variables factices : le tour 2 du scénario vérifie si le kernel voit des
@@ -155,6 +164,23 @@ class CaptureServer:
         except subprocess.TimeoutExpired:
             self.proc.kill()
         self.log.close()
+
+
+def journal_sizes(agent_dir: Path) -> dict[Path, int]:
+    """Journaux d'usage (T04, YA-13) du dossier agent, avec leur taille."""
+    return {path: path.stat().st_size for path in agent_dir.rglob("*.usage.ndjson")}
+
+
+def copy_journals(agent_dir: Path, before: dict[Path, int], case_dir: Path) -> list[str]:
+    """Copie dans `<cas>/usage/` les journaux créés ou agrandis pendant le cas."""
+    copied = []
+    for path, size in sorted(journal_sizes(agent_dir).items()):
+        if before.get(path) == size:
+            continue
+        (case_dir / "usage").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, case_dir / "usage" / path.name)
+        copied.append(path.name)
+    return copied
 
 
 def run_binary(cmd: list[str], env: dict[str, str], cwd: Path, case_dir: Path,
@@ -320,6 +346,7 @@ def spawn_check(binary: Path, cache: Path, work: Path, project: Path, out: Path)
     spawn_dir.mkdir(parents=True, exist_ok=True)
     agent = work / "agent-s"
     server = CaptureServer(spawn_dir / "cap", "spawn", [])
+    before = journal_sizes(agent)
     try:
         write_models_json(agent, "anthropic-messages", server.port)
         write_settings(agent)
@@ -327,6 +354,7 @@ def spawn_check(binary: Path, cache: Path, work: Path, project: Path, out: Path)
         result = run_binary(agent_cmd(binary), env, project, spawn_dir, sandboxed=True)
     finally:
         server.stop()
+    result["usage_journals"] = copy_journals(agent, before, spawn_dir)
     parent_texts, child_texts = [], []
     for meta_path in sorted((spawn_dir / "cap").glob("*.meta.json")):
         meta = json.loads(meta_path.read_text())
@@ -455,6 +483,7 @@ def main() -> None:
         case_dir.mkdir(parents=True, exist_ok=True)
         server = CaptureServer(case_dir / "cap", scenario, extra)
         runs = []
+        before = journal_sizes(work / agent)
         try:
             write_models_json(work / agent, api, server.port)
             write_settings(work / agent, settings)
@@ -467,7 +496,8 @@ def main() -> None:
             server.stop()
         result = {"exit": [r["exit"] for r in runs], "seconds": [r["seconds"] for r in runs],
                   "api": api, "scenario": scenario, "server_args": extra, "agent_dir": agent,
-                  "prompts": prompts, "settings": settings}
+                  "prompts": prompts, "settings": settings,
+                  "usage_journals": copy_journals(work / agent, before, case_dir)}
         run_info["cases"][name] = result
         print(f"{name}: exit={result['exit']} en {result['seconds']} s")
 
@@ -491,6 +521,9 @@ def main() -> None:
                     str(HERE / "analyze.py"), str(out)],
                    check=True, env=analysis_env, cwd=cache)
     print(f"rapport : {out / 'report.md'}")
+    # T04 (YA-13) : journal d'usage et usage enregistré confrontés à l'usage renvoyé.
+    subprocess.run([sys.executable, "-I", str(HERE / "usage_check.py"), str(out)], check=True)
+    print(f"usage : {out / 'usage-report.md'}")
 
 
 if __name__ == "__main__":

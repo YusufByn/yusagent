@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare deux runs du banc de capture : chaque octet qui change dans le préfixe.
 
-Usage : python3 -I compare.py <run A> <run B> [--out <fichier .md>]
+Usage : python3 -I compare.py <run A> <run B> [--all] [--out <fichier .md>]
 
 Pour chaque cas présent dans les deux runs, compare la première requête :
 prompt système, tools, paramètres (hors conversation) et premier message
@@ -11,6 +11,11 @@ communs du bloc exclus). Les deux binaires
 doivent être extraits au même chemin (voir README) : sinon un binaire antérieur
 à T03 diffère aussi par le chemin des skills embarqués.
 
+Avec `--all` (T04), compare en plus chaque requête de chaque cas, corps entier,
+dans l'ordre d'arrivée au serveur. Seuls les UUID (identifiant de session, donc
+`prompt_cache_key` et les chemins qui le contiennent) sont remplacés par `<uuid>`
+avant comparaison : ils changent à chaque lancement, même binaire.
+
 Bibliothèque standard uniquement.
 """
 
@@ -19,7 +24,10 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import re
 from pathlib import Path
+
+UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 def compact(value) -> str:
@@ -96,7 +104,30 @@ def changes(a: str, b: str) -> list[dict]:
     return out
 
 
-def compare(run_a: Path, run_b: Path) -> dict:
+def all_requests(case_dir: Path) -> list[str]:
+    """Chaque corps de requête du cas, JSON compact, UUID normalisés."""
+    return [UUID.sub("<uuid>", compact(json.loads(path.read_text())))
+            for path in sorted((case_dir / "cap").glob("*.body.json"))]
+
+
+def compare_all(run_a: Path, run_b: Path, names: list[str]) -> dict:
+    out = {}
+    for name in names:
+        bodies_a = all_requests(run_a / "cases" / name)
+        bodies_b = all_requests(run_b / "cases" / name)
+        differing = []
+        for index, (a, b) in enumerate(zip(bodies_a, bodies_b), start=1):
+            if a != b:
+                differing.append({"requete": index, "changements": changes(
+                    json.dumps(json.loads(a), indent=1, ensure_ascii=False),
+                    json.dumps(json.loads(b), indent=1, ensure_ascii=False))})
+        out[name] = {"requetes_a": len(bodies_a), "requetes_b": len(bodies_b),
+                     "identiques": sum(a == b for a, b in zip(bodies_a, bodies_b)),
+                     "differentes": differing}
+    return out
+
+
+def compare(run_a: Path, run_b: Path, every_request: bool = False) -> dict:
     report = {"run_a": str(run_a), "run_b": str(run_b), "cases": {}}
     for meta_name, run in (("meta_a", run_a), ("meta_b", run_b)):
         info = json.loads((run / "run.json").read_text())
@@ -121,6 +152,8 @@ def compare(run_a: Path, run_b: Path) -> dict:
                 "changements": changes(text_a, text_b),
             }
         report["cases"][name] = case
+    if every_request:
+        report["all_requests"] = compare_all(run_a, run_b, names)
     return report
 
 
@@ -153,6 +186,22 @@ def render(report: dict) -> str:
                 if change["ajoute"]:
                     out.append(f"  - ajouté : `{json.dumps(change['ajoute'], ensure_ascii=False)}`")
             out.append("")
+    if "all_requests" in report:
+        out += ["## Toutes les requêtes (UUID normalisés)", "",
+                "| Cas | Requêtes A | Requêtes B | Identiques | Différentes |",
+                "|---|---|---|---|---|"]
+        for name, data in report["all_requests"].items():
+            out.append(f"| {name} | {data['requetes_a']} | {data['requetes_b']} | "
+                       f"{data['identiques']} | {len(data['differentes'])} |")
+        out.append("")
+        for name, data in report["all_requests"].items():
+            for diff in data["differentes"]:
+                out += [f"### {name} : requête {diff['requete']}", ""]
+                for change in diff["changements"][:10]:
+                    out.append(f"- −{change['octets_retires']} +{change['octets_ajoutes']}"
+                               f" : `{json.dumps(change['retire'], ensure_ascii=False)[:200]}`"
+                               f" → `{json.dumps(change['ajoute'], ensure_ascii=False)[:200]}`")
+                out.append("")
     return "\n".join(out) + "\n"
 
 
@@ -161,8 +210,10 @@ def main() -> None:
     parser.add_argument("run_a", type=Path)
     parser.add_argument("run_b", type=Path)
     parser.add_argument("--out", type=Path, help="rapport Markdown (sinon sortie standard)")
+    parser.add_argument("--all", action="store_true",
+                        help="compare aussi chaque requête de chaque cas, corps entier")
     args = parser.parse_args()
-    report = compare(args.run_a, args.run_b)
+    report = compare(args.run_a, args.run_b, args.all)
     text = render(report)
     if args.out:
         args.out.write_text(text)
