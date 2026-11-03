@@ -1,0 +1,95 @@
+# yusAgent (YA-00) : binaire macOS arm64 de HEAD en artefact CI, pour les
+# mesures du banc de capture (bench/tools/capture/). Pas de build natif en
+# local (CLAUDE.md règle 8).
+#
+# Reprend les étapes du job build-darwin de continuous.yml (même toolchain
+# épinglée, même assembleur, même livecheck), limité à aarch64-apple-darwin.
+# continuous.yml ne se déclenche que sur un push vers main et construit les
+# 4 cibles ; ce workflow ne construit que la cible utile aux mesures.
+# Aucun secret : seul github.token (lecture) est utilisé.
+name: ya-build-macos-arm64
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - "ya-*"
+    paths:
+      - ".github/workflows/ya-build-macos-arm64.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "prime-agent-runtime/**"
+
+permissions: {}
+
+concurrency:
+  group: ya-build-macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: build-aarch64-apple-darwin
+    runs-on: macos-14
+    permissions:
+      contents: read
+    timeout-minutes: 90
+    env:
+      COPYFILE_DISABLE: "1"
+      TARGET: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@ce678459e9fc7500d337468f904b95f1b5c10b5e
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: ya-aarch64-apple-darwin
+      - name: Build (release, locked)
+        run: cargo build --release --locked --target "${TARGET}" -j 4 -p pa-cli --bin prime-agent
+      - name: Generate bundled catalog assets (live catalog)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ref="$(python3 scripts/release/bundle_catalog.py resolve-ref)"
+          python3 scripts/release/bundle_catalog.py generate --network \
+            --catalog-ref "${ref}" --out "target/${TARGET}/catalog-assets"
+      - name: Assemble tarball + checksums + manifest (commit-stamped)
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
+          python3 scripts/release/assemble_artifacts.py \
+            --repo-root . \
+            --version "${version}" \
+            --target "${TARGET}" \
+            --sha "${GITHUB_SHA}" \
+            --binary "target/${TARGET}/release/prime-agent" \
+            --catalog-assets "target/${TARGET}/catalog-assets" \
+            --out-dir "target/${TARGET}/dist"
+          cat "target/${TARGET}/dist/manifest.json"
+      - name: Livecheck the assembled artifact
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)"
+          python3 scripts/release/verify_release.py \
+            --dist-dir "target/${TARGET}/dist" \
+            --version "${version}" \
+            --target "${TARGET}" \
+            --sha "${GITHUB_SHA}"
+      - name: Upload artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prime-agent-aarch64-apple-darwin-${{ github.sha }}
+          path: |
+            target/aarch64-apple-darwin/dist/prime-agent-*
+            target/aarch64-apple-darwin/dist/SHA256SUMS
+            target/aarch64-apple-darwin/dist/manifest.json
+          if-no-files-found: error
+          retention-days: 30

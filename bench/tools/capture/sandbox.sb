@@ -1,0 +1,9 @@
+;; Profil sandbox-exec des mesures : tout est permis sauf le réseau sortant,
+;; limité à localhost. La résolution DNS (socket de mDNSResponder) est aussi
+;; refusée, pour qu'aucune requête ne quitte la machine, même un DNS.
+(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote unix-socket))
+(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
