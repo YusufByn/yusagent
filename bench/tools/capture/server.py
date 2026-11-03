@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""Serveur de capture : enregistre chaque requête modèle et renvoie une réponse factice.
+
+Formats servis (streaming SSE, ou JSON si `stream` est faux) :
+  POST .../messages   Anthropic Messages
+  POST .../responses  OpenAI Responses
+
+Chaque requête est écrite telle que reçue (octets bruts) dans `<out>/NNNN.body.json`,
+avec ses métadonnées dans `<out>/NNNN.meta.json` (horodatage, chemin, en-têtes sans
+valeur d'authentification, tour détecté, réponse renvoyée).
+
+Le scénario est sans état : le tour est déduit du nombre de résultats de tool déjà
+présents dans la requête, ce qui rend les reprises et les sessions multiples
+déterministes. Une requête sans tools (résumé de compaction, titre de session...)
+reçoit une réponse texte courte.
+
+Bibliothèque standard uniquement.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import threading
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+# Valeurs d'en-têtes jamais écrites sur disque (CLAUDE.md règle 9).
+REDACTED_HEADERS = {"authorization", "x-api-key", "api-key", "cookie", "proxy-authorization"}
+
+# Code des cellules envoyées en tool call, par scénario et par tour.
+# Le tour 2 du scénario de base liste les NOMS des variables d'environnement
+# sensibles vues par le kernel (jamais leurs valeurs).
+SCENARIOS: dict[str, list[str]] = {
+    "basic": [
+        "print(1)",
+        "import os\n"
+        "print(sorted(k for k in os.environ"
+        " if any(s in k.upper() for s in ('KEY', 'TOKEN', 'SECRET'))))",
+    ],
+    # Sorties volumineuses (~40 000 caractères par cellule) : la session dépasse
+    # keepRecentTokens (20 000 par défaut), la compaction a de quoi résumer.
+    "long": ["print('x' * 40000)"] * 4,
+    # Tour 2 tue le process du kernel ; tour 3 force son redémarrage.
+    "crash": [
+        "print(1)",
+        "import os\nos._exit(1)",
+        "print(2)",
+    ],
+}
+FINAL_TEXT = "Capture : fin du scénario."
+AUX_TEXT = (
+    "## Goal\n- capture\n\n## Constraints & Preferences\n- (none)\n\n## Progress\n### Done\n"
+    "- [x] capture\n\n## Next Steps\n1. (none)"
+)
+
+
+def count_tool_results_anthropic(body: dict) -> int:
+    count = 0
+    for message in body.get("messages", []):
+        content = message.get("content")
+        if message.get("role") == "user" and isinstance(content, list):
+            count += sum(1 for block in content if block.get("type") == "tool_result")
+    return count
+
+
+def count_tool_results_responses(body: dict) -> int:
+    items = body.get("input")
+    if not isinstance(items, list):
+        return 0
+    return sum(1 for item in items if item.get("type") == "function_call_output")
+
+
+def first_tool_name(tools: list[dict]) -> str:
+    tool = tools[0]
+    # Responses : {"type": "function", "name": ...} ; Anthropic : {"name": ...}.
+    return tool.get("name") or tool.get("function", {}).get("name", "python_repl")
+
+
+def sse(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+class Plan:
+    """Réponse à renvoyer : un tool call (code) ou un texte."""
+
+    def __init__(self, kind: str, text: str = "", tool_name: str = "", code: str = ""):
+        self.kind = kind
+        self.text = text
+        self.tool_name = tool_name
+        self.code = code
+
+    def describe(self) -> dict:
+        if self.kind == "tool":
+            return {"kind": "tool", "tool": self.tool_name, "code": self.code}
+        return {"kind": self.kind, "text": self.text}
+
+
+class CaptureState:
+    def __init__(self, out_dir: Path, scenario: str, inflate_from_turn: int | None,
+                 inflate_tokens: int):
+        self.out_dir = out_dir
+        self.cells = SCENARIOS[scenario]
+        self.inflate_from_turn = inflate_from_turn
+        self.inflate_tokens = inflate_tokens
+        self.lock = threading.Lock()
+        self.seq = 0
+
+    def next_seq(self) -> int:
+        with self.lock:
+            self.seq += 1
+            return self.seq
+
+    def plan(self, tools: list[dict] | None, turn: int) -> Plan:
+        if not tools:
+            # Une requête sans tools (résumé) signale une compaction : on cesse
+            # d'annoncer un usage gonflé pour ne pas la redéclencher en boucle.
+            self.inflate_from_turn = None
+            return Plan("aux", text=AUX_TEXT)
+        if turn < len(self.cells):
+            return Plan("tool", tool_name=first_tool_name(tools), code=self.cells[turn])
+        return Plan("final", text=FINAL_TEXT)
+
+    def input_tokens(self, raw_len: int, turn: int) -> int:
+        if self.inflate_from_turn is not None and turn >= self.inflate_from_turn:
+            return self.inflate_tokens
+        # Estimation grossière (octets / 4) : seul l'ordre de grandeur compte ici.
+        return max(1, raw_len // 4)
+
+
+def anthropic_events(plan: Plan, model: str, seq: int, input_tokens: int) -> list[bytes]:
+    usage = {
+        "input_tokens": input_tokens,
+        "output_tokens": 1,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+    events = [sse("message_start", {
+        "type": "message_start",
+        "message": {"id": f"msg_cap_{seq}", "type": "message", "role": "assistant",
+                    "model": model, "content": [], "stop_reason": None,
+                    "stop_sequence": None, "usage": usage},
+    })]
+    if plan.kind == "tool":
+        events += [
+            sse("content_block_start", {
+                "type": "content_block_start", "index": 0,
+                "content_block": {"type": "tool_use", "id": f"toolu_cap_{seq}",
+                                  "name": plan.tool_name, "input": {}},
+            }),
+            sse("content_block_delta", {
+                "type": "content_block_delta", "index": 0,
+                "delta": {"type": "input_json_delta",
+                          "partial_json": json.dumps({"code": plan.code})},
+            }),
+        ]
+        stop_reason = "tool_use"
+    else:
+        events += [
+            sse("content_block_start", {
+                "type": "content_block_start", "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            }),
+            sse("content_block_delta", {
+                "type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": plan.text},
+            }),
+        ]
+        stop_reason = "end_turn"
+    events += [
+        sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        # Comme l'API réelle, message_delta porte l'usage cumulé complet ; le
+        # harness ne lit l'usage que là (voir docs/audit/audit-entree.md).
+        sse("message_delta", {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "usage": dict(usage, output_tokens=8),
+        }),
+        sse("message_stop", {"type": "message_stop"}),
+    ]
+    return events
+
+
+def anthropic_json(plan: Plan, model: str, seq: int, input_tokens: int) -> dict:
+    if plan.kind == "tool":
+        content = [{"type": "tool_use", "id": f"toolu_cap_{seq}", "name": plan.tool_name,
+                    "input": {"code": plan.code}}]
+        stop_reason = "tool_use"
+    else:
+        content = [{"type": "text", "text": plan.text}]
+        stop_reason = "end_turn"
+    return {"id": f"msg_cap_{seq}", "type": "message", "role": "assistant", "model": model,
+            "content": content, "stop_reason": stop_reason, "stop_sequence": None,
+            "usage": {"input_tokens": input_tokens, "output_tokens": 8,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}
+
+
+def responses_item(plan: Plan, seq: int, done: bool) -> dict:
+    status = "completed" if done else "in_progress"
+    if plan.kind == "tool":
+        return {"type": "function_call", "id": f"fc_cap_{seq}", "call_id": f"call_cap_{seq}",
+                "name": plan.tool_name,
+                "arguments": json.dumps({"code": plan.code}) if done else "",
+                "status": status}
+    content = [{"type": "output_text", "text": plan.text, "annotations": []}] if done else []
+    return {"type": "message", "id": f"msg_cap_{seq}", "role": "assistant", "status": status,
+            "content": content}
+
+
+def responses_object(plan: Plan, model: str, seq: int, input_tokens: int, done: bool) -> dict:
+    obj = {"id": f"resp_cap_{seq}", "object": "response", "model": model,
+           "status": "completed" if done else "in_progress",
+           "output": [responses_item(plan, seq, done=True)] if done else []}
+    if done:
+        obj["usage"] = {"input_tokens": input_tokens, "output_tokens": 8,
+                        "total_tokens": input_tokens + 8,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens_details": {"reasoning_tokens": 0}}
+    return obj
+
+
+def responses_events(plan: Plan, model: str, seq: int, input_tokens: int) -> list[bytes]:
+    item_id = f"fc_cap_{seq}" if plan.kind == "tool" else f"msg_cap_{seq}"
+    events = [
+        sse("response.created", {"type": "response.created",
+                                 "response": responses_object(plan, model, seq, 0, done=False)}),
+        sse("response.output_item.added", {"type": "response.output_item.added",
+                                           "output_index": 0,
+                                           "item": responses_item(plan, seq, done=False)}),
+    ]
+    if plan.kind == "tool":
+        arguments = json.dumps({"code": plan.code})
+        events += [
+            sse("response.function_call_arguments.delta", {
+                "type": "response.function_call_arguments.delta", "item_id": item_id,
+                "output_index": 0, "delta": arguments}),
+            sse("response.function_call_arguments.done", {
+                "type": "response.function_call_arguments.done", "item_id": item_id,
+                "output_index": 0, "arguments": arguments}),
+        ]
+    else:
+        part = {"type": "output_text", "text": "", "annotations": []}
+        events += [
+            sse("response.content_part.added", {
+                "type": "response.content_part.added", "item_id": item_id, "output_index": 0,
+                "content_index": 0, "part": part}),
+            sse("response.output_text.delta", {
+                "type": "response.output_text.delta", "item_id": item_id, "output_index": 0,
+                "content_index": 0, "delta": plan.text}),
+            sse("response.output_text.done", {
+                "type": "response.output_text.done", "item_id": item_id, "output_index": 0,
+                "content_index": 0, "text": plan.text}),
+            sse("response.content_part.done", {
+                "type": "response.content_part.done", "item_id": item_id, "output_index": 0,
+                "content_index": 0, "part": dict(part, text=plan.text)}),
+        ]
+    events += [
+        sse("response.output_item.done", {"type": "response.output_item.done",
+                                          "output_index": 0,
+                                          "item": responses_item(plan, seq, done=True)}),
+        sse("response.completed", {"type": "response.completed",
+                                   "response": responses_object(plan, model, seq, input_tokens,
+                                                                done=True)}),
+    ]
+    return events
+
+
+def make_handler(state: CaptureState):
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt: str, *args) -> None:  # silence stderr
+            pass
+
+        def do_GET(self) -> None:
+            if self.path.rstrip("/").endswith("/health"):
+                self.reply_json(200, {"ok": True})
+            else:
+                self.reply_json(404, {"error": {"type": "not_found", "message": self.path}})
+
+        def do_POST(self) -> None:
+            raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            seq = state.next_seq()
+            path = self.path.split("?", 1)[0].rstrip("/")
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                body = None
+            if path.endswith("/messages"):
+                api = "anthropic-messages"
+            elif path.endswith("/responses"):
+                api = "openai-responses"
+            else:
+                api = "unknown"
+            meta = {
+                "seq": seq,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "path": self.path,
+                "api": api,
+                "headers": {k: ("<redacted>" if k.lower() in REDACTED_HEADERS else v)
+                            for k, v in self.headers.items()},
+                "bytes": len(raw),
+            }
+            (state.out_dir / f"{seq:04d}.body.json").write_bytes(raw)
+            if body is None or api == "unknown":
+                meta["response"] = {"kind": "error"}
+                self.write_meta(seq, meta)
+                self.reply_json(404, {"error": {"type": "not_found", "message": self.path}})
+                return
+            if api == "anthropic-messages":
+                turn = count_tool_results_anthropic(body)
+            else:
+                turn = count_tool_results_responses(body)
+            plan = state.plan(body.get("tools"), turn)
+            input_tokens = state.input_tokens(len(raw), turn)
+            meta.update({"turn": turn, "response": plan.describe(),
+                         "reported_input_tokens": input_tokens})
+            self.write_meta(seq, meta)
+            model = body.get("model", "capture-model")
+            if not body.get("stream"):
+                if api == "anthropic-messages":
+                    self.reply_json(200, anthropic_json(plan, model, seq, input_tokens))
+                else:
+                    self.reply_json(200, responses_object(plan, model, seq, input_tokens,
+                                                          done=True))
+                return
+            if api == "anthropic-messages":
+                events = anthropic_events(plan, model, seq, input_tokens)
+            else:
+                events = responses_events(plan, model, seq, input_tokens)
+            payload = b"".join(events)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def write_meta(self, seq: int, meta: dict) -> None:
+            (state.out_dir / f"{seq:04d}.meta.json").write_text(
+                json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+
+        def reply_json(self, status: int, obj: dict) -> None:
+            data = json.dumps(obj).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    return Handler
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--out", required=True, type=Path, help="dossier des captures")
+    parser.add_argument("--port", type=int, default=0, help="0 = port libre choisi par l'OS")
+    parser.add_argument("--scenario", choices=sorted(SCENARIOS), default="basic")
+    parser.add_argument("--inflate-from-turn", type=int, default=None,
+                        help="à partir de ce tour, l'usage renvoyé annonce --inflate-tokens"
+                             " tokens d'entrée (pour déclencher la compaction)")
+    parser.add_argument("--inflate-tokens", type=int, default=190_000)
+    parser.add_argument("--port-file", type=Path, help="écrit le port effectif dans ce fichier")
+    args = parser.parse_args()
+    args.out.mkdir(parents=True, exist_ok=True)
+    state = CaptureState(args.out, args.scenario, args.inflate_from_turn, args.inflate_tokens)
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state))
+    port = server.server_address[1]
+    if args.port_file:
+        args.port_file.write_text(f"{port}\n")
+    print(f"capture: http://127.0.0.1:{port} -> {args.out}", flush=True)
+    try:
+        server.serve_forever(poll_interval=0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()
