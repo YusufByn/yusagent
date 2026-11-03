@@ -665,7 +665,14 @@ pub fn default_refiner_call(
                     ..Default::default()
                 });
             stream_options.reasoning = pa_types::ai::minimum_reasoning(&model);
-            Ok(pa_ai::complete_simple(&model, &context, Some(stream_options)).await?)
+            // yusAgent (T04, YA-13): journaled as `refine`.
+            Ok(super::usage_log::complete_simple(
+                super::usage_log::CallKind::Refine,
+                &model,
+                &context,
+                stream_options,
+            )
+            .await?)
         })
     })
 }

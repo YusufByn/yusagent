@@ -334,6 +334,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let model_context_window = model.context_window;
 
     let session_id = wiring.session.lock().await.get_session_id().to_string();
+    // yusAgent (T04, YA-13): the per-call usage journal, next to the session file.
+    let usage_journal = super::usage_log::UsageJournal::for_session(&wiring.session.lock().await);
     let mut handlers = wiring.handlers.clone();
     if let Some(extra) = config.extra_host_handlers.clone() {
         handlers.merge(extra);
@@ -699,7 +701,17 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         std::sync::Arc::clone(&request_timing_wiring),
         stream_fn,
     );
-    let side_question_stream_fn = std::sync::Arc::clone(&timing_stream_fn);
+    // yusAgent (T04, YA-13): each call journaled (`main`/`subagent`, side question `other`).
+    let side_question_stream_fn = super::usage_log::instrument_stream_fn(
+        usage_journal.clone(),
+        super::usage_log::CallKind::Other("side_question"),
+        std::sync::Arc::clone(&timing_stream_fn),
+    );
+    let timing_stream_fn = super::usage_log::instrument_stream_fn(
+        usage_journal,
+        super::usage_log::CallKind::Main,
+        timing_stream_fn,
+    );
     let semantic_recorder = config.semantic_edges.take().map(|identity| {
         std::sync::Arc::new(super::semantic_edges::SemanticEdgeRecorder::open(identity))
     });

@@ -470,7 +470,15 @@ pub async fn generate_branch_summary(
             ..Default::default()
         });
     stream_options.reasoning = pa_types::ai::minimum_reasoning(model);
-    let response = match pa_ai::complete_simple(model, &context, Some(stream_options)).await {
+    // yusAgent (T04, YA-13): journaled as `other` (`branch_summary`).
+    let response = match super::usage_log::complete_simple(
+        super::usage_log::CallKind::Other("branch_summary"),
+        model,
+        &context,
+        stream_options,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(error) => {
             return BranchSummaryResult {
