@@ -282,6 +282,9 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
     let cache_retention =
         super::cache_retention::resolve_from_env(settings.settings().cache_retention);
+    // yusAgent (T05, YA-05): `masking`, `None` unless enabled.
+    let masking =
+        super::masking::MaskingConfig::from_settings(settings.settings().masking.as_ref());
     let (mcp_skill_overrides, mcp_generic_servers, built_manager) =
         mcp_gating(&settings, config.agent_dir.clone()).await?;
     let mcp_manager = config
@@ -710,6 +713,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         super::usage_log::CallKind::Other("side_question"),
         std::sync::Arc::clone(&timing_stream_fn),
     );
+    // yusAgent (T05, YA-05): masking notes its invalidations in the same journal.
+    let masking_transform = super::masking::transform_context(masking, usage_journal.clone());
     let timing_stream_fn = super::usage_log::instrument_stream_fn(
         usage_journal,
         super::usage_log::CallKind::Main,
@@ -750,9 +755,10 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         )),
         // The Rust engine wires no transform, so the instrumented seam
         // wraps a pass-through that marks the turn's dispatch moment.
+        // yusAgent (T05, YA-05): the masking transform when enabled, the pass-through otherwise.
         transform_context: Some(super::request_timing::instrument_transform_context(
             std::sync::Arc::clone(&request_timing_wiring),
-            super::request_timing::pass_through_transform(),
+            masking_transform,
         )),
         should_stop_after_turn: {
             let steering = config.queued_steering_probe.take();

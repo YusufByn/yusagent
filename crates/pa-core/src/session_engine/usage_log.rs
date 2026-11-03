@@ -238,6 +238,9 @@ pub struct CallRecord {
     /// Timestamp of the last user message of the request (agent loop only): a new value starts
     /// a new turn.
     pub user_timestamp: Option<i64>,
+    /// yusAgent (T05, YA-05): why the harness changed the request prefix on this call
+    /// (`invalidation` field, agent-loop calls only); `None` writes nothing.
+    pub invalidation: Option<Value>,
 }
 
 #[derive(Debug, Default)]
@@ -278,6 +281,9 @@ pub struct UsageJournal {
     session_id: String,
     parent_session_id: Option<String>,
     state: Mutex<JournalState>,
+    /// yusAgent (T05, YA-05): an invalidation noted by the context transform, taken by the
+    /// next agent-loop call.
+    pending_invalidation: Mutex<Option<Value>>,
 }
 
 impl UsageJournal {
@@ -308,7 +314,20 @@ impl UsageJournal {
             session_id,
             parent_session_id,
             state: Mutex::new(state),
+            pending_invalidation: Mutex::new(None),
         }
+    }
+
+    /// yusAgent (T05, YA-05): notes that the request being built changed the prefix on
+    /// purpose; the next agent-loop call carries it as its `invalidation` field.
+    pub fn note_invalidation(&self, invalidation: Value) {
+        *lock(&self.pending_invalidation) = Some(invalidation);
+    }
+
+    /// The invalidation noted for the call starting now, if any.
+    #[must_use]
+    pub fn take_invalidation(&self) -> Option<Value> {
+        lock(&self.pending_invalidation).take()
     }
 
     #[must_use]
@@ -395,6 +414,9 @@ impl UsageJournal {
         put("sincePrevMs", json!(since_prev_ms));
         if let Some(history) = record.history_reasoning {
             put("historyReasoning", history.to_json());
+        }
+        if let Some(invalidation) = &record.invalidation {
+            put("invalidation", invalidation.clone());
         }
         Value::Object(entry).to_string()
     }
@@ -504,6 +526,8 @@ struct Probe {
     model: String,
     effort: Option<String>,
     user_timestamp: Option<i64>,
+    /// yusAgent (T05, YA-05): the invalidation this call carries.
+    invalidation: Option<Value>,
     started_at: SystemTime,
     started: Instant,
     state: Mutex<ProbeState>,
@@ -532,6 +556,7 @@ impl Probe {
             model: model.to_string(),
             effort,
             user_timestamp,
+            invalidation: None,
             started_at: SystemTime::now(),
             started: Instant::now(),
             state: Mutex::new(ProbeState::default()),
@@ -574,6 +599,7 @@ impl Probe {
             usage,
             history_reasoning,
             user_timestamp: self.user_timestamp,
+            invalidation: self.invalidation.clone(),
         });
     }
 }
@@ -603,7 +629,12 @@ pub fn instrument_stream_fn(
                     pa_agent::types::Message::User(user) => Some(user.timestamp),
                     _ => None,
                 });
-            let probe = Arc::new(Probe::new(
+            let invalidation = if kind == CallKind::Main {
+                journal.take_invalidation()
+            } else {
+                None
+            };
+            let mut probe = Probe::new(
                 journal,
                 kind,
                 (
@@ -613,7 +644,9 @@ pub fn instrument_stream_fn(
                 ),
                 wire_name(&options.reasoning),
                 user_timestamp,
-            ));
+            );
+            probe.invalidation = invalidation;
+            let probe = Arc::new(probe);
             let mut options = options;
             let inner_payload = options.on_payload.take();
             let observer = Arc::clone(&probe);

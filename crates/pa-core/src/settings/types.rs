@@ -318,6 +318,9 @@ pub struct Settings {
     /// yusAgent (T03, YA-04): prompt-cache TTL, `"short"` (default) or `"long"`;
     /// `PI_CACHE_RETENTION` keeps priority (`crate::session_engine::cache_retention`).
     pub cache_retention: Option<crate::session_engine::cache_retention::CacheRetentionSetting>,
+    /// yusAgent (T05, YA-05): masking of old `python_repl` outputs, off by default
+    /// (`crate::session_engine::masking`).
+    pub masking: Option<crate::session_engine::masking::MaskingSettings>,
     pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,

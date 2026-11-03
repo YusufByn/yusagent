@@ -66,6 +66,8 @@ const KNOWN_FIELDS: &[&str] = &[
     "kernel",
     // yusAgent (T03, YA-04): prompt-cache TTL.
     "cacheRetention",
+    // yusAgent (T05, YA-05): masking of old outputs.
+    "masking",
 ];
 
 /// Extract each known field independently; ignore fields whose JSON type does not match the Rust
