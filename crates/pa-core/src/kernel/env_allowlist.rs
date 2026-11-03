@@ -18,6 +18,7 @@
 //! children are sessions whose kernels start through the same spawn path.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
@@ -187,8 +188,8 @@ pub fn inherited_env(
 ///
 /// Both refusals warn on stderr (the harness log; a daemon worker's lands in
 /// the daemon log) with the var name, never its value.
-pub fn apply_user_allowlist(
-    env: &mut HashMap<String, String>,
+pub fn apply_user_allowlist<H: BuildHasher>(
+    env: &mut HashMap<String, String, H>,
     allowlist: &[String],
     ambient: impl IntoIterator<Item = (String, String)>,
 ) {
@@ -216,7 +217,7 @@ pub fn apply_user_allowlist(
 }
 
 /// Last step at spawn: drops every provider credential, whatever its source.
-pub fn strip_harness_credentials(env: &mut HashMap<String, String>) {
+pub fn strip_harness_credentials<H: BuildHasher>(env: &mut HashMap<String, String, H>) {
     env.retain(|name, _| !is_harness_credential(name));
 }
 
