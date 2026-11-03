@@ -40,6 +40,24 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/session_engine/provider_adapter.rs` | modif. (3 lignes) | `stream_once` : `cache_retention` lu par `cache_retention::current()` au lieu de `None` en dur. | T03 (YA-04) |
 | `crates/pa-core/src/settings/types.rs` | modif. (3 lignes) | Champ `cache_retention` de `Settings`. | T03 (YA-04) |
 | `crates/pa-core/src/settings/load.rs` | modif. (2 lignes) | `cacheRetention` ajouté aux clés connues : une valeur invalide compte comme non réglée. | T03 (YA-04) |
+| `crates/pa-types/src/ai/mod.rs` | modif. | `Usage` : champs optionnels `reasoning` et `cacheWrite1h`, absents à la sérialisation quand ils valent `None`. Voir « Usage (T04) » ci-dessous. | T04 (YA-13) |
+| `crates/pa-agent/src/types.rs` | modif. | Même champs sur le miroir `Usage` de la boucle (la frontière `pa-ai` / `pa-agent` passe par un aller-retour JSON), `Usage::zero()` complété. | T04 (YA-13) |
+| `crates/pa-ai/src/providers/anthropic/stream.rs` | modif. | Correctif : l'usage du `message_start` est lu sous `message.usage` (`:297`) ; nouvelle fonction `read_usage_details` (`:711`) appelée au `message_start` et au `message_delta` (raisonnement, part 1 h de l'écriture du cache). | T04 (YA-13) |
+| `crates/pa-ai/src/providers/openai_responses_stream.rs` | modif. (5 lignes) | `reasoning` = `output_tokens_details.reasoning_tokens`. | T04 (YA-13) |
+| `crates/pa-ai/src/providers/openai_completions/convert.rs` | modif. (5 lignes) | `reasoning` = `completion_tokens_details.reasoning_tokens`. | T04 (YA-13) |
+| `crates/pa-ai/src/providers/google_stream.rs` | modif. (4 lignes) | `reasoning` = `thoughtsTokenCount`. | T04 (YA-13) |
+| `crates/pa-ai/src/providers/anthropic/usage_tests.rs`, `providers/usage_tests.rs`, `providers/openai_completions/usage_tests.rs` | ajout | Tests de normalisation de l'usage sur fixtures (Anthropic, Responses, Gemini, DeepSeek, OpenRouter). | T04 (YA-13) |
+| `crates/pa-ai/src/providers/anthropic/mod.rs`, `providers/mod.rs`, `providers/openai_completions/mod.rs` | modif. (3 lignes chacun) | Déclarent les modules de tests ci-dessus. | T04 (YA-13) |
+| Littéraux `Usage` (19 fichiers) | modif. (2 lignes par littéral) | `reasoning: None, cache_write_1h: None` ajoutés aux littéraux complets de `Usage`, exigés par le compilateur. Liste ci-dessous. | T04 (YA-13) |
+| `crates/pa-core/src/session_engine/usage_log.rs`, `usage_log/tests.rs` | ajout | Journal d'usage par appel (`<id>.usage.ndjson`) et ses tests. Voir `docs/usage.md`. | T04 (YA-13) |
+| `crates/pa-core/src/session_engine/mod.rs` | modif. (2 lignes) | Déclare `usage_log`. | T04 (YA-13) |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | Ouvre le journal de la session (`:338`) ; enveloppe le `stream_fn` de la boucle (`main`/`subagent`) et celui de la question annexe (`other`) par `usage_log::instrument_stream_fn` (`:704-714`). | T04 (YA-13) |
+| `crates/pa-core/src/session_engine/compaction_exec.rs` | modif. | `complete_summary_call` : les deux chemins (avec ou sans deltas) journalisent l'appel en `compaction`. | T04 (YA-13) |
+| `crates/pa-core/src/session_engine/refine.rs` | modif. (7 lignes) | `default_refiner_call` : `usage_log::complete_simple` (`refine`) au lieu de `pa_ai::complete_simple`. | T04 (YA-13) |
+| `crates/pa-core/src/session_engine/branch_summarization.rs` | modif. (8 lignes) | Résumé de branche : `usage_log::complete_simple` (`other`, `branch_summary`). | T04 (YA-13) |
+| `crates/pa-core/tests/usage_backcompat.rs` | ajout | Une session écrite avant T04 se relit ; sans valeur, l'usage s'écrit avec les mêmes champs qu'avant ; les champs traversent la frontière `pa-ai` / `pa-agent`. | T04 (YA-13) |
+| `docs/usage.md` | ajout | Sémantique des champs d'usage par provider, taux de cache, format du journal. | T04 (YA-13) |
+| `.changes/ya-04.md` | ajout | Fragment de changelog. | T04 (YA-13) |
 
 ## Désactivations par défaut (YA-01)
 
@@ -256,3 +274,19 @@ Même règle : aucun test supprimé ni affaibli. Chaque modification porte un co
 | `crates/pa-daemon/tests/queue_delivery_e2e.rs` | mock du provider (3 tests : `multi_item_queue_delivers_every_item_in_lane_order`, `queue_pickup_projection_reaches_clients_before_the_delivered_turn_starts`, `queue_delivery_projects_the_active_action_phases_around_the_turn`) | setup | le texte du prompt est la dernière partie texte qui n'est pas le bloc `<environment>` (le mock prenait la dernière partie, devenue le bloc sur le premier message) |
 | `scripts/check_custom_ca.py` | check de cycle de vie, `request_contract` | setup | le texte d'un message utilisateur exclut la partie `<environment>` avant la comparaison exacte au prompt de fixture |
 | `scripts/check_observe_selectors.py` | check de cycle de vie, `child_task` | setup | même exclusion pour la tâche `[task from parent]` de l'enfant, qui porte désormais le bloc |
+
+## Usage (T04, YA-13)
+
+- **Champs ajoutés** : `reasoning` (sous-ensemble de `output`) et `cacheWrite1h` (part 1 h de `cacheWrite`), `Option<u64>`, `#[serde(default, skip_serializing_if = "Option::is_none")]`. Absents quand le provider ne les donne pas, jamais 0 par défaut. Sémantique complète : `docs/usage.md`.
+- **Pourquoi deux crates** : la boucle (`pa-agent`) reçoit le message du provider (`pa-ai`) par aller-retour JSON (`provider_adapter.rs`, `json_round_trip`) ; sans le champ côté `pa-agent`, il serait perdu avant le journal et la session.
+- **Littéraux complétés** (2 lignes `reasoning: None, cache_write_1h: None` par littéral complet, aucun autre changement) : `pa-ai` : `providers/faux/mod.rs`, `utils_inner/overflow.rs` ; `pa-core` : `session/manager/tests.rs`, `session/window_tests.rs` (2), `session_engine/compact_session/tests.rs`, `compact_session/tests/cut_math.rs`, `compact_session/tests/split_turn.rs` (2), `session_engine/compaction.rs` (4, tests), `session_engine/compaction_exec.rs` (2, tests), `session_engine/harness_digest/direction.rs`, `harness_digest/tests.rs`, `session_engine/request_timing/tests.rs`, `session_engine/rlm_usage.rs`, `session_engine/telemetry/tests.rs`, `session_engine/turn_boundary/tests.rs` (2), `tests/turn_boundary_kernel.rs` ; `pa-daemon` : `session_store/tests.rs`, `session_usage.rs` (2) ; `pa-perf` : `corpus/rows.rs`. Les littéraux qui utilisent `..Default::default()` ne changent pas. Un cherry-pick upstream qui ajoute un littéral complet de `Usage` échouera à la compilation avec un message clair (champ manquant).
+- **Journal** : `<id>.usage.ndjson` (le ticket disait `<id>.usage.jsonl` ; extension changée avec l'accord de Yusuf, sinon une quinzaine de tests upstream qui prennent le premier `.jsonl` du dossier de sessions pour la session devenaient faux). Local uniquement, aucun puits réseau ; une session en mémoire n'en a pas. Les lignes n'ont ni `id`, ni `timestamp`, ni `cwd` : les scans du dossier de sessions (qui lisent la première ligne de chaque `.jsonl`) ne les prennent pas pour une session.
+- **Prompt et requêtes** : inchangés. Le journal observe le corps par le hook `on_payload` et le rend tel quel ; sans journal, `usage_log::complete_simple` appelle `pa_ai::complete_simple` sans rien toucher. Vérifié au banc de capture, `main` contre `ya-04`, toutes les requêtes de tous les cas (`compare.py --all`).
+- **Effet du correctif Anthropic** : avec un `message_delta` qui ne porte que `output_tokens`, `totalTokens` devient juste, et la compaction par seuil (qui lit `totalTokens`, `compaction.rs:50-55`) se déclenche quand elle le doit. Ce n'est pas un changement du préfixe, mais un changement du moment de la compaction sur ces flux.
+
+### Banc de capture (T04)
+
+- `server.py` : usage réaliste dans les deux formats (cache lu et écrit, écriture ventilée 5 min / 1 h selon le `cache_control` de la requête, tokens de raisonnement), noté dans `NNNN.meta.json` (`reported_usage`) ; option `--usage-split` (le `message_delta` Anthropic ne porte que `output_tokens`).
+- `run.py` : cas `usage-split-anthropic` et `refine-anthropic` (compaction avec `/refine` automatique réactivé) ; copie des journaux d'usage de chaque cas dans `<cas>/usage/` ; lance `usage_check.py`.
+- `usage_check.py` (nouveau) : confronte l'usage des messages assistant (`message_end`) et chaque ligne de journal à l'usage renvoyé par le serveur, champ par champ, avec le taux de cache et le type d'appel.
+- `compare.py` : option `--all`, qui compare chaque requête de chaque cas (UUID normalisés).
