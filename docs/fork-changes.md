@@ -25,6 +25,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/settings/load.rs` | modif. (2 lignes) | `kernel` ajouté aux clés connues (`:66`) : une valeur de mauvais type compte comme non réglée, comme les autres clés. | YA-02 |
 | Tests et checks upstream | modif. | Voir « Tests upstream touchés (YA-02) » ci-dessous. | YA-02 |
 | `.changes/ya-02.md` | ajout | Fragment de changelog. | YA-02 |
+| `crates/pa-core/tests/prefix_stability.rs` | ajout | Test de préfixe du cache de prompt : session réelle (`create_session`, adaptateur provider réel, kernel réel) contre un serveur HTTP local, Anthropic Messages et OpenAI Responses, trois prompts avec tool calls. Voir « Test de préfixe » ci-dessous. | T03 (YA-04) |
 
 ## Désactivations par défaut (YA-01)
 
@@ -174,3 +175,14 @@ Même règle que YA-01 : aucun test supprimé ni affaibli. Chaque modification p
 | `scripts/check_launch_env.py` | check de cycle de vie | setup | `kernel.envAllowlist: ["PA_ENV_*", "PRIME_AGENT_INTERNAL_PARITY_CANARY"]` ; le canari reste listé pour que son absence prouve toujours le filtrage côté worker |
 | `scripts/lifecycle_lib.py` | `OwnedProcesses.ownership` | setup | un kernel ne porte plus `PA_GOAL_FIXTURE_ID` ; il est reconnu à `PRIME_AGENT_CODING_AGENT_DIR` = `<racine>/agent`, en plus du pid propriétaire déjà exigé. Workers et process directs exigent toujours l'étiquette |
 | `scripts/test_lifecycle_lib.py` | `test_untagged_kernel_owned_through_its_agent_dir`, `test_untagged_worker_never_owned_through_its_agent_dir` | renfort (nouveaux) | le kernel d'un autre dossier agent n'est pas reconnu ; un worker sans étiquette non plus |
+
+## Test de préfixe (T03, YA-04)
+
+`crates/pa-core/tests/prefix_stability.rs`, lancé par les shards de `ci.yml` (le venv du kernel y est préparé avant les tests ; sans kernel, le test échoue en CI et est sauté ailleurs avec une note).
+
+- Un serveur HTTP local joue le modèle, au format Anthropic Messages ou OpenAI Responses, et garde chaque corps de requête octet pour octet. La réponse ne dépend que de la requête : étape du prompt (marqueur `PREFIX-PROMPT-n`) et nombre de résultats de tool déjà présents.
+- Session réelle : `create_session` avec `real_stream_fn` (`provider_adapter.rs`), donc prompt système, tools, conversion des messages et adaptateur du harness. Les tool calls passent par le vrai `python_repl`.
+- Scénario : trois prompts, six requêtes (deux tool calls puis texte ; texte ; un tool call puis texte).
+- Entre la requête N et N+1 : chaque clé hors conversation (prompt système, tools, paramètres) est identique octet par octet ; pour Responses, le premier élément d'`input` (le prompt système) aussi. Les messages de N sont un préfixe exact de ceux de N+1, seul le déplacement de `cache_control` est toléré.
+- Le corps reçu doit être du JSON compact : sa re-sérialisation (`preserve_order`) redonne les mêmes octets. Comparer les valeurs re-sérialisées revient donc à comparer les octets reçus.
+- En cas d'échec : l'adaptateur, la paire de requêtes, la clé ou le message en cause, l'octet de la première différence et le contexte des deux côtés.
