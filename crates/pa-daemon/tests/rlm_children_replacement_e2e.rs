@@ -582,12 +582,6 @@ fn restart_relists_child(delay_ms: u64, display_status: &str) {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let agent_dir = dir.path().join("agent");
     std::fs::create_dir_all(&agent_dir).expect("agent dir");
-    // yusAgent (YA-01): the probe cell sends through the opt-in agent-message skill.
-    std::fs::write(
-        agent_dir.join("settings.json"),
-        r#"{"bundledSkills":{"agentMessage":true}}"#,
-    )
-    .expect("write settings");
     let socket = dir.path().join("supervisor.sock");
     let receipts = dir.path().join("receipts");
     std::fs::create_dir_all(&receipts).expect("receipts dir");

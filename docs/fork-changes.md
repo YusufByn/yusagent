@@ -5,14 +5,14 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | Fichier | Type | Raison | Ticket |
 |---|---|---|---|
 | `.github/workflows/ya-build-macos-arm64.yml` | ajout | Binaire macOS arm64 de HEAD en artefact CI pour les mesures du banc de capture, sans build natif local. Copie réduite du job `build-darwin` de `continuous.yml` (qui ne tourne que sur `main` et construit 4 cibles). Autorisé par Yusuf pour ce seul but. | YA-00 |
-| `crates/pa-core/src/settings/fork_defaults.rs` | ajout | Défauts du fork pour les fonctions hors MVP (constantes, filtre des skills en opt-in) et leurs tests. Les getters upstream lisent ces constantes au lieu de leurs littéraux : un cherry-pick qui touche l'un d'eux entre en conflit de façon visible. | YA-01 |
+| `crates/pa-core/src/settings/fork_defaults.rs` | ajout | Défauts du fork pour les fonctions hors MVP (constantes, réglage pour couper les skills `agent-message` / `rlm-heartbeat`) et leurs tests. Les getters upstream lisent ces constantes au lieu de leurs littéraux : un cherry-pick qui touche l'un d'eux entre en conflit de façon visible. | YA-01 |
 | `crates/pa-core/src/settings/mod.rs` | modif. (1 ligne) | Déclare `fork_defaults`. | YA-01 |
 | `crates/pa-core/src/settings/interactive_settings.rs` | modif. | `get_harness_refinements` : défaut `fork_defaults::HARNESS_REFINEMENTS` au lieu de `true`. | YA-01 |
 | `crates/pa-core/src/session_engine/refine.rs` | modif. | `AutoRefineGates::default` : `enabled` et `compact` lus dans `fork_defaults`. Test des défauts mis à jour. | YA-01 |
 | `crates/pa-core/src/settings/manager.rs` | modif. | `get_telemetry_enabled` : sans aucun réglage, renvoie `fork_defaults::TELEMETRY_ENABLED`. Dès qu'une portée fixe la valeur, la règle upstream s'applique (toutes les portées qui la fixent doivent dire oui). | YA-01 |
 | `crates/pa-core/src/session_engine/telemetry/status.rs` | modif. | `TelemetrySwitch::Default` suit `fork_defaults::TELEMETRY_ENABLED` ; le motif affiché devient « off by default ». | YA-01 |
-| `crates/pa-core/src/settings/types.rs` | modif. | `BundledSkillsSettings` : champs `agentMessage` et `rlmHeartbeat`. | YA-01 |
-| `crates/pa-core/src/packages/resolve/auto.rs` | modif. (5 lignes) | Ajoute les exclusions des skills en opt-in à côté de celle de websearch. | YA-01 |
+| `crates/pa-core/src/settings/types.rs` | modif. | `BundledSkillsSettings` : champs `agentMessage` et `rlmHeartbeat` (actifs par défaut, `false` coupe le skill). | YA-01 |
+| `crates/pa-core/src/packages/resolve/auto.rs` | modif. (5 lignes) | Ajoute l'exclusion des skills coupés par réglage à côté de celle de websearch. | YA-01 |
 | Tests upstream | modif. | Voir « Tests upstream touchés » ci-dessous. | YA-01 |
 | `.github/workflows/ci.yml` | modif. (1 ligne + commentaire) | Étape `Prepare pinned TS frame comparison binary` : la release `v0.9.8` est téléchargée depuis `PrimeIntellect-ai/prime-agent` au lieu du dépôt courant. Voir ci-dessous. | YA-01 |
 | `.changes/ya-01.md` | ajout | Fragment de changelog exigé par `changelog-fragment.yml` pour tout changement livré. | YA-01 |
@@ -27,8 +27,8 @@ Session lancée sans `settings.json` ni variable d'environnement. Chaque ligne s
 | Continual Harness (création de raffinements, digest du harness dans le contexte) | coupé | `"harnessRefinements": true` | `fork_defaults.rs:7`, `interactive_settings.rs:17` |
 | `/refine` automatique (par intervalle de tours) | coupé | `"autoRefine": {"enabled": true}` (et `harnessRefinements`) | `fork_defaults.rs:10`, `refine.rs:42` |
 | `/refine` automatique après compaction | coupé | `"autoRefine": {"compact": true}` (et `harnessRefinements`) | `fork_defaults.rs:13`, `refine.rs:44` |
-| Skill `agent-message` | absent de l'inventaire et des imports du kernel | `"bundledSkills": {"agentMessage": true}` | `fork_defaults.rs:24-34`, `auto.rs:150-154` |
-| Skill `rlm-heartbeat` | absent de l'inventaire et des imports du kernel | `"bundledSkills": {"rlmHeartbeat": true}` | idem |
+
+Skills `agent-message` et `rlm-heartbeat` : **actifs par défaut**, comme upstream. La couche statique `core.md` les documente (`crates/pa-core/src/prompts/layers/core.md:68`, `:156`), et les enfants de `rlm.spawn` répondent au parent par `agent_message.send` (`prime-agent-runtime/src/rlm/harness.py:1219-1221`). Leur sort sera décidé dans YA-09. Un réglage permet déjà de les couper : `"bundledSkills": {"agentMessage": false}` ou `{"rlmHeartbeat": false}` (`fork_defaults.rs`, `disabled_bundled_skill_overrides`). Un skill coupé disparaît de l'inventaire et des imports du kernel.
 
 Ce qui n'émet plus rien quand le réglage est faux :
 
@@ -56,7 +56,6 @@ Chaque modification porte un commentaire `yusAgent (YA-01)`.
 | `crates/pa-core/src/settings/persistence_tests.rs` | `harness_refinements_ignore_project_overrides_and_resolve_global_wrong_types` | défaut + renfort | mauvais type → `false` ; ajout du cas `"true"` (chaîne) → `false` |
 | `crates/pa-core/src/session_engine/refine.rs` | `auto_refine_gates_resolve_the_ts_defaults_and_clamps` | défaut + renfort | `enabled`/`compact` par défaut `false` ; ajout du cas `Some(true)` |
 | `crates/pa-core/src/session_engine/refinement_gate.rs` | `live_request_gate_filters_saved_rows_and_preserves_quoted_user_content` | setup | `harnessRefinements: true` |
-| `crates/pa-core/src/session_engine/engine/tests.rs` | `engine_over` (helper de `model_visible_skills_follow_the_embedding_wiring`) | setup | `bundledSkills.agentMessage`, `bundledSkills.rlmHeartbeat` |
 | `crates/pa-core/src/session_engine/telemetry/tests.rs` | `a_disable_on_a_fresh_install_never_mints_the_install_id` | renfort | ajout : la valeur enregistrée est `Some(false)` |
 | `crates/pa-cli/src/mode.rs` | `telemetry_defaults_on` → `telemetry_defaults_off` | défaut | désactivée par défaut ; vérifie aussi la réactivation par `telemetry.enabled` |
 | `crates/pa-cli/tests/telemetry_command_e2e.rs` | `status_on_and_off_round_trip` | défaut | « Telemetry is off (off by default). » |
@@ -68,8 +67,6 @@ Chaque modification porte un commentaire `yusAgent (YA-01)`.
 | `crates/pa-daemon/src/compact_autorefine.rs` | `threshold_compaction_arms_the_review_off_the_turn_path`, `the_declining_review_stamps_the_cooldown`, `manual_compaction_arms_and_consumes_the_round`, `refine_session_command_emits_the_refine_events` | setup (via le helper, fichier non modifié) | `harnessRefinements`, `autoRefine.enabled`, `autoRefine.compact` |
 | `crates/pa-daemon/src/worker/turn_stream_tests/broadcast.rs` | `a_retried_turn_broadcasts_one_agent_end_per_run` | setup | `harnessRefinements: true` |
 | `crates/pa-daemon/tests/provider_failure_e2e.rs` | `setup_with_rejection` (helper ; échec observé : `provider_failure_recovered_by_retry_settles_the_turn`) | setup | `harnessRefinements: true` |
-| `crates/pa-daemon/tests/rlm_children_replacement_e2e.rs` | `restart_relists_child` (helper de `a_daemon_restart_relists_and_wakes_the_parents_child`, `a_daemon_restart_marks_a_still_running_child_as_failed`) | setup | `bundledSkills.agentMessage: true` |
-| `crates/pa-cli/tests/print_inline_subagents_e2e.rs` | `lane()` (helper des 11 tests, dont 6 en échec : réponses des enfants par `agent_message.send`) | setup | `bundledSkills.agentMessage: true` |
 | `crates/pa-cli/tests/print_runtime_e2e.rs` | `print_mode_json_streams_the_harness_digest_pair` | setup | `harnessRefinements: true` |
 | `crates/pa-cli/src/print_boundary/tests.rs` | nouveau helper `refining_settings()` pour `requested_refinement_streams_rows_and_refine_complete`, `compact_trigger_auto_refine_streams_at_the_next_boundary`, `overflow_retry_compact_trigger_streams_the_ts_surface`, `compact_trigger_drains_at_disposal_off_the_stream` | setup | `harnessRefinements`, `autoRefine.enabled`, `autoRefine.compact` |
 | `crates/pa-core/src/session_engine/auto_refine_trigger.rs` | `session()` (helper des tests du déclencheur) | setup | portes `enabled` et `compact` explicites au lieu de `AutoRefineGates::default()` |
@@ -81,10 +78,10 @@ Chaque modification porte un commentaire `yusAgent (YA-01)`.
 | `scripts/check_refine_errors.py` | check de cycle de vie | setup | `harnessRefinements: true` |
 | `scripts/check_refine_request_headers.py` | check de cycle de vie | setup | `harnessRefinements: true` |
 | `scripts/check_minimum_reasoning.py` | check de cycle de vie | setup | `harnessRefinements: true` |
-| `scripts/check_late_message_receipt.py` | check de cycle de vie | setup | `bundledSkills.agentMessage: true` |
-| `scripts/check_restore_notice.py` | check de cycle de vie | setup | `bundledSkills.agentMessage`, `bundledSkills.rlmHeartbeat` |
 
-Nouveaux tests du fork : `crates/pa-core/src/settings/fork_defaults.rs` (défauts sans `settings.json`, réactivation de chaque fonction, skills indépendants, portées de la télémétrie).
+Nouveaux tests du fork : `crates/pa-core/src/settings/fork_defaults.rs` (défauts sans `settings.json`, bascule de chaque fonction par réglage, réglages des skills indépendants, portées de la télémétrie).
+
+Les tests qui activaient `agent-message` ou `rlm-heartbeat` dans un état intermédiaire de YA-01 ont été remis à l'état upstream quand ces skills sont redevenus actifs par défaut : `session_engine/engine/tests.rs`, `print_inline_subagents_e2e.rs`, `rlm_children_replacement_e2e.rs`, `check_late_message_receipt.py`, `check_restore_notice.py`. Ils ne figurent plus dans les écarts.
 
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
