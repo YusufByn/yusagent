@@ -112,13 +112,19 @@ fn cached_prefix_is_stable_across_sessions() {
     );
 
     let first_tail = &first.assembled[first.cached_prefix_len..];
-    assert!(first_tail.contains("Current date: "));
-    assert!(first_tail.contains("Working directory: /first/cwd"));
+    // yusAgent (T03, YA-04): the date, the cwd and the log path left the prompt; the tail says
+    // where to find them.
+    assert!(!first_tail.contains("Current date: "));
+    assert!(!first_tail.contains("/first/cwd"));
+    assert!(!first_tail.contains("/first/session.jsonl"));
+    for line in pa_core::prompts::session_paths::PROMPT_LINES {
+        assert!(first_tail.contains(line));
+    }
     assert!(first_tail.contains("Recursive agent depth: 0 (root)"));
     assert!(first_tail.contains("<available_skills>"));
     assert!(first_tail.contains("Pre-installed Python packages:"));
     let second_tail = &second.assembled[second.cached_prefix_len..];
-    assert!(second_tail.contains("/completely/different"));
+    assert!(!second_tail.contains("/completely/different"));
     assert!(second_tail.contains("Enabled generic MCP servers: `github`, `slack`."));
     assert!(second_tail.contains("Recursive agent depth: 3 (not root)"));
     assert!(second_tail.contains("You are a child agent spawned by orchestrator."));
@@ -137,6 +143,31 @@ fn cached_prefix_is_stable_across_sessions() {
             segment.name
         );
     }
+}
+
+/// yusAgent (T03, YA-04): two sessions of one project differ only by their cwd spelling, log
+/// path (session id) and date; none of them reaches the prompt, so the whole prompt (tail
+/// included) is byte-identical. Bundled skill locations name the kernel variable, not the
+/// directory the binary was extracted to.
+#[test]
+fn whole_prompt_is_identical_across_sessions_of_one_project() {
+    let mut options = BuildSystemPromptOptions {
+        cwd: "/project".to_string(),
+        messages_path: Some("/agent/sessions/0001.jsonl".to_string()),
+        skills: sorted_bundled_skills(),
+        selected_tools: Some(vec!["python_repl"]),
+        vision_capable: Some(false),
+        ..Default::default()
+    };
+    let first = system_prompt_breakdown(&options).assembled;
+    options.cwd = "/elsewhere".to_string();
+    options.messages_path = Some("/agent/sessions/0002.jsonl".to_string());
+    let second = system_prompt_breakdown(&options).assembled;
+    assert_eq!(first, second);
+    let bundled = bundled_skills_dir().display().to_string();
+    assert!(!first.contains(&bundled), "the bundled skills root leaked");
+    assert!(first.contains("<location>$PRIME_AGENT_BUNDLED_SKILLS_DIR/edit/SKILL.md</location>"));
+    assert!(first.contains(pa_core::prompts::session_paths::BUNDLED_SKILLS_NOTE));
 }
 
 // Tool surface

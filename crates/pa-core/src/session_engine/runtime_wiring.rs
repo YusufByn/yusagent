@@ -243,6 +243,9 @@ pub fn kernel_python_skills(skills: &[Skill]) -> Vec<KernelPythonSkill> {
 /// `create_session`, not the kernel boot.
 /// yusAgent (YA-02): `env_allowlist` is `kernel.envAllowlist`; it filters the env above and adds
 /// the ambient vars it allows (`crate::kernel::env_allowlist::apply_user_allowlist`).
+/// yusAgent (T03, YA-04): `conversation_log` is exported as `PRIME_AGENT_CONVERSATION_LOG` and
+/// the bundled skills root as `PRIME_AGENT_BUNDLED_SKILLS_DIR`, the values the system prompt no
+/// longer carries (`crate::prompts::session_paths`).
 #[allow(clippy::too_many_arguments)] // one wiring funnel, same style as AgentSession::from_session_arc
 #[must_use]
 pub fn kernel_provisioner(
@@ -255,6 +258,7 @@ pub fn kernel_provisioner(
     command_prefix: Option<String>,
     serper_api_key: Option<String>,
     env_allowlist: &[String],
+    conversation_log: Option<&str>,
     session_artifact_dir: Option<std::path::PathBuf>,
     cell_timeout_ms: Option<u64>,
     on_restore: Option<crate::kernel::provisioner::RestoreCallback>,
@@ -289,6 +293,7 @@ pub fn kernel_provisioner(
     if let Some(serper_api_key) = serper_api_key {
         env.insert("SERPER_API_KEY".to_string(), serper_api_key);
     }
+    crate::prompts::session_paths::insert_kernel_env(&mut env, conversation_log);
     crate::kernel::env_allowlist::apply_user_allowlist(&mut env, env_allowlist, std::env::vars());
     Arc::new(KernelProvisioner::new(
         cwd,

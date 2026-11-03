@@ -510,6 +510,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         kernel_command_prefix,
         serper_api_key,
         &kernel_env_allowlist,
+        conversation_log.as_deref(),
         session_artifact_dir,
         cell_timeout_ms,
         on_restore,
@@ -720,9 +721,13 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         // The session conversion rules apply at the loop's LLM boundary
         // (TS `convertToLlm`): bookkeeping custom rows drop, everything
         // else (the harness digest included) becomes a user turn.
+        // yusAgent (T03, YA-04): date and cwd ride an `<environment>` block, not the prompt.
         convert_to_llm: Some(super::request_timing::instrument_convert_to_llm(
             std::sync::Arc::clone(&request_timing_wiring),
-            super::refinement_gate::convert_to_llm(refinement_settings.reopen()),
+            super::environment_block::wrap_convert_to_llm(
+                super::refinement_gate::convert_to_llm(refinement_settings.reopen()),
+                &cwd,
+            ),
         )),
         // The Rust engine wires no transform, so the instrumented seam
         // wraps a pass-through that marks the turn's dispatch moment.

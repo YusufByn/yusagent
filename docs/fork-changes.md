@@ -26,6 +26,15 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | Tests et checks upstream | modif. | Voir « Tests upstream touchés (YA-02) » ci-dessous. | YA-02 |
 | `.changes/ya-02.md` | ajout | Fragment de changelog. | YA-02 |
 | `crates/pa-core/tests/prefix_stability.rs` | ajout | Test de préfixe du cache de prompt : session réelle (`create_session`, adaptateur provider réel, kernel réel) contre un serveur HTTP local, Anthropic Messages et OpenAI Responses, trois prompts avec tool calls. Voir « Test de préfixe » ci-dessous. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/environment_block.rs` | ajout | Bloc `<environment>` (date UTC, cwd) ajouté à la conversion vers le LLM, jamais stocké, et ses tests. Voir « Prompt système stable » ci-dessous. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/mod.rs` | modif. (2 lignes) | Déclare `environment_block`. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | `convert_to_llm` enveloppé par `environment_block::wrap_convert_to_llm` ; `conversation_log` passé à `kernel_provisioner`. | T03 (YA-04) |
+| `crates/pa-core/src/prompts/session_paths.rs` | ajout | Variables du kernel `PRIME_AGENT_CONVERSATION_LOG` et `PRIME_AGENT_BUNDLED_SKILLS_DIR`, lignes statiques du prompt, `<location>` des skills embarqués relative à la variable, et leurs tests. | T03 (YA-04) |
+| `crates/pa-core/src/prompts/mod.rs` | modif. (2 lignes) | Déclare `session_paths`. | T03 (YA-04) |
+| `crates/pa-core/src/prompts/system_prompt.rs` | modif. | `environment_section` : les lignes `Current date`, `Working directory`, `Conversation log` remplacées par les lignes fixes de `session_paths` ; `today()` retiré (plus d'appelant). Tests adaptés. | T03 (YA-04) |
+| `crates/pa-core/src/skills/mod.rs` | modif. | `format_skills_for_prompt` : `<location>` par `session_paths::skill_location`, et une ligne d'explication quand une location commence par la variable. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (5 lignes) | `kernel_provisioner` reçoit `conversation_log` et appelle `session_paths::insert_kernel_env`. | T03 (YA-04) |
+| Tests upstream | modif. | Voir « Tests upstream touchés (T03) » ci-dessous. | T03 (YA-04) |
 
 ## Désactivations par défaut (YA-01)
 
@@ -186,3 +195,37 @@ Même règle que YA-01 : aucun test supprimé ni affaibli. Chaque modification p
 - Entre la requête N et N+1 : chaque clé hors conversation (prompt système, tools, paramètres) est identique octet par octet ; pour Responses, le premier élément d'`input` (le prompt système) aussi. Les messages de N sont un préfixe exact de ceux de N+1, seul le déplacement de `cache_control` est toléré.
 - Le corps reçu doit être du JSON compact : sa re-sérialisation (`preserve_order`) redonne les mêmes octets. Comparer les valeurs re-sérialisées revient donc à comparer les octets reçus.
 - En cas d'échec : l'adaptateur, la paire de requêtes, la clé ou le message en cause, l'octet de la première différence et le contexte des deux côtés.
+
+## Prompt système stable (T03, YA-04)
+
+Avant T03, le prompt système changeait entre deux sessions du même projet (identifiant de session dans `Conversation log:`), chaque jour (`Current date:`), d'un projet à l'autre (`Working directory:`) et selon le dossier d'extraction du binaire (chemin absolu de chaque `SKILL.md` embarqué).
+
+| Valeur | Avant | Après |
+|---|---|---|
+| Date (UTC) | `Current date:` dans le prompt | bloc `<environment>` à la fin du premier message utilisateur ; nouvelle date à la fin du premier message utilisateur d'un autre jour |
+| Répertoire de travail | `Working directory:` dans le prompt | même bloc, premier message utilisateur |
+| Journal de session (contient l'id de session) | `Conversation log:` dans le prompt | variable du kernel `PRIME_AGENT_CONVERSATION_LOG` (vide si la session n'est pas persistée) ; le prompt dit comment la lire |
+| Racine des skills embarqués (dossier d'extraction du binaire) | chemin absolu dans chaque `<location>` | `<location>$PRIME_AGENT_BUNDLED_SKILLS_DIR/<nom>/SKILL.md</location>` ; variable du kernel, visible aussi par `bash()` |
+
+Bloc `<environment>` :
+
+- Calculé à la conversion vers le LLM (`environment_block.rs`), après `refinement_gate::convert_to_llm`. Rien n'est écrit dans le JSONL de session.
+- La date vient de l'horodatage du message lui-même, pas de l'horloge : chaque requête répète les blocs déjà envoyés octet pour octet.
+- Le bloc est une partie texte ajoutée après le contenu du message, qui reste inchangé.
+- Les messages custom convertis en tours utilisateur comptent aussi : la tâche `[task from parent]` d'un enfant `rlm` porte le bloc complet, comme le premier prompt du parent.
+- Après une compaction, le premier tour utilisateur du contexte reconstruit porte de nouveau le bloc complet (le préfixe est de toute façon reconstruit).
+- C'est le point d'accueil de l'instantané d'environnement complet de YA-09.
+
+Ce qui reste propre au projet dans le prompt : les chemins des `AGENTS.md` (`## <chemin>`) et des skills de l'utilisateur ou du projet (hors racine embarquée). Ils sont identiques d'une session à l'autre du même projet.
+
+## Tests upstream touchés (T03)
+
+Même règle : aucun test supprimé ni affaibli. Chaque modification porte un commentaire `yusAgent (T03, YA-04)`.
+
+| Fichier | Test(s) | Nature | Modification |
+|---|---|---|---|
+| `crates/pa-core/src/prompts/system_prompt.rs` | `default_prompt_is_layered_with_static_prefix_first` | défaut + renfort | la fin du prompt contient les lignes fixes ; ajout : ni `Working directory:`, ni `Current date:`, ni le chemin du journal |
+| `crates/pa-core/src/prompts/system_prompt.rs` | `custom_prompt_replaces_layers_keeps_tail` | défaut | la ligne fixe sur `<environment>` au lieu de `Working directory: /w` ; plus de `Current date: ` |
+| `crates/pa-cli/src/prompt_command.rs` | `assembles_the_layered_prompt_for_a_directory` | défaut + renfort | la ligne fixe du journal au lieu de `Conversation log: not persisted` ; ajout : aucune ligne `Conversation log:` |
+| `crates/pa-core/tests/prompt_guards.rs` | `cached_prefix_is_stable_across_sessions` | défaut + renfort | la fin du prompt ne contient plus la date, le cwd ni le journal (les deux sessions) ; ajout : les lignes fixes sont présentes |
+| `crates/pa-core/tests/prompt_guards.rs` | `whole_prompt_is_identical_across_sessions_of_one_project` | renfort (nouveau) | prompt entier identique quand seuls le cwd et le journal changent ; racine des skills embarqués absente, `<location>` relative à la variable |

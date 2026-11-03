@@ -227,9 +227,11 @@ mod tests {
         assert!(breakdown
             .assembled
             .contains("Recursive agent depth: 0 (root)"));
+        // yusAgent (T03, YA-04): the log path is read from the kernel env, never printed.
         assert!(breakdown
             .assembled
-            .contains("Conversation log: not persisted"));
+            .contains(pa_core::prompts::session_paths::PROMPT_LINES[1]));
+        assert!(!breakdown.assembled.contains("Conversation log:"));
         // Every static segment sits inside the cached prefix.
         for segment in &breakdown.segments {
             let inside = breakdown

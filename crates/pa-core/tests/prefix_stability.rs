@@ -706,3 +706,112 @@ async fn anthropic_messages_prefix_is_stable_across_requests() {
 async fn openai_responses_prefix_is_stable_across_requests() {
     prefix_scenario(Api::OpenAiResponses).await;
 }
+
+/// The first request of a one-prompt session (a text answer: no kernel cell).
+async fn first_request_of_a_session(api: Api, fixture: &Fixture) -> Map<String, Value> {
+    let server = ModelServer::start(api).await;
+    let engine = open_session(api, &server, &fixture.agent_dir(), &fixture.cwd()).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 1, "{}: unexpected request count", api.name());
+    request_object(api, 1, &bodies[0])
+}
+
+/// The texts of the first user message of a request.
+fn first_user_texts(api: Api, request: &Map<String, Value>) -> Vec<String> {
+    let (_, messages) = split_request(api, request);
+    let first = messages.first().expect("a user message");
+    match &first["content"] {
+        Value::String(text) => vec![text.clone()],
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str().map(str::to_string))
+            .collect(),
+        other => panic!("{}: unexpected user content {other}", api.name()),
+    }
+}
+
+/// yusAgent (T03, YA-04): two successive sessions of one project send a byte-identical system
+/// prompt and tools. The prompt carries no date, cwd or session id; the first user message
+/// carries the `<environment>` block with the date and the cwd.
+async fn two_sessions_scenario(api: Api) {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let first = first_request_of_a_session(api, &fixture).await;
+    let second = first_request_of_a_session(api, &fixture).await;
+    let (fixed_first, _) = split_request(api, &first);
+    let (fixed_second, _) = split_request(api, &second);
+    let system_key = match api {
+        Api::AnthropicMessages => "system",
+        Api::OpenAiResponses => "input[0] (system)",
+    };
+    for key in [system_key, "tools"] {
+        let render = |object: &Map<String, Value>| {
+            object
+                .get(key)
+                .map_or_else(|| "<absent>".to_string(), Value::to_string)
+        };
+        let (before, after) = (render(&fixed_first), render(&fixed_second));
+        assert!(
+            before == after,
+            "{}: session 1 -> session 2: `{key}` changed\n{}",
+            api.name(),
+            first_difference(&before, &after)
+        );
+    }
+
+    let system = fixed_first[system_key].to_string();
+    let cwd = fixture.cwd().display().to_string();
+    assert!(
+        !system.contains(&cwd),
+        "{}: the system prompt carries the cwd",
+        api.name()
+    );
+    for entry in std::fs::read_dir(fixture.agent_dir().join("sessions")).expect("sessions dir") {
+        let path = entry.expect("session entry").path();
+        let Some(session_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        assert!(
+            !system.contains(session_id),
+            "{}: the system prompt carries the session id {session_id}",
+            api.name()
+        );
+    }
+    assert!(
+        !system.contains("Current date:"),
+        "{}: the system prompt carries the date",
+        api.name()
+    );
+
+    let texts = first_user_texts(api, &first);
+    assert_eq!(texts[0], PROMPTS[1], "{}: user text changed", api.name());
+    let block = texts.last().expect("environment block");
+    let date = block
+        .strip_prefix("<environment>\nCurrent date: ")
+        .and_then(|rest| rest.get(..10))
+        .unwrap_or_else(|| panic!("{}: no environment block in {texts:?}", api.name()));
+    assert!(
+        date.len() == 10 && date.as_bytes()[4] == b'-' && date.as_bytes()[7] == b'-',
+        "{}: not a date: {date:?}",
+        api.name()
+    );
+    assert_eq!(
+        *block,
+        format!("<environment>\nCurrent date: {date}\nWorking directory: {cwd}\n</environment>"),
+        "{}: environment block",
+        api.name()
+    );
+}
+
+#[tokio::test]
+async fn anthropic_messages_system_prompt_is_identical_across_sessions() {
+    two_sessions_scenario(Api::AnthropicMessages).await;
+}
+
+#[tokio::test]
+async fn openai_responses_system_prompt_is_identical_across_sessions() {
+    two_sessions_scenario(Api::OpenAiResponses).await;
+}
