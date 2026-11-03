@@ -32,10 +32,11 @@ REDACTED_HEADERS = {"authorization", "x-api-key", "api-key", "cookie", "proxy-au
 # Code des cellules envoyées en tool call, par scénario et par tour.
 # Le tour 2 du scénario de base liste les NOMS des variables d'environnement
 # sensibles vues par le kernel (jamais leurs valeurs) : première ligne pour
-# `os.environ`, puis `env` dans `bash()` et `printenv` dans un shell
-# persistant, enfin la variable non sensible déclarée dans
-# `kernel.envAllowlist` (YA-02). Le tour 3 vérifie que uv, git et python3
-# tournent toujours dans `bash()`.
+# `os.environ`, puis `env` dans `bash()`, enfin la variable non sensible
+# déclarée dans `kernel.envAllowlist` (YA-02). Le tour 3 vérifie que uv, git
+# et python3 tournent toujours dans `bash()`. Le shell persistant est relevé
+# dans `psenv` : sur macOS il lit son identité par `ps`, que le sandbox du
+# banc interdit (setuid).
 SENSITIVE_NAMES = (
     "import os\n"
     "def ya_sensitive(names):\n"
@@ -50,9 +51,6 @@ SCENARIOS: dict[str, list[str]] = {
         + "print(ya_sensitive(os.environ))\n"
         "r = await bash('env')\n"
         "print('BASH', ya_sensitive(ya_names(r.output)))\n"
-        "p = await bash('printenv', persistent=True)\n"
-        "p = await p.handle if p.running else p\n"
-        "print('PERSISTENT', ya_sensitive(ya_names(p.output)))\n"
         "print('ALLOWED', os.environ.get('YA_CAPTURE_ALLOWED'))",
         "for c in ('uv --version', 'git status --short', \"python3 -c 'print(1)'\"):\n"
         "    r = await bash(c)\n"
@@ -67,15 +65,20 @@ SCENARIOS: dict[str, list[str]] = {
         "import os\nos._exit(1)",
         "print(2)",
     ],
-    # Hors périmètre YA-02, relevé pour YA-11 : depuis le kernel, `ps eww` sur
-    # le process parent (le harness) montre-t-il son environnement ? Seuls
-    # les noms des variables factices trouvées sont imprimés.
+    # Lancé hors sandbox (`ps` est setuid). Relevé pour YA-11, hors périmètre
+    # YA-02 : depuis le kernel, `ps eww` sur le process parent (le harness)
+    # montre-t-il son environnement ? Seuls les noms des variables factices
+    # trouvées sont imprimés. Puis `printenv` dans un shell persistant (YA-02).
     "psenv": [
-        "import os\n"
-        "r = await bash('ps eww -o command= -p ' + str(os.getppid()))\n"
+        SENSITIVE_NAMES
+        + "r = await bash('ps eww -o command= -p ' + str(os.getppid()))\n"
         "words = r.output.split()\n"
         "print('PS_PARENT', os.path.basename(words[0]) if words else None, r.exit_code,"
-        " sorted(n for n in ('ANTHROPIC_API_KEY', 'YA_CAPTURE_FAKE_TOKEN') if n + '=' in r.output))",
+        " sorted(n for n in ('ANTHROPIC_API_KEY', 'YA_CAPTURE_FAKE_TOKEN') if n + '=' in r.output))\n"
+        "p = await bash('printenv', persistent=True)\n"
+        "p = await p.handle if p.running else p\n"
+        "print('PERSISTENT', p.exit_code, ya_sensitive(ya_names(p.output)),"
+        " 'YA_CAPTURE_ALLOWED' in ya_names(p.output))",
     ],
     # Sous-agent : le parent lance un enfant puis attend son résultat. Les
     # requêtes de l'enfant arrivent sur le même serveur ; il est reconnu à

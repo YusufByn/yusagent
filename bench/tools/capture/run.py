@@ -252,7 +252,7 @@ def acp_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -
         transcript.append({"dir": "client->agent", "msg": message})
         proc.stdin.write(json.dumps(message) + "\n")
         proc.stdin.flush()
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + CASE_TIMEOUT_S
         while time.monotonic() < deadline:
             try:
                 incoming = json.loads(lines.get(timeout=1))
@@ -346,9 +346,14 @@ def spawn_check(binary: Path, cache: Path, work: Path, project: Path, out: Path)
 
 
 def ps_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -> dict:
-    """Hors périmètre YA-02, relevé pour YA-11 : `ps eww` lancé depuis le
-    kernel sur son parent (le harness) affiche-t-il l'environnement du
-    harness ? Scénario `psenv` ; seuls des noms de variables factices sortent.
+    """Scénario `psenv`, hors sandbox : `/bin/ps` est setuid et le profil
+    sandbox-exec en refuse l'exécution (code 126), ce qui casse aussi le shell
+    persistant sur macOS. Le provider reste le serveur local, avec
+    PI_OFFLINE=1 et DO_NOT_TRACK=1, comme la phase de préparation.
+    - Relevé pour YA-11 : `ps eww` lancé depuis le kernel sur son parent (le
+      harness) affiche-t-il l'environnement du harness ? Seuls des noms de
+      variables factices sortent.
+    - YA-02 : noms sensibles vus par `printenv` dans un shell persistant.
     """
     ps_dir = out / "psenv"
     ps_dir.mkdir(parents=True, exist_ok=True)
@@ -358,14 +363,17 @@ def ps_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) ->
         write_models_json(agent, "anthropic-messages", server.port)
         write_settings(agent)
         env = base_env(cache / "home", agent, work / "tmp")
-        result = run_binary(agent_cmd(binary), env, project, ps_dir, sandboxed=True)
+        result = run_binary(agent_cmd(binary), env, project, ps_dir, sandboxed=False)
     finally:
         server.stop()
-    line = None
+    found: dict[str, str | None] = {"PS_PARENT": None, "PERSISTENT": None}
     for body_path in sorted((ps_dir / "cap").glob("*.body.json")):
-        line = next((item for item in _texts(json.loads(body_path.read_text()))
-                     if item.startswith("PS_PARENT")), line)
-    return {**result, "ps_line": line}
+        for item in _texts(json.loads(body_path.read_text())):
+            for prefix in found:
+                if item.startswith(prefix + " "):
+                    found[prefix] = item
+    return {**result, "sandboxed": False, "ps_line": found["PS_PARENT"],
+            "persistent_line": found["PERSISTENT"]}
 
 
 def _texts(value) -> list[str]:
@@ -463,7 +471,7 @@ def main() -> None:
           f"/{run_info['spawn']['child_requests']}")
 
     run_info["psenv"] = ps_check(binary, cache, work, project, out)
-    print(f"psenv : {run_info['psenv']['ps_line']!r}")
+    print(f"psenv : {run_info['psenv']['ps_line']!r} {run_info['psenv']['persistent_line']!r}")
 
     run_info["acp"] = acp_check(binary, cache, work, project, out)
     print(f"acp : prompt={run_info['acp']['prompt_result']} "

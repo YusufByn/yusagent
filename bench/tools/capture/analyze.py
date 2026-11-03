@@ -333,10 +333,13 @@ def render(report: dict) -> str:
             out.append(f"- `{line[:300]}`")
     psenv = report["run"].get("psenv")
     if psenv:
-        out += ["", "## `ps eww` du harness depuis le kernel (scénario `psenv`, relevé YA-11)", "",
-                "Format : `PS_PARENT <commande du parent> <code de sortie> "
-                "<variables factices visibles dans son environnement>`.", "",
-                f"- `{psenv.get('ps_line')}`"]
+        out += ["", "## Scénario `psenv` (hors sandbox : `ps` est setuid)", "",
+                "- `ps eww` du harness depuis le kernel (relevé YA-11). Format : `PS_PARENT "
+                "<commande du parent> <code de sortie> <variables factices visibles dans son "
+                f"environnement>` : `{psenv.get('ps_line')}`",
+                "- `printenv` dans un shell persistant. Format : `PERSISTENT <code de sortie> "
+                "<noms sensibles> <YA_CAPTURE_ALLOWED visible>` : "
+                f"`{psenv.get('persistent_line')}`"]
     out += ["", "## Non-régression de `bash()` (s1-anthropic, tour 3)", ""]
     for result in report.get("bash_nonregression", []):
         for line in result.splitlines():
