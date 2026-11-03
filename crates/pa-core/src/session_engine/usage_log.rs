@@ -794,6 +794,8 @@ impl AuxProbe {
 /// # Errors
 ///
 /// Returns `pa_ai::complete_simple`'s error (no provider registered for `model.api`).
+// The error type is `pa_ai::complete_simple`'s own (pa-ai allows `result_large_err` crate-wide).
+#[allow(clippy::result_large_err)]
 pub async fn complete_simple(
     kind: CallKind,
     model: &pa_types::ai::Model,

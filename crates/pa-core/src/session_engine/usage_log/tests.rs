@@ -120,7 +120,7 @@ fn a_line_is_never_read_as_a_session_header() {
 fn turns_follow_the_last_user_message_and_the_delay_is_per_kind() {
     let dir = tempfile::tempdir().unwrap();
     let journal = journal(dir.path(), None);
-    let t0 = UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+    let t0 = UNIX_EPOCH + std::time::Duration::from_hours(500_000);
     let at = |ms: u64| t0 + std::time::Duration::from_millis(ms);
     journal.append(&record(CallKind::Main, at(0), Some(10)));
     // A tool-result round trip: same user message, same turn.
@@ -164,7 +164,7 @@ fn a_child_session_journals_main_calls_as_subagent() {
 #[test]
 fn a_reopened_journal_continues_its_counters() {
     let dir = tempfile::tempdir().unwrap();
-    let t0 = UNIX_EPOCH + std::time::Duration::from_secs(1_800_000_000);
+    let t0 = UNIX_EPOCH + std::time::Duration::from_hours(500_000);
     {
         let first = journal(dir.path(), None);
         first.append(&record(CallKind::Main, t0, Some(1)));
@@ -173,7 +173,7 @@ fn a_reopened_journal_continues_its_counters() {
     let reopened = journal(dir.path(), None);
     reopened.append(&record(
         CallKind::Main,
-        t0 + std::time::Duration::from_millis(300_000),
+        t0 + std::time::Duration::from_mins(5),
         Some(3),
     ));
     let last = lines(reopened.path()).pop().unwrap();
