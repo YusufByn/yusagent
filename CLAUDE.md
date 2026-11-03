@@ -30,7 +30,7 @@ Hard fork de Prime Agent (MIT), transformé en harness d'agent de code cache-fir
 1. Branche `ya-<ticket>`, commits préfixés par le ticket CDC.
 2. Push : `ya-build-macos-arm64.yml` construit le binaire de la branche (environ 8 min).
 3. `gh run download <run> --repo YusufByn/yusagent --dir <dossier>`, puis `python3 bench/tools/capture/run.py --binary <dossier>/prime-agent`.
-4. PR vers `main` : `ci.yml` lance les tests Rust. Merge seulement si la CI est verte.
+4. PR vers `main` : `ci.yml` lance les tests Rust. Merge uniquement sur un run `ci.yml` vert du dernier commit poussé. Un push annule le run en cours de la branche : regrouper les corrections avant de pousser.
 5. Mesures toujours avec `DO_NOT_TRACK=1 PI_OFFLINE=1` et `PI_CACHE_RETENTION` fixé.
 
 ## Fin de tâche
