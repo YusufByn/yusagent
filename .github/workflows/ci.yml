@@ -352,7 +352,9 @@ jobs:
           set -euo pipefail
           reference="${RUNNER_TEMP}/frame-ts-reference"
           mkdir -p "${reference}/package"
-          gh release download v0.9.8 --repo "${GITHUB_REPOSITORY}" \
+          # yusAgent (YA-01): the fork has no release; the pinned TS archive
+          # comes from upstream's public release, still checked by sha256.
+          gh release download v0.9.8 --repo PrimeIntellect-ai/prime-agent \
             --pattern prime-agent-0.9.8-linux-x64.tar.gz --dir "${reference}"
           archive="${reference}/prime-agent-0.9.8-linux-x64.tar.gz"
           echo "83fb09129bf78e3e60268212cd70932166591b15188caa70c1b0efbcc76235e2  ${archive}" | sha256sum --check
