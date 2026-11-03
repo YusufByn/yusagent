@@ -1,6 +1,6 @@
 # Cahier des charges yusAgent
 
-Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Version 4 (31/10/2026) : base = fork de Prime Agent (MIT), plus de contrainte de langage pour le cœur. Version 3 (28/10/2026) : kernel Python comme outil d'exécution unique, bash appelé en async depuis le kernel. Version 2 (24/10/2026) : priorité à la capacité maximale du modèle.
+Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Version 4.1 (03/11/2026) : constats de l'audit d'entrée du fork (cœur Rust, un seul tool `python_repl`). Version 4 (31/10/2026) : base = fork de Prime Agent (MIT), plus de contrainte de langage pour le cœur. Version 3 (28/10/2026) : kernel Python comme outil d'exécution unique, bash appelé en async depuis le kernel. Version 2 (24/10/2026) : priorité à la capacité maximale du modèle.
 
 ## Journal des décisions
 
@@ -25,10 +25,11 @@ Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Versio
 | 28/10/2026 | Windows : WSL2 obligatoire pour l'exécution, pas de backend Windows natif. En Windows natif, l'extension reste installable mais l'exécution est désactivée avec proposition de rouvrir le dossier dans WSL | Validé | YA-03, YA-10, YA-11, YA-16 |
 | 31/10/2026 | Base du harness : fork de Prime Agent (MIT). La plomberie commune (providers, « OAuth abonnement pour provider » et clés API, streaming, sessions JSONL, kernel, `rlm()`, gate autonome) est reprise ; les choix de ce CDC sont construits dessus. Remplace le choix « pas de fork » de la v3. Plus de contrainte de langage pour le cœur (hôte TypeScript de Prime Agent, runtime du kernel en Python). Code Rust autorisé ; les builds lourds restent en CI | Validé | YA-00, YA-01, YA-02, YA-03, YA-10, YA-16 |
 | 31/10/2026 | Mode de fork : hard fork, sans rebase sur upstream ; récupération sélective des commits upstream utiles (`git cherry-pick` : correctifs, nouveaux modèles, auth). Couche providers gardée au plus près d'upstream ; ajouts du CDC (cache, masquage, `edit`, banc) dans des modules séparés autant que possible. Repo neuf sous YusufByn avec upstream en remote (pas le bouton Fork de GitHub, pour pouvoir passer le repo en privé plus tard) ; public au départ | Validé | YA-02, YA-04, YA-05, YA-16 |
+| 03/11/2026 | Constat de l'audit d'entrée (`docs/audit/audit-entree.md`) : le cœur upstream est un workspace Rust (10 crates `pa-*`, environ 620 k lignes), pas un hôte TypeScript comme écrit le 31/10 ; le kernel est un REPL CPython maison, pas IPython ; le modèle ne voit qu'un tool, `python_repl`, avec `bash()` et `edit()` dans le kernel (conforme à la décision du 28/10 sur bash). Le code TypeScript ne subsiste qu'au tag v0.9.8 | Constat | YA-00, YA-01, YA-03, YA-16 |
 
 ## Résumé
 
-- **Position** : fork de Prime Agent (MIT ; hôte TypeScript, runtime du kernel en Python) transformé en harness inspiré de mini-SWE-agent et des RLM : kernel IPython persistant comme outil d'exécution unique, bash appelé en async depuis le kernel, outil d'édition adapté à chaque famille de modèles. Piloté par une extension VS Code TypeScript via le protocole ACP. La plomberie commune de Prime Agent est reprise ; la valeur ajoutée est dans le contexte, le cache, les formats d'édition et le banc.
+- **Position** : fork de Prime Agent (MIT ; cœur en Rust, runtime du kernel en Python) transformé en harness inspiré de mini-SWE-agent et des RLM : REPL Python persistant comme outil d'exécution unique, bash appelé en async depuis le kernel, outil d'édition adapté à chaque famille de modèles. Piloté par une extension VS Code TypeScript via le protocole ACP. La plomberie commune de Prime Agent est reprise ; la valeur ajoutée est dans le contexte, le cache, les formats d'édition et le banc.
 - **Objectif n°1** : extraire 100 % de la capacité du modèle utilisé. Le harness ne doit jamais être le facteur limitant.
 - **Objectif n°2** : à qualité égale ou supérieure, coût minimal. Leviers : taux de hit du cache de prompt (préfixe stable, contexte append-only), masquage des observations anciennes, réduction des tours inutiles. La compaction par résumé LLM vient en dernier recours.
 - **Preuve de valeur** : banc d'évaluation reproductible (sous-ensemble SWE-bench Verified + Terminal-Bench 4.0 + bench maison), à modèle égal contre mini-SWE-agent, Claude Code et Codex CLI.
@@ -121,7 +122,7 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 | Tours par tâche | médiane des appels modèle | mesuré | -20 % vs MVP sans perte de résolution | idem |
 | Edits appliqués | % d'éditions appliquées au premier essai | ≥ 95 % | ≥ 98 % | ≥ 98 % |
 | Cellules en erreur d'appel | % de cellules du kernel qui échouent sur une erreur de syntaxe Python ou de quoting autour d'un `bash()` | mesuré | ≤ 2 % | ≤ 1 % |
-| Empreinte disque | extension + harness, hors venv | < 50 Mo | < 50 Mo | < 50 Mo |
+| Empreinte disque | extension + harness, hors venv (62 Mo mesurés pour le harness seul au 03/11, cible à revoir) | < 50 Mo | < 50 Mo | < 50 Mo |
 | Démarrage | nouvelle session jusqu'au premier token | < 2 s | < 1 s | < 1 s |
 
 ### Périmètre
@@ -144,6 +145,7 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 ### Contraintes
 
 - Stockage local léger : builds lourds (binaires natifs, code Rust éventuel) construits en CI GitHub Actions et publiés en release, jamais en local.
+- Boucle de dev (constat de l'audit du 03/11) : push sur une branche `ya-*`, binaire macOS arm64 construit en CI (environ 8 min, `ya-build-macos-arm64.yml`), mesures locales avec le banc de capture (`bench/tools/capture/`). Tests Rust en CI ; seul le runtime Python se teste en local.
 - Pas de dépendance lourde ajoutée au cœur (pas de LangGraph).
 - UI et logs en français et en anglais.
 - Pas de secrets en clair : `SecretStorage` côté extension, variables d'environnement côté harness.
@@ -153,9 +155,9 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 | Décision | Choix | Justification |
 |---|---|---|
 | Base | Fork de Prime Agent (MIT), choix du CDC construits dessus (décision du 31/10/2026) | Plomberie commune (providers, auth, streaming, sessions, kernel) déjà écrite et testée ; le temps de build va aux différences qui comptent |
-| Cœur | Boucle de Prime Agent (hôte TypeScript), kernel IPython persistant (runtime Python) comme outil d'exécution unique | RLM et Prime Agent ; Programmatic Tool Calling |
+| Cœur | Boucle de Prime Agent (Rust, crates `pa-agent` et `pa-core`), REPL Python persistant de Prime Agent comme outil d'exécution unique (tool `python_repl`) | RLM et Prime Agent ; Programmatic Tool Calling |
 | Bash | Fonction async du kernel (`await bash(...)`), pas de tool `bash` séparé | Commandes parallèles et filtrage des sorties en code dans un même tour ; un seul point d'exécution à sécuriser ; à confirmer face à un bash natif sur le banc (YA-14) |
-| Protocole | ACP (JSON-RPC 2.0, NDJSON sur stdio) + extensions `_yus/*` ; mode ACP de Prime Agent à vérifier, sinon SDK ACP | Standard ouvert, compatible Zed et JetBrains |
+| Protocole | ACP (JSON-RPC 2.0, NDJSON sur stdio) + extensions `_yus/*` ; mode ACP de Prime Agent (opérationnel ; manquent `session/request_permission` et `session/load`, audit du 03/11) | Standard ouvert, compatible Zed et JetBrains |
 | Format d'édition | Tool `edit` séparé, par famille : `apply_patch` V4A (Codex), `str_replace` (Claude), search/replace (défaut) | Formats entraînés ; Diff-XYZ ; Aider |
 | Contexte | Append-only + masquage, compaction LLM en dernier recours | Manus ; « The Complexity Trap » |
 | Providers | Couche providers de Prime Agent (héritée de pi), auditée pour le cache ; ajustements ciblés là où l'audit montre un manque (breakpoints, `prompt_cache_key`, usage cache lu/écrit) | Évite de réécrire streaming et auth ; le contrôle fin du cache reste exigé (YA-04) |
@@ -195,11 +197,11 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 
 - **Description** :
   - **Tools exposés au modèle** : `python` (exécute une cellule dans le kernel) et `edit` (format natif de la famille). Aucun tool `bash` séparé.
-  - `python` : kernel IPython persistant, un par session, `await` au niveau supérieur. Il tourne dans le venv du harness (helpers et ipykernel garantis). Le code du projet n'est jamais importé dans le kernel : il s'exécute via `bash()` dans l'environnement du projet (`uv run`, `npm test`, venv détecté). Rien n'est installé dans l'environnement de l'utilisateur. Helpers préchargés : `bash`, `read`, `grep`, `glob`, `edit`, `diagnostics()`, `run_tests()`, `rlm()`, `web`, tools MCP. Le modèle traite les données en code au lieu de les lire dans le contexte.
+  - `python` (tool `python_repl` de Prime Agent) : REPL Python persistant (CPython, pas IPython, constat de l'audit du 03/11), un par session, `await` au niveau supérieur. Il tourne dans le venv du harness (helpers et ipykernel garantis). Le code du projet n'est jamais importé dans le kernel : il s'exécute via `bash()` dans l'environnement du projet (`uv run`, `npm test`, venv détecté). Rien n'est installé dans l'environnement de l'utilisateur. Helpers préchargés : `bash`, `read`, `grep`, `glob`, `edit`, `diagnostics()`, `run_tests()`, `rlm()`, `web`, tools MCP. Le modèle traite les données en code au lieu de les lire dans le contexte.
   - `bash` (helper async) : `await bash(cmd, timeout=..., cwd=..., env=...)` renvoie un objet résultat (code de sortie, tête et queue de la sortie, chemin du fichier de sortie complète, durée). Parallélisme via `asyncio.gather`.
     - Shell principal persistant (`cd` et `export` conservés) pour les appels séquentiels.
     - Si le shell principal est occupé, l'appel part dans un sous-process éphémère qui hérite de son cwd et de son env. Les changements d'état de ces appels ne sont pas conservés, et le prompt système le dit.
-    - Les magics shell d'IPython (`!cmd`, `%%bash`, `%sx`) sont redirigées vers ce même backend, jamais exécutées en direct.
+    - Pas de magics shell (le REPL n'est pas IPython, audit du 03/11) : une cellule `!cmd` est une erreur de syntaxe, comptée dans les cellules en erreur d'appel.
   - `edit` : format selon la famille de modèle, correspondance tolérante aux espaces, erreurs exploitables. Renvoie la zone modifiée avec ses numéros de ligne, pour éviter une relecture de vérification. Aussi disponible comme helper du kernel pour les éditions en lot.
   - `read` : renvoie le contenu avec numéros de ligne, pour éviter les relectures de repérage.
   - Pont MCP : tools yusAi (SupabaseQuery, DatabaseQuery, HttpRequest, LogsWatch, Deploy) exposés comme fonctions du kernel.
@@ -326,7 +328,7 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 
 - **Description** :
   - Permissions par défaut : lecture libre dans le workspace, écriture via diff, commandes classées (lecture seule auto-approuvée ; `rm -rf`, `git push --force`, `DROP`, déploiements toujours confirmés), réseau sur liste blanche.
-  - Le classifieur de commandes s'applique à chaque `bash()` et aux magics shell redirigées (YA-03). **Limite** : le Python arbitraire du kernel (`subprocess`, `os`, `shutil`, `socket`, requêtes HTTP) n'est pas filtrable de façon fiable. Sans sandbox, il n'est couvert que par l'avertissement persistant ; une détection heuristique (imports et appels sensibles, confirmation de la cellule) peut s'ajouter mais reste contournable et doit être présentée comme telle.
+  - Le classifieur de commandes s'applique à chaque `bash()` (YA-03). **Limite** : le Python arbitraire du kernel (`subprocess`, `os`, `shutil`, `socket`, requêtes HTTP) n'est pas filtrable de façon fiable. Sans sandbox, il n'est couvert que par l'avertissement persistant ; une détection heuristique (imports et appels sensibles, confirmation de la cellule) peut s'ajouter mais reste contournable et doit être présentée comme telle.
   - Sandbox OS (`@anthropic-ai/sandbox-runtime`, WSL2 sous Windows, ou Docker), appliqué au process du kernel entier, pas seulement aux commandes `bash()`.
   - **Verrou auto-approve** : hors sandbox ou conteneur, l'auto-approve des cellules du kernel est impossible. Chaque cellule à effet de bord (écriture, réseau, process) demande confirmation, quel que soit le réglage de l'utilisateur.
   - **Usage perso vs publication** : en usage perso (MVP), le sandbox reste optionnel grâce au verrou. Pour la publication publique, il est obligatoire et bloquant (YA-16) : les utilisateurs tiers exécutent l'agent sur leurs propres machines et projets, avec des réglages par défaut qu'ils ne liront pas forcément.
@@ -337,7 +339,7 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 - **Justification** : Anthropic (fatigue d'approbation, -84 % avec sandbox) ; « trifecta létale » (données privées + contenu non fiable + exfiltration). Avec le kernel comme outil d'exécution unique, le sandbox devient le seul contrôle complet. Prime Agent précise lui-même que ses process worker et kernel ne sont pas un sandbox.
 - **Critères d'acceptation** :
   - Suite de tests d'injection (README, page web, commentaire) sans commande destructrice ni exfiltration en mode sandbox, y compris via du Python direct (`subprocess`, `os.remove`, requête réseau).
-  - Aucune commande shell exécutée hors du backend `bash()` (magics comprises).
+  - Aucune commande shell exécutée hors du backend `bash()` par les helpers du harness.
   - Décisions de permission journalisées.
   - Avertissement persistant en mode sans sandbox.
   - Auto-approve des cellules refusé hors sandbox ou conteneur, testé.
@@ -477,6 +479,30 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 
 ---
 
+## Audit d'entrée (03/11/2026)
+
+Rapport complet : `docs/audit/audit-entree.md` (binaire de HEAD construit en CI, réseau limité à localhost). Tokens estimés avec `o200k_base`, qui n'est le tokenizer de facturation d'aucun provider.
+
+| Sujet | Constat | Ticket |
+|---|---|---|
+| Prompt système | environ 7 500 tokens est. (couches statiques 5 636, inventaire des skills 1 854) ; cible < 2 000 | YA-09 |
+| Cache dans une session | prompt système et tools identiques octet par octet à chaque tour, après crash, reprise et compaction ; seul `cache_control` se déplace (schéma Anthropic normal) | YA-04 |
+| Cache entre sessions | prompt système différent à chaque session : date, cwd, chemin du journal de session | YA-04, YA-09 |
+| Breakpoints et TTL | 3 breakpoints automatiques ; TTL 1 h seulement via `PI_CACHE_RETENTION=long` ; `prompt_cache_key` = id de session | YA-04 |
+| Secrets | le kernel hérite de tout l'environnement, clés API comprises | YA-03, YA-11 |
+| Compaction | seuil 95 % ; premier message utilisateur perdu ; déclenche un appel `/refine` | YA-05 |
+| Usage | pas de champ raisonnement ; usage Anthropic mal lu au `message_start` | YA-13 |
+| Crash du kernel | redémarrage silencieux, aucune observation injectée | YA-03 |
+| Plafond de sortie de cellule | 1 Mio de texte contre 8 000 tokens dans le CDC | YA-03 |
+| `rlm()` | sous-agent complet (tous les tools), handle puis `collect` | YA-06 |
+| ACP | opérationnel ; manquent `session/request_permission` et `session/load` | YA-10 |
+| Télémétrie | active par défaut vers `api.primeintellect.ai` | YA-13 |
+| Empreinte | 62 Mo installés hors venv (binaire 59 Mo) | KPI |
+| CI du fork | 18 jobs sur 20 ; shard 1 en échec (release v0.9.8 absente) | YA-16 |
+| Déjà présent | provider factice `faux`, transcripts ACP, gate « pas de relance sans changement du workspace », hook `transform_context` pour le masquage | YA-05, YA-07 |
+
+---
+
 ## Roadmap
 
 | Phase | Contenu | Sortie attendue |
@@ -485,17 +511,18 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 | v1 (6 à 8 semaines) | YA-02 (providers supplémentaires, « OAuth abonnement pour provider »), YA-05 (compaction LLM), YA-06 (extensions selon le banc), YA-08, YA-09, YA-11 (sandbox OS, bloquant pour la publication), YA-12, YA-14 (vs Claude Code, Codex CLI, OpenCode), YA-17 (mode effort maximal, auto-revue, vision), YA-19, YA-20, YA-21 | Résolution ≥ harness du fournisseur ; rapport de banc public |
 | v2 (publication) | YA-02 (clés API, OAuth retiré des builds publiés), YA-13 (vérification coût vs facture), YA-16 (publication Marketplace, Open VSX, distribution du harness), YA-15, YA-17 (best-of-N), boucle Meta-Harness hors ligne, ACP multi-éditeurs, tools MCP yusAi avancés | Publication ; résolution > harness du fournisseur ; article technique |
 
-## Ordre de démarrage du build (proposé, 31/10/2026)
+## Ordre de démarrage du build (proposé, 31/10/2026 ; mis à jour 03/11/2026)
 
 Aucun modèle réel nécessaire pour ces étapes : tout se teste avec le provider factice ou des requêtes interceptées (base URL pointée vers un serveur local).
 
-1. Repo neuf `YusufByn/yusagent` (public) créé depuis un clone de `PrimeIntellect-ai/prime-agent`, upstream en remote, LICENSE conservée, ajout de `extension/` et `bench/` (avec l'adaptateur Harbor). CI héritée, réduite à lint + tests avec provider factice.
-2. Audit d'entrée : taille du préambule au premier appel, test de préfixe octet par octet N+1 vs N (YA-04), état du mode ACP, taille sur disque, points d'entrée pour le masquage (YA-05) et le tool `edit` (YA-03).
-3. Désactivation par réglage de ce qui sort du MVP (Continual Harness et `/refine`, messagerie entre agents, heartbeats), sans suppression diffuse du code.
-4. YA-04 et YA-13 (base) : test de préfixe en CI, journal d'usage JSONL.
-5. YA-03 : helper `bash()` conforme (shell principal persistant + sous-process éphémères, magics redirigées), `edit` séparé par famille, `read` numéroté, environnement filtré.
-6. YA-05 (masquage) et YA-06 (`rlm()` en lecture seule, résumé + extraits, réglage désactivé par défaut).
-7. Mode headless pour le banc (Harbor), puis YA-10 branché sur le même cœur. Si le planning glisse, c'est l'extension qui recule, pas le banc.
+1. **Fait (03/11).** Repo neuf `YusufByn/yusagent` (public) créé depuis un clone de `PrimeIntellect-ai/prime-agent`, upstream en remote, LICENSE conservée, ajout de `extension/` et `bench/` (avec l'adaptateur Harbor). CI héritée, réduite à lint + tests avec provider factice.
+2. **Fait (03/11), rapport dans `docs/audit/audit-entree.md`.** Audit d'entrée : taille du préambule au premier appel, test de préfixe octet par octet N+1 vs N (YA-04), état du mode ACP, taille sur disque, points d'entrée pour le masquage (YA-05) et le tool `edit` (YA-03).
+3. Ticket 01 : désactivations par défaut (Continual Harness, `/refine` automatique, messagerie entre agents, heartbeats, télémétrie distante, vérification de version) et correctif du shard CI 1.
+4. Ticket 02 : environnement filtré du kernel et de `bash()` (YA-03, YA-11).
+5. Ticket 03 : YA-04, test de préfixe en CI, volatil (date, cwd, chemin du journal) sorti du prompt système, réglage du TTL.
+6. Ticket 04 : YA-13 base, journal d'usage par appel, champ raisonnement, correctif de l'usage Anthropic.
+7. Ticket 05 : YA-05 masquage par le hook `transform_context`, réglage désactivé par défaut jusqu'au banc.
+8. Ensuite : smoke bench (YA-14) avant toute réduction du prompt (YA-09), puis YA-03 (`edit` en tool, `read` numéroté, plafond de sortie, notice de redémarrage), conservation des messages utilisateur à la compaction (YA-05), YA-06, YA-10 (permissions ACP). Si le planning glisse, c'est l'extension qui recule, pas le banc.
 
 ## Recommandations
 
@@ -513,7 +540,8 @@ Aucun modèle réel nécessaire pour ces étapes : tout se teste avec le provide
 - Sans sandbox, le kernel exécute du Python arbitraire que le classifieur de commandes ne voit pas (YA-11).
 - Les remises de cache varient selon le modèle et la date ; la table de prix de YA-13 se met à jour depuis la doc officielle de chaque provider.
 - Les leaderboards évoluent chaque mois et dépendent des ressources et de la version (Terminal-Bench 2.x, 3.0 et 4.0 non comparables entre eux ; les chiffres 2.1 de l'état de l'art sont historiques).
-- Fork : upstream évolue vite ; plus le contexte et le cache sont réécrits, plus les rebases coûtent. Le mode ACP de Prime Agent n'est confirmé que par une source secondaire.
+- Fork : upstream évolue vite ; plus le contexte et le cache sont réécrits, plus les cherry-picks coûtent. Point de friction principal identifié par l'audit : la compaction (`compact_session.rs`, `compaction.rs`), souvent modifiée upstream.
+- Sans sandbox, filtrer l'environnement du kernel ne suffit pas à cacher les secrets : un process du même utilisateur peut lire les fichiers d'auth du harness et, sous Linux, `/proc/<pid>/environ` du parent (qui garde l'environnement initial même après `unsetenv`). La protection complète vient du sandbox (YA-11).
 - Les KPI sont des hypothèses à recalibrer après le premier rapport de banc.
 - Un harness ne peut pas dépasser le plafond du modèle. « 100 % de la capacité » se mesure concrètement par l'écart avec le meilleur harness connu pour ce modèle (en général celui du fournisseur) : l'objectif est de l'égaler puis de le dépasser.
 
