@@ -496,12 +496,18 @@ class OwnedProcesses:
             if current != identity or state == 'Z':
                 return False
             env = dict(item.split(b'=', 1) for item in Path('/proc/%d/environ' % pid).read_bytes().split(b'\0') if b'=' in item)
-            if env.get(TAG.encode()) != str(self.root).encode():
+            tagged = env.get(TAG.encode()) == str(self.root).encode()
+            # yusAgent (YA-02): the kernel env is an allowlist, so TAG no longer
+            # reaches kernels; they still carry their session's agent dir.
+            kernel_tagged = env.get(b'PRIME_AGENT_CODING_AGENT_DIR') == str(self.root / 'agent').encode()
+            if not (tagged or kernel_tagged):
                 return False
             command = Path('/proc/%d/cmdline' % pid).read_bytes().rstrip(b'\0').split(b'\0')
             if pid in self.direct:
-                return self.direct[pid] == (identity, command)
+                return tagged and self.direct[pid] == (identity, command)
             if command[0] == str(self.binary).encode():
+                if not tagged:
+                    return False
                 for path in (self.root / 'agent' / 'daemon-workers').rglob('*.json'):
                     row = json.loads(path.read_text())
                     if row.get('pid') == pid:
