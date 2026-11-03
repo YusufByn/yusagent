@@ -58,6 +58,74 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/tests/usage_backcompat.rs` | ajout | Une session écrite avant T04 se relit ; sans valeur, l'usage s'écrit avec les mêmes champs qu'avant ; les champs traversent la frontière `pa-ai` / `pa-agent`. | T04 (YA-13) |
 | `docs/usage.md` | ajout | Sémantique des champs d'usage par provider, taux de cache, format du journal. | T04 (YA-13) |
 | `.changes/ya-04.md` | ajout | Fragment de changelog. | T04 (YA-13) |
+| `crates/pa-core/src/session_engine/masking.rs`, `masking/tests.rs` | ajout | Masquage des anciennes sorties de `python_repl` sur le hook `transform_context`, réglage `masking` (coupé par défaut), garde-fous, invalidation journalisée, et leurs tests. Voir « Masquage (T05) » ci-dessous. | T05 (YA-05) |
+| `crates/pa-core/src/session_engine/mod.rs` | modif. (2 lignes) | Déclare `masking` (`:31-32`). | T05 (YA-05) |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | Lit `masking` avant le déplacement des réglages (`:285-287`) ; `transform_context` reçoit `masking::transform_context` (`:717`, `:761`) au lieu de `pass_through_transform()`, qui reste ce qu'il renvoie quand le réglage est coupé. | T05 (YA-05) |
+| `crates/pa-core/src/settings/types.rs` | modif. (3 lignes) | Champ `masking` de `Settings` (`:321-323`). | T05 (YA-05) |
+| `crates/pa-core/src/settings/load.rs` | modif. (2 lignes) | `masking` ajouté aux clés connues (`:69-70`). | T05 (YA-05) |
+| `crates/pa-core/src/session_engine/usage_log.rs`, `usage_log/tests.rs` | modif. (fichiers du fork) | Champ `invalidation` : noté par le masquage (`note_invalidation`, `:323`), pris par l'appel `main` suivant (`instrument_stream_fn`), absent sinon. Test ajouté. | T05 (YA-05) |
+| `prime-agent-runtime/src/rlm/bash.py` | modif. (14 lignes) | `_emit_failed_exit` (`:179`) : une cellule qui lit un résultat `bash()` de code non nul émet `application/vnd.prime-agent.bash-exit+json` (`:54`), appelé à la lecture du résultat (`_note_result_consumed`, `:825`). Sans cela l'hôte ne sait pas qu'un `bash()` a échoué : `bash()` ne lève pas d'exception. | T05 (YA-05) |
+| `crates/pa-core/src/kernel/shared.rs` | modif. (5 lignes) | Constante `BASH_EXIT_DISPLAY_MIME` (`:72`), champ `bash_failed_exit` d'`ExecuteResult` (`:213`). | T05 (YA-05) |
+| `crates/pa-core/src/kernel/manager/events.rs` | modif. (8 lignes) | `dispatch_display` lit le code de sortie de ce MIME (`:239-246`). | T05 (YA-05) |
+| `crates/pa-core/src/kernel/manager/mod.rs`, `execution.rs`, `session_engine/runtime_wiring.rs` | modif. (1 à 2 lignes chacun) | `bash_failed_exit` transmis jusqu'au résultat du tool (`mod.rs:95`, `:139`, `execution.rs:227`, `runtime_wiring.rs:471`). | T05 (YA-05) |
+| `crates/pa-core/src/tools/ipython.rs` | modif. (6 lignes) | Champ `bash_failed_exit` (`:69`) et clé `bashFailedExit` des `details` du résultat (`:470-472`). Les `details` ne sont pas envoyés au modèle. | T05 (YA-05) |
+| `prime-agent-runtime/src/rlm/masked.py`, `prime-agent-runtime/test/test_masked.py` | ajout | `tool_output(id)` relit une sortie masquée dans le journal de session ; tests de la relecture et de l'émission du code de sortie. | T05 (YA-05) |
+| `crates/pa-core/tests/masking_bash_exit.rs` | ajout | Vrai kernel : une cellule qui lit un `bash()` en échec remonte son code de sortie. | T05 (YA-05) |
+| `bench/tools/capture/server.py`, `run.py`, `masking_check.py`, `README.md` | modif. / ajout | Scénario `mask`, cache simulé sur le préfixe réel (`--prefix-cache`), cas `mask-off-anthropic` et `mask-on-anthropic`, rapport `masking-report.md`. | T05 (YA-05) |
+| `docs/usage.md` | modif. | Champ `invalidation` du journal. | T05 (YA-05) |
+| `.changes/ya-05.md` | ajout | Fragment de changelog. | T05 (YA-05) |
+
+## Masquage (T05, YA-05)
+
+Coupé par défaut. Réglage dans `settings.json` (global ou projet) :
+
+```json
+{"masking": {"enabled": true, "window": 10, "step": 5, "minChars": 500}}
+```
+
+Réglage coupé : `transform_context` reste `pass_through_transform()` (`masking.rs:168-170`), donc les requêtes sont celles d'avant T05 octet pour octet (test `disabled_the_transform_returns_the_same_bytes`, et banc : `compare.py --all` entre `main` et `ya-05`).
+
+Réglage actif, à chaque requête de la boucle (`masking.rs:198`) :
+
+- **Tours** : le tour `k` est le `k`-ième message assistant du contexte ; ses résultats de tool lui appartiennent. La requête en cours est le tour `N`.
+- **Paliers** : frontière `F = step × ⌊(N − window − 1) / step⌋` (`masking.rs:142`). Les sorties des tours `1..F` sont candidates. Avec les défauts, `F` passe à 5 au tour 16, 10 au tour 21, 15 au tour 26, etc.
+- **Décisions figées** : la liste masquée pour `F` est calculée sur le contexte tel qu'il était quand `F` a été atteint, c'est-à-dire les messages des tours `1..F + window` (`masking.rs:268`). Entre deux paliers, rien ne bouge dans le préfixe, même si une nouvelle erreur arrive. Au palier, le préfixe change au plus une fois.
+- **Placeholder** : `[sortie masquée : tour <k>, <n> caractères, relire avec from rlm.masked import tool_output; print(tool_output("<id du tool call>"))]` (`masking.rs:228`). Il dépend seulement du tour, du nombre de caractères et de l'identifiant du tool call. Les `details` du résultat restent tels quels (ils ne partent pas au modèle).
+- **Relecture** : `rlm.masked.tool_output(id)` (`prime-agent-runtime/src/rlm/masked.py`) lit la sortie complète dans `PRIME_AGENT_CONVERSATION_LOG`. Le JSONL de session n'est jamais modifié.
+- **Périmètre** : seuls les résultats de `python_repl`. Jamais les messages utilisateur ou assistant, ni le code des cellules, ni les autres tools.
+
+Garde-fous (`masking.rs:352`). Ne sont jamais masqués :
+
+| Garde-fou | Règle |
+|---|---|
+| Sortie courte | moins de `minChars` caractères (défaut 500) |
+| Image | résultat qui contient une image (pas de relecture texte possible) |
+| Dernière sortie en erreur | `details.status == "error"` (exception Python) ou `details.bashFailedExit` (un `bash()` lu avec un code non nul) |
+| Dernier échec de test | dernière sortie en erreur dont la cellule lance des tests (`pytest`, `cargo test`, `npm test`, `go test`, …, `masking.rs:45`), même si une erreur plus récente existe |
+| Diagnostics actifs | dernière exécution de chaque outil de diagnostic (`ruff`, `mypy`, `pyright`, `eslint`, `tsc`, `cargo check`, `cargo clippy`, …, `masking.rs:72`) |
+| Fichiers en cours d'édition | toute sortie dont la cellule cite (chemin ou nom de fichier) un fichier modifié par `edit()` dans les `window` derniers tours (`details.diffs`) |
+| Plan | dernière sortie qui lit ou modifie `plan.md`, `progress.md` ou `todo.md` (sans casse, `masking.rs:90`) |
+
+Ces règles sont des heuristiques sur le code de la cellule. Elles protègent trop plutôt que pas assez : une protection en trop coûte des tokens, une protection en moins coûte une relecture.
+
+Invalidation : quand la liste masquée change, la requête est notée dans le journal d'usage (`invalidation`, voir `docs/usage.md`), avec son `cacheWrite`.
+
+Compaction : le seuil part de l'usage réel du dernier appel, plus une estimation des messages qui le suivent (`compaction.rs:237-246`). L'usage renvoyé par le provider porte sur la requête masquée : le seuil en tient compte sans changement. La compaction elle-même résume l'historique complet (non masqué).
+
+## Instabilité probable : `clipboard_auth_commands_e2e` (T05)
+
+`crates/pa-cli/tests/clipboard_auth_commands_e2e.rs`, test `tui_prime_login_escape_keeps_the_default_team_status`, shard 5 de `ci.yml`.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 41702752565 | `aa4b128b7` | 1 | échec du shard 5 |
+| 41702752565 | `aa4b128b7` | 2 | réussi, aucun changement de code |
+
+Symptôme : `the team picker mounted` échoue à `clipboard_auth_commands_e2e.rs:989`. Le rendu ne montre que l'écran d'accueil : le sélecteur d'équipe n'apparaît pas pendant les attentes fixes du plan headless (`WaitMs(400)` après `/login`, `:975-979`). Hypothèse : délai trop court sur un runner chargé (même tentative : le shard 6 est tombé sur « No space left on device »). Le test ne touche à rien de ce que modifient les tickets du fork (login headless sur le provider factice).
+
+Le run `ci.yml` de `main` après le merge de T04 (41707124985, `e76dfc0ad`) a aussi un shard 5 en échec, mais l'annotation dit « No space left on device » et le log n'est plus téléchargeable : cause non attribuable à ce test.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
 ## Désactivations par défaut (YA-01)
 

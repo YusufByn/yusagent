@@ -83,6 +83,7 @@ Par précaution, une ligne ne contient jamais les clés `id`, `timestamp` ou `cw
 | `durationMs` | Du début de l'appel à sa fin. |
 | `sincePrevMs` | Délai depuis le début de l'appel précédent **du même `kind`** dans la session (`null` pour le premier), relu dans le journal après un redémarrage. Le cache se rafraîchit à chaque lecture, donc ce délai, comparé au TTL (5 min ou 1 h), dit si le préfixe de la boucle était encore chaud. Les appels annexes ont leur propre préfixe et leur propre délai. |
 | `historyReasoning` | Raisonnement renvoyé au modèle dans l'historique de cette requête, mesuré sur le corps exact envoyé : `blocks` (blocs ou items de raisonnement), `textChars` (caractères de texte lisible), `textTokensEst` (**estimation** : caractères / 4, l'heuristique de `compaction::estimate_tokens`), `opaqueBytes` (signatures, raisonnement chiffré ou masqué, en octets). Aucun provider ne donne ce compte en tokens. Absent si le corps n'a pas été observé (échec avant l'envoi). |
+| `invalidation` | (T05, YA-05) Le harness a changé le préfixe de cette requête exprès. Seulement sur les appels de la boucle, absent sinon. Masquage (`docs/fork-changes.md`, « Masquage (T05) ») : `{"cause": "masking", "turn": N, "frontier": F, "masked": n}`, posé quand la liste des sorties masquées change (une fois par palier au plus). Le `cacheWrite` de la même ligne est le coût de cette rupture. Champ optionnel : la version `v` ne change pas. |
 
 Points d'accroche :
 
