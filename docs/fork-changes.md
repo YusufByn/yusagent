@@ -83,6 +83,30 @@ Nouveaux tests du fork : `crates/pa-core/src/settings/fork_defaults.rs` (défaut
 
 Les tests qui activaient `agent-message` ou `rlm-heartbeat` dans un état intermédiaire de YA-01 ont été remis à l'état upstream quand ces skills sont redevenus actifs par défaut : `session_engine/engine/tests.rs`, `print_inline_subagents_e2e.rs`, `rlm_children_replacement_e2e.rs`, `check_late_message_receipt.py`, `check_restore_notice.py`. Ils ne figurent plus dans les écarts.
 
+## Instabilité probable : `agent_family_e2e` (YA-01)
+
+`crates/pa-daemon/tests/agent_family_e2e.rs`, tests `parent_child_agent_message_round_trip_end_to_end` et `family_edges_never_cross_families_end_to_end`.
+
+Historique des runs :
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 41609183862 | `f4809b6` | 1 | réussi |
+| 41612185670 | `d5a18c7` | 1 | échec |
+| 41612185670 | `d5a18c7` | 2 | réussi, aucun changement de code |
+
+Symptômes de l'échec :
+- `{"messages":[]}` pour le parent, à `agent_family_e2e.rs:538` (délai de 20 s) ;
+- un reçu jamais écrit, à `:310` (délai de 30 s) ;
+- `Broken pipe (os error 32)` dans le log du daemon.
+
+Aucune dépendance de la messagerie aux réglages coupés par YA-01 :
+- Aucune référence à harness, refine ou digest dans `crates/pa-core/src/session_engine/agent_messaging.rs`, `agent_messaging/`, `crates/pa-daemon/src/agent_messaging.rs`, `agent_message_ingest.rs`, `agent_message_broadcast.rs` ou `peer_tickets.rs`. Le « digest » de `peer.rs:202-207` est un hachage de jeton.
+- Le `host_request` `agent_message.send` (`crates/pa-core/src/session_engine/runtime_wiring.rs:198`, `:546`) n'a pas de porte de raffinement.
+- Seul point commun : l'admission de chaque prompt (`crates/pa-core/src/session_engine/admission.rs:43`, `:142`) appelle `pending_digest_prompt_row`. Raffinements coupés, la fonction renvoie `Ok(None)` aussitôt (`harness_digest.rs:463-465`).
+
+Si ce test retombe sur une PR suivante : enquête.
+
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
 Le shard 1 de `ci.yml` téléchargeait la release `v0.9.8` depuis `${GITHUB_REPOSITORY}`. Le fork n'a pas de release, l'étape échouait et faisait échouer tout le shard.
