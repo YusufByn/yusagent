@@ -86,7 +86,7 @@ Par précaution, une ligne ne contient jamais les clés `id`, `timestamp` ou `cw
 
 Points d'accroche :
 
-- Appels de la boucle (et de leurs retries) : `instrument_stream_fn` enveloppe le `StreamFn` de la session (`crates/pa-core/src/session_engine/engine.rs:704-714`), la question annexe a son propre enveloppement (`purpose: side_question`). Le corps est observé par le hook `on_payload`, qui le rend inchangé.
+- Appels de la boucle (et de leurs retries) : `instrument_stream_fn` enveloppe le `StreamFn` de la session (`crates/pa-core/src/session_engine/engine.rs:707-717`), la question annexe a son propre enveloppement (`purpose: side_question`). Le corps est observé par le hook `on_payload`, qui le rend inchangé.
 - Appels annexes (`pa_ai` direct) : résumé de compaction (`crates/pa-core/src/session_engine/compaction_exec.rs:183-213`), `/refine` (`crates/pa-core/src/session_engine/refine.rs:668`), résumé de branche (`crates/pa-core/src/session_engine/branch_summarization.rs:473`). Ils retrouvent le journal par l'id de session qu'ils passent déjà au provider. Sans journal, `usage_log::complete_simple` est exactement `pa_ai::complete_simple`.
 
 Exemple (banc de capture, cas `s1-anthropic`, deuxième requête) : voir `usage-report.md` d'un run (`bench/tools/capture/usage_check.py`).

@@ -51,7 +51,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | Littéraux `Usage` (19 fichiers) | modif. (2 lignes par littéral) | `reasoning: None, cache_write_1h: None` ajoutés aux littéraux complets de `Usage`, exigés par le compilateur. Liste ci-dessous. | T04 (YA-13) |
 | `crates/pa-core/src/session_engine/usage_log.rs`, `usage_log/tests.rs` | ajout | Journal d'usage par appel (`<id>.usage.ndjson`) et ses tests. Voir `docs/usage.md`. | T04 (YA-13) |
 | `crates/pa-core/src/session_engine/mod.rs` | modif. (2 lignes) | Déclare `usage_log`. | T04 (YA-13) |
-| `crates/pa-core/src/session_engine/engine.rs` | modif. | Ouvre le journal de la session (`:338`) ; enveloppe le `stream_fn` de la boucle (`main`/`subagent`) et celui de la question annexe (`other`) par `usage_log::instrument_stream_fn` (`:704-714`). | T04 (YA-13) |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | Ouvre le journal de la session (`:338-341`) ; enveloppe le `stream_fn` de la boucle (`main`/`subagent`) et celui de la question annexe (`other`) par `usage_log::instrument_stream_fn` (`:707-717`). | T04 (YA-13) |
 | `crates/pa-core/src/session_engine/compaction_exec.rs` | modif. | `complete_summary_call` : les deux chemins (avec ou sans deltas) journalisent l'appel en `compaction`. | T04 (YA-13) |
 | `crates/pa-core/src/session_engine/refine.rs` | modif. (7 lignes) | `default_refiner_call` : `usage_log::complete_simple` (`refine`) au lieu de `pa_ai::complete_simple`. | T04 (YA-13) |
 | `crates/pa-core/src/session_engine/branch_summarization.rs` | modif. (8 lignes) | Résumé de branche : `usage_log::complete_simple` (`other`, `branch_summary`). | T04 (YA-13) |
