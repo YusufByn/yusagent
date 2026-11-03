@@ -1,15 +1,21 @@
-"""yusAgent (T05, YA-05): masked outputs read back from the conversation log."""
+"""yusAgent (T05, YA-05): masked outputs read back from the log; failed bash() reads tagged."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
+import rlm.repl as repl_module
+from rlm import bash
 from rlm.masked import tool_output
 
+bash_module = sys.modules["rlm.bash"]
+EXIT_MIME = "application/vnd.prime-agent.bash-exit+json"
 
 
 def _log(rows: list[dict]) -> str:
@@ -60,6 +66,24 @@ class ToolOutputTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PRIME_AGENT_CONVERSATION_LOG": ""}):
             with self.assertRaises(RuntimeError):
                 tool_output("c1")
+
+
+class FailedExitTest(unittest.IsolatedAsyncioTestCase):
+    async def _exit_payloads(self, command: str) -> list[dict]:
+        emitted = []
+        task = asyncio.current_task()
+        with mock.patch.object(bash_module, "_live_cell_owner", return_value=task), \
+                mock.patch.object(bash_module, "_creating_cell_waits_for", return_value=True), \
+                mock.patch.object(repl_module, "is_active", return_value=True), \
+                mock.patch.object(repl_module, "emit", side_effect=emitted.append):
+            await bash(command)
+        return [data[EXIT_MIME] for data in emitted if EXIT_MIME in data]
+
+    async def test_a_failed_result_read_by_the_cell_is_tagged(self):
+        self.assertEqual(await self._exit_payloads("exit 3"), [{"exitCode": 3}])
+
+    async def test_a_successful_result_is_not_tagged(self):
+        self.assertEqual(await self._exit_payloads("true"), [])
 
 
 if __name__ == "__main__":

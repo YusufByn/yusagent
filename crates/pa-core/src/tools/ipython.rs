@@ -64,6 +64,9 @@ pub struct ExecuteResult {
     /// The `bash()` commands this cell started, summarized for display
     /// (`bashCommands` on the tool-result details).
     pub bash_commands: Option<crate::kernel::shared::KernelBashCommands>,
+    /// yusAgent (T05, YA-05): the last non-zero exit code of a `bash()` result the cell read
+    /// (`bashFailedExit` on the tool-result details).
+    pub bash_failed_exit: Option<i64>,
 }
 
 /// The wire form of one sent agent message (TS `KernelSentAgentMessage`):
@@ -463,6 +466,9 @@ pub async fn execute_ipython(
             "count": bash.count,
             "lines": bash.lines,
         });
+    }
+    if let Some(code) = r.bash_failed_exit {
+        details[crate::session_engine::masking::BASH_FAILED_EXIT_DETAIL] = json!(code);
     }
     if let Some(background) = &r.background_output {
         details["backgroundOutput"] = json!(background);
