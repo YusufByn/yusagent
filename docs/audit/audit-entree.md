@@ -6,6 +6,37 @@
 - Run de mesure de référence : `bench/tools/capture/runs/20261103T083549Z/` (local, non versionné). Les chiffres sont relançables, voir §3.
 - Convention : « est. » marque une estimation. Les tokens sont comptés avec tiktoken `o200k_base`, qui n'est le tokenizer de facturation d'aucun des providers capturés.
 
+## Erratum (YA-01, 2026-11-03)
+
+Les mesures de référence de cet audit sont remplacées par le run « avant » de YA-01 : même binaire (`4807b98c5`, sha256 `5a0aa3c0…`), même banc, binaire extrait à un chemin fixe et documenté. Le run `20261103T083549Z` cité plus haut n'est plus disponible en local.
+
+**Cause, confirmée** : l'inventaire des skills du prompt système contient le chemin absolu de chaque `SKILL.md` (balise `<location>`), donc le dossier où le binaire a été extrait.
+
+- Hors chemins, l'inventaire fait 5 167 caractères dans le run de l'audit (`20261103T081928Z`) comme dans le run de remplacement.
+- Seule la longueur du dossier d'extraction change : 112 caractères pour l'audit, 115 pour le remplacement. L'écart est multiplié par les 11 balises `<location>` de `prime-agent prompt --json`, et par les 9 skills visibles en session print.
+- Un premier run de contrôle, extrait dans un dossier plus long de 80 caractères, donnait 7 569 caractères d'inventaire : 11 × 80 = 880 de plus.
+- Conséquence : toute comparaison entre binaires doit extraire les binaires au même chemin. Le banc le documente (`bench/tools/capture/README.md`).
+- Conséquence pour le cache : le prompt système change avec le dossier d'installation, en plus de la date, du cwd et du chemin du journal (§1.3). Point à traiter avec YA-04 et YA-09.
+
+Valeurs de remplacement (`bench/tools/capture/runs/ya01-before/`, binaire à `<scratchpad>/bench-bin/prime-agent`, dossier de 115 caractères) :
+
+| Élément | Audit | Remplacement |
+|---|---|---|
+| Prompt système au premier appel, `s1-anthropic` (car.) | 30 842 | 30 869 |
+| Prompt système (tokens est.) | 7 500 | 7 484 |
+| Couche `skills-inventory` (octets / tokens est.) | 6 689 / 1 854 | 6 722 / 1 832 |
+| Couche `skills-inventory` hors chemins `<location>` (car.) | 5 167 | 5 167 |
+| Message `[harness-digest]` (car. / tokens est.) | 2 657 / 537 | 2 657 / 537 |
+| Corps complet de la requête (octets) | 35 138 | 35 165 |
+
+Les couches statiques (core, usage, opinionated) et les autres couches dynamiques sont identiques octet pour octet. Les constats qualitatifs de l'audit (stabilité du préfixe, append-only, déplacement de `cache_control`) sont inchangés.
+
+Commande :
+
+```bash
+python3 bench/tools/capture/run.py --binary <scratchpad>/bench-bin/prime-agent --out bench/tools/capture/runs/ya01-before
+```
+
 ## Résumé
 
 Le CDC décrit un hôte TypeScript avec un kernel IPython. Le code est un workspace Rust d'environ 620 k lignes (§1.1), avec un REPL CPython maison (§1.4).
