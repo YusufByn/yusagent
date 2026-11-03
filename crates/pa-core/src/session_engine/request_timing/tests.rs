@@ -52,6 +52,8 @@ fn final_message(model: &pa_agent::types::Model) -> pa_agent::types::AssistantMe
         cache_write: 0,
         total_tokens: 800_012,
         cost: UsageCost::default(),
+        reasoning: None,
+        cache_write_1h: None,
     };
     message
 }

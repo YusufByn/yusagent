@@ -34,6 +34,8 @@ fn session_with_turns(cwd: &std::path::Path, turns: usize) -> SessionManager {
                     cache_write: 0,
                     total_tokens: 120,
                     cost: pa_types::ai::UsageCost::default(),
+                    reasoning: None,
+                    cache_write_1h: None,
                 },
                 stop_reason: pa_types::ai::StopReason::Stop,
                 stop_reason_raw: None,

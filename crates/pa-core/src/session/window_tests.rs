@@ -814,6 +814,8 @@ async fn adopted_manager_live_appends_match_full_reopen() {
                 cache_write: 0,
                 total_tokens: 6,
                 cost: pa_types::ai::UsageCost::default(),
+                reasoning: None,
+                cache_write_1h: None,
             },
             pa_types::ai::Usage {
                 input: 15,
@@ -822,6 +824,8 @@ async fn adopted_manager_live_appends_match_full_reopen() {
                 cache_write: 0,
                 total_tokens: 18,
                 cost: pa_types::ai::UsageCost::default(),
+                reasoning: None,
+                cache_write_1h: None,
             },
             None,
         )

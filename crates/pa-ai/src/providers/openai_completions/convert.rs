@@ -442,6 +442,12 @@ pub(crate) fn parse_chunk_usage(
         cache_write: cache_write_tokens,
         total_tokens: input + output_tokens + cache_read_tokens + cache_write_tokens,
         cost: UsageCost::default(),
+        // yusAgent (T04, YA-13): a subset of `completion_tokens`.
+        reasoning: raw_usage
+            .get("completion_tokens_details")
+            .and_then(|details| details.get("reasoning_tokens"))
+            .and_then(Value::as_u64),
+        cache_write_1h: None,
     };
     calculate_cost(
         model,

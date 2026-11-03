@@ -159,6 +159,16 @@ pub struct Usage {
     pub total_tokens: u64,
     #[serde(default)]
     pub cost: UsageCost,
+    /// yusAgent (T04, YA-13): mirror of `pa_types::ai::Usage::reasoning`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<u64>,
+    /// yusAgent (T04, YA-13): mirror of `pa_types::ai::Usage::cache_write_1h`.
+    #[serde(
+        rename = "cacheWrite1h",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cache_write_1h: Option<u64>,
 }
 
 impl Usage {
@@ -177,6 +187,8 @@ impl Usage {
                 cache_write: 0.0,
                 total: 0.0,
             },
+            reasoning: None,
+            cache_write_1h: None,
         }
     }
 }

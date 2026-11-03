@@ -212,6 +212,8 @@ fn usage(rng: &mut Rng) -> Usage {
             cache_write: cost(cache_write),
             total: cost(total),
         },
+        reasoning: None,
+        cache_write_1h: None,
     }
 }
 
