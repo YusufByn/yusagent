@@ -13,8 +13,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/session_engine/telemetry/status.rs` | modif. | `TelemetrySwitch::Default` suit `fork_defaults::TELEMETRY_ENABLED` ; le motif affiché devient « off by default ». | YA-01 |
 | `crates/pa-core/src/settings/types.rs` | modif. | `BundledSkillsSettings` : champs `agentMessage` et `rlmHeartbeat`. | YA-01 |
 | `crates/pa-core/src/packages/resolve/auto.rs` | modif. (5 lignes) | Ajoute les exclusions des skills en opt-in à côté de celle de websearch. | YA-01 |
-| Tests upstream (`pa-core` : `persistence_tests.rs`, `refinement_gate.rs`, `engine/tests.rs` ; `pa-cli` : `mode.rs`, `interactive_mode/tests.rs`, `interactive_mode/telemetry.rs`, `tests/telemetry_command_e2e.rs` ; `pa-daemon` : `agent_engine/tests.rs`, `model_allowlist.rs`, `supervisor/tests.rs`) | modif. | Les tests qui supposaient un défaut actif activent la fonction par réglage (même scénario qu'upstream) ; ceux qui vérifiaient le défaut vérifient le défaut du fork. Chaque modification porte un commentaire `yusAgent (YA-01)`. | YA-01 |
-| `scripts/check_refine_errors.py`, `check_refine_request_headers.py`, `check_minimum_reasoning.py`, `check_late_message_receipt.py`, `check_restore_notice.py` | modif. | Checks de cycle de vie (shard 1) : la fixture active par réglage la fonction qu'elle exerce (`harnessRefinements`, `bundledSkills`). | YA-01 |
+| Tests upstream | modif. | Voir « Tests upstream touchés » ci-dessous. | YA-01 |
 | `.github/workflows/ci.yml` | modif. (1 ligne + commentaire) | Étape `Prepare pinned TS frame comparison binary` : la release `v0.9.8` est téléchargée depuis `PrimeIntellect-ai/prime-agent` au lieu du dépôt courant. Voir ci-dessous. | YA-01 |
 | `.changes/ya-01.md` | ajout | Fragment de changelog exigé par `changelog-fragment.yml` pour tout changement livré. | YA-01 |
 
@@ -40,6 +39,39 @@ Réglages cherchés sans résultat :
 
 - **Vérification de version au lancement** : il n'y en a pas dans le portage Rust. `latest_release` (`crates/pa-core/src/update/release.rs:71`) n'est appelé que par les commandes explicites `prime-agent update` (`crates/pa-cli/src/update_flow/plan.rs:140`) et `prime-agent update --check` (`crates/pa-cli/src/installer_update.rs:269`). La vérification des mises à jour de packages (`crates/pa-core/src/packages/update.rs:54`) n'a aucun appelant. Aucun réglage ajouté.
 - **Commande `schedule`** : aucun réglage dédié dans `Settings` (`crates/pa-core/src/settings/types.rs`). C'est une sous-commande CLI explicite (`crates/pa-cli/src/command_registry.rs:92`), qui ne s'exécute que si on l'appelle. Rien de modifié.
+
+## Tests upstream touchés (YA-01)
+
+Règle : aucun test supprimé ni affaibli.
+
+- **Setup** : un test qui exerce une fonction désormais coupée l'active explicitement dans son setup (même scénario, mêmes assertions).
+- **Défaut** : seuls les tests qui vérifient la valeur par défaut elle-même changent leur valeur attendue.
+- **Renfort** : quand le nouveau défaut rendait une assertion non discriminante (elle passerait même si le code ignorait le réglage), un cas est ajouté pour la rendre de nouveau discriminante.
+
+Chaque modification porte un commentaire `yusAgent (YA-01)`.
+
+| Fichier de test | Test(s) | Nature | Réglage activé ou valeur attendue |
+|---|---|---|---|
+| `crates/pa-core/src/settings/persistence_tests.rs` | `harness_refinements_persist_without_clobbering_other_settings` | défaut + renfort | attendu initial `false` ; ajout d'un retour à `false` après `true` pour prouver la relecture |
+| `crates/pa-core/src/settings/persistence_tests.rs` | `harness_refinements_ignore_project_overrides_and_resolve_global_wrong_types` | défaut + renfort | mauvais type → `false` ; ajout du cas `"true"` (chaîne) → `false` |
+| `crates/pa-core/src/session_engine/refine.rs` | `auto_refine_gates_resolve_the_ts_defaults_and_clamps` | défaut + renfort | `enabled`/`compact` par défaut `false` ; ajout du cas `Some(true)` |
+| `crates/pa-core/src/session_engine/refinement_gate.rs` | `live_request_gate_filters_saved_rows_and_preserves_quoted_user_content` | setup | `harnessRefinements: true` |
+| `crates/pa-core/src/session_engine/engine/tests.rs` | `engine_over` (helper de `model_visible_skills_follow_the_embedding_wiring`) | setup | `bundledSkills.agentMessage`, `bundledSkills.rlmHeartbeat` |
+| `crates/pa-core/src/session_engine/telemetry/tests.rs` | `a_disable_on_a_fresh_install_never_mints_the_install_id` | renfort | ajout : la valeur enregistrée est `Some(false)` |
+| `crates/pa-cli/src/mode.rs` | `telemetry_defaults_on` → `telemetry_defaults_off` | défaut | désactivée par défaut ; vérifie aussi la réactivation par `telemetry.enabled` |
+| `crates/pa-cli/tests/telemetry_command_e2e.rs` | `status_on_and_off_round_trip` | défaut | « Telemetry is off (off by default). » |
+| `crates/pa-cli/src/interactive_mode/tests.rs` | `settings_sink_reports_an_aborted_flow_once` | setup | `telemetry.enabled: true` |
+| `crates/pa-cli/src/interactive_mode/telemetry.rs` | `each_tui_exit_reports_only_its_own_run` | setup | `telemetry.enabled: true` |
+| `crates/pa-daemon/src/agent_engine/tests.rs` | `write_compaction_settings` (helper de `threshold_/requested_/manual_wire_compaction_counts_into_the_run_telemetry`) | setup | `telemetry.enabled: true` (sans effet ailleurs : `DO_NOT_TRACK=1` dans `.cargo/config.toml`) |
+| `crates/pa-daemon/src/model_allowlist.rs` | `refusal_telemetry_honors_both_opt_outs`, `refusal_telemetry_dedupes_repeated_resolves`, `refusal_telemetry_rebinds_when_the_cwd_moves` | setup | `telemetry.enabled: true` |
+| `crates/pa-daemon/src/supervisor/tests.rs` | `the_exit_flush_sends_the_partial_daemon_event_summary` | setup | `telemetry.enabled: true` |
+| `scripts/check_refine_errors.py` | check de cycle de vie | setup | `harnessRefinements: true` |
+| `scripts/check_refine_request_headers.py` | check de cycle de vie | setup | `harnessRefinements: true` |
+| `scripts/check_minimum_reasoning.py` | check de cycle de vie | setup | `harnessRefinements: true` |
+| `scripts/check_late_message_receipt.py` | check de cycle de vie | setup | `bundledSkills.agentMessage: true` |
+| `scripts/check_restore_notice.py` | check de cycle de vie | setup | `bundledSkills.agentMessage`, `bundledSkills.rlmHeartbeat` |
+
+Nouveaux tests du fork : `crates/pa-core/src/settings/fork_defaults.rs` (défauts sans `settings.json`, réactivation de chaque fonction, skills indépendants, portées de la télémétrie).
 
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
