@@ -19,6 +19,8 @@ avec lecture, écriture ventilée 5 min / 1 h et tokens de raisonnement, dans le
 format de chaque API. L'usage exact renvoyé est noté dans `NNNN.meta.json`
 (`reported_usage`). Avec `--usage-split`, le `message_delta` Anthropic ne porte que
 `output_tokens` (et le détail de raisonnement) : le reste vient du `message_start`.
+Avec `--prefix-cache` (T05, YA-05), la lecture du cache suit le préfixe réellement
+commun avec la requête précédente de la conversation (voir `UsageModel`).
 
 Bibliothèque standard uniquement.
 """
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,6 +53,47 @@ SENSITIVE_NAMES = (
     "def ya_names(output):\n"
     "    return [line.split('=', 1)[0] for line in output.splitlines() if '=' in line]\n"
 )
+# Masquage (T05, YA-05) : 25 cellules d'environ 5 000 caractères, une erreur au tour 12.
+# La cellule 25 est écrite à la volée (`reread_cell`) : elle relit depuis le kernel la
+# première sortie masquée de la requête, ou n'imprime rien de plus sans masquage.
+MASK_TURNS = 25
+MASK_ERROR_TURN = 12
+MASK_ERROR_MARK = "YA_MASK_ERROR"
+REREAD = "<reread>"
+PLACEHOLDER_CALL = re.compile(r'tool_output\("([^"]+)"\)')
+
+
+def mask_cell(turn: int) -> str:
+    if turn == MASK_ERROR_TURN:
+        return f"print('e' * 5000)\nraise RuntimeError('{MASK_ERROR_MARK} tour {turn}')"
+    if turn == MASK_TURNS:
+        return REREAD
+    return f"print('{turn:02d}' + 'x' * 4998)"
+
+
+def reread_cell(body: dict) -> str:
+    """Cellule 25 : relit la première sortie masquée (identifiant du placeholder)."""
+    call_id = next((m.group(1) for text in strings(body) for m in [PLACEHOLDER_CALL.search(text)]
+                    if m), None)
+    tail = f"print('{MASK_TURNS}' + 'x' * 4998)"
+    if call_id is None:
+        return f"print('REREAD', None, 0, '')\n{tail}"
+    return ("from rlm.masked import tool_output\n"
+            f"_ya_text = tool_output({call_id!r})\n"
+            f"print('REREAD', {call_id!r}, len(_ya_text), _ya_text[:2])\n{tail}")
+
+
+def strings(value) -> list[str]:
+    """Chaînes d'un corps de requête, dans l'ordre."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for item in value.values() for s in strings(item)]
+    if isinstance(value, list):
+        return [s for item in value for s in strings(item)]
+    return []
+
+
 SCENARIOS: dict[str, list[str]] = {
     "basic": [
         "print(1)",
@@ -95,6 +139,7 @@ SCENARIOS: dict[str, list[str]] = {
         "r = await rlm.collect(['kid'], timeout_ms=120000)\n"
         "print('COLLECT', r[0].status, r[0].settled, r[0].answer_text)",
     ],
+    "mask": [mask_cell(turn) for turn in range(1, MASK_TURNS + 1)],
 }
 CHILD_MARKER = "YA_CHILD_TASK"
 # L'enfant relève aussi ce que voit son propre kernel (YA-02).
@@ -169,9 +214,9 @@ class Plan:
 
 class CaptureState:
     def __init__(self, out_dir: Path, scenario: str, inflate_from_turn: int | None,
-                 inflate_tokens: int, usage_split: bool = False):
+                 inflate_tokens: int, usage_split: bool = False, prefix_cache: bool = False):
         self.out_dir = out_dir
-        self.usage = UsageModel()
+        self.usage = UsageModel(prefix_cache)
         self.usage_split = usage_split
         self.cells = SCENARIOS[scenario]
         self.inflate_from_turn = inflate_from_turn
@@ -184,7 +229,8 @@ class CaptureState:
             self.seq += 1
             return self.seq
 
-    def plan(self, tools: list[dict] | None, turn: int, child: bool = False) -> Plan:
+    def plan(self, tools: list[dict] | None, turn: int, child: bool = False,
+             body: dict | None = None) -> Plan:
         if not tools:
             # Une requête sans tools (résumé) signale une compaction : on cesse
             # d'annoncer un usage gonflé pour ne pas la redéclencher en boucle.
@@ -192,7 +238,8 @@ class CaptureState:
             return Plan("aux", text=AUX_TEXT)
         cells, final = (CHILD_CELLS, CHILD_FINAL_TEXT) if child else (self.cells, FINAL_TEXT)
         if turn < len(cells):
-            return Plan("tool", tool_name=first_tool_name(tools), code=cells[turn])
+            code = reread_cell(body or {}) if cells[turn] == REREAD else cells[turn]
+            return Plan("tool", tool_name=first_tool_name(tools), code=code)
         return Plan("final", text=final)
 
     def input_tokens(self, raw_len: int, turn: int) -> int:
@@ -216,15 +263,30 @@ class UsageModel:
     lisent 90 % du prompt de la requête précédente (borné par le prompt courant) et
     écrivent 80 % du reste. Le TTL d'écriture suit la requête : 1 h si un
     `cache_control` demande `"ttl": "1h"`, 5 min sinon.
+
+    Avec `prefix_cache` (T05, YA-05) : la lecture vaut le préfixe commun avec la requête
+    précédente de la conversation, dans l'ordre du cache (tools, système, messages, hors
+    `cache_control`), en octets / 4 ; le reste du prompt est écrit. Une requête qui change
+    un ancien message relit moins et écrit d'autant plus. Simulation, pas un tokenizer.
     """
 
-    def __init__(self):
+    def __init__(self, prefix_cache: bool = False):
         self.lock = threading.Lock()
         self.previous: dict[str, int] = {}
+        self.prefix_cache = prefix_cache
+        self.previous_units: dict[str, list[str]] = {}
 
     def split(self, body: dict, total: int) -> dict:
         key = json.dumps([body.get("system") or body.get("instructions"), first_user_text(body)],
                          sort_keys=True, ensure_ascii=False)
+        if self.prefix_cache:
+            units = prefix_units(body)
+            with self.lock:
+                previous_units = self.previous_units.get(key)
+                self.previous_units[key] = units
+            read = min(total, common_prefix_bytes(previous_units, units) // 4) if previous_units else 0
+            return {"total": total, "read": read, "write": total - read, "input": 0,
+                    "ttl_1h": asks_one_hour_ttl(body)}
         with self.lock:
             previous = self.previous.get(key)
             self.previous[key] = total
@@ -232,6 +294,38 @@ class UsageModel:
         write = (total - read) * 8 // 10
         return {"total": total, "read": read, "write": write, "input": total - read - write,
                 "ttl_1h": asks_one_hour_ttl(body)}
+
+
+def compact(value) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def strip_cache_control(value):
+    if isinstance(value, dict):
+        return {k: strip_cache_control(v) for k, v in value.items() if k != "cache_control"}
+    if isinstance(value, list):
+        return [strip_cache_control(v) for v in value]
+    return value
+
+
+def prefix_units(body: dict) -> list[str]:
+    """Morceaux du prompt dans l'ordre du cache : tools, système, puis chaque message."""
+    conversation = body.get("messages") if "messages" in body else body.get("input")
+    head = [body.get("tools"), body.get("system") or body.get("instructions")]
+    return [compact(strip_cache_control(item)) for item in head + list(conversation or [])]
+
+
+def common_prefix_bytes(a: list[str], b: list[str]) -> int:
+    total = 0
+    for x, y in zip(a, b):
+        if x == y:
+            total += len(x.encode())
+            continue
+        same = 0
+        while same < min(len(x), len(y)) and x[same] == y[same]:
+            same += 1
+        return total + len(x[:same].encode())
+    return total
 
 
 def asks_one_hour_ttl(value) -> bool:
@@ -450,7 +544,7 @@ def make_handler(state: CaptureState):
             else:
                 turn = count_tool_results_responses(body)
             child = CHILD_MARKER in first_user_text(body)
-            plan = state.plan(body.get("tools"), turn, child)
+            plan = state.plan(body.get("tools"), turn, child, body)
             input_tokens = state.input_tokens(len(raw), turn)
             split = state.usage.split(body, input_tokens)
             model = body.get("model", "capture-model")
@@ -506,10 +600,12 @@ def main() -> None:
     parser.add_argument("--port-file", type=Path, help="écrit le port effectif dans ce fichier")
     parser.add_argument("--usage-split", action="store_true",
                         help="Anthropic : message_delta ne porte que output_tokens (T04)")
+    parser.add_argument("--prefix-cache", action="store_true",
+                        help="lecture du cache = préfixe commun avec la requête précédente (T05)")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     state = CaptureState(args.out, args.scenario, args.inflate_from_turn, args.inflate_tokens,
-                         args.usage_split)
+                         args.usage_split, args.prefix_cache)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state))
     port = server.server_address[1]
     if args.port_file:

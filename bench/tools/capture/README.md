@@ -62,6 +62,8 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 | `compact-anthropic` | Sorties volumineuses et usage annoncé de 199 000 tokens : compaction par seuil, résumé, porte auto `/refine` |
 | `usage-split-anthropic` | (T04) Scénario de base, `message_delta` réduit à `output_tokens` : l'usage d'entrée doit venir du `message_start` |
 | `refine-anthropic` | (T04) Comme `compact-anthropic`, avec `harnessRefinements` et `autoRefine` réactivés : un appel `/refine` est journalisé |
+| `mask-off-anthropic` | (T05) Scénario `mask` : 25 tours, chaque cellule imprime environ 5 000 caractères, exception Python au tour 12, la cellule 25 relit la première sortie masquée (ligne `REREAD`). Cache simulé sur le préfixe réel (`--prefix-cache`). Réglage par défaut : aucun masquage |
+| `mask-on-anthropic` | (T05) Même scénario avec `"masking": {"enabled": true}` (fenêtre 10, palier 5) |
 | ACP | `--mode acp` sur un daemon isolé (`--daemon-socket`) : `initialize`, `session/new`, `session/prompt` |
 | Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant relève les noms sensibles de son kernel (ligne `CHILD_ENV`) puis répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
 | `psenv` | **Hors sandbox** : `/bin/ps` est setuid et le profil `sandbox.sb` refuse de l'exécuter (code 126), ce qui casse aussi le shell persistant sur macOS (identité de démarrage lue par `ps`). Provider local, `PI_OFFLINE=1`. Ligne `PS_PARENT` (relevé YA-11) : `ps eww` lancé depuis le kernel sur le harness, avec la commande du parent, le code de sortie et les noms des variables factices visibles (jamais de valeur). Ligne `PERSISTENT` : noms sensibles vus par `printenv` dans un shell persistant |
@@ -77,6 +79,22 @@ python3 -I bench/tools/capture/usage_check.py <run>
 ```
 
 Résultat : `<run>/usage-report.md` et `.json`. Pour chaque cas, l'usage des messages assistant (`message_end` de `out*.jsonl`) et chaque ligne de journal sont confrontés à l'usage renvoyé, champ par champ (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation par TTL, raisonnement), avec le taux de cache et le type d'appel. Un binaire antérieur à T04 n'a pas de journal : seule la première vérification s'applique. Sémantique des champs : `docs/usage.md`.
+
+## Masquage (T05)
+
+`run.py` lance ensuite, sous sandbox et dans le venv d'analyse (tiktoken) :
+
+```bash
+python3 -I bench/tools/capture/masking_check.py <run>
+```
+
+Résultat : `<run>/masking-report.md` et `.json`. Pour `mask-off-anthropic` et `mask-on-anthropic` :
+
+- chaque requête de la boucle : tour N, sorties masquées, octets et tokens est. du corps, présence de la sortie en erreur du tour 12, `cacheRead` et `cacheWrite` de la ligne de journal correspondante ;
+- chaque rupture de préfixe N → N+1 (hors déplacement de `cache_control`), avec le premier message changé, le `cacheWrite` et le champ `invalidation` du journal ; les ruptures doivent être exactement les requêtes que le journal marque `invalidation` ;
+- la ligne `REREAD` : identifiant relu, caractères relus, caractères annoncés par le placeholder.
+
+Cache simulé (`server.py --prefix-cache`) : la lecture vaut le préfixe commun avec la requête précédente de la même conversation (tools, système, puis messages, sans `cache_control`), en octets / 4 ; le reste du prompt est écrit. C'est une simulation : elle montre où le préfixe casse et ce que ça écrit, pas le coût réel. Les tokens envoyés sont une estimation (o200k_base sur le corps JSON). Le gain réel de coût et l'effet sur la résolution se mesurent au smoke bench (YA-14).
 
 ## Comparer deux runs
 
@@ -97,4 +115,4 @@ python3 -I bench/tools/capture/server.py --out /tmp/cap --port 8787 --scenario b
 - Format Anthropic Messages : `POST …/messages`. Format OpenAI Responses : `POST …/responses`. Streaming SSE, ou JSON si `stream` est faux.
 - Chaque corps reçu est écrit octet pour octet dans `NNNN.body.json`. Les métadonnées vont dans `NNNN.meta.json`, sans valeur d'authentification.
 - Le tour est déduit du nombre de résultats de tool présents dans la requête : le serveur est sans état.
-- Options : `--scenario basic|long|crash`, `--inflate-from-turn N --inflate-tokens T` (usage gonflé pour déclencher la compaction), `--usage-split` (T04 : `message_delta` Anthropic réduit à `output_tokens`).
+- Options : `--scenario basic|long|crash|mask`, `--prefix-cache` (T05 : lecture du cache sur le préfixe réel), `--inflate-from-turn N --inflate-tokens T` (usage gonflé pour déclencher la compaction), `--usage-split` (T04 : `message_delta` Anthropic réduit à `output_tokens`).
