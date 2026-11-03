@@ -529,8 +529,10 @@ impl Inner {
 /// read UTF-8 regardless of the active legacy code page, overriding any
 /// provisioner-provided `PYTHONUTF8`) and the owner pid the runtime journals
 /// its process groups under.
+/// yusAgent (YA-02): only the allowlisted part of the worker env, and never
+/// a provider credential (`crate::kernel::env_allowlist`).
 fn kernel_spawn_env(options_env: &HashMap<String, String>) -> HashMap<String, String> {
-    let mut env: HashMap<String, String> = std::env::vars().collect();
+    let mut env = crate::kernel::env_allowlist::inherited_env(std::env::vars());
     for (key, value) in options_env {
         env.insert(key.clone(), value.clone());
     }
@@ -541,6 +543,7 @@ fn kernel_spawn_env(options_env: &HashMap<String, String>) -> HashMap<String, St
         "PRIME_AGENT_KERNEL_OWNER_PID".to_string(),
         std::process::id().to_string(),
     );
+    crate::kernel::env_allowlist::strip_harness_credentials(&mut env);
     env
 }
 
@@ -577,6 +580,25 @@ mod tests {
             env.get("PRIME_AGENT_KERNEL_OWNER_PID").map(String::as_str),
             Some(std::process::id().to_string().as_str())
         );
+    }
+
+    // yusAgent (YA-02): whatever the ambient env holds (the CI runner's
+    // tokens included), the kernel gets no secret-looking var but the
+    // harness's own injections, and never a provider credential.
+    #[test]
+    fn kernel_spawn_env_is_allowlisted() {
+        let mut options_env = HashMap::new();
+        options_env.insert("RLM_SESSION_ID".to_string(), "s".to_string());
+        options_env.insert("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string());
+        let env = kernel_spawn_env(&options_env);
+        assert_eq!(env.get("RLM_SESSION_ID").map(String::as_str), Some("s"));
+        assert!(!env.contains_key("ANTHROPIC_API_KEY"));
+        assert!(env.contains_key("PRIME_AGENT_KERNEL_OWNER_PID"));
+        let secret_looking: Vec<&String> = env
+            .keys()
+            .filter(|name| crate::kernel::env_allowlist::looks_secret(name))
+            .collect();
+        assert!(secret_looking.is_empty(), "{secret_looking:?}");
     }
 
     #[test]

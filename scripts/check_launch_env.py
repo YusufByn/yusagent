@@ -207,7 +207,10 @@ def run_case(binary, root, observed):
     models_path.write_text(json.dumps(models))
     settings = root / 'agent/settings.json'
     settings.write_text(json.dumps({'prewarmPythonKernel': False, 'onboardingCompleted': True,
-        'telemetry': {'noticeShown': True}, 'defaultProvider': 'parity-local', 'defaultModel': 'parity-1'}))
+        'telemetry': {'noticeShown': True}, 'defaultProvider': 'parity-local', 'defaultModel': 'parity-1',
+        # yusAgent (YA-02): the kernel env is an allowlist. The canary stays
+        # listed so its absence still proves the worker-side strip.
+        'kernel': {'envAllowlist': ['PA_ENV_*', 'PRIME_AGENT_INTERNAL_PARITY_CANARY']}}))
     log = open(root / 'daemon.log', 'wb')
     process = subprocess.Popen([str(binary), '--mode', 'daemon', '--daemon-socket', str(root / 'd.sock')],
         cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)

@@ -1419,6 +1419,13 @@ mod tests {
             r#"{ "serper": { "type": "api_key", "key": "!printf key-from-cmd" } }"#,
         )
         .unwrap();
+        // yusAgent (YA-02): a secret reaches the kernel only when
+        // `kernel.envAllowlist` names it.
+        std::fs::write(
+            agent_dir.join("settings.json"),
+            serde_json::json!({ "kernel": { "envAllowlist": ["SERPER_API_KEY"] } }).to_string(),
+        )
+        .unwrap();
         let engine = shell_test_session(cwd, agent_dir).await.unwrap();
         let injected = engine
             .provisioner
@@ -1427,13 +1434,35 @@ mod tests {
             .env
             .get("SERPER_API_KEY")
             .map(String::as_str);
-        // A nonblank ambient SERPER_API_KEY wins (TS parity): the ambient key
-        // reaches the kernel through the inherited env, not the wiring.
-        if std::env::var("SERPER_API_KEY").is_ok_and(|value| !value.trim().is_empty()) {
-            assert_eq!(injected, None);
-        } else {
-            assert_eq!(injected, Some("key-from-cmd"));
-        }
+        // A nonblank ambient SERPER_API_KEY wins (TS parity). yusAgent
+        // (YA-02): the kernel no longer inherits the whole env, so the
+        // allowlisted ambient key rides the wiring instead.
+        let ambient = std::env::var("SERPER_API_KEY")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        assert_eq!(injected, Some(ambient.as_deref().unwrap_or("key-from-cmd")));
+    }
+
+    // yusAgent (YA-02): without `kernel.envAllowlist`, the resolved key is
+    // withheld from the kernel env (the websearch skill still reads a literal
+    // key from auth.json itself).
+    #[tokio::test]
+    async fn a_stored_serper_key_is_withheld_without_the_allowlist() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent_dir = dir.path().join("agent");
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::write(
+            agent_dir.join("auth.json"),
+            r#"{ "serper": { "type": "api_key", "key": "!printf key-from-cmd" } }"#,
+        )
+        .unwrap();
+        let engine = shell_test_session(cwd, agent_dir).await.unwrap();
+        assert_eq!(
+            engine.provisioner.inner.options.env.get("SERPER_API_KEY"),
+            None
+        );
     }
 
     #[tokio::test]

@@ -80,6 +80,25 @@ class CleanupTests(unittest.TestCase):
                         ('PA_GOAL_FIXTURE_ID=/fixture\0PRIME_AGENT_KERNEL_OWNER_PID=%s\0' % owner).encode(), b'/usr/bin/python3\0kernel\0']):
                 self.assertEqual(scope.ownership(20, 'proc:8'), expected)
 
+    # yusAgent (YA-02): kernels no longer inherit TAG; their agent dir is the proof.
+    def test_untagged_kernel_owned_through_its_agent_dir(self):
+        scope = lifecycle.OwnedProcesses(Path('/fixture/bin'), Path('/fixture'), Path('/fixture/d.sock'))
+        scope.targets = {12: 'proc:4'}
+        for agent, expected in (('/fixture/agent', True), ('/foreign/agent', False)):
+            with patch.object(lifecycle, 'process_identity', return_value=('proc:8', 'S')), \
+                    patch.object(Path, 'read_bytes', side_effect=[
+                        ('PRIME_AGENT_CODING_AGENT_DIR=%s\0PRIME_AGENT_KERNEL_OWNER_PID=12\0' % agent).encode(),
+                        b'/usr/bin/python3\0kernel\0']):
+                self.assertEqual(scope.ownership(20, 'proc:8'), expected)
+
+    def test_untagged_worker_never_owned_through_its_agent_dir(self):
+        scope = lifecycle.OwnedProcesses(Path('/fixture/bin'), Path('/fixture'), Path('/fixture/d.sock'))
+        scope.direct[12] = ('proc:4', [b'/fixture/bin'])
+        with patch.object(lifecycle, 'process_identity', return_value=('proc:4', 'S')), \
+                patch.object(Path, 'read_bytes', side_effect=[
+                    b'PRIME_AGENT_CODING_AGENT_DIR=/fixture/agent\0', b'/fixture/bin\0']):
+            self.assertFalse(scope.ownership(12, 'proc:4'))
+
 
 if __name__ == '__main__':
     unittest.main()

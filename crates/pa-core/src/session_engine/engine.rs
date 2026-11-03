@@ -277,6 +277,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     // Captured before `settings` moves into the resource loader: the
     // per-cell watchdog budget (default 60s, `0` disables).
     let python_cell_timeout_ms = settings.get_python_cell_timeout_ms();
+    // yusAgent (YA-02): `kernel.envAllowlist`, captured before the move too.
+    let kernel_env_allowlist = crate::kernel::env_allowlist::env_allowlist(settings.settings());
     let (mcp_skill_overrides, mcp_generic_servers, built_manager) =
         mcp_gating(&settings, config.agent_dir.clone()).await?;
     let mcp_manager = config
@@ -507,6 +509,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         kernel_shell_path,
         kernel_command_prefix,
         serper_api_key,
+        &kernel_env_allowlist,
         session_artifact_dir,
         cell_timeout_ms,
         on_restore,

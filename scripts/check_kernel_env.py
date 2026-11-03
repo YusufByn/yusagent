@@ -34,6 +34,10 @@ CASES = {
     'ambient_key_wins': {'skill': True, 'ambient': ' ambient-fixture ', 'prefix': ''},
     'no_skill_no_command': {'skill': False, 'ambient': None, 'prefix': ''},
     'blank_ambient_resolves': {'skill': True, 'ambient': '  ', 'prefix': ''},
+    # yusAgent (YA-02): without kernel.envAllowlist, neither the resolved nor
+    # the ambient key reaches the kernel.
+    'command_key_withheld': {'skill': True, 'ambient': None, 'prefix': '', 'allow_serper': False},
+    'ambient_key_withheld': {'skill': True, 'ambient': ' ambient-fixture ', 'prefix': '', 'allow_serper': False},
 }
 
 
@@ -86,6 +90,8 @@ def expected(case):
     key = case['ambient']
     if case['skill'] and (key is None or not key.strip()):
         key = 'resolved-fixture-key'
+    if not case.get('allow_serper', True):
+        key = None
     prefix = case['prefix'] or None
     return {'serper': key, 'prefix': prefix,
             'bash_output': 'prefix-ran' if prefix else 'ABSENT', 'bash_exit': 0}
@@ -330,7 +336,11 @@ def run_case(binary, name, case, root, observation):
                     'contextWindow': 128000, 'maxTokens': 4096}]}}}))
     (agent / 'settings.json').write_text(json.dumps({'defaultProvider': 'fixture',
         'defaultModel': 'env-fixture', 'prewarmPythonKernel': False,
-        'shellCommandPrefix': case['prefix'], 'bundledSkills': {'websearch': False}}))
+        'shellCommandPrefix': case['prefix'], 'bundledSkills': {'websearch': False},
+        # yusAgent (YA-02): the kernel env is an allowlist; the fixture id keeps
+        # identifying the kernel process, and SERPER_API_KEY must be named.
+        'kernel': {'envAllowlist': ['PA_KERNEL_ENV_FIXTURE_ID']
+                   + (['SERPER_API_KEY'] if case.get('allow_serper', True) else [])}}))
     socket_path = root / 'd.sock'
     log = open(root / 'daemon.log', 'wb')
     process = subprocess.Popen([str(binary), '--mode', 'daemon', '--daemon-socket', str(socket_path)],

@@ -411,6 +411,9 @@ fn the_client_launch_env_reaches_only_its_own_worker() {
 /// The kernel under the worker runs in the client's env too (the audit
 /// #1 repro: `bash()`/kernel subprocesses see the terminal's PATH, not
 /// the daemon's). One scripted cell writes its `os.environ` to a receipt.
+/// yusAgent (YA-02): the kernel sees only the allowlisted part of that env,
+/// so the marker is named in `kernel.envAllowlist`, and an unlisted
+/// secret-looking client var must stay out.
 #[test]
 fn the_kernel_runs_in_the_client_launch_env() {
     let Some(kernel_python) = kernel_python() else {
@@ -421,9 +424,9 @@ fn the_kernel_runs_in_the_client_launch_env() {
     let agent_dir = dir.path().join("agent");
     let marker = format!("a-{}", uuid::Uuid::new_v4());
     let receipt = dir.path().join("kernel-receipt.txt");
-    // The cell records exactly the two vars the contract cares about.
+    // The cell records exactly the vars the contract cares about.
     let cell = format!(
-        "import os\nopen({receipt:?}, \"w\").write((os.environ.get(\"PA_MARKER\") or \"ABSENT\") + \"\\n\" + (os.environ.get(\"RLM_DEPTH\") or \"ABSENT\"))\nprint(\"cell done\")",
+        "import os\nopen({receipt:?}, \"w\").write((os.environ.get(\"PA_MARKER\") or \"ABSENT\") + \"\\n\" + (os.environ.get(\"RLM_DEPTH\") or \"ABSENT\") + \"\\n\" + (os.environ.get(\"PA_FAKE_TOKEN\") or \"ABSENT\"))\nprint(\"cell done\")",
         receipt = receipt.to_string_lossy(),
     );
     let script = dir.path().join("kernel-script.json");
@@ -443,6 +446,12 @@ fn the_kernel_runs_in_the_client_launch_env() {
         .to_string(),
     )
     .expect("write faux script");
+    std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        json!({ "kernel": { "envAllowlist": ["PA_MARKER"] } }).to_string(),
+    )
+    .expect("write settings");
     let _daemon = spawn_supervisor(&socket, &agent_dir, Some(&kernel_python));
     wait_socket_ready(&socket);
     let (mut client, hello) = Client::connect(&socket);
@@ -453,7 +462,7 @@ fn the_kernel_runs_in_the_client_launch_env() {
         dir.path(),
         &script,
         "a",
-        json!({ "launchEnv": { "PA_MARKER": marker } }),
+        json!({ "launchEnv": { "PA_MARKER": marker, "PA_FAKE_TOKEN": "fixture-only" } }),
     );
     run_one_turn(&mut client, &session_a, "a");
 
@@ -473,8 +482,8 @@ fn the_kernel_runs_in_the_client_launch_env() {
     };
     assert_eq!(
         content,
-        format!("{marker}\nABSENT"),
-        "the kernel env must carry the client's marker and no RLM_DEPTH"
+        format!("{marker}\nABSENT\nABSENT"),
+        "the kernel env must carry the client's allowlisted marker, no RLM_DEPTH and no unlisted secret"
     );
     // The ran-proof (the skip gate must not be a hollow pass): the
     // receipt exists only because the live kernel executed the cell.
