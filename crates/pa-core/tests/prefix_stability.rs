@@ -695,6 +695,45 @@ async fn prefix_scenario(api: Api) {
         api.name()
     );
     assert_prefix_stable(api, &bodies);
+    // The cells really ran in one kernel: `x` set by the second cell is read by the third.
+    let last = request_object(api, bodies.len(), bodies.last().expect("a request"));
+    assert_eq!(
+        tool_outputs(api, &last),
+        ["1", "2", "3"],
+        "{}: kernel outputs",
+        api.name()
+    );
+}
+
+/// The text of every tool result in a request, trimmed.
+fn tool_outputs(api: Api, request: &Map<String, Value>) -> Vec<String> {
+    fn text_of(value: &Value) -> String {
+        match value {
+            Value::String(text) => text.trim().to_string(),
+            Value::Array(parts) => parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<String>()
+                .trim()
+                .to_string(),
+            _ => String::new(),
+        }
+    }
+    let (_, messages) = split_request(api, request);
+    match api {
+        Api::AnthropicMessages => messages
+            .iter()
+            .filter_map(|message| message["content"].as_array())
+            .flatten()
+            .filter(|block| block["type"] == "tool_result")
+            .map(|block| text_of(&block["content"]))
+            .collect(),
+        Api::OpenAiResponses => messages
+            .iter()
+            .filter(|item| item["type"] == "function_call_output")
+            .map(|item| text_of(&item["output"]))
+            .collect(),
+    }
 }
 
 #[tokio::test]
