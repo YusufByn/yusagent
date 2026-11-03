@@ -219,10 +219,19 @@ pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
         "Use python_repl to inspect a skill's file when the task matches its description.".to_string(),
         "Skills with a python_import are prepared in the persistent Python kernel when available and can be called directly by that import name.".to_string(),
         "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.".to_string(),
-        String::new(),
-        "<available_skills>".to_string(),
     ];
-    for skill in visible {
+    // yusAgent (T03, YA-04): bundled skills read relative to a kernel env var, so the
+    // binary's extraction path stays out of the prompt (`crate::prompts::session_paths`).
+    let locations: Vec<String> = visible
+        .iter()
+        .map(|skill| crate::prompts::session_paths::skill_location(&skill.file_path))
+        .collect();
+    if locations.iter().any(|location| location.starts_with('$')) {
+        lines.push(crate::prompts::session_paths::BUNDLED_SKILLS_NOTE.to_string());
+    }
+    lines.push(String::new());
+    lines.push("<available_skills>".to_string());
+    for (skill, location) in visible.into_iter().zip(&locations) {
         lines.push("  <skill>".to_string());
         lines.push(format!("    <name>{}</name>", escape_xml(&skill.name)));
         lines.push(format!("    <type>{}</type>", skill.kind_label()));
@@ -236,10 +245,7 @@ pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
             "    <description>{}</description>",
             escape_xml(&skill.description)
         ));
-        lines.push(format!(
-            "    <location>{}</location>",
-            escape_xml(&skill.file_path.display().to_string())
-        ));
+        lines.push(format!("    <location>{}</location>", escape_xml(location)));
         lines.push("  </skill>".to_string());
     }
     lines.push("</available_skills>".to_string());

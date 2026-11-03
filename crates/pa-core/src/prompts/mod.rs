@@ -7,6 +7,9 @@ pub mod layers;
 
 pub mod model_prompts;
 
+// yusAgent (T03, YA-04): per-session paths read from the kernel, not the prompt.
+pub mod session_paths;
+
 pub mod system_prompt;
 
 pub use system_prompt::{

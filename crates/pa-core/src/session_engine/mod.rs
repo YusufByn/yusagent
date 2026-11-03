@@ -8,12 +8,16 @@ pub mod auto_retry;
 pub mod auxiliary_model;
 pub mod bash_notices;
 pub mod branch_summarization;
+// yusAgent (T03, YA-04): the `cacheRetention` setting.
+pub mod cache_retention;
 pub mod compact_session;
 pub mod compaction;
 pub mod compaction_exec;
 pub mod compaction_trace;
 pub mod compaction_utils;
 pub mod engine;
+// yusAgent (T03, YA-04): the `<environment>` block at the LLM boundary.
+pub mod environment_block;
 pub mod error_classify;
 pub mod factory_host;
 pub mod goal_boundary;

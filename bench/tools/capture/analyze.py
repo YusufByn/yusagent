@@ -204,10 +204,23 @@ def analyze_case(name: str, reqs: list[Request]) -> dict:
     }
 
 
+def environment_block(req: Request) -> str | None:
+    """Bloc `<environment>` du premier message utilisateur (T03), ou None."""
+    for message in req.conversation():
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        texts = [content] if isinstance(content, str) else [
+            block.get("text", "") for block in content or [] if isinstance(block, dict)]
+        return next((text for text in texts if text.startswith("<environment>")), None)
+    return None
+
+
 def session_compare(a: Request, b: Request) -> dict:
     digest_a = [compact(m) for m in a.conversation()[:-1]]
     digest_b = [compact(m) for m in b.conversation()[:-1]]
     return {
+        "environnement_premier_message": environment_block(a),
         "system_identique": compact(a.system_value()) == compact(b.system_value()),
         "system_diff": system_line_diff(a.system_text(), b.system_text()),
         "tools_identiques": compact(a.body.get("tools")) == compact(b.body.get("tools")),
@@ -241,6 +254,7 @@ def render(report: dict) -> str:
             f"- Commit du dépôt : `{info['repo_commit']}`",
             f"- Date (UTC) : {info['date_utc']}",
             f"- Tokenizer : {report['tokenizer']}",
+            f"- TTL du cache : `{compact(info.get('cache_retention'))}`",
             f"- Contrôle réseau sandbox : `{info['network_control']['command']}` → exit "
             f"{info['network_control']['exit']} ({info['network_control']['stderr']})", ""]
     out += ["## Cas", "", "| Cas | API | Scénario | Exit | Durée (s) | Requêtes (avec tools / total) |",
@@ -294,7 +308,9 @@ def render(report: dict) -> str:
             f"- Système identique : {sc['system_identique']}",
             f"- Tools identiques : {sc['tools_identiques']}",
             f"- Messages avant le prompt utilisateur identiques : "
-            f"{sc['messages_avant_prompt_identiques']}"]
+            f"{sc['messages_avant_prompt_identiques']}",
+            f"- Bloc `<environment>` du premier message utilisateur (session 1) : "
+            f"`{compact(sc.get('environnement_premier_message'))}`"]
     for change in sc["system_diff"]:
         out.append(f"- ({change['cause']}) `{change['ligne'][:200]}`")
     if report.get("responses_cache_key"):

@@ -268,18 +268,15 @@ fn context_files_section(context_files: &[(String, String)]) -> String {
     lines.join("\n")
 }
 
+/// yusAgent (T03, YA-04): the date, the working directory and the conversation log path no
+/// longer appear here (they changed the prompt every day, project and session). The date and
+/// the cwd ride the `<environment>` block (`session_engine::environment_block`), the log path
+/// the kernel env (`super::session_paths`); these lines say where to find them.
 fn environment_section(options: &BuildSystemPromptOptions) -> String {
-    let cwd = options.cwd.replace('\\', "/");
-    let messages_path = options
-        .messages_path
-        .clone()
-        .unwrap_or_else(|| "not persisted".to_string())
-        .replace('\\', "/");
-    let mut lines = vec![
-        format!("Current date: {}", today()),
-        format!("Working directory: {cwd}"),
-        format!("Conversation log: {messages_path}"),
-    ];
+    let mut lines: Vec<String> = super::session_paths::PROMPT_LINES
+        .iter()
+        .map(ToString::to_string)
+        .collect();
     match options.vision_capable {
         Some(true) => lines.push(
             "Image input: this model can see images; `attach_image` loads them into context."
@@ -343,25 +340,6 @@ fn session_role_section(options: &BuildSystemPromptOptions, has_ipython: bool) -
         }
     }
     lines.join("\n")
-}
-
-fn today() -> String {
-    // UTC date in YYYY-MM-DD form; the prompt is date context only.
-    let days = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs() / 86_400);
-    // Civil-from-days algorithm (Howard Hinnant).
-    let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}")
 }
 
 fn format_generic_mcp_guidance(servers: &[String]) -> String {
@@ -464,8 +442,14 @@ mod tests {
             )
         );
         let tail = &prompt[breakdown.cached_prefix_len..];
-        assert!(tail.contains("Working directory: /w"));
-        assert!(tail.contains("Conversation log: /log.jsonl"));
+        // yusAgent (T03, YA-04): the tail says where the cwd, date and log path are, never
+        // their values.
+        for line in super::super::session_paths::PROMPT_LINES {
+            assert!(tail.contains(line));
+        }
+        assert!(!tail.contains("Working directory:"));
+        assert!(!tail.contains("Current date:"));
+        assert!(!tail.contains("/log.jsonl"));
         assert!(tail.contains("<available_skills>"));
         assert!(tail.contains("Recursive agent depth: 0 (root)"));
         assert!(tail.contains("Pre-installed Python packages: requests, httpx,"));
@@ -519,8 +503,9 @@ mod tests {
         assert!(prompt.starts_with("Be terse."));
         assert_eq!(breakdown.segments[0].name, "custom");
         assert!(prompt.contains("## AGENTS.md\n\nRule one."));
-        assert!(prompt.contains("Working directory: /w"));
-        assert!(prompt.contains("Current date: "));
+        // yusAgent (T03, YA-04): the tail keeps the environment section, without the values.
+        assert!(prompt.contains(super::super::session_paths::PROMPT_LINES[0]));
+        assert!(!prompt.contains("Current date: "));
         assert!(!prompt.contains("# prime-agent harness"));
         assert!(!prompt.contains("Tier-2 guidance."));
     }

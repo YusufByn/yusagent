@@ -158,7 +158,9 @@ pub fn stream_once(
             // session's Codex socket and its continuation) carries it through.
             transport: options.transport.as_ref().and_then(json_round_trip),
             service_tier,
-            cache_retention: None,
+            // yusAgent (T03, YA-04): the session's `cacheRetention` (`None` outside a session
+            // or when `PI_CACHE_RETENTION` is set: the providers then resolve it as upstream).
+            cache_retention: super::cache_retention::current(),
             session_id: options.session_id.clone(),
             // The loop-level request hooks cross the crate boundary here: the payload
             // hook may replace the wire payload, the response hook observes headers.

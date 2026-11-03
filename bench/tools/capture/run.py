@@ -67,6 +67,10 @@ FAKE_SECRETS = {
 # provider, il ne doit jamais passer.
 ALLOWED_VARS = {"YA_CAPTURE_ALLOWED": "visible"}
 KERNEL_SETTINGS = {"kernel": {"envAllowlist": ["YA_CAPTURE_ALLOWED", "ANTHROPIC_API_KEY"]}}
+# TTL du cache de prompt fixé explicitement (T03) : la variable, prioritaire et
+# lue aussi par un binaire antérieur à T03, et le réglage `cacheRetention`.
+CACHE_RETENTION = "short"
+CACHE_SETTINGS = {"cacheRetention": CACHE_RETENTION}
 
 
 def sha256(path: Path) -> str:
@@ -86,6 +90,7 @@ def base_env(home: Path, agent_dir: Path, tmp: Path) -> dict[str, str]:
         "DO_NOT_TRACK": "1",
         "PI_OFFLINE": "1",
         "PI_SKIP_VERSION_CHECK": "1",
+        "PI_CACHE_RETENTION": CACHE_RETENTION,
         "PRIME_AGENT_CODING_AGENT_DIR": str(agent_dir),
     }
     env.update(FAKE_SECRETS)
@@ -96,7 +101,7 @@ def base_env(home: Path, agent_dir: Path, tmp: Path) -> dict[str, str]:
 def write_settings(agent_dir: Path, settings: dict | None = None) -> None:
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "settings.json").write_text(
-        json.dumps({**KERNEL_SETTINGS, **(settings or {})}) + "\n")
+        json.dumps({**KERNEL_SETTINGS, **CACHE_SETTINGS, **(settings or {})}) + "\n")
 
 
 def write_models_json(agent_dir: Path, api: str, port: int) -> None:
@@ -430,6 +435,7 @@ def main() -> None:
         "fake_secret_names": sorted(FAKE_SECRETS),
         "allowed_var_names": sorted(ALLOWED_VARS),
         "kernel_settings": KERNEL_SETTINGS,
+        "cache_retention": {"PI_CACHE_RETENTION": CACHE_RETENTION, **CACHE_SETTINGS},
         "network_control": network_control(out),
         "cases": {},
     }

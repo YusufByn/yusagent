@@ -25,6 +25,21 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/settings/load.rs` | modif. (2 lignes) | `kernel` ajouté aux clés connues (`:66`) : une valeur de mauvais type compte comme non réglée, comme les autres clés. | YA-02 |
 | Tests et checks upstream | modif. | Voir « Tests upstream touchés (YA-02) » ci-dessous. | YA-02 |
 | `.changes/ya-02.md` | ajout | Fragment de changelog. | YA-02 |
+| `crates/pa-core/tests/prefix_stability.rs` | ajout | Test de préfixe du cache de prompt : session réelle (`create_session`, adaptateur provider réel, kernel réel) contre un serveur HTTP local, Anthropic Messages et OpenAI Responses, trois prompts avec tool calls. Voir « Test de préfixe » ci-dessous. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/environment_block.rs` | ajout | Bloc `<environment>` (date UTC, cwd) ajouté à la conversion vers le LLM, jamais stocké, et ses tests. Voir « Prompt système stable » ci-dessous. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/mod.rs` | modif. (4 lignes) | Déclare `environment_block` et `cache_retention`. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | `convert_to_llm` enveloppé par `environment_block::wrap_convert_to_llm` ; `conversation_log` passé à `kernel_provisioner` ; `cacheRetention` lu avant le déplacement des réglages et `stream_fn` enveloppé par `cache_retention::scoped_stream_fn`. | T03 (YA-04) |
+| `crates/pa-core/src/prompts/session_paths.rs` | ajout | Variables du kernel `PRIME_AGENT_CONVERSATION_LOG` et `PRIME_AGENT_BUNDLED_SKILLS_DIR`, lignes statiques du prompt, `<location>` des skills embarqués relative à la variable, et leurs tests. | T03 (YA-04) |
+| `crates/pa-core/src/prompts/mod.rs` | modif. (2 lignes) | Déclare `session_paths`. | T03 (YA-04) |
+| `crates/pa-core/src/prompts/system_prompt.rs` | modif. | `environment_section` : les lignes `Current date`, `Working directory`, `Conversation log` remplacées par les lignes fixes de `session_paths` ; `today()` retiré (plus d'appelant). Tests adaptés. | T03 (YA-04) |
+| `crates/pa-core/src/skills/mod.rs` | modif. | `format_skills_for_prompt` : `<location>` par `session_paths::skill_location`, et une ligne d'explication quand une location commence par la variable. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (5 lignes) | `kernel_provisioner` reçoit `conversation_log` et appelle `session_paths::insert_kernel_env`. | T03 (YA-04) |
+| Tests upstream | modif. | Voir « Tests upstream touchés (T03) » ci-dessous. | T03 (YA-04) |
+| `.changes/ya-03.md` | ajout | Fragment de changelog. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/cache_retention.rs` | ajout | Réglage `cacheRetention` (`"short"`, `"long"`), priorité à `PI_CACHE_RETENTION`, portée de session par variable de tâche, et ses tests. Voir « Réglage du TTL » ci-dessous. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/provider_adapter.rs` | modif. (3 lignes) | `stream_once` : `cache_retention` lu par `cache_retention::current()` au lieu de `None` en dur. | T03 (YA-04) |
+| `crates/pa-core/src/settings/types.rs` | modif. (3 lignes) | Champ `cache_retention` de `Settings`. | T03 (YA-04) |
+| `crates/pa-core/src/settings/load.rs` | modif. (2 lignes) | `cacheRetention` ajouté aux clés connues : une valeur invalide compte comme non réglée. | T03 (YA-04) |
 
 ## Désactivations par défaut (YA-01)
 
@@ -147,6 +162,7 @@ Règles :
 - **Motifs** : un motif avec `*` (base ou réglage) ne laisse jamais passer un nom d'allure secrète (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `AUTH`, `PRIVATE`, `COOKIE`, `env_allowlist.rs:100`). Une telle variable ne passe que nommée exactement dans `kernel.envAllowlist`.
 - **Identifiants provider** : clés d'environnement de chaque provider du catalogue (`pa_ai::env_api_keys`), sources AWS et Google ambiantes, `PRIME_AGENT_TRACES_API_KEY`, jeton du worker daemon (`env_allowlist.rs:115`, `:131`). Jamais transmis, même nommés : avertissement sur stderr (le journal du worker daemon), avec le nom seul.
 - **Injections secrètes du harness** : la clé Serper que le harness résout pour le skill websearch (`runtime_wiring.rs:289-291`) n'est transmise que si `SERPER_API_KEY` est nommée dans `kernel.envAllowlist`. Sinon elle est retenue, avec avertissement. Le skill relit de toute façon une clé littérale dans `auth.json` (`skills/websearch/src/websearch/websearch.py:46`).
+- **Proxy et index uv** : `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (et leurs formes minuscules, distinctes hors Windows), `UV_INDEX`, `UV_INDEX_URL`, `UV_DEFAULT_INDEX`, `UV_EXTRA_INDEX_URL` et `PIP_INDEX_URL` ne sont pas dans la base : derrière un proxy ou avec un index privé, les déclarer dans `kernel.envAllowlist`, de préférence par leur nom exact (une URL peut contenir des identifiants).
 - **Portée** : `kernel.envAllowlist` se lit dans les réglages fusionnés. Le réglage projet (`.prime/agent/settings.json`) remplace le global (les tableaux remplacent dans `deep_merge`, `merge.rs:7`). Comme `shellPath`, un dépôt non fiable peut donc élargir la liste : relire les réglages du projet avant d'y lancer l'agent.
 
 Ce qui hérite de cet environnement, et de rien d'autre :
@@ -159,6 +175,7 @@ Ce qui hérite de cet environnement, et de rien d'autre :
 
 - **Jetons et clés au repos** : `<agentDir>/auth.json`, créé en `0o600` avec écritures atomiques (`crates/pa-core/src/auth/manager.rs:275`, `storage.rs:1`, `:73`). `agentDir` vaut `~/.prime/agent` par défaut (`crates/pa-cli/src/config.rs:7`, `:104-111`). On y trouve les clés API, les jetons OAuth provider et les jetons MCP (`mcp:*`). Le kernel connaît ce chemin (`PRIME_AGENT_CODING_AGENT_DIR`) et le skill websearch lit déjà ce fichier.
 - **Clés en variables d'environnement** : le process du harness les garde. Sous Linux, `/proc/<pid>/environ` du harness reste lisible par un process du même utilisateur. Sur macOS, voir la mesure `psenv` du banc de capture (rapport de la PR YA-02).
+- **`unsetenv` au démarrage ne suffit pas sur macOS** (relevé T03, macOS 27.0.1, `python3 -I bench/tools/capture/unsetenv_ps.py`) : après `unsetenv` dans le parent, `ps eww <pid du parent>` lancé par un enfant affiche toujours le nom et la valeur. `ps` lit la zone d'environnement initiale du process, que `unsetenv` ne modifie pas. Écraser la valeur en place avant `unsetenv` la masque ; le nom reste visible. Le harness ne fait aujourd'hui ni l'un ni l'autre. Piste pour YA-11 : sandbox qui interdit `ps` sur le harness, ou harness relancé sans les secrets dans son environnement (lus depuis `auth.json`).
 - **MCP stdio lancés depuis le kernel** : une référence d'environnement dans `mcpServers.<nom>.env` (`prime-agent-runtime/src/rlm/mcp.py:995-997`) ou un jeton porteur lu depuis l'environnement (`mcp.py:923`, `:970`, `mcp_base.py:149`) n'est plus résolu, sauf si la variable est nommée dans `kernel.envAllowlist`.
 
 ## Tests upstream touchés (YA-02)
@@ -174,3 +191,68 @@ Même règle que YA-01 : aucun test supprimé ni affaibli. Chaque modification p
 | `scripts/check_launch_env.py` | check de cycle de vie | setup | `kernel.envAllowlist: ["PA_ENV_*", "PRIME_AGENT_INTERNAL_PARITY_CANARY"]` ; le canari reste listé pour que son absence prouve toujours le filtrage côté worker |
 | `scripts/lifecycle_lib.py` | `OwnedProcesses.ownership` | setup | un kernel ne porte plus `PA_GOAL_FIXTURE_ID` ; il est reconnu à `PRIME_AGENT_CODING_AGENT_DIR` = `<racine>/agent`, en plus du pid propriétaire déjà exigé. Workers et process directs exigent toujours l'étiquette |
 | `scripts/test_lifecycle_lib.py` | `test_untagged_kernel_owned_through_its_agent_dir`, `test_untagged_worker_never_owned_through_its_agent_dir` | renfort (nouveaux) | le kernel d'un autre dossier agent n'est pas reconnu ; un worker sans étiquette non plus |
+
+## Test de préfixe (T03, YA-04)
+
+`crates/pa-core/tests/prefix_stability.rs`, lancé par les shards de `ci.yml` (le venv du kernel y est préparé avant les tests ; sans kernel, le test échoue en CI et est sauté ailleurs avec une note).
+
+- Un serveur HTTP local joue le modèle, au format Anthropic Messages ou OpenAI Responses, et garde chaque corps de requête octet pour octet. La réponse ne dépend que de la requête : étape du prompt (marqueur `PREFIX-PROMPT-n`) et nombre de résultats de tool déjà présents.
+- Session réelle : `create_session` avec `real_stream_fn` (`provider_adapter.rs`), donc prompt système, tools, conversion des messages et adaptateur du harness. Les tool calls passent par le vrai `python_repl`.
+- Scénario : trois prompts, six requêtes (deux tool calls puis texte ; texte ; un tool call puis texte).
+- Les sorties des cellules prouvent que le vrai kernel a tourné : `1`, `2`, puis `3` (variable de la cellule 2) et `True True` (`PRIME_AGENT_CONVERSATION_LOG` se termine par `.jsonl`, `$PRIME_AGENT_BUNDLED_SKILLS_DIR/edit/SKILL.md` existe).
+- Entre la requête N et N+1 : chaque clé hors conversation (prompt système, tools, paramètres) est identique octet par octet ; pour Responses, le premier élément d'`input` (le prompt système) aussi. Les messages de N sont un préfixe exact de ceux de N+1, seul le déplacement de `cache_control` est toléré.
+- Le corps reçu doit être du JSON compact : sa re-sérialisation (`preserve_order`) redonne les mêmes octets. Comparer les valeurs re-sérialisées revient donc à comparer les octets reçus.
+- En cas d'échec : l'adaptateur, la paire de requêtes, la clé ou le message en cause, l'octet de la première différence et le contexte des deux côtés.
+
+## Prompt système stable (T03, YA-04)
+
+Avant T03, le prompt système changeait entre deux sessions du même projet (identifiant de session dans `Conversation log:`), chaque jour (`Current date:`), d'un projet à l'autre (`Working directory:`) et selon le dossier d'extraction du binaire (chemin absolu de chaque `SKILL.md` embarqué).
+
+| Valeur | Avant | Après |
+|---|---|---|
+| Date (UTC) | `Current date:` dans le prompt | bloc `<environment>` à la fin du premier message utilisateur ; nouvelle date à la fin du premier message utilisateur d'un autre jour |
+| Répertoire de travail | `Working directory:` dans le prompt | même bloc, premier message utilisateur |
+| Journal de session (contient l'id de session) | `Conversation log:` dans le prompt | variable du kernel `PRIME_AGENT_CONVERSATION_LOG` (vide si la session n'est pas persistée) ; le prompt dit comment la lire |
+| Racine des skills embarqués (dossier d'extraction du binaire) | chemin absolu dans chaque `<location>` | `<location>$PRIME_AGENT_BUNDLED_SKILLS_DIR/<nom>/SKILL.md</location>` ; variable du kernel, visible aussi par `bash()` |
+
+Bloc `<environment>` :
+
+- Calculé à la conversion vers le LLM (`environment_block.rs`), après `refinement_gate::convert_to_llm`. Rien n'est écrit dans le JSONL de session.
+- La date vient de l'horodatage du message lui-même, pas de l'horloge : chaque requête répète les blocs déjà envoyés octet pour octet.
+- Le bloc est une partie texte ajoutée après le contenu du message, qui reste inchangé.
+- Les messages custom convertis en tours utilisateur comptent aussi : la tâche `[task from parent]` d'un enfant `rlm` porte le bloc complet, comme le premier prompt du parent.
+- Après une compaction, le premier tour utilisateur du contexte reconstruit porte de nouveau le bloc complet (le préfixe est de toute façon reconstruit).
+- C'est le point d'accueil de l'instantané d'environnement complet de YA-09.
+
+Ce qui reste propre au projet dans le prompt : les chemins des `AGENTS.md` (`## <chemin>`) et des skills de l'utilisateur ou du projet (hors racine embarquée). Ils sont identiques d'une session à l'autre du même projet.
+
+## Réglage du TTL (T03, YA-04)
+
+`settings.json` : `"cacheRetention": "short"` ou `"long"` (global ou projet, le projet l'emporte).
+
+| `PI_CACHE_RETENTION` | `cacheRetention` | Option envoyée aux providers | TTL effectif (Anthropic) |
+|---|---|---|---|
+| définie | quelconque | `None` | celui de la variable, comme upstream (`long` → 1 h, toute autre valeur → 5 min) |
+| absente | absent | `None` | 5 min (défaut upstream, inchangé) |
+| absente | `"short"` | `Short` | 5 min |
+| absente | `"long"` | `Long` | 1 h si le modèle l'accepte (`supportsLongCacheRetention`, vrai par défaut) |
+
+- Une valeur invalide (`"1h"`, `true`) compte comme non réglée.
+- Côté OpenAI Responses, `Long` n'ajoute `prompt_cache_retention: "24h"` que si le modèle déclare `supportsLongCacheRetention`.
+- Transport : `engine.rs` enveloppe le `stream_fn` de la session (`scoped_stream_fn`), qui pose la valeur dans une variable de tâche tokio autour de chaque appel et du futur renvoyé ; `stream_once` la lit (`cache_retention::current()`). Les signatures upstream (`StreamRequestOptions`, `ProviderTarget`) et la couche providers (`pa-ai`) ne changent pas. Hors session (appels annexes sans ce `stream_fn`), la valeur est `None`, comme avant.
+- Test : `anthropic_cache_retention_follows_the_setting` (`prefix_stability.rs`) vérifie les marqueurs `cache_control` de la requête réelle, sans réglage puis avec `"long"`.
+
+## Tests upstream touchés (T03)
+
+Même règle : aucun test supprimé ni affaibli. Chaque modification porte un commentaire `yusAgent (T03, YA-04)`.
+
+| Fichier | Test(s) | Nature | Modification |
+|---|---|---|---|
+| `crates/pa-core/src/prompts/system_prompt.rs` | `default_prompt_is_layered_with_static_prefix_first` | défaut + renfort | la fin du prompt contient les lignes fixes ; ajout : ni `Working directory:`, ni `Current date:`, ni le chemin du journal |
+| `crates/pa-core/src/prompts/system_prompt.rs` | `custom_prompt_replaces_layers_keeps_tail` | défaut | la ligne fixe sur `<environment>` au lieu de `Working directory: /w` ; plus de `Current date: ` |
+| `crates/pa-cli/src/prompt_command.rs` | `assembles_the_layered_prompt_for_a_directory` | défaut + renfort | la ligne fixe du journal au lieu de `Conversation log: not persisted` ; ajout : aucune ligne `Conversation log:` |
+| `crates/pa-core/tests/prompt_guards.rs` | `cached_prefix_is_stable_across_sessions` | défaut + renfort | la fin du prompt ne contient plus la date, le cwd ni le journal (les deux sessions) ; ajout : les lignes fixes sont présentes |
+| `crates/pa-core/tests/prompt_guards.rs` | `whole_prompt_is_identical_across_sessions_of_one_project` | renfort (nouveau) | prompt entier identique quand seuls le cwd et le journal changent ; racine des skills embarqués absente, `<location>` relative à la variable |
+| `crates/pa-daemon/tests/queue_delivery_e2e.rs` | mock du provider (3 tests : `multi_item_queue_delivers_every_item_in_lane_order`, `queue_pickup_projection_reaches_clients_before_the_delivered_turn_starts`, `queue_delivery_projects_the_active_action_phases_around_the_turn`) | setup | le texte du prompt est la dernière partie texte qui n'est pas le bloc `<environment>` (le mock prenait la dernière partie, devenue le bloc sur le premier message) |
+| `scripts/check_custom_ca.py` | check de cycle de vie, `request_contract` | setup | le texte d'un message utilisateur exclut la partie `<environment>` avant la comparaison exacte au prompt de fixture |
+| `scripts/check_observe_selectors.py` | check de cycle de vie, `child_task` | setup | même exclusion pour la tâche `[task from parent]` de l'enfant, qui porte désormais le bloc |

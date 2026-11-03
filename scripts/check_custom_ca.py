@@ -154,8 +154,11 @@ def terminal_assistant(messages):
 
 def request_contract(request):
     body = request['body']
-    users = ['\n'.join(texts(row.get('content'))) for row in body.get('messages', [])
-             if row.get('role') == 'user']
+    # yusAgent (T03, YA-04): the harness appends an `<environment>` text part to the first
+    # user message; the prompt is the user's own text.
+    users = ['\n'.join(text for text in texts(row.get('content'))
+                       if not text.startswith('<environment>'))
+             for row in body.get('messages', []) if row.get('role') == 'user']
     count = users.count(PROMPT)
     assert count == 1, 'expected current fixture prompt exactly once'
     # Harness digests and unrelated prompt layers are outside the TLS contract.

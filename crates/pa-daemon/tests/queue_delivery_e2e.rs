@@ -232,8 +232,13 @@ fn serve(
                 .find(|message| message["role"] == "user")
                 .and_then(|message| match &message["content"] {
                     Value::String(text) => Some(text.clone()),
+                    // yusAgent (T03, YA-04): the first user message ends with an
+                    // `<environment>` text part; the prompt is the part before it.
                     Value::Array(parts) => parts.iter().rev().find_map(|part| {
-                        part.get("text").and_then(Value::as_str).map(str::to_string)
+                        part.get("text")
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.starts_with("<environment>"))
+                            .map(str::to_string)
                     }),
                     _ => None,
                 })

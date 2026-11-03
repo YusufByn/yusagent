@@ -498,7 +498,7 @@ Rapport complet : `docs/audit/audit-entree.md` (binaire de HEAD construit en CI,
 | ACP | opérationnel ; manquent `session/request_permission` et `session/load` | YA-10 |
 | Télémétrie | active par défaut vers `api.primeintellect.ai` | YA-13 |
 | Empreinte | 62 Mo installés hors venv (binaire 59 Mo) | KPI |
-| CI du fork | 18 jobs sur 20 ; shard 1 en échec (release v0.9.8 absente) | YA-16 |
+| CI du fork | 17 jobs sur 19 ; shard 1 en échec (release v0.9.8 absente) | YA-16 |
 | Déjà présent | provider factice `faux`, transcripts ACP, gate « pas de relance sans changement du workspace », hook `transform_context` pour le masquage | YA-05, YA-07 |
 
 ---

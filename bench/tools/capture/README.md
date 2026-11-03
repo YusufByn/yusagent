@@ -29,9 +29,9 @@ Prérequis : macOS (`sandbox-exec`), `python3` ≥ 3.11, `uv`, `git`. Bibliothè
 2. **Mesures** (réseau limité à localhost) : chaque lancement du binaire passe par `sandbox-exec -f sandbox.sb`, qui refuse tout trafic sortant sauf localhost, y compris le DNS. Le rapport inclut un contrôle : `curl https://example.com` dans le même profil doit échouer.
 3. **Analyse** : `analyze.py`, elle aussi sous sandbox.
 
-Environnement transmis au binaire (liste blanche, `env -i`) : `PATH`, `HOME` (isolé, dans le cache), `TMPDIR`, `LANG`, `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PRIME_AGENT_CODING_AGENT_DIR` (isolé), plus deux variables factices (`ANTHROPIC_API_KEY`, `YA_CAPTURE_FAKE_TOKEN`) qui servent à vérifier si le kernel voit des noms de secrets, et une variable non sensible, `YA_CAPTURE_ALLOWED=visible`. Le `~/.prime` de l'utilisateur n'est jamais lu.
+Environnement transmis au binaire (liste blanche, `env -i`) : `PATH`, `HOME` (isolé, dans le cache), `TMPDIR`, `LANG`, `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PI_CACHE_RETENTION=short`, `PRIME_AGENT_CODING_AGENT_DIR` (isolé), plus deux variables factices (`ANTHROPIC_API_KEY`, `YA_CAPTURE_FAKE_TOKEN`) qui servent à vérifier si le kernel voit des noms de secrets, et une variable non sensible, `YA_CAPTURE_ALLOWED=visible`. Le `~/.prime` de l'utilisateur n'est jamais lu.
 
-Chaque dossier agent reçoit un `settings.json` avec `"kernel": {"envAllowlist": ["YA_CAPTURE_ALLOWED", "ANTHROPIC_API_KEY"]}` (YA-02) : la première doit être visible dans le kernel, la seconde jamais (identifiant de provider). Un binaire antérieur à YA-02 ignore ce réglage.
+Chaque dossier agent reçoit un `settings.json` avec `"kernel": {"envAllowlist": ["YA_CAPTURE_ALLOWED", "ANTHROPIC_API_KEY"]}` (YA-02) et `"cacheRetention": "short"` (T03). Le TTL du cache est donc fixé deux fois : par la variable, prioritaire et lue aussi par les binaires antérieurs à T03, et par le réglage : la première doit être visible dans le kernel, la seconde jamais (identifiant de provider). Un binaire antérieur à YA-02 ignore ce réglage.
 
 Le projet de test est créé hors du dépôt (`/private/tmp/ya-capture/project`, modifiable par `YA_CAPTURE_WORK`), parce que la découverte d'`AGENTS.md` remonte les dossiers parents.
 
@@ -64,7 +64,15 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 | Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant relève les noms sensibles de son kernel (ligne `CHILD_ENV`) puis répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
 | `psenv` | **Hors sandbox** : `/bin/ps` est setuid et le profil `sandbox.sb` refuse de l'exécuter (code 126), ce qui casse aussi le shell persistant sur macOS (identité de démarrage lue par `ps`). Provider local, `PI_OFFLINE=1`. Ligne `PS_PARENT` (relevé YA-11) : `ps eww` lancé depuis le kernel sur le harness, avec la commande du parent, le code de sortie et les noms des variables factices visibles (jamais de valeur). Ligne `PERSISTENT` : noms sensibles vus par `printenv` dans un shell persistant |
 
-Le prompt système contient le chemin absolu de chaque `SKILL.md` (`<location>`), donc le dossier où le binaire est extrait. Pour comparer deux binaires, les extraire au même chemin, sinon l'inventaire des skills diffère de (écart de longueur du chemin) × (nombre de skills).
+Avant T03, le prompt système contient le chemin absolu de chaque `SKILL.md` embarqué (`<location>`), donc le dossier où le binaire est extrait. Depuis T03, ces locations s'écrivent `$PRIME_AGENT_BUNDLED_SKILLS_DIR/<nom>/SKILL.md`. Pour comparer un binaire antérieur à T03 avec un autre, les extraire au même chemin, sinon l'inventaire des skills diffère de (écart de longueur du chemin) × (nombre de skills).
+
+## Comparer deux runs
+
+```bash
+python3 -I bench/tools/capture/compare.py <run A> <run B> --out <fichier>.md
+```
+
+Pour chaque cas commun, la première requête : prompt système, chaque paramètre hors conversation et premier message utilisateur. Chaque bloc modifié est listé avec sa position en octets dans A et dans B, les octets retirés et ajoutés. `--out` écrit aussi le `.json` complet.
 
 ## Serveur seul
 

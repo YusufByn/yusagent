@@ -64,6 +64,8 @@ const KNOWN_FIELDS: &[&str] = &[
     "pythonCellTimeoutMs",
     // yusAgent (YA-02): `kernel.envAllowlist`.
     "kernel",
+    // yusAgent (T03, YA-04): prompt-cache TTL.
+    "cacheRetention",
 ];
 
 /// Extract each known field independently; ignore fields whose JSON type does not match the Rust

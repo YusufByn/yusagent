@@ -279,6 +279,9 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let python_cell_timeout_ms = settings.get_python_cell_timeout_ms();
     // yusAgent (YA-02): `kernel.envAllowlist`, captured before the move too.
     let kernel_env_allowlist = crate::kernel::env_allowlist::env_allowlist(settings.settings());
+    // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
+    let cache_retention =
+        super::cache_retention::resolve_from_env(settings.settings().cache_retention);
     let (mcp_skill_overrides, mcp_generic_servers, built_manager) =
         mcp_gating(&settings, config.agent_dir.clone()).await?;
     let mcp_manager = config
@@ -314,6 +317,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let stream_fn = config
         .stream_fn
         .ok_or_else(|| anyhow::anyhow!("a provider stream_fn is required"))?;
+    let stream_fn = super::cache_retention::scoped_stream_fn(stream_fn, cache_retention);
     // `model.info` facts, captured before the model moves into the loop.
     let model_info = match config.model_info.clone() {
         Some(full) => super::turn_boundary::ModelInfo {
@@ -510,6 +514,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         kernel_command_prefix,
         serper_api_key,
         &kernel_env_allowlist,
+        conversation_log.as_deref(),
         session_artifact_dir,
         cell_timeout_ms,
         on_restore,
@@ -720,9 +725,13 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         // The session conversion rules apply at the loop's LLM boundary
         // (TS `convertToLlm`): bookkeeping custom rows drop, everything
         // else (the harness digest included) becomes a user turn.
+        // yusAgent (T03, YA-04): date and cwd ride an `<environment>` block, not the prompt.
         convert_to_llm: Some(super::request_timing::instrument_convert_to_llm(
             std::sync::Arc::clone(&request_timing_wiring),
-            super::refinement_gate::convert_to_llm(refinement_settings.reopen()),
+            super::environment_block::wrap_convert_to_llm(
+                super::refinement_gate::convert_to_llm(refinement_settings.reopen()),
+                &cwd,
+            ),
         )),
         // The Rust engine wires no transform, so the instrumented seam
         // wraps a pass-through that marks the turn's dispatch moment.
