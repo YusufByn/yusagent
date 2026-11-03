@@ -29,7 +29,9 @@ Prérequis : macOS (`sandbox-exec`), `python3` ≥ 3.11, `uv`, `git`. Bibliothè
 2. **Mesures** (réseau limité à localhost) : chaque lancement du binaire passe par `sandbox-exec -f sandbox.sb`, qui refuse tout trafic sortant sauf localhost, y compris le DNS. Le rapport inclut un contrôle : `curl https://example.com` dans le même profil doit échouer.
 3. **Analyse** : `analyze.py`, elle aussi sous sandbox.
 
-Environnement transmis au binaire (liste blanche, `env -i`) : `PATH`, `HOME` (isolé, dans le cache), `TMPDIR`, `LANG`, `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PRIME_AGENT_CODING_AGENT_DIR` (isolé), plus deux variables factices (`ANTHROPIC_API_KEY`, `YA_CAPTURE_FAKE_TOKEN`) qui servent à vérifier si le kernel voit des noms de secrets. Le `~/.prime` de l'utilisateur n'est jamais lu.
+Environnement transmis au binaire (liste blanche, `env -i`) : `PATH`, `HOME` (isolé, dans le cache), `TMPDIR`, `LANG`, `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PRIME_AGENT_CODING_AGENT_DIR` (isolé), plus deux variables factices (`ANTHROPIC_API_KEY`, `YA_CAPTURE_FAKE_TOKEN`) qui servent à vérifier si le kernel voit des noms de secrets, et une variable non sensible, `YA_CAPTURE_ALLOWED=visible`. Le `~/.prime` de l'utilisateur n'est jamais lu.
+
+Chaque dossier agent reçoit un `settings.json` avec `"kernel": {"envAllowlist": ["YA_CAPTURE_ALLOWED", "ANTHROPIC_API_KEY"]}` (YA-02) : la première doit être visible dans le kernel, la seconde jamais (identifiant de provider). Un binaire antérieur à YA-02 ignore ce réglage.
 
 Le projet de test est créé hors du dépôt (`/private/tmp/ya-capture/project`, modifiable par `YA_CAPTURE_WORK`), parce que la découverte d'`AGENTS.md` remonte les dossiers parents.
 
@@ -52,14 +54,15 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 
 | Cas | Ce qu'il vérifie |
 |---|---|
-| `s1-anthropic` | Scénario de 3 tours : `print(1)`, liste des noms de variables d'environnement sensibles vues par le kernel, réponse finale |
+| `s1-anthropic` | Scénario de 4 tours : `print(1)` ; noms de variables sensibles vus par `os.environ`, par `env` dans `bash()` et par `printenv` dans un shell persistant, puis `YA_CAPTURE_ALLOWED` ; `uv --version`, `git status --short` et `python3 -c 'print(1)'` dans `bash()` ; réponse finale |
 | `s2-anthropic` | Même scénario, deuxième session dans le même projet et le même dossier agent |
 | `s1-responses` | Même scénario au format OpenAI Responses (`prompt_cache_key`) |
 | `crash-anthropic` | Le tour 2 tue le kernel (`os._exit(1)`), le tour 3 le relance |
 | `resume-anthropic` | Deuxième prompt dans la même session (`--continue`) |
 | `compact-anthropic` | Sorties volumineuses et usage annoncé de 199 000 tokens : compaction par seuil, résumé, porte auto `/refine` |
 | ACP | `--mode acp` sur un daemon isolé (`--daemon-socket`) : `initialize`, `session/new`, `session/prompt` |
-| Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
+| Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant relève les noms sensibles de son kernel (ligne `CHILD_ENV`) puis répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
+| `psenv` | Relevé pour YA-11 : depuis le kernel, `ps eww` sur le process parent (le harness). La ligne `PS_PARENT` donne la commande du parent, le code de sortie et les noms des variables factices visibles dans son environnement (jamais de valeur) |
 
 Le prompt système contient le chemin absolu de chaque `SKILL.md` (`<location>`), donc le dossier où le binaire est extrait. Pour comparer deux binaires, les extraire au même chemin, sinon l'inventaire des skills diffère de (écart de longueur du chemin) × (nombre de skills).
 

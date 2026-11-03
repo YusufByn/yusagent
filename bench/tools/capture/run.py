@@ -62,6 +62,11 @@ FAKE_SECRETS = {
     "ANTHROPIC_API_KEY": "capture-fake-not-a-key",
     "YA_CAPTURE_FAKE_TOKEN": "capture-fake-not-a-token",
 }
+# Variable non sensible déclarée dans `kernel.envAllowlist` : le kernel doit
+# la voir (YA-02). ANTHROPIC_API_KEY y est aussi déclarée : identifiant de
+# provider, il ne doit jamais passer.
+ALLOWED_VARS = {"YA_CAPTURE_ALLOWED": "visible"}
+KERNEL_SETTINGS = {"kernel": {"envAllowlist": ["YA_CAPTURE_ALLOWED", "ANTHROPIC_API_KEY"]}}
 
 
 def sha256(path: Path) -> str:
@@ -84,7 +89,14 @@ def base_env(home: Path, agent_dir: Path, tmp: Path) -> dict[str, str]:
         "PRIME_AGENT_CODING_AGENT_DIR": str(agent_dir),
     }
     env.update(FAKE_SECRETS)
+    env.update(ALLOWED_VARS)
     return env
+
+
+def write_settings(agent_dir: Path, settings: dict | None = None) -> None:
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "settings.json").write_text(
+        json.dumps({**KERNEL_SETTINGS, **(settings or {})}) + "\n")
 
 
 def write_models_json(agent_dir: Path, api: str, port: int) -> None:
@@ -223,8 +235,7 @@ def acp_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -
     socket = work / "d.sock"
     server = CaptureServer(acp_dir / "cap", "basic", [])
     write_models_json(agent, "anthropic-messages", server.port)
-    (agent / "settings.json").write_text(
-        json.dumps({"defaultProvider": "capture", "defaultModel": "capture-model"}) + "\n")
+    write_settings(agent, {"defaultProvider": "capture", "defaultModel": "capture-model"})
     env = base_env(cache / "home", agent, work / "tmp")
     lines: queue.Queue[str] = queue.Queue()
     transcript: list[dict] = []
@@ -306,31 +317,55 @@ def spawn_check(binary: Path, cache: Path, work: Path, project: Path, out: Path)
     server = CaptureServer(spawn_dir / "cap", "spawn", [])
     try:
         write_models_json(agent, "anthropic-messages", server.port)
+        write_settings(agent)
         env = base_env(cache / "home", agent, work / "tmp")
         result = run_binary(agent_cmd(binary), env, project, spawn_dir, sandboxed=True)
     finally:
         server.stop()
-    parent_texts, child_requests = [], 0
+    parent_texts, child_texts = [], []
     for meta_path in sorted((spawn_dir / "cap").glob("*.meta.json")):
         meta = json.loads(meta_path.read_text())
-        if meta.get("child"):
-            child_requests += 1
-            continue
         body = (spawn_dir / "cap" / meta_path.name.replace(".meta.json", ".body.json")).read_text()
-        parent_texts.append(body)
+        (child_texts if meta.get("child") else parent_texts).append(body)
     collect = next((line for text in parent_texts for line in _texts(json.loads(text))
                     if line.startswith("COLLECT")), None)
     reply_seen = any("YA_CHILD_RESULT" in text and "agent-message" in text
                      for text in parent_texts)
+    child_env = next((line for text in child_texts for line in _texts(json.loads(text))
+                      if line.startswith("CHILD_ENV")), None)
     return {
         **result,
         "parent_requests": len(parent_texts),
-        "child_requests": child_requests,
+        "child_requests": len(child_texts),
         "collect_line": collect,
         "child_reply_in_parent_context": reply_seen,
+        "child_env_line": child_env,
         "ok": result["exit"] == 0 and bool(collect) and "True" in collect
               and "YA_CHILD_DONE" in collect and reply_seen,
     }
+
+
+def ps_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -> dict:
+    """Hors périmètre YA-02, relevé pour YA-11 : `ps eww` lancé depuis le
+    kernel sur son parent (le harness) affiche-t-il l'environnement du
+    harness ? Scénario `psenv` ; seuls des noms de variables factices sortent.
+    """
+    ps_dir = out / "psenv"
+    ps_dir.mkdir(parents=True, exist_ok=True)
+    agent = work / "agent-p"
+    server = CaptureServer(ps_dir / "cap", "psenv", [])
+    try:
+        write_models_json(agent, "anthropic-messages", server.port)
+        write_settings(agent)
+        env = base_env(cache / "home", agent, work / "tmp")
+        result = run_binary(agent_cmd(binary), env, project, ps_dir, sandboxed=True)
+    finally:
+        server.stop()
+    line = None
+    for body_path in sorted((ps_dir / "cap").glob("*.body.json")):
+        line = next((item for item in _texts(json.loads(body_path.read_text()))
+                     if item.startswith("PS_PARENT")), line)
+    return {**result, "ps_line": line}
 
 
 def _texts(value) -> list[str]:
@@ -385,6 +420,8 @@ def main() -> None:
         "project": str(project),
         "env_names": sorted(base_env(Path("/h"), Path("/a"), Path("/t"))),
         "fake_secret_names": sorted(FAKE_SECRETS),
+        "allowed_var_names": sorted(ALLOWED_VARS),
+        "kernel_settings": KERNEL_SETTINGS,
         "network_control": network_control(out),
         "cases": {},
     }
@@ -406,8 +443,7 @@ def main() -> None:
         runs = []
         try:
             write_models_json(work / agent, api, server.port)
-            if settings:
-                (work / agent / "settings.json").write_text(json.dumps(settings) + "\n")
+            write_settings(work / agent, settings)
             env = base_env(cache / "home", work / agent, work / "tmp")
             for index, prompt in enumerate(prompts):
                 runs.append(run_binary(agent_cmd(binary, prompt, resume=index > 0), env, project,
@@ -425,6 +461,9 @@ def main() -> None:
     print(f"spawn : ok={run_info['spawn']['ok']} collect={run_info['spawn']['collect_line']!r} "
           f"requêtes parent/enfant={run_info['spawn']['parent_requests']}"
           f"/{run_info['spawn']['child_requests']}")
+
+    run_info["psenv"] = ps_check(binary, cache, work, project, out)
+    print(f"psenv : {run_info['psenv']['ps_line']!r}")
 
     run_info["acp"] = acp_check(binary, cache, work, project, out)
     print(f"acp : prompt={run_info['acp']['prompt_result']} "

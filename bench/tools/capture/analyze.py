@@ -320,12 +320,27 @@ def render(report: dict) -> str:
                 f"{spawn['child_requests']}",
                 f"- Ligne `rlm.collect` vue par le parent : `{spawn['collect_line']}`",
                 f"- Réponse de l'enfant (`agent_message.send`) dans le contexte du parent : "
-                f"{spawn['child_reply_in_parent_context']}"]
+                f"{spawn['child_reply_in_parent_context']}",
+                f"- Environnement vu par le kernel de l'enfant : `{spawn.get('child_env_line')}`"]
     out += ["", "## Environnement vu par le kernel (s1-anthropic, tour 2)", "",
             "Variables factices transmises au binaire : "
-            f"{', '.join(report['run'].get('fake_secret_names', []))}.", ""]
-    for line in report["env_visibility"]:
-        out.append(f"- résultat de cellule : `{line[:300]}`")
+            f"{', '.join(report['run'].get('fake_secret_names', []))}. "
+            "Variables non sensibles transmises : "
+            f"{', '.join(report['run'].get('allowed_var_names', [])) or 'aucune'}. "
+            f"Réglage : `{json.dumps(report['run'].get('kernel_settings'))}`.", ""]
+    for result in report["env_visibility"]:
+        for line in result.splitlines():
+            out.append(f"- `{line[:300]}`")
+    psenv = report["run"].get("psenv")
+    if psenv:
+        out += ["", "## `ps eww` du harness depuis le kernel (scénario `psenv`, relevé YA-11)", "",
+                "Format : `PS_PARENT <commande du parent> <code de sortie> "
+                "<variables factices visibles dans son environnement>`.", "",
+                f"- `{psenv.get('ps_line')}`"]
+    out += ["", "## Non-régression de `bash()` (s1-anthropic, tour 3)", ""]
+    for result in report.get("bash_nonregression", []):
+        for line in result.splitlines():
+            out.append(f"- `{line[:300]}`")
     out += ["", "## Crash du kernel (résultats de tool du dernier appel)", ""]
     for line in report["crash"]["tool_results"]:
         out.append(f"- `{line[:400]}`")
@@ -390,6 +405,7 @@ def main() -> None:
         report["responses_cache_key"] = sorted({r.body.get("prompt_cache_key", "absent")
                                                 for r in responses})
     report["env_visibility"] = tool_results_text(s1[-1])[1:2] if s1 else []
+    report["bash_nonregression"] = tool_results_text(s1[-1])[2:3] if s1 else []
     crash = main_requests(cases["crash-anthropic"])
     report["crash"] = {"tool_results": tool_results_text(crash[-1]) if crash else []}
 
