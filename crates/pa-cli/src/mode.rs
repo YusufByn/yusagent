@@ -348,14 +348,17 @@ pub(crate) mod tests {
         });
     }
 
-    /// A fresh install resolves enabled (the TS posture) with the env overrides cleared.
+    /// yusAgent (YA-01): a fresh install resolves disabled with the env
+    /// overrides cleared; `telemetry.enabled=true` turns it back on.
     #[test]
-    fn telemetry_defaults_on() {
+    fn telemetry_defaults_off() {
         with_clean_telemetry_env(|| {
             let dir = tempfile::tempdir().unwrap();
             let agent_dir = dir.path().join("agent");
-            let settings = pa_core::settings::SettingsManager::create(dir.path(), agent_dir);
-            assert!(!telemetry_disabled(&settings));
+            let mut settings = pa_core::settings::SettingsManager::create(dir.path(), agent_dir);
+            assert!(telemetry_disabled(&settings));
+            settings.set_telemetry_enabled(true).unwrap();
+            assert!(!telemetry_disabled(&settings.reopen()));
         });
     }
 }

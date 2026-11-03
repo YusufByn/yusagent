@@ -135,7 +135,8 @@ fn resource_save_survives_an_unrelated_later_save() {
 fn harness_refinements_persist_without_clobbering_other_settings() {
     let (storage, mut manager) =
         fixture(r#"{"theme":"light","autoRefine":{"turnInterval":3},"future":{"keep":true}}"#);
-    assert!(manager.get_harness_refinements());
+    // yusAgent (YA-01): off by default.
+    assert!(!manager.get_harness_refinements());
     manager.set_harness_refinements(false).unwrap();
     assert!(!manager.reopen().get_harness_refinements());
     assert_eq!(
@@ -179,7 +180,8 @@ fn harness_refinements_ignore_project_overrides_and_resolve_global_wrong_types()
         r#"{"harnessRefinements":"false"}"#,
     )
     .unwrap();
-    assert!(manager.reopen().get_harness_refinements());
+    // yusAgent (YA-01): a wrong type resolves to the fork default (off).
+    assert!(!manager.reopen().get_harness_refinements());
 }
 
 #[test]

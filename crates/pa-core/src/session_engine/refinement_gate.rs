@@ -92,6 +92,8 @@ mod tests {
     async fn live_request_gate_filters_saved_rows_and_preserves_quoted_user_content() {
         let tmp = tempfile::tempdir().unwrap();
         let mut settings = SettingsManager::create(tmp.path(), tmp.path().join("agent"));
+        // yusAgent (YA-01): off by default.
+        settings.set_harness_refinements(true).unwrap();
         let convert = convert_to_llm(settings.reopen());
         let digest =
             super::super::harness_digest::harness_digest_prompt_row("saved memory", 1, "fp");

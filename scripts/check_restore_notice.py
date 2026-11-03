@@ -183,8 +183,10 @@ def run_case(binary, root, observation):
         'baseUrl': 'http://127.0.0.1:%s/v1' % server.server_address[1],
         'models': [{'id': 'restore-fixture', 'name': 'Restore fixture', 'reasoning': False,
                     'contextWindow': 128000, 'maxTokens': 4096}]}}}))
+    # yusAgent (YA-01): agent-message and rlm-heartbeat are opt-in.
     (agent / 'settings.json').write_text(json.dumps({'defaultProvider': 'fixture',
-        'defaultModel': 'restore-fixture', 'prewarmPythonKernel': False}))
+        'defaultModel': 'restore-fixture', 'prewarmPythonKernel': False,
+        'bundledSkills': {'agentMessage': True, 'rlmHeartbeat': True}}))
     command = [str(binary), '--mode', 'json', '--provider', 'fixture', '--model',
                'restore-fixture', '--session-dir', str(sessions)]
     try:

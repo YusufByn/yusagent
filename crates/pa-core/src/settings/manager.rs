@@ -821,7 +821,7 @@ impl SettingsManager {
     }
 
     /// `telemetry.enabled` when any scope sets it (`None`: nothing set, the
-    /// default-on posture), resolved like [`Self::get_telemetry_enabled`].
+    /// fork default), resolved like [`Self::get_telemetry_enabled`].
     #[must_use]
     pub fn telemetry_enabled_setting(&self) -> Option<bool> {
         let set = [
@@ -834,16 +834,24 @@ impl SettingsManager {
         set.then(|| self.get_telemetry_enabled())
     }
 
-    /// Telemetry is enabled only when every scope says so (default true).
+    /// Telemetry is enabled only when every scope that sets it says so;
+    /// unset everywhere is [`super::fork_defaults::TELEMETRY_ENABLED`].
     #[must_use]
     pub fn get_telemetry_enabled(&self) -> bool {
-        [
+        let scopes = [
             self.global.telemetry.as_ref(),
             self.project.telemetry.as_ref(),
             self.runtime_overrides.telemetry.as_ref(),
-        ]
-        .iter()
-        .all(|scope| scope.and_then(|t| t.enabled).unwrap_or(true))
+        ];
+        if scopes
+            .iter()
+            .all(|scope| scope.and_then(|t| t.enabled).is_none())
+        {
+            return super::fork_defaults::TELEMETRY_ENABLED;
+        }
+        scopes
+            .iter()
+            .all(|scope| scope.and_then(|t| t.enabled).unwrap_or(true))
     }
 
     #[must_use]

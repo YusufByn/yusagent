@@ -159,7 +159,9 @@ def observe(binary, root, observed):
     provider = Provider(root)
     thread = threading.Thread(target=provider.serve_forever, daemon=True)
     thread.start()
-    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False}))
+    # yusAgent (YA-01): the agent-message skill is opt-in.
+    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False,
+        'bundledSkills': {'agentMessage': True}}))
     (root / 'agent/models.json').write_text(json.dumps({'providers': {'fixture': {
         'api': 'openai-completions', 'apiKey': 'fixture-only',
         'baseUrl': f'http://127.0.0.1:{provider.server_port}/v1', 'models': [{

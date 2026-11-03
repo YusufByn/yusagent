@@ -79,6 +79,8 @@ def observe(binary, root, case, receipt):
         'defaultProvider': 'prime-inference', 'defaultModel': 'parity-1',
         'auxiliaryModel': 'prime-inference/parity-1',
         'prewarmPythonKernel': False, 'autoRefine': {'enabled': False},
+        # yusAgent (YA-01): refinements are off by default.
+        'harnessRefinements': True,
         'onboardingCompleted': True}))
     path = root / 'd.sock'
     scope = OwnedProcesses(binary, root, path)

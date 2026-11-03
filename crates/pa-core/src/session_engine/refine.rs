@@ -39,9 +39,9 @@ pub struct AutoRefineGates {
 impl Default for AutoRefineGates {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: crate::settings::fork_defaults::AUTO_REFINE_ENABLED,
             turn_interval: 25,
-            compact: true,
+            compact: crate::settings::fork_defaults::AUTO_REFINE_COMPACT,
             cooldown_ms: 20 * 60 * 1000,
         }
     }
@@ -834,9 +834,9 @@ mod tests {
         assert_eq!(
             AutoRefineGates::from_settings(None),
             AutoRefineGates {
-                enabled: true,
+                enabled: false,
                 turn_interval: 25,
-                compact: true,
+                compact: false,
                 cooldown_ms: 20 * 60 * 1000,
             }
         );

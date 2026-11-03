@@ -587,6 +587,13 @@ async fn engine_over(
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path().join("project");
     std::fs::create_dir_all(&cwd).unwrap();
+    // yusAgent (YA-01): these bundled skills are opt-in.
+    std::fs::create_dir_all(tmp.path().join("agent")).unwrap();
+    std::fs::write(
+        tmp.path().join("agent").join("settings.json"),
+        r#"{"bundledSkills":{"agentMessage":true,"rlmHeartbeat":true}}"#,
+    )
+    .unwrap();
     let engine = create_session(SessionEngineConfig {
         cron_store,
         cwd: cwd.clone(),
