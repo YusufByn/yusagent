@@ -524,9 +524,10 @@ async fn refine_factory_edits_follow_the_agent_dir_opt_in_setting() {
     // The user opts in: the next run of the same proposal applies.
     let agent_dir = tmp.path().join("agent");
     std::fs::create_dir_all(&agent_dir).unwrap();
+    // yusAgent (YA-01): the same settings file must keep refinements on.
     std::fs::write(
         agent_dir.join("settings.json"),
-        r#"{"factory": {"enabled": true}}"#,
+        r#"{"factory": {"enabled": true}, "harnessRefinements": true}"#,
     )
     .unwrap();
     session.set_agent_dir(agent_dir);

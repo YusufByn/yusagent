@@ -687,6 +687,14 @@ fn print_mode_stale_overflow_recovers_before_the_next_prompt_after_a_resume() {
 #[test]
 fn print_mode_json_streams_the_harness_digest_pair() {
     let home = isolated_home();
+    // yusAgent (YA-01): the digest needs harness refinements on.
+    let agent_dir = home.path().join(".prime").join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"harnessRefinements":true}"#,
+    )
+    .unwrap();
     let script = serde_json::json!({ "responses": ["json answer"] });
     let (stdout, stderr, code) = run_in_home(home.path(), &["--mode", "json", "-p", "hi"], &script);
     assert_eq!(code, 0, "stderr: {stderr}");

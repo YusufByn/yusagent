@@ -927,12 +927,13 @@ Reviewer instructions: record it"
         let state = load_harness_state(&harness_dir, HarnessScope::Local);
         assert!(state.entries[&crate::refinement::RefinementKind::Factory].is_empty());
         // The user opts in: the same proposal applies, read live from the
-        // agent dir's settings.json.
+        // agent dir's settings.json. yusAgent (YA-01): that file must also
+        // keep harness refinements on.
         let agent_dir = dir.path().join("agent");
         std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::write(
             agent_dir.join(crate::refinement::FACTORY_SETTINGS_FILE_NAME),
-            r#"{"factory": {"enabled": true}}"#,
+            r#"{"factory": {"enabled": true}, "harnessRefinements": true}"#,
         )
         .unwrap();
         let enabled = execute_refinement(
@@ -970,10 +971,16 @@ Reviewer instructions: record it"
         let global_dir = dir.path().join("harness");
         let agent_dir = dir.path().join("agent");
         std::fs::create_dir_all(&agent_dir).unwrap();
+        // yusAgent (YA-01): every write below keeps harness refinements on;
+        // only `factory.enabled` flips.
         let settings = agent_dir.join(crate::refinement::FACTORY_SETTINGS_FILE_NAME);
         let reply = r#"{"summary":"sweep","edits":[{"action":"create","kind":"factory","id":"sweep","title":"Factory","content":"Sweep review.","arguments":{"machine":{"states":[{"id":"collect","entry":true,"subagent":"worker"}],"transitions":[]}}}]}"#;
         // Authored while enabled; the request flips the setting off.
-        std::fs::write(&settings, r#"{"factory": {"enabled": true}}"#).unwrap();
+        std::fs::write(
+            &settings,
+            r#"{"factory": {"enabled": true}, "harnessRefinements": true}"#,
+        )
+        .unwrap();
         let turned_off = execute_refinement(
             &mut session,
             RefinementTranscript {
@@ -984,7 +991,11 @@ Reviewer instructions: record it"
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
-            flip_seam(&settings, r#"{"factory": {"enabled": false}}"#, reply),
+            flip_seam(
+                &settings,
+                r#"{"factory": {"enabled": false}, "harnessRefinements": true}"#,
+                reply,
+            ),
             Some(&agent_dir),
         )
         .await
@@ -1000,7 +1011,11 @@ Reviewer instructions: record it"
         let state = load_harness_state(&harness_dir, HarnessScope::Local);
         assert!(state.entries[&crate::refinement::RefinementKind::Factory].is_empty());
         // Authored while disabled; the request opts in.
-        std::fs::write(&settings, r#"{"factory": {"enabled": false}}"#).unwrap();
+        std::fs::write(
+            &settings,
+            r#"{"factory": {"enabled": false}, "harnessRefinements": true}"#,
+        )
+        .unwrap();
         let turned_on = execute_refinement(
             &mut session,
             RefinementTranscript {
@@ -1011,7 +1026,11 @@ Reviewer instructions: record it"
             &test_model(),
             &RefineOptions::default(),
             RefinementSource::User,
-            flip_seam(&settings, r#"{"factory": {"enabled": true}}"#, reply),
+            flip_seam(
+                &settings,
+                r#"{"factory": {"enabled": true}, "harnessRefinements": true}"#,
+                reply,
+            ),
             Some(&agent_dir),
         )
         .await

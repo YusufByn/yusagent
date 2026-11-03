@@ -328,7 +328,12 @@ async fn a_retried_turn_broadcasts_one_agent_end_per_run() {
     std::fs::create_dir_all(dir.join("agent")).unwrap();
     std::fs::write(
         dir.join("agent").join("settings.json"),
-        json!({ "retry": { "enabled": true, "maxRetries": 1, "baseDelayMs": 10 } }).to_string(),
+        // yusAgent (YA-01): harness refinements on, for the deferred digest row.
+        json!({
+            "retry": { "enabled": true, "maxRetries": 1, "baseDelayMs": 10 },
+            "harnessRefinements": true
+        })
+        .to_string(),
     )
     .unwrap();
     let config = WorkerConfig {

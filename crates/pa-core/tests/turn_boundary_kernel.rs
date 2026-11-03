@@ -123,6 +123,12 @@ async fn turn_boundary_host_requests_round_trip_through_a_real_kernel() {
     let agent_dir = dir.path().join("agent");
     let sessions_dir = agent_dir.join("sessions");
     std::fs::create_dir_all(&sessions_dir).expect("sessions dir");
+    // yusAgent (YA-01): the refine round trip needs harness refinements on.
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"harnessRefinements":true}"#,
+    )
+    .expect("write settings");
     let cwd = dir.path().join("project");
     std::fs::create_dir_all(&cwd).expect("project dir");
     let receipt_path = dir.path().join("harness-receipt.json");

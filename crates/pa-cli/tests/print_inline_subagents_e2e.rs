@@ -28,6 +28,12 @@ fn lane() -> PrintLane {
     let home = tempfile::TempDir::new().unwrap();
     let agent_dir = home.path().join("agent");
     std::fs::create_dir_all(&agent_dir).unwrap();
+    // yusAgent (YA-01): children reply through the opt-in agent-message skill.
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"bundledSkills":{"agentMessage":true}}"#,
+    )
+    .unwrap();
     PrintLane { home, agent_dir }
 }
 

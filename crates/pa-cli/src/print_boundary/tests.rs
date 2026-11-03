@@ -35,6 +35,15 @@ fn compactable_settings() -> Value {
     json!({ "compaction": { "enabled": true, "reserveTokens": 1, "keepRecentTokens": 10 } })
 }
 
+/// yusAgent (YA-01): [`compactable_settings`] with harness refinements and
+/// auto-refine turned back on, for the tests that exercise them.
+fn refining_settings() -> Value {
+    let mut settings = compactable_settings();
+    settings["harnessRefinements"] = json!(true);
+    settings["autoRefine"] = json!({ "enabled": true, "compact": true });
+    settings
+}
+
 /// One faux-driven engine over its own tempdir with explicit compaction
 /// settings, optionally resuming a persisted session file.
 async fn faux_engine_with_settings(
@@ -1340,7 +1349,7 @@ async fn requested_refinement_streams_rows_and_refine_complete() {
     let plan = r#"{"summary":"note it","rationale":"repeated","expectedOutcome":"recall","edits":[{"action":"create","kind":"memory","id":"m1","title":"Tactic","content":"Use tactic A"}]}"#;
     let (engine, _dir, model) = faux_engine_with_settings(
         json!({ "responses": [{"text": "seed reply"}, {"text": plan}] }),
-        compactable_settings(),
+        refining_settings(),
         None,
     )
     .await;
@@ -1410,7 +1419,7 @@ async fn compact_trigger_auto_refine_streams_at_the_next_boundary() {
                 {"text": plan},
             ]
         }),
-        compactable_settings(),
+        refining_settings(),
         None,
     )
     .await;
@@ -1499,7 +1508,7 @@ async fn overflow_retry_compact_trigger_streams_the_ts_surface() {
                 {"text": plan},
             ]
         }),
-        compactable_settings(),
+        refining_settings(),
         None,
     )
     .await;
@@ -1568,7 +1577,7 @@ async fn compact_trigger_drains_at_disposal_off_the_stream() {
                 {"text": plan},
             ]
         }),
-        compactable_settings(),
+        refining_settings(),
         None,
     )
     .await;

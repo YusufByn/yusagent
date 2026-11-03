@@ -433,9 +433,14 @@ fn setup_with_rejection(
     )
     .expect("write models.json");
     // A fast retry policy so the test asserts the loop, not the delays.
+    // yusAgent (YA-01): harness refinements on, for the deferred digest row.
     std::fs::write(
         agent_dir.join("settings.json"),
-        json!({ "retry": { "enabled": true, "maxRetries": 2, "baseDelayMs": 50 } }).to_string(),
+        json!({
+            "retry": { "enabled": true, "maxRetries": 2, "baseDelayMs": 50 },
+            "harnessRefinements": true
+        })
+        .to_string(),
     )
     .expect("write settings.json");
     let socket = dir.path().join(format!("{name}.sock"));
