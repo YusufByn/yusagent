@@ -27,14 +27,18 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `.changes/ya-02.md` | ajout | Fragment de changelog. | YA-02 |
 | `crates/pa-core/tests/prefix_stability.rs` | ajout | Test de préfixe du cache de prompt : session réelle (`create_session`, adaptateur provider réel, kernel réel) contre un serveur HTTP local, Anthropic Messages et OpenAI Responses, trois prompts avec tool calls. Voir « Test de préfixe » ci-dessous. | T03 (YA-04) |
 | `crates/pa-core/src/session_engine/environment_block.rs` | ajout | Bloc `<environment>` (date UTC, cwd) ajouté à la conversion vers le LLM, jamais stocké, et ses tests. Voir « Prompt système stable » ci-dessous. | T03 (YA-04) |
-| `crates/pa-core/src/session_engine/mod.rs` | modif. (2 lignes) | Déclare `environment_block`. | T03 (YA-04) |
-| `crates/pa-core/src/session_engine/engine.rs` | modif. | `convert_to_llm` enveloppé par `environment_block::wrap_convert_to_llm` ; `conversation_log` passé à `kernel_provisioner`. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/mod.rs` | modif. (4 lignes) | Déclare `environment_block` et `cache_retention`. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | `convert_to_llm` enveloppé par `environment_block::wrap_convert_to_llm` ; `conversation_log` passé à `kernel_provisioner` ; `cacheRetention` lu avant le déplacement des réglages et `stream_fn` enveloppé par `cache_retention::scoped_stream_fn`. | T03 (YA-04) |
 | `crates/pa-core/src/prompts/session_paths.rs` | ajout | Variables du kernel `PRIME_AGENT_CONVERSATION_LOG` et `PRIME_AGENT_BUNDLED_SKILLS_DIR`, lignes statiques du prompt, `<location>` des skills embarqués relative à la variable, et leurs tests. | T03 (YA-04) |
 | `crates/pa-core/src/prompts/mod.rs` | modif. (2 lignes) | Déclare `session_paths`. | T03 (YA-04) |
 | `crates/pa-core/src/prompts/system_prompt.rs` | modif. | `environment_section` : les lignes `Current date`, `Working directory`, `Conversation log` remplacées par les lignes fixes de `session_paths` ; `today()` retiré (plus d'appelant). Tests adaptés. | T03 (YA-04) |
 | `crates/pa-core/src/skills/mod.rs` | modif. | `format_skills_for_prompt` : `<location>` par `session_paths::skill_location`, et une ligne d'explication quand une location commence par la variable. | T03 (YA-04) |
 | `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (5 lignes) | `kernel_provisioner` reçoit `conversation_log` et appelle `session_paths::insert_kernel_env`. | T03 (YA-04) |
 | Tests upstream | modif. | Voir « Tests upstream touchés (T03) » ci-dessous. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/cache_retention.rs` | ajout | Réglage `cacheRetention` (`"short"`, `"long"`), priorité à `PI_CACHE_RETENTION`, portée de session par variable de tâche, et ses tests. Voir « Réglage du TTL » ci-dessous. | T03 (YA-04) |
+| `crates/pa-core/src/session_engine/provider_adapter.rs` | modif. (3 lignes) | `stream_once` : `cache_retention` lu par `cache_retention::current()` au lieu de `None` en dur. | T03 (YA-04) |
+| `crates/pa-core/src/settings/types.rs` | modif. (3 lignes) | Champ `cache_retention` de `Settings`. | T03 (YA-04) |
+| `crates/pa-core/src/settings/load.rs` | modif. (2 lignes) | `cacheRetention` ajouté aux clés connues : une valeur invalide compte comme non réglée. | T03 (YA-04) |
 
 ## Désactivations par défaut (YA-01)
 
@@ -217,6 +221,22 @@ Bloc `<environment>` :
 - C'est le point d'accueil de l'instantané d'environnement complet de YA-09.
 
 Ce qui reste propre au projet dans le prompt : les chemins des `AGENTS.md` (`## <chemin>`) et des skills de l'utilisateur ou du projet (hors racine embarquée). Ils sont identiques d'une session à l'autre du même projet.
+
+## Réglage du TTL (T03, YA-04)
+
+`settings.json` : `"cacheRetention": "short"` ou `"long"` (global ou projet, le projet l'emporte).
+
+| `PI_CACHE_RETENTION` | `cacheRetention` | Option envoyée aux providers | TTL effectif (Anthropic) |
+|---|---|---|---|
+| définie | quelconque | `None` | celui de la variable, comme upstream (`long` → 1 h, toute autre valeur → 5 min) |
+| absente | absent | `None` | 5 min (défaut upstream, inchangé) |
+| absente | `"short"` | `Short` | 5 min |
+| absente | `"long"` | `Long` | 1 h si le modèle l'accepte (`supportsLongCacheRetention`, vrai par défaut) |
+
+- Une valeur invalide (`"1h"`, `true`) compte comme non réglée.
+- Côté OpenAI Responses, `Long` n'ajoute `prompt_cache_retention: "24h"` que si le modèle déclare `supportsLongCacheRetention`.
+- Transport : `engine.rs` enveloppe le `stream_fn` de la session (`scoped_stream_fn`), qui pose la valeur dans une variable de tâche tokio autour de chaque appel et du futur renvoyé ; `stream_once` la lit (`cache_retention::current()`). Les signatures upstream (`StreamRequestOptions`, `ProviderTarget`) et la couche providers (`pa-ai`) ne changent pas. Hors session (appels annexes sans ce `stream_fn`), la valeur est `None`, comme avant.
+- Test : `anthropic_cache_retention_follows_the_setting` (`prefix_stability.rs`) vérifie les marqueurs `cache_control` de la requête réelle, sans réglage puis avec `"long"`.
 
 ## Tests upstream touchés (T03)
 

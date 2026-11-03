@@ -279,6 +279,9 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let python_cell_timeout_ms = settings.get_python_cell_timeout_ms();
     // yusAgent (YA-02): `kernel.envAllowlist`, captured before the move too.
     let kernel_env_allowlist = crate::kernel::env_allowlist::env_allowlist(settings.settings());
+    // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
+    let cache_retention =
+        super::cache_retention::resolve_from_env(settings.settings().cache_retention);
     let (mcp_skill_overrides, mcp_generic_servers, built_manager) =
         mcp_gating(&settings, config.agent_dir.clone()).await?;
     let mcp_manager = config
@@ -314,6 +317,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let stream_fn = config
         .stream_fn
         .ok_or_else(|| anyhow::anyhow!("a provider stream_fn is required"))?;
+    let stream_fn = super::cache_retention::scoped_stream_fn(stream_fn, cache_retention);
     // `model.info` facts, captured before the model moves into the loop.
     let model_info = match config.model_info.clone() {
         Some(full) => super::turn_boundary::ModelInfo {

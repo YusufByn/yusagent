@@ -815,3 +815,49 @@ async fn anthropic_messages_system_prompt_is_identical_across_sessions() {
 async fn openai_responses_system_prompt_is_identical_across_sessions() {
     two_sessions_scenario(Api::OpenAiResponses).await;
 }
+
+/// The `cache_control` markers of an Anthropic request, wherever they sit.
+fn cache_controls(value: &Value, found: &mut Vec<Value>) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                if key == "cache_control" {
+                    found.push(child.clone());
+                } else {
+                    cache_controls(child, found);
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| cache_controls(item, found)),
+        _ => {}
+    }
+}
+
+/// yusAgent (T03, YA-04): `cacheRetention` reaches the provider request. Unset: the 5-minute
+/// marker (no `ttl`); `"long"`: `ttl: 1h` on every marker.
+#[tokio::test]
+async fn anthropic_cache_retention_follows_the_setting() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let api = Api::AnthropicMessages;
+    let markers = |request: &Map<String, Value>| {
+        let mut found = Vec::new();
+        cache_controls(&Value::Object(request.clone()), &mut found);
+        assert!(!found.is_empty(), "no cache_control marker");
+        found
+    };
+    let default = first_request_of_a_session(api, &fixture).await;
+    for marker in markers(&default) {
+        assert_eq!(marker, json!({"type": "ephemeral"}));
+    }
+    std::fs::write(
+        fixture.agent_dir().join("settings.json"),
+        json!({"cacheRetention": "long"}).to_string(),
+    )
+    .expect("settings.json");
+    let long = first_request_of_a_session(api, &fixture).await;
+    for marker in markers(&long) {
+        assert_eq!(marker, json!({"type": "ephemeral", "ttl": "1h"}));
+    }
+}

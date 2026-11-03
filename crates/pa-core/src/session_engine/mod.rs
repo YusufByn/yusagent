@@ -7,6 +7,8 @@ pub mod auto_refine_trigger;
 pub mod auto_retry;
 pub mod auxiliary_model;
 pub mod bash_notices;
+// yusAgent (T03, YA-04): the `cacheRetention` setting.
+pub mod cache_retention;
 pub mod branch_summarization;
 pub mod compact_session;
 pub mod compaction;

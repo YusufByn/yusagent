@@ -315,6 +315,9 @@ pub struct Settings {
     /// yusAgent (YA-02): `kernel.envAllowlist`, the extra ambient vars the
     /// kernel and `bash()` see (`crate::kernel::env_allowlist`).
     pub kernel: Option<crate::kernel::env_allowlist::KernelSettings>,
+    /// yusAgent (T03, YA-04): prompt-cache TTL, `"short"` (default) or `"long"`;
+    /// `PI_CACHE_RETENTION` keeps priority (`crate::session_engine::cache_retention`).
+    pub cache_retention: Option<crate::session_engine::cache_retention::CacheRetentionSetting>,
     pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,
