@@ -174,7 +174,8 @@ def run_case(binary, scenario, root, observation):
         'defaultProvider': 'fixture', 'defaultModel': 'mandatory-fixture',
         'prewarmPythonKernel': False, 'compaction': {'enabled': False, 'keepRecentTokens': 100,
                                                    'reserveTokens': 1024},
-        'autoRefine': {'enabled': False}}))
+        # yusAgent (YA-01): refinements are off by default.
+        'autoRefine': {'enabled': False}, 'harnessRefinements': True}))
     socket_path = root / 'daemon.sock'
     scope = OwnedProcesses(binary, root, socket_path)
     process = client = None

@@ -48,7 +48,21 @@ SCENARIOS: dict[str, list[str]] = {
         "import os\nos._exit(1)",
         "print(2)",
     ],
+    # Sous-agent : le parent lance un enfant puis attend son résultat. Les
+    # requêtes de l'enfant arrivent sur le même serveur ; il est reconnu à
+    # CHILD_MARKER dans son premier message utilisateur et joue CHILD_CELLS.
+    "spawn": [
+        "h = await rlm.spawn('YA_CHILD_TASK : réponds au parent.', name='kid')\n"
+        "print('SPAWNED', h.name)",
+        "r = await rlm.collect(['kid'], timeout_ms=120000)\n"
+        "print('COLLECT', r[0].status, r[0].settled, r[0].answer_text)",
+    ],
 }
+CHILD_MARKER = "YA_CHILD_TASK"
+CHILD_CELLS = [
+    "await agent_message.send('YA_CHILD_RESULT', receiver_role='parent')\nprint('SENT')",
+]
+CHILD_FINAL_TEXT = "YA_CHILD_DONE"
 FINAL_TEXT = "Capture : fin du scénario."
 AUX_TEXT = (
     "## Goal\n- capture\n\n## Constraints & Preferences\n- (none)\n\n## Progress\n### Done\n"
@@ -70,6 +84,21 @@ def count_tool_results_responses(body: dict) -> int:
     if not isinstance(items, list):
         return 0
     return sum(1 for item in items if item.get("type") == "function_call_output")
+
+
+def first_user_text(body: dict) -> str:
+    """Texte du premier message utilisateur (Anthropic `messages` ou Responses `input`)."""
+    for message in body.get("messages") or body.get("input") or []:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(block.get("text", "") for block in content
+                           if isinstance(block, dict))
+        return ""
+    return ""
 
 
 def first_tool_name(tools: list[dict]) -> str:
@@ -112,15 +141,16 @@ class CaptureState:
             self.seq += 1
             return self.seq
 
-    def plan(self, tools: list[dict] | None, turn: int) -> Plan:
+    def plan(self, tools: list[dict] | None, turn: int, child: bool = False) -> Plan:
         if not tools:
             # Une requête sans tools (résumé) signale une compaction : on cesse
             # d'annoncer un usage gonflé pour ne pas la redéclencher en boucle.
             self.inflate_from_turn = None
             return Plan("aux", text=AUX_TEXT)
-        if turn < len(self.cells):
-            return Plan("tool", tool_name=first_tool_name(tools), code=self.cells[turn])
-        return Plan("final", text=FINAL_TEXT)
+        cells, final = (CHILD_CELLS, CHILD_FINAL_TEXT) if child else (self.cells, FINAL_TEXT)
+        if turn < len(cells):
+            return Plan("tool", tool_name=first_tool_name(tools), code=cells[turn])
+        return Plan("final", text=final)
 
     def input_tokens(self, raw_len: int, turn: int) -> int:
         if self.inflate_from_turn is not None and turn >= self.inflate_from_turn:
@@ -312,9 +342,10 @@ def make_handler(state: CaptureState):
                 turn = count_tool_results_anthropic(body)
             else:
                 turn = count_tool_results_responses(body)
-            plan = state.plan(body.get("tools"), turn)
+            child = CHILD_MARKER in first_user_text(body)
+            plan = state.plan(body.get("tools"), turn, child)
             input_tokens = state.input_tokens(len(raw), turn)
-            meta.update({"turn": turn, "response": plan.describe(),
+            meta.update({"turn": turn, "child": child, "response": plan.describe(),
                          "reported_input_tokens": input_tokens})
             self.write_meta(seq, meta)
             model = body.get("model", "capture-model")

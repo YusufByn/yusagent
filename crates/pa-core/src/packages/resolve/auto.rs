@@ -147,6 +147,11 @@ impl PackageManager {
                     // never advertises a tool that errors on use.
                     builtin_skill_overrides.push("-websearch/SKILL.md".to_string());
                 }
+                builtin_skill_overrides.extend(
+                    crate::settings::fork_defaults::disabled_bundled_skill_overrides(
+                        self.settings().settings(),
+                    ),
+                );
                 builtin_skill_overrides
                     .extend(self.extra_builtin_skill_overrides().iter().cloned());
                 add_resources(

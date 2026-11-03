@@ -320,6 +320,8 @@ mod tests {
             settings_gated.client.lock().unwrap().is_none(),
             "no client when settings disable telemetry"
         );
+        // yusAgent (YA-01): telemetry is off by default.
+        write_settings(dir.path(), r#"{"telemetry": {"enabled": true}}"#);
         let enabled = ModelRefusalTelemetry::new(dir.path().to_path_buf(), false);
         enabled.note_refused("set_model", "zai/glm-5.3", dir.path());
         assert!(
@@ -336,6 +338,8 @@ mod tests {
     async fn refusal_telemetry_dedupes_repeated_resolves() {
         let _telemetry = crate::agent_engine::tests::telemetry_opt_in();
         let dir = tempfile::tempdir().expect("tempdir");
+        // yusAgent (YA-01): telemetry is off by default.
+        write_settings(dir.path(), r#"{"telemetry": {"enabled": true}}"#);
         let telemetry = ModelRefusalTelemetry::new(dir.path().to_path_buf(), false);
         telemetry.note_refused("session_start", "zai/glm-5.3", dir.path());
         assert_eq!(
@@ -358,6 +362,11 @@ mod tests {
     async fn refusal_telemetry_rebinds_when_the_cwd_moves() {
         let _telemetry = crate::agent_engine::tests::telemetry_opt_in();
         let dir = tempfile::tempdir().expect("tempdir");
+        // yusAgent (YA-01): telemetry is off by default.
+        write_settings(
+            &dir.path().join("agent"),
+            r#"{"telemetry": {"enabled": true}}"#,
+        );
         let telemetry = ModelRefusalTelemetry::new(dir.path().join("agent"), false);
         let first = dir.path().join("project-a");
         std::fs::create_dir_all(&first).unwrap();

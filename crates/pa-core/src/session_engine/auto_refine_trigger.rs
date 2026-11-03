@@ -321,7 +321,15 @@ mod tests {
         let mut session = AgentSession::new(Arc::new(agent), manager, Vec::new())
             .await
             .unwrap();
-        session.set_auto_refine(true, AutoRefineGates::default());
+        // yusAgent (YA-01): auto-refine is off by default; these tests exercise it.
+        session.set_auto_refine(
+            true,
+            AutoRefineGates {
+                enabled: true,
+                compact: true,
+                ..AutoRefineGates::default()
+            },
+        );
         session
     }
 

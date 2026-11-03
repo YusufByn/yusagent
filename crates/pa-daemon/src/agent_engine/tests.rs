@@ -43,11 +43,20 @@ fn bare_engine(dir: &std::path::Path) -> AgentSessionEngine {
 }
 
 /// A settings.json with an explicit compaction reserve (the f14 battery shape).
+/// yusAgent (YA-01): these tests were written against upstream's defaults, so
+/// the settings turn back on what the fork leaves off: telemetry (for the
+/// [`telemetry_opt_in`] callers; the cargo env keeps it off elsewhere),
+/// harness refinements (the deferred digest row) and auto-refine.
 fn write_compaction_settings(dir: &std::path::Path, reserve_tokens: u64) {
     std::fs::create_dir_all(dir.join("agent")).unwrap();
     std::fs::write(
         dir.join("agent").join("settings.json"),
-        serde_json::json!({ "compaction": { "enabled": true, "reserveTokens": reserve_tokens, "keepRecentTokens": 10 } })
+        serde_json::json!({
+            "compaction": { "enabled": true, "reserveTokens": reserve_tokens, "keepRecentTokens": 10 },
+            "telemetry": { "enabled": true },
+            "harnessRefinements": true,
+            "autoRefine": { "enabled": true, "compact": true }
+        })
             .to_string(),
     )
     .unwrap();

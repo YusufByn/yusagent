@@ -2393,6 +2393,10 @@ async fn a_ledger_child_wake_joins_an_already_hosting_resident() {
 async fn the_exit_flush_sends_the_partial_daemon_event_summary() {
     let _env = CleanTelemetryEnv::default();
     let dir = tempfile::TempDir::new().unwrap();
+    // yusAgent (YA-01): telemetry is off by default.
+    pa_core::settings::SettingsManager::create(dir.path(), dir.path().join("agent"))
+        .set_telemetry_enabled(true)
+        .unwrap();
     let supervisor = Supervisor::new(SupervisorOptions {
         socket_path: dir.path().join("daemon.sock"),
         agent_dir: dir.path().join("agent"),

@@ -369,6 +369,10 @@ async fn report_an_aborted_flow_once() {
     let dir = tempfile::TempDir::new().expect("temp dir");
     let agent_dir = dir.path().join("agent");
     std::fs::create_dir_all(&agent_dir).expect("agent dir");
+    // yusAgent (YA-01): telemetry is off by default.
+    pa_core::settings::SettingsManager::create(dir.path(), &agent_dir)
+        .set_telemetry_enabled(true)
+        .expect("telemetry on");
     let sink = SettingsOnboardingSink {
         cwd: dir.path().to_path_buf(),
         agent_dir: agent_dir.clone(),

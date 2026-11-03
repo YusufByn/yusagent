@@ -11,10 +11,10 @@ use crate::settings::SettingsManager;
 /// What decides whether telemetry is on, in precedence order (TS
 /// `isTelemetryEnabled`): `PI_OFFLINE` / `DO_NOT_TRACK` force off,
 /// `PRIME_AGENT_TELEMETRY` forces either way, then settings
-/// `telemetry.enabled`, then the default (on).
+/// `telemetry.enabled`, then the fork default (off).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelemetrySwitch {
-    /// Nothing set: on.
+    /// Nothing set: [`crate::settings::fork_defaults::TELEMETRY_ENABLED`].
     Default,
     /// Settings `telemetry.enabled` (any scope false turns it off).
     Settings(bool),
@@ -26,7 +26,7 @@ impl TelemetrySwitch {
     #[must_use]
     pub fn enabled(self) -> bool {
         match self {
-            Self::Default => true,
+            Self::Default => crate::settings::fork_defaults::TELEMETRY_ENABLED,
             Self::Settings(enabled) | Self::Env { enabled, .. } => enabled,
         }
     }
@@ -35,7 +35,7 @@ impl TelemetrySwitch {
     #[must_use]
     pub fn reason(self) -> String {
         match self {
-            Self::Default => "on by default".to_string(),
+            Self::Default => format!("{} by default", if self.enabled() { "on" } else { "off" }),
             Self::Settings(true) => "turned on in settings".to_string(),
             Self::Settings(false) => "turned off in settings".to_string(),
             Self::Env {

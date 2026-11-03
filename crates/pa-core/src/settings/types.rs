@@ -220,6 +220,10 @@ pub struct MarkdownSettings {
 #[serde(rename_all = "camelCase")]
 pub struct BundledSkillsSettings {
     pub websearch: Option<bool>,
+    /// yusAgent: on by default, see [`super::fork_defaults::disabled_bundled_skill_overrides`].
+    pub agent_message: Option<bool>,
+    /// yusAgent: on by default, see [`super::fork_defaults::disabled_bundled_skill_overrides`].
+    pub rlm_heartbeat: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

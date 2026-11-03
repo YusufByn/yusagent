@@ -354,7 +354,9 @@ fn retried_run_restarts_with_its_own_agent_frames() {
         dir.path().join("agent").join("settings.json"),
         serde_json::json!({
             "compaction": { "enabled": true, "reserveTokens": 1, "keepRecentTokens": 10 },
-            "retry": { "enabled": true, "maxRetries": 1, "baseDelayMs": 10 }
+            "retry": { "enabled": true, "maxRetries": 1, "baseDelayMs": 10 },
+            // yusAgent (YA-01): the deferred digest row needs harness refinements on.
+            "harnessRefinements": true
         })
         .to_string(),
     )
