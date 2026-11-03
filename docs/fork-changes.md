@@ -35,6 +35,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/skills/mod.rs` | modif. | `format_skills_for_prompt` : `<location>` par `session_paths::skill_location`, et une ligne d'explication quand une location commence par la variable. | T03 (YA-04) |
 | `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (5 lignes) | `kernel_provisioner` reçoit `conversation_log` et appelle `session_paths::insert_kernel_env`. | T03 (YA-04) |
 | Tests upstream | modif. | Voir « Tests upstream touchés (T03) » ci-dessous. | T03 (YA-04) |
+| `.changes/ya-03.md` | ajout | Fragment de changelog. | T03 (YA-04) |
 | `crates/pa-core/src/session_engine/cache_retention.rs` | ajout | Réglage `cacheRetention` (`"short"`, `"long"`), priorité à `PI_CACHE_RETENTION`, portée de session par variable de tâche, et ses tests. Voir « Réglage du TTL » ci-dessous. | T03 (YA-04) |
 | `crates/pa-core/src/session_engine/provider_adapter.rs` | modif. (3 lignes) | `stream_once` : `cache_retention` lu par `cache_retention::current()` au lieu de `None` en dur. | T03 (YA-04) |
 | `crates/pa-core/src/settings/types.rs` | modif. (3 lignes) | Champ `cache_retention` de `Settings`. | T03 (YA-04) |
@@ -161,6 +162,7 @@ Règles :
 - **Motifs** : un motif avec `*` (base ou réglage) ne laisse jamais passer un nom d'allure secrète (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `AUTH`, `PRIVATE`, `COOKIE`, `env_allowlist.rs:100`). Une telle variable ne passe que nommée exactement dans `kernel.envAllowlist`.
 - **Identifiants provider** : clés d'environnement de chaque provider du catalogue (`pa_ai::env_api_keys`), sources AWS et Google ambiantes, `PRIME_AGENT_TRACES_API_KEY`, jeton du worker daemon (`env_allowlist.rs:115`, `:131`). Jamais transmis, même nommés : avertissement sur stderr (le journal du worker daemon), avec le nom seul.
 - **Injections secrètes du harness** : la clé Serper que le harness résout pour le skill websearch (`runtime_wiring.rs:289-291`) n'est transmise que si `SERPER_API_KEY` est nommée dans `kernel.envAllowlist`. Sinon elle est retenue, avec avertissement. Le skill relit de toute façon une clé littérale dans `auth.json` (`skills/websearch/src/websearch/websearch.py:46`).
+- **Proxy et index uv** : `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (et leurs formes minuscules, distinctes hors Windows), `UV_INDEX`, `UV_INDEX_URL`, `UV_DEFAULT_INDEX`, `UV_EXTRA_INDEX_URL` et `PIP_INDEX_URL` ne sont pas dans la base : derrière un proxy ou avec un index privé, les déclarer dans `kernel.envAllowlist`, de préférence par leur nom exact (une URL peut contenir des identifiants).
 - **Portée** : `kernel.envAllowlist` se lit dans les réglages fusionnés. Le réglage projet (`.prime/agent/settings.json`) remplace le global (les tableaux remplacent dans `deep_merge`, `merge.rs:7`). Comme `shellPath`, un dépôt non fiable peut donc élargir la liste : relire les réglages du projet avant d'y lancer l'agent.
 
 Ce qui hérite de cet environnement, et de rien d'autre :
@@ -173,6 +175,7 @@ Ce qui hérite de cet environnement, et de rien d'autre :
 
 - **Jetons et clés au repos** : `<agentDir>/auth.json`, créé en `0o600` avec écritures atomiques (`crates/pa-core/src/auth/manager.rs:275`, `storage.rs:1`, `:73`). `agentDir` vaut `~/.prime/agent` par défaut (`crates/pa-cli/src/config.rs:7`, `:104-111`). On y trouve les clés API, les jetons OAuth provider et les jetons MCP (`mcp:*`). Le kernel connaît ce chemin (`PRIME_AGENT_CODING_AGENT_DIR`) et le skill websearch lit déjà ce fichier.
 - **Clés en variables d'environnement** : le process du harness les garde. Sous Linux, `/proc/<pid>/environ` du harness reste lisible par un process du même utilisateur. Sur macOS, voir la mesure `psenv` du banc de capture (rapport de la PR YA-02).
+- **`unsetenv` au démarrage ne suffit pas sur macOS** (relevé T03, macOS 27.0.1, `python3 -I bench/tools/capture/unsetenv_ps.py`) : après `unsetenv` dans le parent, `ps eww <pid du parent>` lancé par un enfant affiche toujours le nom et la valeur. `ps` lit la zone d'environnement initiale du process, que `unsetenv` ne modifie pas. Écraser la valeur en place avant `unsetenv` la masque ; le nom reste visible. Le harness ne fait aujourd'hui ni l'un ni l'autre. Piste pour YA-11 : sandbox qui interdit `ps` sur le harness, ou harness relancé sans les secrets dans son environnement (lus depuis `auth.json`).
 - **MCP stdio lancés depuis le kernel** : une référence d'environnement dans `mcpServers.<nom>.env` (`prime-agent-runtime/src/rlm/mcp.py:995-997`) ou un jeton porteur lu depuis l'environnement (`mcp.py:923`, `:970`, `mcp_base.py:149`) n'est plus résolu, sauf si la variable est nommée dans `kernel.envAllowlist`.
 
 ## Tests upstream touchés (YA-02)

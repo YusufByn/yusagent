@@ -244,7 +244,7 @@ Mesuré (§4.5) : un échange `initialize` → `session/new` → `session/prompt
 
 - **Pas de `npm ci`** : il n'y a plus de paquet Node. L'installation passe par `cargo build`, interdit en local (CLAUDE.md règle 8). Les tests Rust ont donc tourné en CI uniquement.
 - **CI du fork** (run 41600446529, `ci.yml` sur le push de `c83ac68b3`, 12 min 35 s de bout en bout) :
-  - 18 jobs sur 20 en succès, dont `fmt`, `check + clippy`, `deny`, `runtime suite (python 3.11)` et les shards de tests 2 à 8 ;
+  - 17 jobs sur 19 en succès, dont `fmt`, `check + clippy`, `deny`, `runtime suite (python 3.11)` et les shards de tests 2 à 8 ;
   - **le shard 1 échoue avant ses tests** : l'étape `Prepare pinned TS frame comparison binary` télécharge la release `v0.9.8` depuis le dépôt courant (`.github/workflows/ci.yml:347-361`, ligne 355). Le fork n'a pas de release (« release not found »). Le job `test summary` échoue par conséquence.
   - Sur upstream, le même commit est vert (`gh run list --repo PrimeIntellect-ai/prime-agent --workflow ci`).
   - Commande : `gh run view 41600446529 --repo YusufByn/yusagent`.
