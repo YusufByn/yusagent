@@ -20,6 +20,9 @@ mod convert;
 mod errors;
 mod params;
 mod stream;
+// yusAgent (T04, YA-13): usage normalization on wire fixtures.
+#[cfg(test)]
+mod usage_tests;
 
 pub use stream::stream_openai_completions;
 

@@ -267,6 +267,11 @@ impl GoogleStreamState {
                 cache_write: 0,
                 total_tokens: get("totalTokenCount"),
                 cost: UsageCost::default(),
+                // yusAgent (T04, YA-13): already counted in `output` above.
+                reasoning: usage_metadata
+                    .get("thoughtsTokenCount")
+                    .and_then(serde_json::Value::as_u64),
+                cache_write_1h: None,
             };
             calculate_cost(model, &mut output.usage, None);
         }

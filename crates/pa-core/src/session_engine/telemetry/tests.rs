@@ -142,6 +142,8 @@ fn assistant_message() -> AssistantMessage {
             cache_write: 0,
             total_tokens: 170,
             cost: pa_agent::types::UsageCost::default(),
+            reasoning: None,
+            cache_write_1h: None,
         },
         stop_reason: StopReason::Stop,
         stop_reason_raw: None,

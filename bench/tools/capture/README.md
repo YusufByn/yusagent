@@ -60,11 +60,23 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 | `crash-anthropic` | Le tour 2 tue le kernel (`os._exit(1)`), le tour 3 le relance |
 | `resume-anthropic` | Deuxième prompt dans la même session (`--continue`) |
 | `compact-anthropic` | Sorties volumineuses et usage annoncé de 199 000 tokens : compaction par seuil, résumé, porte auto `/refine` |
+| `usage-split-anthropic` | (T04) Scénario de base, `message_delta` réduit à `output_tokens` : l'usage d'entrée doit venir du `message_start` |
+| `refine-anthropic` | (T04) Comme `compact-anthropic`, avec `harnessRefinements` et `autoRefine` réactivés : un appel `/refine` est journalisé |
 | ACP | `--mode acp` sur un daemon isolé (`--daemon-socket`) : `initialize`, `session/new`, `session/prompt` |
 | Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant relève les noms sensibles de son kernel (ligne `CHILD_ENV`) puis répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
 | `psenv` | **Hors sandbox** : `/bin/ps` est setuid et le profil `sandbox.sb` refuse de l'exécuter (code 126), ce qui casse aussi le shell persistant sur macOS (identité de démarrage lue par `ps`). Provider local, `PI_OFFLINE=1`. Ligne `PS_PARENT` (relevé YA-11) : `ps eww` lancé depuis le kernel sur le harness, avec la commande du parent, le code de sortie et les noms des variables factices visibles (jamais de valeur). Ligne `PERSISTENT` : noms sensibles vus par `printenv` dans un shell persistant |
 
 Avant T03, le prompt système contient le chemin absolu de chaque `SKILL.md` embarqué (`<location>`), donc le dossier où le binaire est extrait. Depuis T03, ces locations s'écrivent `$PRIME_AGENT_BUNDLED_SKILLS_DIR/<nom>/SKILL.md`. Pour comparer un binaire antérieur à T03 avec un autre, les extraire au même chemin, sinon l'inventaire des skills diffère de (écart de longueur du chemin) × (nombre de skills).
+
+## Usage et journal d'usage (T04)
+
+Le serveur renvoie un usage réaliste (cache lu et écrit, écriture ventilée 5 min / 1 h, tokens de raisonnement) et note l'usage exact renvoyé dans `NNNN.meta.json` (`reported_usage`). `run.py` copie les journaux `<id>.usage.ndjson` de chaque cas dans `<cas>/usage/`, puis lance :
+
+```bash
+python3 -I bench/tools/capture/usage_check.py <run>
+```
+
+Résultat : `<run>/usage-report.md` et `.json`. Pour chaque cas, l'usage des messages assistant (`message_end` de `out*.jsonl`) et chaque ligne de journal sont confrontés à l'usage renvoyé, champ par champ (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation par TTL, raisonnement), avec le taux de cache et le type d'appel. Un binaire antérieur à T04 n'a pas de journal : seule la première vérification s'applique. Sémantique des champs : `docs/usage.md`.
 
 ## Comparer deux runs
 
@@ -73,6 +85,8 @@ python3 -I bench/tools/capture/compare.py <run A> <run B> --out <fichier>.md
 ```
 
 Pour chaque cas commun, la première requête : prompt système, chaque paramètre hors conversation et premier message utilisateur. Chaque bloc modifié est listé avec sa position en octets dans A et dans B, les octets retirés et ajoutés. `--out` écrit aussi le `.json` complet.
+
+`--all` (T04) compare en plus chaque requête de chaque cas, corps entier, dans l'ordre d'arrivée ; seuls les UUID (identifiant de session) sont normalisés.
 
 ## Serveur seul
 
@@ -83,4 +97,4 @@ python3 -I bench/tools/capture/server.py --out /tmp/cap --port 8787 --scenario b
 - Format Anthropic Messages : `POST …/messages`. Format OpenAI Responses : `POST …/responses`. Streaming SSE, ou JSON si `stream` est faux.
 - Chaque corps reçu est écrit octet pour octet dans `NNNN.body.json`. Les métadonnées vont dans `NNNN.meta.json`, sans valeur d'authentification.
 - Le tour est déduit du nombre de résultats de tool présents dans la requête : le serveur est sans état.
-- Options : `--scenario basic|long|crash`, `--inflate-from-turn N --inflate-tokens T` (usage gonflé pour déclencher la compaction).
+- Options : `--scenario basic|long|crash`, `--inflate-from-turn N --inflate-tokens T` (usage gonflé pour déclencher la compaction), `--usage-split` (T04 : `message_delta` Anthropic réduit à `output_tokens`).

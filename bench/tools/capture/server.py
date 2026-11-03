@@ -14,6 +14,12 @@ présents dans la requête, ce qui rend les reprises et les sessions multiples
 déterministes. Une requête sans tools (résumé de compaction, titre de session...)
 reçoit une réponse texte courte.
 
+Usage renvoyé (T04, YA-13) : un modèle de cache déterministe (voir `UsageModel`),
+avec lecture, écriture ventilée 5 min / 1 h et tokens de raisonnement, dans le
+format de chaque API. L'usage exact renvoyé est noté dans `NNNN.meta.json`
+(`reported_usage`). Avec `--usage-split`, le `message_delta` Anthropic ne porte que
+`output_tokens` (et le détail de raisonnement) : le reste vient du `message_start`.
+
 Bibliothèque standard uniquement.
 """
 
@@ -163,8 +169,10 @@ class Plan:
 
 class CaptureState:
     def __init__(self, out_dir: Path, scenario: str, inflate_from_turn: int | None,
-                 inflate_tokens: int):
+                 inflate_tokens: int, usage_split: bool = False):
         self.out_dir = out_dir
+        self.usage = UsageModel()
+        self.usage_split = usage_split
         self.cells = SCENARIOS[scenario]
         self.inflate_from_turn = inflate_from_turn
         self.inflate_tokens = inflate_tokens
@@ -194,13 +202,81 @@ class CaptureState:
         return max(1, raw_len // 4)
 
 
-def anthropic_events(plan: Plan, model: str, seq: int, input_tokens: int) -> list[bytes]:
-    usage = {
-        "input_tokens": input_tokens,
-        "output_tokens": 1,
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
+# Tokens de sortie annoncés, dont tokens de raisonnement (sous-ensemble, comme
+# `output_tokens_details` chez Anthropic et OpenAI).
+OUTPUT_TOKENS = 8
+REASONING_TOKENS = 3
+
+
+class UsageModel:
+    """Cache simulé, déterministe pour une suite de requêtes donnée.
+
+    Une conversation est identifiée par son prompt système et son premier message
+    utilisateur. Sa première requête écrit 80 % du prompt en cache ; les suivantes
+    lisent 90 % du prompt de la requête précédente (borné par le prompt courant) et
+    écrivent 80 % du reste. Le TTL d'écriture suit la requête : 1 h si un
+    `cache_control` demande `"ttl": "1h"`, 5 min sinon.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.previous: dict[str, int] = {}
+
+    def split(self, body: dict, total: int) -> dict:
+        key = json.dumps([body.get("system") or body.get("instructions"), first_user_text(body)],
+                         sort_keys=True, ensure_ascii=False)
+        with self.lock:
+            previous = self.previous.get(key)
+            self.previous[key] = total
+        read = min(total, previous * 9 // 10) if previous else 0
+        write = (total - read) * 8 // 10
+        return {"total": total, "read": read, "write": write, "input": total - read - write,
+                "ttl_1h": asks_one_hour_ttl(body)}
+
+
+def asks_one_hour_ttl(value) -> bool:
+    """Un `cache_control` de la requête demande-t-il le TTL d'une heure ?"""
+    if isinstance(value, dict):
+        control = value.get("cache_control")
+        if isinstance(control, dict) and control.get("ttl") == "1h":
+            return True
+        return any(asks_one_hour_ttl(item) for item in value.values())
+    if isinstance(value, list):
+        return any(asks_one_hour_ttl(item) for item in value)
+    return False
+
+
+def anthropic_usage(split: dict, output_tokens: int) -> dict:
+    """Usage Anthropic : `input_tokens` hors cache, écriture ventilée par TTL."""
+    one_hour = split["write"] if split["ttl_1h"] else 0
+    return {
+        "input_tokens": split["input"],
+        "cache_creation_input_tokens": split["write"],
+        "cache_read_input_tokens": split["read"],
+        "cache_creation": {"ephemeral_5m_input_tokens": split["write"] - one_hour,
+                           "ephemeral_1h_input_tokens": one_hour},
+        "output_tokens": output_tokens,
     }
+
+
+def responses_usage(split: dict) -> dict:
+    """Usage OpenAI Responses : `input_tokens` inclut `cached_tokens`, pas d'écriture."""
+    return {"input_tokens": split["total"], "output_tokens": OUTPUT_TOKENS,
+            "total_tokens": split["total"] + OUTPUT_TOKENS,
+            "input_tokens_details": {"cached_tokens": split["read"]},
+            "output_tokens_details": {"reasoning_tokens": REASONING_TOKENS}}
+
+
+def anthropic_events(plan: Plan, model: str, seq: int, split: dict,
+                     usage_split: bool) -> tuple[list[bytes], dict]:
+    usage = anthropic_usage(split, 1)
+    # Comme l'API réelle, message_delta porte l'usage cumulé ; le détail de
+    # raisonnement n'arrive que dans le message_delta final.
+    final = dict(anthropic_usage(split, OUTPUT_TOKENS),
+                 output_tokens_details={"thinking_tokens": REASONING_TOKENS})
+    delta_usage = ({"output_tokens": OUTPUT_TOKENS,
+                    "output_tokens_details": {"thinking_tokens": REASONING_TOKENS}}
+                   if usage_split else final)
     events = [sse("message_start", {
         "type": "message_start",
         "message": {"id": f"msg_cap_{seq}", "type": "message", "role": "assistant",
@@ -235,19 +311,17 @@ def anthropic_events(plan: Plan, model: str, seq: int, input_tokens: int) -> lis
         stop_reason = "end_turn"
     events += [
         sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        # Comme l'API réelle, message_delta porte l'usage cumulé complet ; le
-        # harness ne lit l'usage que là (voir docs/audit/audit-entree.md).
         sse("message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": dict(usage, output_tokens=8),
+            "usage": delta_usage,
         }),
         sse("message_stop", {"type": "message_stop"}),
     ]
-    return events
+    return events, {"message_start": usage, "message_delta": delta_usage}
 
 
-def anthropic_json(plan: Plan, model: str, seq: int, input_tokens: int) -> dict:
+def anthropic_json(plan: Plan, model: str, seq: int, split: dict) -> dict:
     if plan.kind == "tool":
         content = [{"type": "tool_use", "id": f"toolu_cap_{seq}", "name": plan.tool_name,
                     "input": {"code": plan.code}}]
@@ -257,8 +331,8 @@ def anthropic_json(plan: Plan, model: str, seq: int, input_tokens: int) -> dict:
         stop_reason = "end_turn"
     return {"id": f"msg_cap_{seq}", "type": "message", "role": "assistant", "model": model,
             "content": content, "stop_reason": stop_reason, "stop_sequence": None,
-            "usage": {"input_tokens": input_tokens, "output_tokens": 8,
-                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}
+            "usage": dict(anthropic_usage(split, OUTPUT_TOKENS),
+                          output_tokens_details={"thinking_tokens": REASONING_TOKENS})}
 
 
 def responses_item(plan: Plan, seq: int, done: bool) -> dict:
@@ -273,23 +347,21 @@ def responses_item(plan: Plan, seq: int, done: bool) -> dict:
             "content": content}
 
 
-def responses_object(plan: Plan, model: str, seq: int, input_tokens: int, done: bool) -> dict:
+def responses_object(plan: Plan, model: str, seq: int, split: dict | None, done: bool) -> dict:
     obj = {"id": f"resp_cap_{seq}", "object": "response", "model": model,
            "status": "completed" if done else "in_progress",
            "output": [responses_item(plan, seq, done=True)] if done else []}
     if done:
-        obj["usage"] = {"input_tokens": input_tokens, "output_tokens": 8,
-                        "total_tokens": input_tokens + 8,
-                        "input_tokens_details": {"cached_tokens": 0},
-                        "output_tokens_details": {"reasoning_tokens": 0}}
+        obj["usage"] = responses_usage(split)
     return obj
 
 
-def responses_events(plan: Plan, model: str, seq: int, input_tokens: int) -> list[bytes]:
+def responses_events(plan: Plan, model: str, seq: int, split: dict) -> list[bytes]:
     item_id = f"fc_cap_{seq}" if plan.kind == "tool" else f"msg_cap_{seq}"
     events = [
         sse("response.created", {"type": "response.created",
-                                 "response": responses_object(plan, model, seq, 0, done=False)}),
+                                 "response": responses_object(plan, model, seq, None,
+                                                              done=False)}),
         sse("response.output_item.added", {"type": "response.output_item.added",
                                            "output_index": 0,
                                            "item": responses_item(plan, seq, done=False)}),
@@ -325,7 +397,7 @@ def responses_events(plan: Plan, model: str, seq: int, input_tokens: int) -> lis
                                           "output_index": 0,
                                           "item": responses_item(plan, seq, done=True)}),
         sse("response.completed", {"type": "response.completed",
-                                   "response": responses_object(plan, model, seq, input_tokens,
+                                   "response": responses_object(plan, model, seq, split,
                                                                 done=True)}),
     ]
     return events
@@ -380,21 +452,25 @@ def make_handler(state: CaptureState):
             child = CHILD_MARKER in first_user_text(body)
             plan = state.plan(body.get("tools"), turn, child)
             input_tokens = state.input_tokens(len(raw), turn)
-            meta.update({"turn": turn, "child": child, "response": plan.describe(),
-                         "reported_input_tokens": input_tokens})
-            self.write_meta(seq, meta)
+            split = state.usage.split(body, input_tokens)
             model = body.get("model", "capture-model")
             if not body.get("stream"):
-                if api == "anthropic-messages":
-                    self.reply_json(200, anthropic_json(plan, model, seq, input_tokens))
-                else:
-                    self.reply_json(200, responses_object(plan, model, seq, input_tokens,
-                                                          done=True))
+                reply = (anthropic_json(plan, model, seq, split) if api == "anthropic-messages"
+                         else responses_object(plan, model, seq, split, done=True))
+                meta.update({"turn": turn, "child": child, "response": plan.describe(),
+                             "reported_input_tokens": input_tokens,
+                             "reported_usage": {"json": reply["usage"]}})
+                self.write_meta(seq, meta)
+                self.reply_json(200, reply)
                 return
             if api == "anthropic-messages":
-                events = anthropic_events(plan, model, seq, input_tokens)
+                events, reported = anthropic_events(plan, model, seq, split, state.usage_split)
             else:
-                events = responses_events(plan, model, seq, input_tokens)
+                events = responses_events(plan, model, seq, split)
+                reported = {"response.completed": responses_usage(split)}
+            meta.update({"turn": turn, "child": child, "response": plan.describe(),
+                         "reported_input_tokens": input_tokens, "reported_usage": reported})
+            self.write_meta(seq, meta)
             payload = b"".join(events)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -428,9 +504,12 @@ def main() -> None:
                              " tokens d'entrée (pour déclencher la compaction)")
     parser.add_argument("--inflate-tokens", type=int, default=190_000)
     parser.add_argument("--port-file", type=Path, help="écrit le port effectif dans ce fichier")
+    parser.add_argument("--usage-split", action="store_true",
+                        help="Anthropic : message_delta ne porte que output_tokens (T04)")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    state = CaptureState(args.out, args.scenario, args.inflate_from_turn, args.inflate_tokens)
+    state = CaptureState(args.out, args.scenario, args.inflate_from_turn, args.inflate_tokens,
+                         args.usage_split)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state))
     port = server.server_address[1]
     if args.port_file:

@@ -18,3 +18,6 @@ pub mod openai_responses_stream;
 mod opencode_headers;
 pub mod simple_options;
 pub mod transform_messages;
+// yusAgent (T04, YA-13): usage normalization per provider.
+#[cfg(test)]
+mod usage_tests;

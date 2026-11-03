@@ -791,6 +791,12 @@ impl<'a> ResponsesStreamProcessor<'a> {
                             .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0),
                         cost: UsageCost::default(),
+                        // yusAgent (T04, YA-13): a subset of `output_tokens`.
+                        reasoning: usage
+                            .get("output_tokens_details")
+                            .and_then(|details| details.get("reasoning_tokens"))
+                            .and_then(serde_json::Value::as_u64),
+                        cache_write_1h: None,
                     };
                 }
                 calculate_cost(self.model, &mut self.output.usage, None);

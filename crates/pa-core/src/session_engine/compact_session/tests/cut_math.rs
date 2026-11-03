@@ -103,6 +103,8 @@ fn tokens_before_anchors_on_last_valid_usage_plus_trailing() {
         cache_write: 0,
         total_tokens: 110,
         cost: pa_types::ai::UsageCost::default(),
+        reasoning: None,
+        cache_write_1h: None,
     };
     let probe = |text: &str| {
         AgentMessage::User(pa_types::ai::UserMessage {

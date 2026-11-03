@@ -180,19 +180,36 @@ pub async fn complete_summary_call(
             ..Default::default()
         });
     stream_options.reasoning = pa_types::ai::minimum_reasoning(model);
+    // yusAgent (T04, YA-13): both paths journal the call as `compaction`.
     let assistant = match on_delta {
-        None => pa_ai::complete_simple(model, &context, Some(stream_options)).await?,
+        None => {
+            super::usage_log::complete_simple(
+                super::usage_log::CallKind::Compaction,
+                model,
+                &context,
+                stream_options,
+            )
+            .await?
+        }
         Some(on_delta) => {
+            let usage_probe = super::usage_log::AuxProbe::start(
+                super::usage_log::CallKind::Compaction,
+                model,
+                &mut stream_options,
+            );
             // The live path rides the same provider stream: every text delta
             // forwards to the sink, and the terminal event's message is the
             // summary; thinking deltas stay off the sink.
             let mut stream = pa_ai::stream_simple(model, &context, Some(stream_options))?;
             while let Some(event) = stream.next_event().await {
+                usage_probe.observe(&event);
                 if let pa_types::ai::AssistantMessageEvent::TextDelta { delta, .. } = &event {
                     on_delta(delta);
                 }
             }
-            stream.result().await
+            let assistant = stream.result().await;
+            usage_probe.finish(&assistant);
+            assistant
         }
     };
     let stop_reason = assistant.stop_reason;
@@ -477,6 +494,8 @@ mod tests {
             cache_write: 0,
             total_tokens: 110,
             cost: pa_types::ai::UsageCost::default(),
+            reasoning: None,
+            cache_write_1h: None,
         };
         let result = CompactionResult {
             summary: "the overflow summary".to_string(),
@@ -670,6 +689,8 @@ mod tests {
                 cache_write: 0.0.into(),
                 total: pa_types::JsNumber::from(cost),
             },
+            reasoning: None,
+            cache_write_1h: None,
         };
         // Binary-exact costs so the sum assertion compares exactly.
         let (first_cost, second_cost) = (0.25, 0.5);

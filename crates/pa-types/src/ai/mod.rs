@@ -430,6 +430,18 @@ pub struct Usage {
     #[serde(rename = "totalTokens")]
     pub total_tokens: u64,
     pub cost: UsageCost,
+    /// yusAgent (T04, YA-13): reasoning tokens, a subset of `output`; `None` when the provider
+    /// does not report them (never a default 0). Absent from older session files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<u64>,
+    /// yusAgent (T04, YA-13): the part of `cache_write` written with the 1 h TTL, when the
+    /// provider reports the split (Anthropic `cache_creation`); the rest is 5 min.
+    #[serde(
+        rename = "cacheWrite1h",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cache_write_1h: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

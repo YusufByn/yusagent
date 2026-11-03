@@ -165,6 +165,8 @@ impl From<ScanUsage> for Usage {
                 cache_write: scan.cost.cache_write,
                 total: scan.cost.total,
             },
+            reasoning: None,
+            cache_write_1h: None,
         }
     }
 }
@@ -231,6 +233,8 @@ impl From<PersistedUsage> for Usage {
                 cache_write: JsNumber(f64::from_bits(persisted.cost_cache_write)),
                 total: JsNumber(f64::from_bits(persisted.cost_total)),
             },
+            reasoning: None,
+            cache_write_1h: None,
         }
     }
 }
