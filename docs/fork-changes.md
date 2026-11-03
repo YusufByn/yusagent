@@ -16,6 +16,15 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | Tests upstream | modif. | Voir « Tests upstream touchés » ci-dessous. | YA-01 |
 | `.github/workflows/ci.yml` | modif. (1 ligne + commentaire) | Étape `Prepare pinned TS frame comparison binary` : la release `v0.9.8` est téléchargée depuis `PrimeIntellect-ai/prime-agent` au lieu du dépôt courant. Voir ci-dessous. | YA-01 |
 | `.changes/ya-01.md` | ajout | Fragment de changelog exigé par `changelog-fragment.yml` pour tout changement livré. | YA-01 |
+| `crates/pa-core/src/kernel/env_allowlist.rs` | ajout | Environnement du kernel en liste blanche : base intégrée, réglage `kernel.envAllowlist`, refus des identifiants provider, tests unitaires. Voir « Environnement du kernel » ci-dessous. | YA-02 |
+| `crates/pa-core/src/kernel/mod.rs` | modif. (1 ligne) | Déclare `env_allowlist`. | YA-02 |
+| `crates/pa-core/src/kernel/manager/startup.rs` | modif. | `kernel_spawn_env` part de `env_allowlist::inherited_env` au lieu de `std::env::vars()` (`:535`) et retire les identifiants provider en dernier (`:546`). Test `kernel_spawn_env_is_allowlisted` ajouté. | YA-02 |
+| `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (4 lignes) | `kernel_provisioner` reçoit `env_allowlist` (`:257`) et appelle `apply_user_allowlist` sur l'environnement qu'il injecte (`:292`). | YA-02 |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. (3 lignes) | Lit `kernel.envAllowlist` avant le déplacement des réglages (`:281`) et le passe à `kernel_provisioner` (`:512`). | YA-02 |
+| `crates/pa-core/src/settings/types.rs` | modif. (3 lignes) | Champ `kernel` de `Settings` (`:317`). | YA-02 |
+| `crates/pa-core/src/settings/load.rs` | modif. (2 lignes) | `kernel` ajouté aux clés connues (`:66`) : une valeur de mauvais type compte comme non réglée, comme les autres clés. | YA-02 |
+| Tests et checks upstream | modif. | Voir « Tests upstream touchés (YA-02) » ci-dessous. | YA-02 |
+| `.changes/ya-02.md` | ajout | Fragment de changelog. | YA-02 |
 
 ## Désactivations par défaut (YA-01)
 
@@ -117,3 +126,51 @@ Choix : télécharger la même archive depuis le dépôt upstream public (`Prime
 - Pas de release à publier ni à maintenir sur le fork.
 - Dépendance : la CI suppose que la release upstream `v0.9.8` reste publique. Si elle disparaît, le sha256 ne correspondra plus ou le téléchargement échouera, de façon visible.
 - Alternative écartée : sauter l'étape et les deux checks hors du dépôt upstream. Plus de lignes modifiées, et deux tests en moins.
+
+## Environnement du kernel (YA-02)
+
+Décision du 31/10/2026 : les secrets ne sont jamais transmis au kernel ni à `bash()`. Avant YA-02, `kernel_spawn_env` partait de `std::env::vars()`, donc de tout l'environnement du harness.
+
+Construction, dans l'ordre :
+
+1. **Au lancement** (`startup.rs:535`) : seules les variables ambiantes de `BUILTIN_ALLOWLIST` (`env_allowlist.rs:39`).
+2. **Au câblage de session** (`runtime_wiring.rs:292`) : les variables que le harness injecte lui-même, puis les variables ambiantes autorisées par `kernel.envAllowlist`. Une injection du harness l'emporte sur la variable ambiante de même nom.
+3. **En dernier** (`startup.rs:546`) : retrait de tout identifiant provider, quelle qu'en soit la source.
+
+Règles :
+
+- **Base intégrée**.
+  - Système : `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, et les équivalents Windows.
+  - Lues par le runtime et ses skills : `PRIME_AGENT_CODING_AGENT_DIR`, `PI_CODING_AGENT_DIR`, `PRIME_AGENT_MACHINES_DIR`, `PRIME_AGENT_BASH_SHELL`, `PRIME_AGENT_BASH_COMMAND_PREFIX`, `PRIME_AGENT_INTERNAL_ORPHAN_PROCESS_JOURNAL`, `PRIME_AGENT_KERNEL_OWNER_PID`, `RLM_SESSION_ID`, `RLM_SESSION_DIR`, `RLM_HARNESS_STATE_DIR`, `RLM_GLOBAL_HARNESS_STATE_DIR`.
+  - Python : `PYTHONPATH` (un kernel explicite, `PRIME_AGENT_KERNEL_PYTHON`, trouve les skills par là), `PYTHONUTF8`.
+  - uv : emplacements de cache, de Python et de configuration (`UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, …), `XDG_*`, `SSL_CERT_FILE`, `SSL_CERT_DIR`. Les URL d'index uv ne sont pas dans la base : elles peuvent contenir des identifiants.
+- **Motifs** : un motif avec `*` (base ou réglage) ne laisse jamais passer un nom d'allure secrète (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `AUTH`, `PRIVATE`, `COOKIE`, `env_allowlist.rs:100`). Une telle variable ne passe que nommée exactement dans `kernel.envAllowlist`.
+- **Identifiants provider** : clés d'environnement de chaque provider du catalogue (`pa_ai::env_api_keys`), sources AWS et Google ambiantes, `PRIME_AGENT_TRACES_API_KEY`, jeton du worker daemon (`env_allowlist.rs:115`, `:131`). Jamais transmis, même nommés : avertissement sur stderr (le journal du worker daemon), avec le nom seul.
+- **Injections secrètes du harness** : la clé Serper que le harness résout pour le skill websearch (`runtime_wiring.rs:289-291`) n'est transmise que si `SERPER_API_KEY` est nommée dans `kernel.envAllowlist`. Sinon elle est retenue, avec avertissement. Le skill relit de toute façon une clé littérale dans `auth.json` (`skills/websearch/src/websearch/websearch.py:46`).
+- **Portée** : `kernel.envAllowlist` se lit dans les réglages fusionnés. Le réglage projet (`.prime/agent/settings.json`) remplace le global (les tableaux remplacent dans `deep_merge`, `merge.rs:7`). Comme `shellPath`, un dépôt non fiable peut donc élargir la liste : relire les réglages du projet avant d'y lancer l'agent.
+
+Ce qui hérite de cet environnement, et de rien d'autre :
+
+- `bash()`, ses sous-process et les shells persistants : `_child_env()` = `os.environ` du kernel plus des réglages non interactifs fixes (`prime-agent-runtime/src/rlm/bash.py:1410-1437`, appelé `:449`, `:457`, `:1553`).
+- Les sous-agents `rlm.spawn` : ce sont des sessions dont le kernel passe par le même `kernel_provisioner` → `kernel_spawn_env` (`engine.rs:503`, seul appelant). Le process worker de l'enfant garde l'environnement complet du harness, dont il a besoin pour ses appels provider.
+- `bash()` n'a pas de paramètre `env=` (`bash.py:1298`, signature `bash(command, persistent=False)`). Une variable posée par le modèle (`os.environ[...]` ou `VAR=x cmd`) est une valeur qu'il connaît déjà.
+
+### Points relevés pour le sandbox (YA-11), non corrigés
+
+- **Jetons et clés au repos** : `<agentDir>/auth.json`, créé en `0o600` avec écritures atomiques (`crates/pa-core/src/auth/manager.rs:275`, `storage.rs:1`, `:73`). `agentDir` vaut `~/.prime/agent` par défaut (`crates/pa-cli/src/config.rs:7`, `:104-111`). On y trouve les clés API, les jetons OAuth provider et les jetons MCP (`mcp:*`). Le kernel connaît ce chemin (`PRIME_AGENT_CODING_AGENT_DIR`) et le skill websearch lit déjà ce fichier.
+- **Clés en variables d'environnement** : le process du harness les garde. Sous Linux, `/proc/<pid>/environ` du harness reste lisible par un process du même utilisateur. Sur macOS, voir la mesure `psenv` du banc de capture (rapport de la PR YA-02).
+- **MCP stdio lancés depuis le kernel** : une référence d'environnement dans `mcpServers.<nom>.env` (`prime-agent-runtime/src/rlm/mcp.py:995-997`) ou un jeton porteur lu depuis l'environnement (`mcp.py:923`, `:970`, `mcp_base.py:149`) n'est plus résolu, sauf si la variable est nommée dans `kernel.envAllowlist`.
+
+## Tests upstream touchés (YA-02)
+
+Même règle que YA-01 : aucun test supprimé ni affaibli. Chaque modification porte un commentaire `yusAgent (YA-02)`.
+
+| Fichier | Test(s) | Nature | Modification |
+|---|---|---|---|
+| `crates/pa-core/src/kernel/provisioner.rs` | `a_stored_serper_key_reaches_the_kernel_env` | setup + défaut | `kernel.envAllowlist: ["SERPER_API_KEY"]` ; une clé ambiante passe désormais par le câblage, donc l'attendu est cette clé au lieu de `None` |
+| `crates/pa-core/src/kernel/provisioner.rs` | `a_stored_serper_key_is_withheld_without_the_allowlist` | renfort (nouveau) | sans réglage, la clé résolue n'est pas transmise |
+| `crates/pa-daemon/tests/launch_env_e2e.rs` | `the_kernel_runs_in_the_client_launch_env` | setup + renfort | `kernel.envAllowlist: ["PA_MARKER"]` ; ajout de `PA_FAKE_TOKEN` au `launchEnv`, qui doit rester absent du kernel |
+| `scripts/check_kernel_env.py` | check de cycle de vie | setup + renfort | `kernel.envAllowlist` avec l'identifiant de fixture et `SERPER_API_KEY` ; deux cas ajoutés sans `SERPER_API_KEY` : clé résolue et clé ambiante retenues |
+| `scripts/check_launch_env.py` | check de cycle de vie | setup | `kernel.envAllowlist: ["PA_ENV_*", "PRIME_AGENT_INTERNAL_PARITY_CANARY"]` ; le canari reste listé pour que son absence prouve toujours le filtrage côté worker |
+| `scripts/lifecycle_lib.py` | `OwnedProcesses.ownership` | setup | un kernel ne porte plus `PA_GOAL_FIXTURE_ID` ; il est reconnu à `PRIME_AGENT_CODING_AGENT_DIR` = `<racine>/agent`, en plus du pid propriétaire déjà exigé. Workers et process directs exigent toujours l'étiquette |
+| `scripts/test_lifecycle_lib.py` | `test_untagged_kernel_owned_through_its_agent_dir`, `test_untagged_worker_never_owned_through_its_agent_dir` | renfort (nouveaux) | le kernel d'un autre dossier agent n'est pas reconnu ; un worker sans étiquette non plus |
