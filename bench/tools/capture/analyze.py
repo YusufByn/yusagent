@@ -311,6 +311,16 @@ def render(report: dict) -> str:
                 f"{acp['agent_requests'] or 'aucune'}",
                 f"- Notifications : {', '.join(acp['notifications'])}",
                 f"- Process restants après arrêt : {acp['leftover_processes'] or 'aucun'}"]
+    spawn = report["run"].get("spawn")
+    if spawn:
+        out += ["", "## Sous-agent (`rlm.spawn` puis `rlm.collect`, scénario `spawn`)", "",
+                f"- Résultat : {'OK' if spawn['ok'] else 'ÉCHEC'} (exit {spawn['exit']}, "
+                f"{spawn['seconds']} s)",
+                f"- Requêtes parent / enfant : {spawn['parent_requests']} / "
+                f"{spawn['child_requests']}",
+                f"- Ligne `rlm.collect` vue par le parent : `{spawn['collect_line']}`",
+                f"- Réponse de l'enfant (`agent_message.send`) dans le contexte du parent : "
+                f"{spawn['child_reply_in_parent_context']}"]
     out += ["", "## Environnement vu par le kernel (s1-anthropic, tour 2)", "",
             "Variables factices transmises au binaire : "
             f"{', '.join(report['run'].get('fake_secret_names', []))}.", ""]

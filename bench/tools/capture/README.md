@@ -59,6 +59,9 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 | `resume-anthropic` | Deuxième prompt dans la même session (`--continue`) |
 | `compact-anthropic` | Sorties volumineuses et usage annoncé de 199 000 tokens : compaction par seuil, résumé, porte auto `/refine` |
 | ACP | `--mode acp` sur un daemon isolé (`--daemon-socket`) : `initialize`, `session/new`, `session/prompt` |
+| Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
+
+Le prompt système contient le chemin absolu de chaque `SKILL.md` (`<location>`), donc le dossier où le binaire est extrait. Pour comparer deux binaires, les extraire au même chemin, sinon l'inventaire des skills diffère de (écart de longueur du chemin) × (nombre de skills).
 
 ## Serveur seul
 

@@ -293,6 +293,61 @@ def acp_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -
     }
 
 
+def spawn_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -> dict:
+    """Sous-agent de bout en bout : `rlm.spawn`, réponse de l'enfant par
+    `agent_message.send`, puis `rlm.collect` côté parent (scénario `spawn`).
+
+    Hors de CASES : les requêtes de l'enfant, mêlées à celles du parent,
+    fausseraient l'analyse de préfixe N -> N+1.
+    """
+    spawn_dir = out / "spawn"
+    spawn_dir.mkdir(parents=True, exist_ok=True)
+    agent = work / "agent-s"
+    server = CaptureServer(spawn_dir / "cap", "spawn", [])
+    try:
+        write_models_json(agent, "anthropic-messages", server.port)
+        env = base_env(cache / "home", agent, work / "tmp")
+        result = run_binary(agent_cmd(binary), env, project, spawn_dir, sandboxed=True)
+    finally:
+        server.stop()
+    parent_texts, child_requests = [], 0
+    for meta_path in sorted((spawn_dir / "cap").glob("*.meta.json")):
+        meta = json.loads(meta_path.read_text())
+        if meta.get("child"):
+            child_requests += 1
+            continue
+        body = (spawn_dir / "cap" / meta_path.name.replace(".meta.json", ".body.json")).read_text()
+        parent_texts.append(body)
+    collect = next((line for text in parent_texts for line in _texts(json.loads(text))
+                    if line.startswith("COLLECT")), None)
+    reply_seen = any("YA_CHILD_RESULT" in text and "agent-message" in text
+                     for text in parent_texts)
+    return {
+        **result,
+        "parent_requests": len(parent_texts),
+        "child_requests": child_requests,
+        "collect_line": collect,
+        "child_reply_in_parent_context": reply_seen,
+        "ok": result["exit"] == 0 and bool(collect) and "True" in collect
+              and "YA_CHILD_DONE" in collect and reply_seen,
+    }
+
+
+def _texts(value) -> list[str]:
+    """Lignes de texte d'un corps de requête (résultats de tool compris)."""
+    lines: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in ("text", "content", "output") and isinstance(item, str):
+                lines += item.splitlines()
+            else:
+                lines += _texts(item)
+    elif isinstance(value, list):
+        for item in value:
+            lines += _texts(item)
+    return lines
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--binary", required=True, type=Path)
@@ -365,6 +420,11 @@ def main() -> None:
                   "prompts": prompts, "settings": settings}
         run_info["cases"][name] = result
         print(f"{name}: exit={result['exit']} en {result['seconds']} s")
+
+    run_info["spawn"] = spawn_check(binary, cache, work, project, out)
+    print(f"spawn : ok={run_info['spawn']['ok']} collect={run_info['spawn']['collect_line']!r} "
+          f"requêtes parent/enfant={run_info['spawn']['parent_requests']}"
+          f"/{run_info['spawn']['child_requests']}")
 
     run_info["acp"] = acp_check(binary, cache, work, project, out)
     print(f"acp : prompt={run_info['acp']['prompt_result']} "
