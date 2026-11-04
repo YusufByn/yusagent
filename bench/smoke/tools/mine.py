@@ -23,10 +23,17 @@ Usage :
      Retenu si au moins un test des fichiers de test de la correction échoue au rouge
      et passe aux 3 verts, et si les 3 verts n'ont aucun échec et le même résultat.
      Type d'échec rouge noté : `assertion`, `exception`, `import`, `collecte`.
+     Dernières lignes de la sortie d'installation gardées (couleurs, jetons et en-têtes
+     d'authentification masqués) ; un échec d'installation est classé par cause
+     (`uv_no_build`, `python_version`, `resolution`, `npm_lock`, ...).
+     Python, avec `--locks-dir` : `uv.lock` produit par `uv sync` quand le dépôt n'en a
+     pas, et `freeze.txt` de l'environnement, pour des installations identiques entre
+     la baseline et les runs suivants (repris par la tâche en phase B).
      Une sonde réseau précède la validation : une requête sortante doit échouer sous
      la coupure réseau, sinon arrêt.
   3. `csv` : fusionne les sorties de `validate` (shards) en `candidates.csv` (retenus
      seulement) et écrit un résumé (retenus par langage, minimums, échecs par cause).
+     `--revalidated <sortie>` : écarts avec une validation sur une autre plateforme.
 
 Isolation (`--isolation`) du code des dépôts tiers (installation, build, tests) :
   - `sandbox-exec` (macOS, par défaut) : profil `mine.sb`, écriture limitée au cache,
@@ -49,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import os
 import platform
@@ -101,6 +109,35 @@ MAX_SRC_LINES = 400
 PER_REPO_PRS = 4  # PR candidates gardées par dépôt avant validation
 MAX_FILE_CALLS = 6  # appels `pulls/<n>/files` par dépôt (limite de 5 000 appels/h)
 GREEN_RUNS = 3
+TAIL_LINES = 20  # lignes gardées de la sortie d'installation
+
+# Causes d'échec d'installation, dans l'ordre de test sur la fin de la sortie.
+INSTALL_CAUSES = [
+    ("uv_no_build", re.compile(r"no-build|has no binary distribution|source distributions? (is|are) disabled", re.I)),
+    ("python_version", re.compile(r"requires-python|No interpreter found|Python requirement|"
+                                  r"unsupported Python", re.I)),
+    ("resolution", re.compile(r"No solution found|unsatisfiable|ERESOLVE|Could not resolve dependency", re.I)),
+    ("npm_lock", re.compile(r"can only install packages when your package\.json and package-lock|"
+                            r"Missing: .* from lock file|lockfile", re.I)),
+    ("npm_engine", re.compile(r"EBADENGINE|Unsupported engine", re.I)),
+    ("proxy_refused", re.compile(r"403 Forbidden|tunnel|CONNECT", re.I)),
+    ("git_dependency", re.compile(r"git@|ssh://|Git operation failed|git clone|Failed to clone", re.I)),
+    ("build_backend", re.compile(r"Failed to build|build backend|subprocess-exited-with-error|"
+                                 r"Failed to prepare distributions", re.I)),
+    ("auth", re.compile(r"\bE?401\b|authentication required|Unauthorized", re.I)),
+    ("network", re.compile(r"Could not resolve|getaddrinfo|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|"
+                           r"Failed to fetch|Connection reset|dns error", re.I)),
+]
+SECRET_RES = [
+    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|npm_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{16,}|"
+                r"xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}"), "<masqué>"),
+    (re.compile(r"(?im)\b(authorization|proxy-authorization|cookie|set-cookie|token|password|"
+                r"secret|api[_-]?key)\b(\s*[:=]\s*).*$"), r"\1\2<masqué>"),
+    (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://<masqué>@"),
+]
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+WORK_PREFIX_RE = re.compile(r"^.*/work/[^/]+/")  # dossier de travail du minage dans une clé
+GENERATED_RE = re.compile(r"(^|/)(dist|build|out)/|\.min\.[cm]?js$|\.map$")
 
 # Causes de rejet (résumé) : code -> libellé.
 CAUSES = {
@@ -123,6 +160,30 @@ class Reject(Exception):
     def __init__(self, cause: str, detail: str = ""):
         super().__init__(detail)
         self.cause, self.detail = cause, detail
+
+
+def clean_tail(text: str, home: str = str(Path.home())) -> str:
+    """Dernières lignes d'une sortie, sans couleurs, jetons ni en-têtes d'authentification."""
+    text = ANSI_RE.sub("", text or "").replace(home, "~")
+    for pattern, repl in SECRET_RES:
+        text = pattern.sub(repl, text)
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    return "\n".join(lines[-TAIL_LINES:])[-2500:]
+
+
+def install_cause(res: dict) -> str:
+    if res["timeout"]:
+        return "timeout"
+    for cause, pattern in INSTALL_CAUSES:
+        if pattern.search(res["out"]):
+            return cause
+    return "other"
+
+
+def norm_key(key: str) -> str:
+    """Clé de test sans le chemin absolu du dossier de travail (différent par plateforme) ni
+    entités HTML (le reporter JUnit de Node 24.21 sur macOS laisse `&quot;` dans les noms)."""
+    return html.unescape(WORK_PREFIX_RE.sub("", key))
 
 
 def now() -> str:
@@ -383,7 +444,7 @@ def sh(cmd: list[str] | str, cwd: Path, timeout: int, env: dict, network: bool,
         with log_path.open("a") as fh:
             fh.write(f"\n$ {' '.join(cmd[-1:])}\n[exit={code} timeout={timed_out}]\n{out}\n")
     return {"exit": code, "timeout": timed_out, "seconds": round(time.monotonic() - started, 1),
-            "tail": (out or "")[-1500:]}
+            "tail": (out or "")[-1500:], "out": (out or "")[-20000:]}
 
 
 def git(repo: Path, *args: str, timeout: int = 600) -> str:
@@ -504,11 +565,12 @@ def parse_report(runner: str, report: Path, work: Path) -> dict[str, tuple[str, 
             return results
         for suite in root.iter("testsuite"):
             for case in suite.iter("testcase"):
-                name = case.get("name", "")
+                name = html.unescape(case.get("name", ""))
                 if runner == "pytest":
                     key = f"{case.get('classname', '')}::{name}"
                 else:
-                    key = f"{case.get('file') or case.get('classname') or suite.get('name')}::{name}"
+                    path = case.get("file") or case.get("classname") or suite.get("name") or ""
+                    key = f"{os.path.relpath(path, work) if os.path.isabs(path) else path}::{name}"
                 bad = case.find("failure")
                 if bad is None:
                     bad = case.find("error")
@@ -632,10 +694,15 @@ def _run_states(c: dict, rec: dict, cache: Path, env: dict, slug: str, log_path:
     rec["repo_files"] = len(git(work, "ls-files").splitlines())
     setup = detect_python(work) if c["lang"] == "python" else detect_node(work)
     rec["install"], rec["runner"] = setup["install"], setup["runner"]
+    had_lock = (work / "uv.lock").exists()
     inst = sh(setup["install"], work, 600, env, network=True, log_path=log_path)
     rec["install_seconds"] = inst["seconds"]
+    rec["install_tail"] = clean_tail(inst["out"])
     if inst["exit"] != 0:
-        raise Reject("install", f"exit {inst['exit']}")
+        rec["install_cause"] = install_cause(inst)
+        raise Reject("install", f"{rec['install_cause']}, exit {inst['exit']}")
+    if c["lang"] == "python" and LOCKS_DIR is not None:
+        save_python_versions(c, rec, work, env, slug, had_lock, log_path)
 
     runnable = [f for f in tests if f.endswith(SRC_EXT[c["lang"]])
                 and (TEST_FILE_RE.search(f) or c["lang"] == "node" and "/test" in f)]
@@ -703,6 +770,27 @@ def _run_states(c: dict, rec: dict, cache: Path, env: dict, slug: str, log_path:
     rec["suite_exit"] = s["exit"]
 
 
+LOCKS_DIR: Path | None = None
+
+
+def save_python_versions(c: dict, rec: dict, work: Path, env: dict, slug: str, had_lock: bool,
+                         log_path: Path) -> None:
+    """Versions résolues : `uv.lock` produit par `uv sync` quand le dépôt n'en a pas, et
+    `freeze.txt` de l'environnement (pytest ajouté compris), pour la tâche en phase B."""
+    dest = LOCKS_DIR / f"{slug}-{c['pr']}"
+    dest.mkdir(parents=True, exist_ok=True)
+    if not had_lock and (work / "uv.lock").exists():
+        shutil.copyfile(work / "uv.lock", dest / "uv.lock")
+        rec["locked_here"] = True
+    freeze = sh("uv pip freeze --python .venv/bin/python", work, 120, env, network=False,
+                log_path=log_path)
+    if freeze["exit"] == 0:
+        lines = [ln for ln in freeze["out"].splitlines()
+                 if ln.strip() and not ln.startswith("-e ")]  # projet lui-même : chemin local
+        (dest / "freeze.txt").write_text("\n".join(lines) + "\n")
+    rec["versions_dir"] = str(dest.relative_to(HERE)) if dest.is_relative_to(HERE) else str(dest)
+
+
 def shard_of(cands: list[dict], index: int, total: int) -> list[dict]:
     """Shards équilibrés et stables : dépôts entiers (un clone par dépôt), plus gros d'abord."""
     by_repo: dict[str, list[dict]] = {}
@@ -719,8 +807,9 @@ def shard_of(cands: list[dict], index: int, total: int) -> list[dict]:
 
 
 def validate(args: argparse.Namespace) -> None:
-    global ISO
+    global ISO, LOCKS_DIR
     cache = Path(args.cache)
+    LOCKS_DIR = Path(args.locks_dir).resolve() if args.locks_dir else None
     cache.mkdir(parents=True, exist_ok=True)
     if args.isolation == "sandbox-exec" and (PLATFORM != "macos"
                                              or not Path("/usr/bin/sandbox-exec").exists()):
@@ -785,10 +874,35 @@ def validate(args: argparse.Namespace) -> None:
 # --- Fusion et CSV ----------------------------------------------------------------------
 
 CSV_FIELDS = ["platform", "lang", "repo", "fix_commit", "parent_commit", "license", "stars",
-              "repo_size_kb", "repo_files", "src_files", "src_lines_added", "src_lines_deleted",
+              "repo_size_kb", "repo_files", "src_files", "src_files_hand", "src_lines_added",
+              "src_lines_deleted",
               "test_files", "test_lines", "f2p_count", "fail_to_pass", "p2p_count",
               "red_failure", "red_failure_detail", "runner", "install", "targeted_test_s",
-              "suite_s", "suite_exit", "pr_url", "issue_url", "merged_at", "title"]
+              "suite_s", "suite_exit", "prompt_source", "pr_url", "issue_url", "merged_at",
+              "title", "revalidated_platform", "revalidated_ok", "revalidated_diff"]
+
+
+def revalidation(r: dict, other: dict | None, platform_name: str) -> dict:
+    """Écarts d'une seconde validation (autre plateforme) avec la première."""
+    if not platform_name:
+        return {"revalidated_platform": "", "revalidated_ok": "", "revalidated_diff": ""}
+    if other is None:
+        return {"revalidated_platform": platform_name, "revalidated_ok": "",
+                "revalidated_diff": "non revalidé"}
+    diff = []
+    if not other["ok"]:
+        diff.append(other["reason"])
+    else:
+        a = {norm_key(k) for k in r["fail_to_pass"]}
+        b = {norm_key(k) for k in other["fail_to_pass"]}
+        if a != b:
+            diff.append(f"fail_to_pass : {len(a - b)} en moins, {len(b - a)} en plus")
+        if r["pass_to_pass_count"] != other["pass_to_pass_count"]:
+            diff.append(f"pass_to_pass {r['pass_to_pass_count']} -> {other['pass_to_pass_count']}")
+        if r["red_failure"] != other["red_failure"]:
+            diff.append(f"échec rouge {r['red_failure']} -> {other['red_failure']}")
+    return {"revalidated_platform": platform_name, "revalidated_ok": other["ok"],
+            "revalidated_diff": " ; ".join(diff)}
 
 
 def write_csv(args: argparse.Namespace) -> None:
@@ -803,6 +917,12 @@ def write_csv(args: argparse.Namespace) -> None:
         probes.append((p.name, data["platform"], data["isolation"], data["probe"]))
         for r in data["records"]:
             records[r["pr_url"]] = r
+    reval: dict[str, dict] = {}
+    reval_platform = ""
+    if args.revalidated:
+        data = json.loads(Path(args.revalidated).read_text())
+        reval_platform = data["platform"]
+        reval = {r["pr_url"]: r for r in data["records"]}
     rows = []
     for r in records.values():
         if not r["ok"]:
@@ -813,16 +933,19 @@ def write_csv(args: argparse.Namespace) -> None:
             "fix_commit": r["fix_commit"], "parent_commit": r["parent_commit"],
             "license": c["license"], "stars": c["stars"], "repo_size_kb": c["size_kb"],
             "repo_files": r["repo_files"], "src_files": r["src_files"],
+            "src_files_hand": sum(1 for f in c["src_files"] if not GENERATED_RE.search(f)),
             "src_lines_added": r["src_added"], "src_lines_deleted": r["src_deleted"],
             "test_files": r["test_files"], "test_lines": r["test_lines"],
-            "f2p_count": len(r["fail_to_pass"]), "fail_to_pass": " | ".join(r["fail_to_pass"]),
+            "f2p_count": len(r["fail_to_pass"]), "fail_to_pass": " | ".join(norm_key(k) for k in r["fail_to_pass"]),
             "p2p_count": r["pass_to_pass_count"], "red_failure": r["red_failure"],
             "red_failure_detail": r["red_failure_detail"], "runner": r["runner"],
             "install": r["install"].split(" && ")[0], "targeted_test_s": r["targeted_seconds"],
             "suite_s": r["suite_seconds"] if r["suite_seconds"] is not None
             else f">{args.suite_timeout}",
-            "suite_exit": r["suite_exit"], "pr_url": r["pr_url"], "issue_url": c["issue_url"],
-            "merged_at": c["merged_at"], "title": c["title"]})
+            "suite_exit": r["suite_exit"], "prompt_source": "issue" if c["issue_url"] else "pr",
+            "pr_url": r["pr_url"], "issue_url": c["issue_url"],
+            "merged_at": c["merged_at"], "title": c["title"],
+            **revalidation(r, reval.get(r["pr_url"]), reval_platform)})
     rows.sort(key=lambda x: (x["lang"], x["src_files"], x["src_lines_added"] + x["src_lines_deleted"]))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -844,6 +967,11 @@ def write_csv(args: argparse.Namespace) -> None:
              "| Cause de rejet | Nombre | Part des validés |", "|---|---|---|"]
     for cause, n in causes.most_common():
         lines.append(f"| {CAUSES[cause]} | {n} | {100 * n / total:.1f} % |")
+    inst = Counter(r.get("install_cause", "inconnue") for r in records.values()
+                   if r["cause"] == "install")
+    if inst:
+        lines += ["", "| Échec d'installation, cause | Nombre |", "|---|---|"]
+        lines += [f"| {k} | {n} |" for k, n in inst.most_common()]
     lines += ["", "| Type d'échec rouge (retenus) | Nombre |", "|---|---|"]
     for kind, n in Counter(x["red_failure"] for x in rows).most_common():
         lines.append(f"| {kind} | {n} |")
@@ -882,12 +1010,14 @@ def main() -> None:
     v.add_argument("--deadline-min", type=float, default=0,
                    help="plus de nouveau candidat après N minutes")
     v.add_argument("--suite-timeout", type=int, default=120)
+    v.add_argument("--locks-dir", help="Python : uv.lock produit et freeze.txt par candidat")
     v.add_argument("--mem-gb", type=float, default=3,
                    help="netns : mémoire max par commande réseau coupé (Go)")
     c = sub.add_parser("csv")
     c.add_argument("--validated", nargs="*", default=[])
     c.add_argument("--out", default=str(OUT_CSV))
     c.add_argument("--summary")
+    c.add_argument("--revalidated", help="sortie de validate d'une autre plateforme (écarts)")
     c.add_argument("--suite-timeout", type=int, default=120)
     args = p.parse_args()
     {"discover": discover, "validate": validate, "csv": write_csv}[args.cmd](args)

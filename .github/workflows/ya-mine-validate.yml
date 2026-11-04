@@ -27,6 +27,7 @@ on:
       - ".github/workflows/ya-mine-validate.yml"
       - "bench/smoke/tools/**"
       - "!bench/smoke/tools/candidates.csv"
+      - "!bench/smoke/tools/locks/**"
 
 permissions:
   contents: read
