@@ -18,6 +18,13 @@ inconnue (run fait avant l'empreinte et non recalculé par `run.py --rereport`, 
 modifié au moment du run), est refusée : rien n'est écrit. `--exclude <run>:<tâches>`
 retire des tâches d'un run (par exemple celles dont l'énoncé a changé depuis).
 
+Agrégat (`aggregate`) : coût total des tâches stables, et deux estimations du CV de ce
+total. `cv_independent` suppose les tâches indépendantes (√Σσ² / Σμ) ; `cv_passes` est le
+CV des sommes par passe (passe k : k-ième run retenu de chaque tâche, dans l'ordre des
+runs donnés), qui capte un effet propre à un run. `cv` = le plus grand des deux (décision
+du 04/11/2026) ; `cv_passes` est `null` si les tâches stables n'ont pas toutes le même
+nombre de runs.
+
 `compare.py` lit ce fichier pour ses seuils de bruit. Bibliothèque standard uniquement.
 """
 
@@ -25,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import sys
 from datetime import datetime, timezone
@@ -86,6 +94,22 @@ def task_versions(task: str, items: list[tuple[Path, dict]]) -> tuple[str | None
     return next(iter(trees.values())), None
 
 
+def aggregate(per_task: dict) -> dict:
+    """Coût total des tâches stables et CV de ce total (voir la docstring du module)."""
+    stable = [t for t, a in per_task.items() if a["stable"] and a["cost"] is not None]
+    costs = [per_task[t]["cost"] for t in stable]
+    mean = sum(c["mean"] for c in costs) if costs else None
+    cv_independent = (math.sqrt(sum(c["stdev"] ** 2 for c in costs)) / mean
+                      if mean and all(c["stdev"] is not None for c in costs) else None)
+    counts = {len(c["values"]) for c in costs}
+    passes = ([sum(c["values"][k] for c in costs) for k in range(counts.pop())]
+              if len(counts) == 1 else None)
+    cv_passes = spread(passes)["cv"] if passes and len(passes) > 1 else None
+    known = [v for v in (cv_independent, cv_passes) if v is not None]
+    return {"tasks": stable, "cost_mean": mean, "cv_independent": cv_independent,
+            "cv_passes": cv_passes, "passes": passes, "cv": max(known) if known else None}
+
+
 def build(runs: list[Path], exclude: list[str] | None = None) -> dict:
     names = [run.name for run in runs]
     if len(set(names)) != len(names):
@@ -145,6 +169,7 @@ def build(runs: list[Path], exclude: list[str] | None = None) -> dict:
                   "runs_per_task": r["header"].get("runs")} for run, r in reports],
         "header": {k: first.get(k) for k in SAME},
         "per_task": per_task,
+        "aggregate": aggregate(per_task),
     }
 
 
@@ -166,6 +191,10 @@ def main() -> None:
         stable = " (stable)" if a["stable"] else ""
         print(f"{task} : {a['runs']} run(s), résolue {a['resolved_rate']:.2f}{stable}, "
               f"CV coût {cv_cost}, CV tokens {cv_tokens}, miss serveur {a['server_misses']}")
+    agg = baseline["aggregate"]
+    print(f"agrégat ({len(agg['tasks'])} tâches stables) : coût moyen {metrics_fmt(agg['cost_mean'])} $,"
+          f" CV indépendance {metrics_fmt(agg['cv_independent'])}, CV passes "
+          f"{metrics_fmt(agg['cv_passes'])}, CV retenu {metrics_fmt(agg['cv'])}")
     print(f"baseline : {out}")
 
 

@@ -10,6 +10,9 @@ en tête (un run de PR en alerte est relancé 2 fois, décision du 04/11/2026) :
   - tâche résolue en A et non en B ;
   - écart de coût ou de tokens de B par rapport à A au-delà du bruit mesuré de la tâche :
     2 fois son coefficient de variation en baseline, et au moins 5 %.
+  - écart du coût agrégé (somme des coûts moyens des tâches stables de la baseline,
+    présentes dans A et B et de même version) au-delà de max(2 × CV du total, 5 %), CV
+    du total = `aggregate.cv` de la baseline (le plus grand de ses deux estimations).
 Baseline : `baseline/<modèle de B>.json` (écrit par `baseline.py`) si `--baseline` n'est
 pas donné. Sans baseline, seules les régressions de résolution sont signalées : les
 écarts de coût et de tokens restent affichés, sans seuil.
@@ -137,6 +140,25 @@ def noise_threshold(baseline: dict | None, task: str, measure: str) -> tuple[flo
     return max(NOISE_FACTOR * cv * 100, NOISE_FLOOR_PCT), f"2 × CV {cv:.3f}"
 
 
+def aggregate_check(pa: dict, pb: dict, baseline: dict | None,
+                    excluded: dict[str, str]) -> dict | None:
+    """Coût agrégé des tâches stables de la baseline, A contre B, et son seuil."""
+    agg = (baseline or {}).get("aggregate")
+    if not agg or agg.get("cv") is None:
+        return None
+    tasks = [t for t in agg["tasks"] if t in pa and t in pb and t not in excluded
+             and pa[t]["cost_mean"] is not None and pb[t]["cost_mean"] is not None]
+    if not tasks:
+        return None
+    cost_a = sum(pa[t]["cost_mean"] for t in tasks)
+    cost_b = sum(pb[t]["cost_mean"] for t in tasks)
+    limit = max(NOISE_FACTOR * agg["cv"] * 100, NOISE_FLOOR_PCT)
+    return {"tasks": tasks, "missing": [t for t in agg["tasks"] if t not in tasks],
+            "cost_a": cost_a, "cost_b": cost_b, "change": pct(cost_a, cost_b), "limit": limit,
+            "cv_independent": agg.get("cv_independent"), "cv_passes": agg.get("cv_passes"),
+            "cv": agg["cv"]}
+
+
 def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) -> str:
     ha, hb = a["header"], b["header"]
     pa, pb = a["per_task"], b["per_task"]
@@ -164,6 +186,11 @@ def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) 
                 way = "Hausse" if change > 0 else "Baisse"
                 signals.append(f"**{way} de {name}** : {t} {change:+.1f} % (seuil {limit[0]:.1f} %,"
                                f" {limit[1]})")
+    agg = aggregate_check(pa, pb, baseline, excluded)
+    if agg and agg["change"] is not None and abs(agg["change"]) > agg["limit"]:
+        way = "Hausse" if agg["change"] > 0 else "Baisse"
+        signals.append(f"**{way} du coût agrégé** : {agg['change']:+.1f} % sur {len(agg['tasks'])} "
+                       f"tâche(s) stable(s) (seuil {agg['limit']:.1f} %, 2 × CV {agg['cv']:.3f})")
     mismatches = [k for k in SAME_HEADER if ha.get(k) != hb.get(k)]
     if baseline and baseline.get("header", {}).get("model") != hb.get("model"):
         mismatches.append("modèle de la baseline")
@@ -183,6 +210,19 @@ def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) 
     if mismatches:
         lines.append(f"- Attention : en-têtes différents ({', '.join(mismatches)}), comparaison "
                      "à lire avec prudence")
+    lines += ["", "## Coût agrégé des tâches stables", ""]
+    if agg is None:
+        lines.append("- non calculé (pas de baseline avec agrégat, ou aucune tâche stable commune)")
+    else:
+        lines += [f"- Tâches : {len(agg['tasks'])} ({', '.join(agg['tasks'])})"
+                  + (f" ; hors comparaison : {', '.join(agg['missing'])}" if agg["missing"] else ""),
+                  f"- Coût : {fmt(agg['cost_a'])} → {fmt(agg['cost_b'])} "
+                  f"({fmt(agg['change'], 1)} %), seuil {agg['limit']:.1f} %",
+                  f"- CV du total en baseline : indépendance {fmt(agg['cv_independent'], 3)}, "
+                  f"passes {fmt(agg['cv_passes'], 3)}, retenu {fmt(agg['cv'], 3)} (le plus grand)"]
+        if agg["missing"]:
+            lines.append("- Attention : le CV de la baseline porte sur toutes ses tâches stables, "
+                         "le seuil est approximatif sur un sous-ensemble")
     lines += ["", "## Tâches exclues de la comparaison", "",
               "Version de la tâche différente entre B et A ou la baseline, ou inconnue : ni "
               "alerte ni écart.", ""]
