@@ -366,6 +366,7 @@ class CaptureState:
         self.no_websocket = False
         self.inflate_from_turn = inflate_from_turn
         self.inflate_tokens = inflate_tokens
+        self.server_miss_turns: set[int] = set()
         self.lock = threading.Lock()
         self.seq = 0
 
@@ -386,6 +387,13 @@ class CaptureState:
             code = reread_cell(body or {}) if cells[turn] == REREAD else cells[turn]
             return Plan("tool", tool_name=first_tool_name(tools), code=code)
         return Plan("final", text=final)
+
+    def server_miss(self, split: dict, turn: int, child: bool) -> dict:
+        """Miss complet côté serveur simulé (T07) : rien n'est lu du cache à ce tour, alors
+        que la requête prolonge la conversation (le harness n'a rien changé)."""
+        if child or turn not in self.server_miss_turns:
+            return split
+        return {**split, "read": 0, "input": split["total"] - split["write"]}
 
     def input_tokens(self, raw_len: int, turn: int) -> int:
         if self.inflate_from_turn is not None and turn >= self.inflate_from_turn:
@@ -701,7 +709,7 @@ def make_handler(state: CaptureState):
             child = CHILD_MARKER in first_user_text(body)
             plan = state.plan(body.get("tools"), turn, child, body)
             input_tokens = state.input_tokens(len(raw), turn)
-            split = state.usage.split(body, input_tokens)
+            split = state.server_miss(state.usage.split(body, input_tokens), turn, child)
             model = body.get("model", "capture-model")
             if not body.get("stream"):
                 reply = (anthropic_json(plan, model, seq, split) if api == "anthropic-messages"
@@ -779,7 +787,7 @@ def make_handler(state: CaptureState):
                 plan = state.plan(body.get("tools"), turn, child, body)
                 full = json.dumps(body).encode()
                 input_tokens = state.input_tokens(len(full), turn)
-                split = state.usage.split(body, input_tokens)
+                split = state.server_miss(state.usage.split(body, input_tokens), turn, child)
                 model = body.get("model", "capture-model")
                 events = responses_events(plan, model, seq, split)
                 meta.update({"turn": turn, "child": child, "response": plan.describe(),
@@ -826,6 +834,8 @@ def main() -> None:
                         help="répond « modèle inconnu » pour cet id (T06, id faux simulé)")
     parser.add_argument("--read-probe-path", action="append", default=[],
                         help="chemin hors workspace que la sonde d'isolation tente de lire (T06)")
+    parser.add_argument("--server-miss-at-turn", type=int, action="append", default=[],
+                        help="à ce tour, l'usage annonce cacheRead = 0 (miss serveur, T07)")
     parser.add_argument("--no-websocket", action="store_true",
                         help="refuse l'upgrade WebSocket (404) : force le repli SSE (T06)")
     args = parser.parse_args()
@@ -834,6 +844,7 @@ def main() -> None:
                          args.usage_split, args.prefix_cache, args.connect_proxy_port,
                          tuple(args.reject_model), tuple(args.read_probe_path))
     state.no_websocket = args.no_websocket
+    state.server_miss_turns = set(args.server_miss_at_turn)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state))
     port = server.server_address[1]
     if args.port_file:

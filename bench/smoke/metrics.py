@@ -9,6 +9,13 @@ Sources, sans rien recalculer qui existe déjà :
   - journal du proxy CONNECT : CONNECT refusés.
 
 Un champ absent est écrit `null`, jamais estimé.
+
+Miss serveur (T07) : appel de la boucle qui n'est pas le premier de sa session, sans
+invalidation journalisée, avec un prompt non vide et `cacheRead = 0`. Le harness n'a pas
+changé le préfixe : le cache a manqué côté serveur. Taux « évitable » : cacheRead / prompt
+sur les appels de la boucle hors premier de session, hors invalidations et hors miss
+serveur. Calculés depuis les journaux seuls : `python3 -I bench/smoke/metrics.py <run>`
+les recalcule pour un run déjà fait.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import sys
 from pathlib import Path
 
 TOKEN_FIELDS = ("input", "output", "cacheRead", "cacheWrite", "cacheWrite5m", "cacheWrite1h",
@@ -71,6 +79,43 @@ def cache_rates(records: list[dict]) -> dict:
     return {"session_rate": read / total if total else None,
             "continuation_median": median(continuation),
             "continuation_requests": len(continuation)}
+
+
+def first_seqs(loop: list[dict]) -> dict[str, int]:
+    first: dict[str, int] = {}
+    for r in loop:
+        sid = r.get("sessionId")
+        first[sid] = min(first.get(sid, r.get("seq", 0)), r.get("seq", 0))
+    return first
+
+
+def server_misses(records: list[dict], per_request: list[dict]) -> list[dict]:
+    """Miss complets côté serveur, avec délai, transport et continuation de chacun."""
+    loop = [r for r in records if r.get("kind") in LOOP_KINDS]
+    first = first_seqs(loop)
+    by_call = {(p["session"], p["seq"]): p for p in per_request}
+    misses = []
+    for r in sorted(loop, key=lambda r: (r.get("sessionId") or "", r.get("seq", 0))):
+        if (r.get("seq") == first.get(r.get("sessionId")) or "invalidation" in r
+                or not prompt_size(r) or r.get("cacheRead") != 0):
+            continue
+        proxy = by_call.get((r.get("sessionId"), r.get("seq")), {})
+        misses.append({"session": r.get("sessionId"), "seq": r.get("seq"), "kind": r.get("kind"),
+                       "prompt": prompt_size(r), "since_prev_ms": r.get("sincePrevMs"),
+                       "transport": proxy.get("transport"),
+                       "continuation": proxy.get("continuation")})
+    return misses
+
+
+def avoidable_cache_rate(records: list[dict], misses: list[dict]) -> float | None:
+    """cacheRead / prompt, hors premier appel de session, invalidations et miss serveur."""
+    loop = [r for r in records if r.get("kind") in LOOP_KINDS]
+    first = first_seqs(loop)
+    missed = {(m["session"], m["seq"]) for m in misses}
+    kept = [r for r in loop if r.get("seq") != first.get(r.get("sessionId"))
+            and "invalidation" not in r and (r.get("sessionId"), r.get("seq")) not in missed]
+    total = sum(prompt_size(r) for r in kept)
+    return sum(r.get("cacheRead") or 0 for r in kept) / total if total else None
 
 
 def price_row(prices: dict, model: str, record: dict) -> tuple[dict | None, str | None]:
@@ -258,3 +303,33 @@ def connect_summary(entries: list[dict]) -> dict:
             "refused": sum(1 for e in connects if not e.get("accepted")),
             "refused_hosts": sorted({str(e.get("host")) for e in connects
                                      if not e.get("accepted")})}
+
+
+def task_run_cache(run_task_dir: Path) -> dict:
+    """Miss serveur et taux de cache d'un run de tâche, relus dans ses journaux."""
+    records = read_ndjson(sorted((run_task_dir / "sessions").glob("*.usage.ndjson")))
+    proxy = run_task_dir / "proxy.ndjson"
+    proxy_log = read_ndjson([proxy]) if proxy.exists() else []
+    misses = server_misses(records, match_transports(records, proxy_log)["per_request"])
+    return {"server_misses": misses, "cache_avoidable_rate": avoidable_cache_rate(records, misses),
+            "cache_session_rate": cache_rates(records)["session_rate"]}
+
+
+def main() -> None:
+    """Recalcule les miss serveur et le taux évitable de chaque run de tâche d'un run."""
+    for run in (Path(a) for a in sys.argv[1:]):
+        print(f"# {run.name}")
+        for task_dir in sorted(run.glob("tasks/*/run-*")):
+            m = task_run_cache(task_dir)
+            rate, session = m["cache_avoidable_rate"], m["cache_session_rate"]
+            print(f"{task_dir.parent.name} {task_dir.name} : {len(m['server_misses'])} miss serveur,"
+                  f" taux évitable {'null' if rate is None else f'{rate:.4f}'},"
+                  f" taux de session {'null' if session is None else f'{session:.4f}'}")
+            for x in m["server_misses"]:
+                print(f"  seq {x['seq']} ({x['kind']}) : prompt {x['prompt']}, depuis l'appel "
+                      f"précédent {x['since_prev_ms']} ms, transport {x['transport']}, "
+                      f"continuation {x['continuation']}")
+
+
+if __name__ == "__main__":
+    main()
