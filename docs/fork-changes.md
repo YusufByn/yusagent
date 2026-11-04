@@ -86,8 +86,8 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-agent/src/agent_loop/response.rs` | modif. (1 ligne) | `on_usage: None` dans le littéral complet des options (`:147`), comme `on_payload`. | T08 (YA-13) |
 | `crates/pa-core/src/session_engine/provider_adapter.rs` | modif. (12 lignes) | `agent_usage_hook_to_ai` (`:84`) et passage du hook de la boucle à `pa_ai` (`:180`), comme `on_response`. | T08 (YA-13) |
 | `crates/pa-ai/src/providers/usage_tests.rs` | modif. (fichier du fork) | Fixtures Responses : écriture avec et sans ventilation, sans écriture, saturation de `input`, hook `on_usage`, coût des écritures au tarif du catalogue. | T08 (YA-13) |
-| `crates/pa-core/src/session_engine/usage_log.rs`, `usage_log/tests.rs` | modif. (fichiers du fork) | `providerUsage` (`:447`), `cacheWrite30m` / `cacheWrite12h` lus dans l'usage brut et `costWarning` si du 12 h apparaît (`:413-431`) ; la sonde branche `on_usage` comme `on_payload` (`:703`, `:840`). Tests ajoutés. | T08 (YA-13) |
-| `bench/tools/capture/server.py`, `usage_check.py`, `README.md` | modif. (fichiers du fork) | Usage Responses et Codex avec `cache_write_tokens` et ventilation 30 min / 12 h ; vérification de `cacheWrite`, de la ventilation, de `costWarning` et de `providerUsage`. | T08 (YA-13) |
+| `crates/pa-core/src/session_engine/usage_log.rs`, `usage_log/tests.rs` | modif. (fichiers du fork) | `providerUsage` sans `attribution` et `undocumentedAttribution` (compteurs agrégés `request_fields`) (`:447-456`, `split_attribution` `:464`), `cacheWrite30m` / `cacheWrite12h` lus dans l'usage brut et `costWarning` si du 12 h apparaît (`:413-431`) ; la sonde branche `on_usage` comme `on_payload`. Tests ajoutés. | T08 (YA-13) |
+| `bench/tools/capture/server.py`, `usage_check.py`, `README.md` | modif. (fichiers du fork) | Usage Responses et Codex avec `cache_write_tokens` et ventilation 30 min / 12 h ; vérification de `cacheWrite`, de la ventilation, de `costWarning`, de `providerUsage` (sans `attribution`) et de `undocumentedAttribution`. | T08 (YA-13) |
 | `bench/smoke/metrics.py`, `run.py`, `README.md` | modif. (fichiers du fork) | `request_cost` et coût des invalidations : `cacheWrite30m` et `cacheWrite12h` tarifés séparément depuis `prices.json` (`cache_write_30m`, `cache_write_12h`), sans ventilation au tarif 30 min comme avant ; notes du rapport mises à jour. | T08 (YA-13) |
 | `docs/usage.md` | modif. | Ligne Responses, `cacheRetention: long` et TTL 12 h, format du journal (`cacheWrite30m`, `cacheWrite12h`, `costWarning`, `providerUsage`). | T08 (YA-13) |
 | `docs/tickets/08-usage-ecriture-cache.md` | modif. | Décision du 04/11/2026 après la CI : ventilation hors de `Usage`. | T08 (YA-13) |
@@ -149,6 +149,19 @@ Compaction : le seuil part de l'usage réel du dernier appel, plus une estimatio
 Symptôme : `the team picker mounted` échoue à `clipboard_auth_commands_e2e.rs:989`. Le rendu ne montre que l'écran d'accueil : le sélecteur d'équipe n'apparaît pas pendant les attentes fixes du plan headless (`WaitMs(400)` après `/login`, `:975-979`). Hypothèse : délai trop court sur un runner chargé (même tentative : le shard 6 est tombé sur « No space left on device »). Le test ne touche à rien de ce que modifient les tickets du fork (login headless sur le provider factice).
 
 Le run `ci.yml` de `main` après le merge de T04 (41707124985, `e76dfc0ad`) a aussi un shard 5 en échec, mais l'annotation dit « No space left on device » et le log n'est plus téléchargeable : cause non attribuable à ce test.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
+## Instabilité probable : `interactive_daemon_e2e` (T08)
+
+`crates/pa-cli/tests/interactive_daemon_e2e.rs`, test `tui_ctrl_s_stashes_and_restores_the_prompt_draft`, shard 4 de `ci.yml`.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 41903362499 | `6eed2da` | 1 | échec du shard 4 (41 réussis, 1 échec) |
+| 41903362499 | `6eed2da` | 2 | réussi, aucun changement de code |
+
+Symptôme : `connect supervisor: Failed to connect to the Prime Agent daemon` avec `Connection refused (os error 111)` à `interactive_daemon_e2e.rs:424`. Le test attend que le fichier du socket existe (`:405-407`) puis se connecte : le socket existe déjà mais le superviseur n'écoute pas encore. Hypothèse : course au démarrage du superviseur. T08 ne touche ni le daemon, ni la TUI, ni ce test.
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 

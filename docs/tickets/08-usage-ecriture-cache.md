@@ -97,3 +97,13 @@ Montrer à Yusuf l'usage brut (`providerUsage`) renvoyé par le backend Codex, a
 - `docs/fork-changes.md` : chaque fichier upstream touché.
 - Rapport du run luna : usage brut de chaque appel, présence ou absence de `cache_write_tokens` et de sa ventilation dans la réponse du backend Codex, coût recalculé.
 - Impact préfixe : aucun attendu, vérifié au banc de capture et signalé dans le résumé.
+
+## Suite du 04/11/2026 (après le run luna)
+
+Décision de Yusuf : `providerUsage` sans `attribution` (objet non documenté du backend Codex, dont la liste par item grossit avec la conversation) ; les compteurs agrégés `attribution.request_fields` (`instructions`, `tools`) gardés à part, sous `undocumentedAttribution`. Résultat du run dans `docs/usage.md` (« OpenAI Responses : rétention et TTL 12 h »).
+
+## Points ouverts
+
+- **Relecture de la fin du journal au redémarrage** : `JournalState::restore` ne relit que les 64 derniers Kio (`RESTORE_TAIL_BYTES`, `crates/pa-core/src/session_engine/usage_log.rs:33`) et saute la première ligne, partielle. Si la dernière ligne complète ne tient pas dans ces 64 Kio, aucune ligne n'est lue : `seq`, `turn` et `sincePrevMs` repartent de zéro après `--continue`. Avec `attribution.items` retiré, une ligne Codex ne grossit plus avec la conversation ; le cas reste possible pour une ligne très longue (usage brut d'un autre provider, par exemple). Non corrigé.
+- **Écriture du cache chez Codex** : `cache_write_tokens` toujours à 0 au run luna ; à recouper sur un run plus long ou un autre modèle avant d'en tirer une règle.
+
