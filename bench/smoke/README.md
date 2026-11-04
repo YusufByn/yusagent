@@ -35,7 +35,7 @@ C'est un appel réel au modèle. Le proxy CONNECT accepte alors tout hôte sur l
 ```bash
 make smoke BINARY=<dossier>/prime-agent PROVIDER=openai-codex MODEL=<id> EFFORT=high [SETTINGS=bench/smoke/settings/<x>.json] [RUNS=1] [TASKS=id1,id2]
 python3 -I bench/smoke/compare.py <run A> <run B> [--baseline bench/smoke/baseline/<modèle>.json] --out <fichier>.md
-python3 -I bench/smoke/baseline.py <run> [<run> ...]   # écrit bench/smoke/baseline/<modèle>.json
+python3 -I bench/smoke/baseline.py <run> [<run> ...] [--exclude <run>:<tâche>[,<tâche>...]]   # écrit bench/smoke/baseline/<modèle>.json
 python3 -I bench/smoke/metrics.py <run> [<run> ...]    # miss serveur et taux évitable, runs déjà faits
 python3 -I bench/smoke/run.py --rereport <run>         # rapport recalculé depuis les journaux du run
 ```
@@ -45,7 +45,8 @@ python3 -I bench/smoke/run.py --rereport <run>         # rapport recalculé depu
 - `EFFORT` : `high` au banc (décision du 04/11/2026), noté dans le rapport.
 - Variantes : fichiers de réglages (`settings/default.json`, `settings/masking-on.json`), jamais des branches.
 - Validation sans modèle : `make smoke BINARY=... CAPTURE=1 [CAPTURE_FAIL=node-example-001] [CAPTURE_SPAWN=1]`. `CAPTURE_SPAWN=1` (`--capture-spawn`) : chaque tâche joue le scénario `spawn` du serveur de capture (un sous-agent), pour vérifier que ses sessions sont ramassées. Options du runner en plus : `--capture-reject-model <id>` (le serveur refuse l'id au run de chauffe), `--capture-no-websocket` (le serveur refuse le WebSocket : repli SSE).
-- Recalcul : `--rereport <run>` relit les journaux d'un run déjà fait (sans binaire ni modèle) et réécrit son rapport ; tests cachés, sortie et durée du binaire restent ceux du run. L'ancien rapport est gardé (`report.initial.*`, `tasks.initial.csv`). Pour un run antérieur à YA-07b, les sessions de sous-agents sont copiées depuis le dossier agent du banc. `prices.json` doit être celui du run (sha256 de l'en-tête).
+- Recalcul : `--rereport <run>` relit les journaux d'un run déjà fait (sans binaire ni modèle) et réécrit son rapport ; tests cachés, sortie et durée du binaire restent ceux du run. L'ancien rapport est gardé (`report.initial.*`, `tasks.initial.csv`). Pour un run antérieur à YA-07b, les sessions de sous-agents sont copiées depuis le dossier agent du banc, et l'empreinte de chaque tâche est recalculée au commit de l'en-tête depuis les fichiers suivis par git, seulement si `commit_dirty` vaut `false` (sinon version inconnue). `prices.json` doit être celui du run (sha256 de l'en-tête).
+- Version des tâches : chaque résultat porte l'empreinte du dossier de sa tâche (`task_version` : `tree_hash` de `task.toml`, `prompt.md`, `hidden/` et `files/`, la clé de préparation), listée dans la section « Version des tâches » du rapport et dans `tasks.csv`. `baseline.py` refuse une tâche dont les runs retenus ont deux versions ou une version inconnue, et n'écrit alors rien ; `--exclude <run>:<tâches>` (répétable, `<run>` = nom du dossier) retire des tâches d'un run, par exemple celles dont l'énoncé a changé depuis. La baseline note l'empreinte de chaque tâche et les runs retenus.
 
 ## Déroulé
 

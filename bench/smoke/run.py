@@ -129,11 +129,37 @@ def sha256(path: Path) -> str:
 
 
 def tree_hash(root: Path) -> str:
+    """Empreinte d'un dossier de tâche (version de la tâche, clé de sa préparation)."""
+    return files_hash((p.relative_to(root), p.read_bytes()) for p in root.rglob("*")
+                      if p.is_file() and "__pycache__" not in p.parts)
+
+
+def files_hash(files) -> str:
     digest = hashlib.sha256()
-    for path in sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
-        digest.update(str(path.relative_to(root)).encode() + b"\0")
-        digest.update(path.read_bytes() + b"\0")
+    for rel, data in sorted(files, key=lambda item: item[0]):
+        digest.update(str(rel).encode() + b"\0")
+        digest.update(data + b"\0")
     return digest.hexdigest()
+
+
+def tree_hash_at(commit: str, root: Path) -> str | None:
+    """`tree_hash` d'un dossier du dépôt tel qu'il était au commit donné (fichiers suivis
+    par git) ; `None` si le commit ou le dossier est introuvable."""
+    rel = root.resolve().relative_to(REPO).as_posix()
+    listed = subprocess.run(["git", "-C", str(REPO), "ls-tree", "-r", "-z", "--name-only",
+                             commit, "--", rel], capture_output=True)
+    names = [n for n in listed.stdout.decode().split("\0") if n]
+    if listed.returncode != 0 or not names:
+        return None
+    files = []
+    for name in names:
+        path = Path(name).relative_to(rel)
+        if "__pycache__" in path.parts:
+            continue
+        shown = subprocess.run(["git", "-C", str(REPO), "show", f"{commit}:{name}"],
+                               capture_output=True, check=True)
+        files.append((path, shown.stdout))
+    return files_hash(files)
 
 
 def utc_stamp() -> str:
@@ -844,14 +870,15 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
         access.stop()
     graded = run_tests(task, workspace, out / "grading", cache, sandboxed=True)
     return task_result(task, index, session["process"], session, graded, model, effort,
-                       prices)
+                       prices, {"tree": tree_hash(task["dir"]), "source": "run"})
 
 
 def task_result(task: dict, index: int, process: dict, session: dict, graded: dict,
-                model: str, effort: str, prices: dict) -> dict:
+                model: str, effort: str, prices: dict, version: dict) -> dict:
     """Mesures d'un run de tâche. Totaux : session principale et sous-agents ; la part
     des sous-agents est donnée à part (`subagents`). Statut et dernier message : session
-    principale seule."""
+    principale seule. `version` : empreinte du dossier de la tâche (`tree_hash`) et sa
+    source (`run`, ou `commit <sha>` pour un run recalculé), `tree` à `None` si inconnue."""
     entries = session["entries"]
     records = session["records"] + session["sub_records"]
     all_entries = entries + session["sub_entries"]
@@ -891,6 +918,7 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
                          " à signaler, pas de remplacement sans accord")
     return {
         "task": task["id"], "run": index, "status": status, "resolved": status == "resolved",
+        "task_version": version,
         "tests": graded["tests"], "agent": process, "final": final,
         "tokens": metrics.token_totals(records), "calls": calls,
         "cache": {**metrics.cache_rates(records),
@@ -1030,7 +1058,7 @@ def write_report(run_dir: Path, report: dict) -> None:
               "cache_continuation_median", "cache_avoidable_rate", "server_misses",
               "ttft_median_ms", "seconds", "websocket", "sse", "loop_on_sse", "connect_refused",
               "cell_errors", "syntax_errors", "truncated", "subagent_sessions", "subagent_calls",
-              "subagent_cost"]
+              "subagent_cost", "task_tree"]
     with (run_dir / "tasks.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -1054,7 +1082,8 @@ def write_report(run_dir: Path, report: dict) -> None:
                 "syntax_errors": r["cells"]["syntax_errors"], "truncated": r["calls"]["truncated"],
                 "subagent_sessions": (r.get("subagents") or {}).get("sessions"),
                 "subagent_calls": (r.get("subagents") or {}).get("calls"),
-                "subagent_cost": (r.get("subagents") or {}).get("cost")})
+                "subagent_cost": (r.get("subagents") or {}).get("cost"),
+                "task_tree": (r.get("task_version") or {}).get("tree")})
     h, t = report["header"], report["totals"]
     sub = t.get("subagents") or {}
     lines = [f"# Smoke bench — {h['model']} — {h['started']}", "",
@@ -1118,6 +1147,14 @@ def write_report(run_dir: Path, report: dict) -> None:
         lines.append(f"| {r['task']} | {r['run']} | {s.get('sessions')} | {s.get('calls')} | "
                      f"{fmt(s.get('cost'))} | {fmt(pct(s.get('cost_share')), 1)} | "
                      f"{fmt(s.get('cache_session_rate'))} | {s.get('server_misses')} |")
+    lines += ["", "## Version des tâches", "",
+              "Empreinte du dossier de la tâche (`task.toml`, `prompt.md`, `hidden/`, fichiers) : "
+              "`baseline.py` refuse de mélanger deux versions d'une tâche.", ""]
+    versions = sorted({(r["task"], (r.get("task_version") or {}).get("tree"),
+                        (r.get("task_version") or {}).get("source")) for r in report["results"]},
+                      key=lambda v: (v[0], v[1] or ""))
+    lines += [f"- {task} : `{tree[:16] if tree else 'inconnue'}` ({source})"
+              for task, tree, source in versions]
     if report["header"]["runs"] > 1:
         lines += ["", "## Variabilité entre runs", "",
                   "| Tâche | Runs | Taux résolu | Bascule | Coût moyen | Écart-type coût |"
@@ -1209,12 +1246,23 @@ def secret_values(cache: Cache, capture: bool) -> list[str]:
 REPORT_FILES = ("report.json", "report.md", "tasks.csv")
 
 
+def commit_version(header: dict, task: dict) -> dict:
+    """Version d'une tâche pour un run sans empreinte : `tree_hash` au commit de l'en-tête,
+    seulement si l'arbre était propre ; sinon inconnue (`baseline.py` refuse la tâche)."""
+    commit = header.get("commit")
+    if not commit or header.get("commit_dirty") is not False:
+        return {"tree": None, "source": f"inconnue (commit {commit}, "
+                                         f"commit_dirty {header.get('commit_dirty')})"}
+    return {"tree": tree_hash_at(commit, task["dir"]), "source": f"commit {commit}"}
+
+
 def rereport(run_dir: Path, cache_root: Path) -> None:
     """Recalcule le rapport d'un run déjà fait depuis ses journaux (sans binaire ni modèle).
 
     Résultat des tests cachés, sortie et durée du binaire restent ceux du run. Les sessions
     de sous-agents absentes du run (runs antérieurs à YA-07b) sont copiées depuis le
-    dossier agent du banc. Le rapport précédent est gardé (`*.initial.*`).
+    dossier agent du banc. Pour un run sans empreinte des tâches, elle est recalculée au
+    commit de l'en-tête (`commit_version`). Le rapport précédent est gardé (`*.initial.*`).
     """
     old = json.loads((run_dir / "report.json").read_text())
     header = old["header"]
@@ -1225,7 +1273,7 @@ def rereport(run_dir: Path, cache_root: Path) -> None:
     prices = json.loads(PRICES.read_text())
     tasks = {t["id"]: t for t in load_tasks(sorted({r["task"] for r in old["results"]}),
                                              capture)}
-    results = []
+    results, versions = [], {}
     for prev in old["results"]:
         out = run_dir / "tasks" / prev["task"] / f"run-{prev['run']}"
         sessions = out / "sessions"
@@ -1242,10 +1290,17 @@ def rereport(run_dir: Path, cache_root: Path) -> None:
         session = {**session_logs(copied), "proxy_log": proxies.read_log(out / "proxy.ndjson"),
                    "connect": proxies.read_log(out / "connect.ndjson")}
         graded = {"tests": prev["tests"], "junit": (out / "grading" / "junit.xml").exists()}
+        version = prev.get("task_version")
+        if version is None:
+            if prev["task"] not in versions:
+                versions[prev["task"]] = commit_version(header, tasks[prev["task"]])
+            version = versions[prev["task"]]
         results.append(task_result(tasks[prev["task"]], prev["run"], prev["agent"], session,
-                                   graded, header["model"], header["effort"], prices))
+                                   graded, header["model"], header["effort"], prices, version))
+        tree = results[-1]["task_version"]["tree"]
         print(f"  {prev['task']} run {prev['run']} : {results[-1]['status']}, "
-              f"{results[-1]['subagents']['sessions']} sous-agent(s)")
+              f"{results[-1]['subagents']['sessions']} sous-agent(s), version "
+              f"{tree[:12] if tree else 'inconnue'} ({results[-1]['task_version']['source']})")
     for name in REPORT_FILES:
         backup = run_dir / name.replace(".", ".initial.", 1)
         if (run_dir / name).exists() and not backup.exists():

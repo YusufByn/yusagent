@@ -2,7 +2,8 @@
 """Baseline du smoke bench (T07, YA-14) : bruit mesuré sur plusieurs runs de `main`.
 
 Usage :
-    python3 -I bench/smoke/baseline.py <run> [<run> ...] [--out bench/smoke/baseline/<modèle>.json]
+    python3 -I bench/smoke/baseline.py <run> [<run> ...] [--exclude <run>:<tâche>[,<tâche>...]]
+        [--out bench/smoke/baseline/<modèle>.json]
 
 Lit les `report.json` des runs donnés (un run à `RUNS=3`, ou plusieurs runs à `RUNS=1`),
 tous du même modèle, effort, réglages, catalogue et tarif, et écrit par tâche : taux de
@@ -10,6 +11,12 @@ résolution, stabilité (résolue à tous les runs), moyenne, écart-type et coe
 variation du coût et des tokens, tours moyens, miss serveur et taux de cache évitable.
 Miss serveur et taux évitable sont relus dans les journaux de chaque run de tâche
 (`metrics.task_run_cache`) : un run fait avant leur ajout au rapport est donc couvert.
+
+Version des tâches : chaque résultat porte l'empreinte du dossier de sa tâche
+(`task_version`, run.py). Une tâche dont les runs ont deux versions, ou une version
+inconnue (run fait avant l'empreinte et non recalculé par `run.py --rereport`, ou arbre
+modifié au moment du run), est refusée : rien n'est écrit. `--exclude <run>:<tâches>`
+retire des tâches d'un run (par exemple celles dont l'énoncé a changé depuis).
 
 `compare.py` lit ce fichier pour ses seuils de bruit. Bibliothèque standard uniquement.
 """
@@ -48,8 +55,43 @@ def spread(values: list[float]) -> dict:
     return {"mean": mean, "stdev": stdev, "cv": cv, "values": values}
 
 
-def build(runs: list[Path]) -> dict:
+def parse_excludes(values: list[str], reports: list[tuple[Path, dict]]) -> dict[str, set[str]]:
+    """`<run>:<tâche>[,<tâche>...]` -> {nom du run: tâches}. Run ou tâche absents : erreur."""
+    excluded: dict[str, set[str]] = {}
+    known = {run.name: {r["task"] for r in report["results"]} for run, report in reports}
+    for value in values:
+        run, sep, tasks = value.rpartition(":")
+        name = Path(run).name
+        if not sep or not run or not tasks:
+            sys.exit(f"--exclude {value} : format attendu <run>:<tâche>[,<tâche>...]")
+        if name not in known:
+            sys.exit(f"--exclude {value} : run {name} absent des runs donnés")
+        ids = {t for t in tasks.split(",") if t}
+        unknown = sorted(ids - known[name])
+        if unknown:
+            sys.exit(f"--exclude {value} : tâches absentes du run {name} : {', '.join(unknown)}")
+        excluded.setdefault(name, set()).update(ids)
+    return excluded
+
+
+def task_versions(task: str, items: list[tuple[Path, dict]]) -> tuple[str | None, str | None]:
+    """(empreinte commune, motif de refus) des runs retenus d'une tâche."""
+    trees = {run.name: (r.get("task_version") or {}).get("tree") for run, r in items}
+    unknown = sorted(name for name, tree in trees.items() if tree is None)
+    if unknown:
+        return None, f"version inconnue dans {', '.join(unknown)}"
+    if len(set(trees.values())) > 1:
+        detail = ", ".join(f"{name} {tree[:12]}" for name, tree in sorted(trees.items()))
+        return None, f"versions mélangées : {detail}"
+    return next(iter(trees.values())), None
+
+
+def build(runs: list[Path], exclude: list[str] | None = None) -> dict:
+    names = [run.name for run in runs]
+    if len(set(names)) != len(names):
+        sys.exit("deux runs portent le même nom : --exclude serait ambigu")
     reports = [(run, json.loads((run / "report.json").read_text())) for run in runs]
+    excluded = parse_excludes(exclude or [], reports)
     first = reports[0][1]["header"]
     for run, report in reports[1:]:
         diff = [k for k in SAME if report["header"].get(k) != first.get(k)]
@@ -60,7 +102,13 @@ def build(runs: list[Path]) -> dict:
     tasks: dict[str, list[tuple[Path, dict]]] = {}
     for run, report in reports:
         for result in report["results"]:
-            tasks.setdefault(result["task"], []).append((run, result))
+            if result["task"] not in excluded.get(run.name, set()):
+                tasks.setdefault(result["task"], []).append((run, result))
+    versions = {task: task_versions(task, items) for task, items in tasks.items()}
+    refused = {task: reason for task, (_, reason) in versions.items() if reason}
+    if refused:
+        sys.exit("tâches refusées, aucune baseline écrite :\n" + "\n".join(
+            f"- {task} : {reason}" for task, reason in sorted(refused.items())))
     per_task = {}
     for task, items in sorted(tasks.items()):
         results = [r for _, r in items]
@@ -71,7 +119,9 @@ def build(runs: list[Path]) -> dict:
         avoidable = [c["cache_avoidable_rate"] for c in caches
                      if c["cache_avoidable_rate"] is not None]
         per_task[task] = {
+            "task_tree": versions[task][0],
             "runs": len(results),
+            "from_runs": [f"{run.name}/run-{r['run']}" for run, r in items],
             "resolved_rate": sum(resolved) / len(resolved),
             "stable": len(resolved) >= MIN_RUNS and all(resolved),
             "cost": spread(costs) if len(costs) == len(results) else None,
@@ -87,7 +137,9 @@ def build(runs: list[Path]) -> dict:
         print(f"attention : moins de {MIN_RUNS} runs pour {', '.join(short)}", file=sys.stderr)
     return {
         "written": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "command": "python3 -I bench/smoke/baseline.py " + " ".join(str(r) for r in runs),
+        "command": "python3 -I bench/smoke/baseline.py " + " ".join(
+            [str(r) for r in runs] + [f"--exclude {e}" for e in exclude or []]),
+        "excluded": {name: sorted(ids) for name, ids in sorted(excluded.items())},
         "runs": [{"run": run.name, "commit": r["header"].get("commit"),
                   "binary_sha256": r["header"].get("binary_sha256"),
                   "runs_per_task": r["header"].get("runs")} for run, r in reports],
@@ -99,9 +151,12 @@ def build(runs: list[Path]) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("runs", nargs="+", type=Path)
+    parser.add_argument("--exclude", action="append", default=[],
+                        metavar="RUN:TÂCHE[,TÂCHE...]",
+                        help="retire ces tâches de ce run (répétable)")
     parser.add_argument("--out", type=Path, help="défaut : bench/smoke/baseline/<modèle>.json")
     args = parser.parse_args()
-    baseline = build(args.runs)
+    baseline = build(args.runs, args.exclude)
     out = args.out or HERE / "baseline" / f"{baseline['header']['model']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(baseline, indent=2, ensure_ascii=False) + "\n")
