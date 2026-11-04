@@ -1,0 +1,21 @@
+{
+  "note": "Fiches des modèles du banc absents de models.bundled.json, déclarées par le runner dans le models.json du dossier agent (provider intégré : ni baseUrl ni apiKey requis, crates/pa-core/src/models/custom.rs:207 ; api reprise du provider, custom.rs:410-420). Champs relevés sur la doc officielle ; `_source` est retiré avant l'écriture. thinkingLevelMap : null = niveau non pris en charge (crates/pa-ai/src/types.rs:130). `off` n'est pas déclaré : la doc nomme `none`, sans équivalence vérifiée côté harness ; le banc n'utilise que `high`.",
+  "models": [
+    {
+      "id": "gpt-6.1-terra",
+      "name": "GPT-6.1 Terra",
+      "reasoning": true,
+      "input": ["text", "image"],
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
+      "thinkingLevelMap": {"minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max"},
+      "cost": {"input": 1.00, "output": 5.00, "cacheRead": 0.05, "cacheWrite": 1.25},
+      "_source": {
+        "url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+        "retrieved": "2026-11-04",
+        "fields": "contextWindow (1 050 000, dont 922 000 en entrée), maxTokens (128 000), niveaux d'effort (none, low, medium, high, xhigh, max), entrées texte et image, tarif Standard par million (entrée 1, entrée en cache 0,05, écriture cache 30 min 1,25, sortie 5)",
+        "caveat": "Valeurs de l'API. La fenêtre de la surface Codex n'est pas donnée sur la page de Terra ; la page de GPT-6.1 Sol donne 500K par défaut pour Codex, et models.bundled.json déclare 272 000 pour les modèles Codex voisins."
+      }
+    }
+  ]
+}
