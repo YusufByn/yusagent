@@ -236,6 +236,14 @@ impl Inner {
                 }
             }
         }
+        // yusAgent (T05, YA-05): the masking guard needs failed `bash()` results.
+        if let Some(code) = data
+            .get(crate::kernel::shared::BASH_EXIT_DISPLAY_MIME)
+            .and_then(|payload| payload.get("exitCode"))
+            .and_then(Value::as_i64)
+        {
+            buffers.bash_failed_exit = Some(code);
+        }
     }
 
     /// Unattributed stream text: attached to the active cell's background

@@ -49,6 +49,9 @@ _COMPLETION_NOTICE_COMMAND_CAP = 1000
 # Display MIME the host aggregates into a per-cell summary of the bash()
 # commands the cell ran (first capped command, count, line total).
 _BASH_COMMAND_MIME = "application/vnd.prime-agent.bash-command+json"
+# yusAgent (T05, YA-05): a cell read a bash() result with a non-zero exit code; the
+# host's masking guard keeps the last failed output in the model context.
+_BASH_EXIT_MIME = "application/vnd.prime-agent.bash-exit+json"
 _ASYNCIO_WRAPPER_CALLBACKS = {
     ("asyncio.tasks", "gather.<locals>._done_callback"),
     ("asyncio.tasks", "shield.<locals>._inner_done_callback"),
@@ -171,6 +174,16 @@ def _consume_notice_task(task: asyncio.Task[None]) -> None:
     """Retrieve detached notifier failures so they never become loop warnings."""
     if not task.cancelled():
         task.exception()
+
+
+def _emit_failed_exit(result: "BashResult | None") -> None:
+    """yusAgent (T05, YA-05): tag the reading cell when the result failed."""
+    if result is None or result.exit_code == 0:
+        return
+    from . import repl
+
+    if repl.is_active():
+        repl.emit({_BASH_EXIT_MIME: {"exitCode": result.exit_code}})
 
 
 def _capped(command: str) -> str:
@@ -809,6 +822,7 @@ class BashHandle:
             notice, self._consumed_notice = self._consumed_notice, None
         if notice is not None:
             notice()
+        _emit_failed_exit(self._result)
 
     def _schedule_background_completion_notice(self) -> None:
         cell_finished = self._creating_cell_finished

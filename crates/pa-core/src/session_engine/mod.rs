@@ -28,6 +28,8 @@ pub mod host_requests;
 pub mod image_model_routing;
 pub mod ipython_state;
 pub mod late_sent_messages;
+// yusAgent (T05, YA-05): masking of old `python_repl` outputs.
+pub mod masking;
 pub mod messages;
 pub mod provider_adapter;
 pub mod provider_failover;

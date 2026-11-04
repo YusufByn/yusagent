@@ -63,6 +63,12 @@ CASES = [
     ("refine-anthropic", "anthropic-messages", "long",
      ["--inflate-from-turn", "1", "--inflate-tokens", "199000"], "agent-f", [PROMPT, PROMPT_2],
      {"harnessRefinements": True, "autoRefine": {"enabled": True, "compact": True}}),
+    # T05 (YA-05) : 25 tours d'environ 5 000 caractères, erreur au tour 12, cache simulé
+    # sur le préfixe réel. Sans masquage (défaut), puis avec `masking.enabled`.
+    ("mask-off-anthropic", "anthropic-messages", "mask", ["--prefix-cache"], "agent-o",
+     [PROMPT], None),
+    ("mask-on-anthropic", "anthropic-messages", "mask", ["--prefix-cache"], "agent-n",
+     [PROMPT], {"masking": {"enabled": True}}),
 ]
 
 # Variables factices : le tour 2 du scénario vérifie si le kernel voit des
@@ -524,6 +530,12 @@ def main() -> None:
     # T04 (YA-13) : journal d'usage et usage enregistré confrontés à l'usage renvoyé.
     subprocess.run([sys.executable, "-I", str(HERE / "usage_check.py"), str(out)], check=True)
     print(f"usage : {out / 'usage-report.md'}")
+    # T05 (YA-05) : paliers de masquage, tokens envoyés et invalidations journalisées.
+    subprocess.run(["/usr/bin/sandbox-exec", "-f", str(SANDBOX),
+                    str(cache / "analysis-venv" / "bin" / "python"), "-I",
+                    str(HERE / "masking_check.py"), str(out)],
+                   check=True, env=analysis_env, cwd=cache)
+    print(f"masquage : {out / 'masking-report.md'}")
 
 
 if __name__ == "__main__":

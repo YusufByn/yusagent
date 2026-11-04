@@ -36,6 +36,7 @@ fn record(kind: CallKind, started_at: SystemTime, user_timestamp: Option<i64>) -
         },
         history_reasoning: None,
         user_timestamp,
+        invalidation: None,
     }
 }
 
@@ -103,6 +104,7 @@ fn unreported_fields_are_absent_never_zero() {
         "cacheWrite1h",
         "historyReasoning",
         "purpose",
+        "invalidation",
     ] {
         assert!(entry.get(field).is_none(), "{field} must be absent");
     }
@@ -408,4 +410,39 @@ fn a_registered_journal_is_found_by_session_id() {
     assert!(lookup("usage-log-registry-test").is_some_and(|found| Arc::ptr_eq(&found, &journal)));
     drop(journal);
     assert!(lookup("usage-log-registry-test").is_none());
+}
+
+// yusAgent (T05, YA-05): the masking transform notes an invalidation; the next agent-loop
+// call carries it, once, and a side call never takes it.
+#[tokio::test]
+async fn a_noted_invalidation_rides_the_next_main_call_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = Arc::new(journal(dir.path(), None));
+    let run = |kind: CallKind| {
+        let stream_fn = instrument_stream_fn(
+            Some(Arc::clone(&journal)),
+            kind,
+            scripted(json!({}), pa_agent::types::Usage::zero()),
+        );
+        async move {
+            let mut stream = stream_fn(
+                agent_model(),
+                LlmContext::default(),
+                StreamRequestOptions::default(),
+            )
+            .await
+            .unwrap();
+            while stream.next_event().await.is_some() {}
+        }
+    };
+    let noted = json!({"cause": "masking", "turn": 16, "frontier": 5, "masked": 5});
+    journal.note_invalidation(noted.clone());
+    run(CallKind::Other("side_question")).await;
+    run(CallKind::Main).await;
+    run(CallKind::Main).await;
+    let entries = lines(journal.path());
+    assert_eq!(entries.len(), 3);
+    assert!(entries[0].get("invalidation").is_none());
+    assert_eq!(entries[1]["invalidation"], noted);
+    assert!(entries[2].get("invalidation").is_none());
 }
