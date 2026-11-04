@@ -36,7 +36,8 @@ Isolation (`--isolation`) du code des dépôts tiers (installation, build, tests
     (`UV_NO_BUILD=1`).
   - `netns` (Linux, runner CI jetable : le runner est le sandbox, pas de
     `sandbox-exec`) : réseau coupé par `sudo unshare --net` (espace réseau vide,
-    loopback seul), puis retour à l'utilisateur du runner par `setpriv`.
+    loopback seul), mémoire bornée par `systemd-run --scope -p MemoryMax=` (`--mem-gb`),
+    puis retour à l'utilisateur du runner par `setpriv`.
 `HOME` des commandes tierces : `<cache>/home`. Variables de jetons retirées.
 
 Rien n'est cloné ni installé dans le dépôt yusAgent (cache `--cache`, par défaut
@@ -317,8 +318,8 @@ def discover(args: argparse.Namespace) -> None:
 class Isolation:
     """Enveloppe des commandes tierces selon `--isolation`."""
 
-    def __init__(self, mode: str, cache: Path):
-        self.mode, self.cache = mode, cache.resolve()
+    def __init__(self, mode: str, cache: Path, mem_gb: float = 3):
+        self.mode, self.cache, self.mem_gb = mode, cache.resolve(), mem_gb
         self.proxy_env: dict[str, str] = {}
         self.proxy = None
         if mode == "sandbox-exec":
@@ -344,12 +345,15 @@ class Isolation:
                     "-D", f"NODE_HOME={self.node_home}", *cmd], env
         if network:
             return cmd, env
-        # netns : espace réseau neuf (loopback seul), puis retour à l'utilisateur courant.
+        # netns : espace réseau neuf (loopback seul), mémoire bornée (scope systemd : un
+        # dépôt qui épuise la mémoire est tué seul, pas le runner), puis retour à
+        # l'utilisateur courant.
         inner = ('ip link set lo up && exec setpriv --reuid="$MINE_UID" --regid="$MINE_GID" '
                  '--init-groups -- "$@"')
         env = {**env, "MINE_UID": str(os.getuid()), "MINE_GID": str(os.getgid())}
         return ["sudo", "-E", "env", f"PATH={env['PATH']}", f"HOME={env['HOME']}",
-                "unshare", "--net", "--", "/bin/sh", "-c", inner, "mine-netns", *cmd], env
+                "systemd-run", "--scope", "--quiet", "-p", f"MemoryMax={self.mem_gb}G",
+                "-p", "MemorySwapMax=0", "unshare", "--net", "--", "/bin/sh", "-c", inner, "mine-netns", *cmd], env
 
 
 ISO: Isolation | None = None
@@ -414,18 +418,22 @@ def probe_network(cache: Path, env: dict) -> dict:
     """Une requête sortante doit échouer réseau coupé et réussir à l'installation."""
     url = "https://pypi.org/simple/pip/"
     curl = ["curl", "-sS", "-m", "15", "-o", "/dev/null", "-w", "%{http_code}", url]
+    # L'enveloppe doit marcher (sinon curl « échoue » sans que le réseau soit coupé) et
+    # curl doit échouer sur la résolution (6) ou la connexion (7).
+    wrap_ok = sh(["true"], cache, 60, env, network=False)["exit"] == 0
     cut = sh(curl, cache, 60, env, network=False)
     open_ = sh(curl, cache, 60, env, network=True)
-    probe = {"url": url, "isolation": ISO.mode, "cut_exit": cut["exit"],
+    probe = {"url": url, "isolation": ISO.mode, "wrapper_ok": wrap_ok, "cut_exit": cut["exit"],
              "cut_output": cut["tail"].strip()[-200:], "install_exit": open_["exit"],
              "install_output": open_["tail"].strip()[-200:],
-             "network_cut": cut["exit"] not in (0, None)}
+             "network_cut": wrap_ok and cut["exit"] in (6, 7) and "curl: (" in cut["tail"]}
     log(f"sonde réseau coupé ({ISO.mode}) : curl {url} -> exit {cut['exit']} "
         f"« {probe['cut_output']} » (échec attendu)")
     log(f"sonde réseau d'installation : curl {url} -> exit {open_['exit']} "
         f"« {probe['install_output']} »")
     if not probe["network_cut"]:
-        sys.exit("sonde : la requête sortante a réussi réseau coupé, arrêt")
+        sys.exit(f"sonde : coupure réseau non prouvée (enveloppe {wrap_ok}, curl exit "
+                 f"{cut['exit']}), arrêt")
     return probe
 
 
@@ -719,7 +727,7 @@ def validate(args: argparse.Namespace) -> None:
         sys.exit("sandbox-exec indisponible : --isolation netns hors macOS")
     if args.isolation == "netns" and PLATFORM != "linux":
         sys.exit("--isolation netns : Linux seulement")
-    ISO = Isolation(args.isolation, cache)
+    ISO = Isolation(args.isolation, cache, args.mem_gb)
     env = base_env(cache, uv_no_build=args.uv_no_build)
     probe = probe_network(cache, env)
 
@@ -874,6 +882,8 @@ def main() -> None:
     v.add_argument("--deadline-min", type=float, default=0,
                    help="plus de nouveau candidat après N minutes")
     v.add_argument("--suite-timeout", type=int, default=120)
+    v.add_argument("--mem-gb", type=float, default=3,
+                   help="netns : mémoire max par commande réseau coupé (Go)")
     c = sub.add_parser("csv")
     c.add_argument("--validated", nargs="*", default=[])
     c.add_argument("--out", default=str(OUT_CSV))

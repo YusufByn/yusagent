@@ -6,10 +6,13 @@
 #   dépôts tiers (installation, tests) ne voit aucun jeton.
 # - Isolation : le runner jetable tient lieu de sandbox (pas de sandbox-exec). Les tests
 #   tournent réseau coupé : `mine.py --isolation netns` les lance dans un espace réseau
-#   neuf (`sudo unshare --net`, loopback seul) puis rend la main à l'utilisateur du
-#   runner (`setpriv`). Chaque shard commence par une sonde : un `curl` sortant doit
-#   échouer sous cette coupure, sinon le shard s'arrête ; le résultat est dans le log
-#   et dans le résumé.
+#   neuf (`sudo unshare --net`, loopback seul), mémoire bornée à 3 Go par commande
+#   (`systemd-run --scope`), puis rend la main à l'utilisateur du runner (`setpriv`).
+#   La borne mémoire vise l'arrêt du runner vu deux fois au run du 04/11 pendant les
+#   tests de nodeca/pako#316 (cause supposée : mémoire, non prouvée).
+# - Chaque shard commence par une sonde : sous la même enveloppe, `true` doit réussir
+#   et un `curl` sortant doit échouer sur la résolution ou la connexion, sinon le
+#   shard s'arrête ; le résultat est dans le log et dans le résumé.
 # - Par candidat : 1 run rouge, 3 runs verts, suite complète (durée).
 # - workflow_dispatch n'est utilisable qu'une fois le fichier sur la branche par
 #   défaut : d'ici là, déclenchement par push sur ya-07 limité à bench/smoke/tools/.
@@ -23,6 +26,7 @@ on:
     paths:
       - ".github/workflows/ya-mine-validate.yml"
       - "bench/smoke/tools/**"
+      - "!bench/smoke/tools/candidates.csv"
 
 permissions:
   contents: read
