@@ -1,0 +1,7 @@
+# Hôtes autorisés au proxy CONNECT du minage sur macOS (installation seulement, port 443).
+pypi.org                              # index PyPI (uv)
+files.pythonhosted.org                # fichiers PyPI
+registry.npmjs.org                    # registre npm
+github.com                            # Pythons gérés par uv (python-build-standalone)
+objects.githubusercontent.com         # redirection des téléchargements GitHub
+release-assets.githubusercontent.com  # redirection des téléchargements GitHub
