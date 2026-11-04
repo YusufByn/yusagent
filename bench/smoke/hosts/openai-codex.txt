@@ -1,0 +1,2 @@
+# Établi par --record-hosts le 2026-11-04T10:37:11.399379+00:00
+# binaire b8e92ec54f3b73077418d0fd84ba81efe04c3ef349e65485aaef2da182f2f626, modèle gpt-6-luna, run 20261104T103708Z-4718c9f-gpt-6-luna
