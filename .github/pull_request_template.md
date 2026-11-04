@@ -29,3 +29,5 @@ https://github.com/PrimeIntellect-ai/prime-agent/discussions
 <!-- Windows-touching PRs: make windows-cross (zero warnings) -->
 
 ## Test/e2e evidence
+
+- [ ] Smoke bench lancé sur ce commit (lien ou chemin du rapport) :

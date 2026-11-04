@@ -3,7 +3,11 @@
 
 Formats servis (streaming SSE, ou JSON si `stream` est faux) :
   POST .../messages   Anthropic Messages
-  POST .../responses  OpenAI Responses
+  POST .../responses  OpenAI Responses (et Codex, `.../codex/responses`)
+  GET  .../responses  WebSocket Codex (T06, YA-14) : une trame texte `response.create`
+                      par requête, les événements Responses en trames texte. Avec
+                      `previous_response_id`, l'entrée reçue est le delta : la requête
+                      est reconstruite depuis la précédente de la même connexion.
 
 Chaque requête est écrite telle que reçue (octets bruts) dans `<out>/NNNN.body.json`,
 avec ses métadonnées dans `<out>/NNNN.meta.json` (horodatage, chemin, en-têtes sans
@@ -28,8 +32,11 @@ Bibliothèque standard uniquement.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import re
+import struct
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -94,6 +101,41 @@ def strings(value) -> list[str]:
     return []
 
 
+# Sonde réseau du smoke bench (T06, YA-14) : noms des variables de proxy vues par le
+# kernel et par `bash()` (jamais leurs valeurs), `curl` direct (doit échouer : réseau
+# coupé), puis `curl` par le proxy CONNECT du banc (doit être refusé et journalisé :
+# example.com n'est pas dans la liste). Le port du proxy est fixé au lancement
+# (`--connect-proxy-port`), le kernel ne voit pas HTTPS_PROXY.
+CONNECT_PROXY_PORT = "<connect-proxy-port>"
+NET_PROBE = (
+    "import os\n"
+    "print('SMOKE_KERNEL_PROXY_VARS', sorted(n for n in os.environ if 'PROXY' in n.upper()))\n"
+    "r = await bash('env')\n"
+    "print('SMOKE_BASH_PROXY_VARS', sorted(line.split('=', 1)[0] for line in r.output.splitlines()"
+    " if '=' in line and 'PROXY' in line.split('=', 1)[0].upper()))\n"
+    "r = await bash('curl -sS -m 5 -o /dev/null https://example.com')\n"
+    "print('SMOKE_CURL_DIRECT', r.exit_code)\n"
+    f"r = await bash('curl -sS -m 5 -o /dev/null -x http://127.0.0.1:{CONNECT_PROXY_PORT}"
+    " https://example.com')\n"
+    "print('SMOKE_CURL_PROXY', r.exit_code)"
+)
+
+# Sonde d'isolation (T06) : tente de lire, par chemin absolu, des fichiers hors du
+# workspace (tests cachés, copie pristine), en Python et par `bash()`. Chemins fixés au
+# lancement (`--read-probe-path`), une ligne par chemin et par voie, jamais le contenu.
+READ_PROBE_PATHS = "<read-probe-paths>"
+READ_PROBE = (
+    "import os, shlex\n"
+    f"for p in {READ_PROBE_PATHS}:\n"
+    "    try:\n"
+    "        os.listdir(p) if os.path.isdir(p) else open(p, 'rb').read(1)\n"
+    "        print('SMOKE_READ_PY', p, 'ok')\n"
+    "    except Exception as e:\n"
+    "        print('SMOKE_READ_PY', p, type(e).__name__)\n"
+    "    r = await bash(('ls ' if os.path.isdir(p) else 'cat ') + shlex.quote(p) + ' > /dev/null')\n"
+    "    print('SMOKE_READ_BASH', p, 'ok' if r.exit_code == 0 else f'exit={r.exit_code}')"
+)
+
 SCENARIOS: dict[str, list[str]] = {
     "basic": [
         "print(1)",
@@ -140,6 +182,30 @@ SCENARIOS: dict[str, list[str]] = {
         "print('COLLECT', r[0].status, r[0].settled, r[0].answer_text)",
     ],
     "mask": [mask_cell(turn) for turn in range(1, MASK_TURNS + 1)],
+    # Smoke bench (T06, YA-14) : chaque scénario résout sa tâche d'exemple en
+    # quelques cellules, après la sonde réseau ; `smoke-fail` ne corrige rien.
+    "smoke-probe": [NET_PROBE, READ_PROBE],
+    "smoke-warmup": [],
+    # Préparation du venv du kernel, hors sandbox : aucune sortie réseau dans la cellule.
+    "smoke-kernel": ["print('SMOKE_KERNEL_READY', 1)"],
+    "smoke-py-example-001": [
+        "print(open('textstats/__init__.py').read())",
+        NET_PROBE,
+        "import pathlib\np = pathlib.Path('textstats/__init__.py')\n"
+        "p.write_text(p.read_text().replace(\"text.split(' ')\", 'text.split()'))\n"
+        "print('SMOKE_EDIT', 'text.split()' in p.read_text())",
+        READ_PROBE,
+    ],
+    "smoke-node-example-001": [
+        "print(open('src/slug.js').read())",
+        NET_PROBE,
+        "import pathlib\np = pathlib.Path('src/slug.js')\n"
+        "p.write_text(p.read_text().replace(\"/[^a-z0-9]/g, '-')\","
+        " \"/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')\"))\n"
+        "print('SMOKE_EDIT', '+/g' in p.read_text())",
+        READ_PROBE,
+    ],
+    "smoke-fail": ["print('SMOKE_NOOP')", NET_PROBE, READ_PROBE],
 }
 CHILD_MARKER = "YA_CHILD_TASK"
 # L'enfant relève aussi ce que voit son propre kernel (YA-02).
@@ -197,6 +263,79 @@ def sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
 
+def sse_data(event: bytes) -> str:
+    """JSON d'un événement SSE (ligne `data:`), envoyé tel quel en trame WebSocket."""
+    return event.decode().split("\ndata: ", 1)[1].rstrip("\n")
+
+
+def model_not_found(model: str) -> dict:
+    """Erreur renvoyée pour un modèle refusé (`--reject-model`) : id faux simulé."""
+    return {"error": {"type": "invalid_request_error", "code": "model_not_found",
+                      "message": f"The requested model '{model}' does not exist."}}
+
+
+# WebSocket (RFC 6455), le strict nécessaire pour le client Codex du harness : trames
+# texte, fragmentation, ping et fermeture. Les trames du client sont masquées.
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def ws_read_frame(rfile) -> tuple[bool, int, bytes] | None:
+    head = rfile.read(2)
+    if len(head) < 2:
+        return None
+    fin, opcode = bool(head[0] & 0x80), head[0] & 0x0F
+    masked, length = bool(head[1] & 0x80), head[1] & 0x7F
+    if length == 126:
+        length = struct.unpack(">H", rfile.read(2))[0]
+    elif length == 127:
+        length = struct.unpack(">Q", rfile.read(8))[0]
+    mask = rfile.read(4) if masked else b""
+    payload = rfile.read(length)
+    if masked:
+        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    return fin, opcode, payload
+
+
+def ws_send(wfile, opcode: int, payload: bytes) -> None:
+    length = len(payload)
+    if length < 126:
+        head = struct.pack(">BB", 0x80 | opcode, length)
+    elif length < 1 << 16:
+        head = struct.pack(">BBH", 0x80 | opcode, 126, length)
+    else:
+        head = struct.pack(">BBQ", 0x80 | opcode, 127, length)
+    wfile.write(head + payload)
+    wfile.flush()
+
+
+def ws_send_text(wfile, text: str) -> None:
+    ws_send(wfile, 0x1, text.encode())
+
+
+def ws_read_message(rfile, wfile) -> bytes | None:
+    """Prochain message texte ou binaire complet ; None à la fermeture."""
+    parts: list[bytes] = []
+    while True:
+        frame = ws_read_frame(rfile)
+        if frame is None:
+            return None
+        fin, opcode, payload = frame
+        if opcode == 0x8:
+            try:
+                ws_send(wfile, 0x8, payload[:2])
+            except OSError:
+                pass
+            return None
+        if opcode == 0x9:
+            ws_send(wfile, 0xA, payload)
+            continue
+        if opcode == 0xA:
+            continue
+        parts.append(payload)
+        if fin:
+            return b"".join(parts)
+
+
 class Plan:
     """Réponse à renvoyer : un tool call (code) ou un texte."""
 
@@ -214,11 +353,17 @@ class Plan:
 
 class CaptureState:
     def __init__(self, out_dir: Path, scenario: str, inflate_from_turn: int | None,
-                 inflate_tokens: int, usage_split: bool = False, prefix_cache: bool = False):
+                 inflate_tokens: int, usage_split: bool = False, prefix_cache: bool = False,
+                 connect_proxy_port: int | None = None, reject_models: tuple[str, ...] = (),
+                 read_probe_paths: tuple[str, ...] = ()):
         self.out_dir = out_dir
         self.usage = UsageModel(prefix_cache)
         self.usage_split = usage_split
-        self.cells = SCENARIOS[scenario]
+        self.cells = [cell.replace(CONNECT_PROXY_PORT, str(connect_proxy_port or 9))
+                      .replace(READ_PROBE_PATHS, repr(list(read_probe_paths)))
+                      for cell in SCENARIOS[scenario]]
+        self.reject_models = set(reject_models)
+        self.no_websocket = False
         self.inflate_from_turn = inflate_from_turn
         self.inflate_tokens = inflate_tokens
         self.lock = threading.Lock()
@@ -505,7 +650,11 @@ def make_handler(state: CaptureState):
             pass
 
         def do_GET(self) -> None:
-            if self.path.rstrip("/").endswith("/health"):
+            path = self.path.split("?", 1)[0].rstrip("/")
+            if (self.headers.get("Upgrade", "").lower() == "websocket"
+                    and path.endswith("/responses") and not state.no_websocket):
+                self.serve_websocket()
+            elif self.path.rstrip("/").endswith("/health"):
                 self.reply_json(200, {"ok": True})
             else:
                 self.reply_json(404, {"error": {"type": "not_found", "message": self.path}})
@@ -529,6 +678,7 @@ def make_handler(state: CaptureState):
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "path": self.path,
                 "api": api,
+                "transport": "http",
                 "headers": {k: ("<redacted>" if k.lower() in REDACTED_HEADERS else v)
                             for k, v in self.headers.items()},
                 "bytes": len(raw),
@@ -538,6 +688,11 @@ def make_handler(state: CaptureState):
                 meta["response"] = {"kind": "error"}
                 self.write_meta(seq, meta)
                 self.reply_json(404, {"error": {"type": "not_found", "message": self.path}})
+                return
+            if body.get("model") in state.reject_models:
+                meta["response"] = {"kind": "model_not_found"}
+                self.write_meta(seq, meta)
+                self.reply_json(400, model_not_found(body["model"]))
                 return
             if api == "anthropic-messages":
                 turn = count_tool_results_anthropic(body)
@@ -573,6 +728,69 @@ def make_handler(state: CaptureState):
             self.end_headers()
             self.wfile.write(payload)
 
+        def serve_websocket(self) -> None:
+            """WebSocket Codex : une requête par trame `response.create` (T06, YA-14)."""
+            key = self.headers.get("Sec-WebSocket-Key", "")
+            accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+            self.send_response(101, "Switching Protocols")
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", accept)
+            self.end_headers()
+            self.wfile.flush()
+            self.close_connection = True
+            # Dernière requête complète de la connexion, et sortie renvoyée : la base
+            # d'une continuation (`previous_response_id`).
+            last = {"id": None, "input": [], "output": []}
+            while True:
+                raw = ws_read_message(self.rfile, self.wfile)
+                if raw is None:
+                    return
+                seq = state.next_seq()
+                (state.out_dir / f"{seq:04d}.body.json").write_bytes(raw)
+                body = json.loads(raw)
+                body.pop("type", None)
+                previous = body.pop("previous_response_id", None)
+                meta = {"seq": seq, "ts": datetime.now(timezone.utc).isoformat(),
+                        "path": self.path, "api": "openai-responses", "transport": "websocket",
+                        "continuation": previous is not None,
+                        "headers": {k: ("<redacted>" if k.lower() in REDACTED_HEADERS else v)
+                                    for k, v in self.headers.items()},
+                        "bytes": len(raw)}
+                if previous is not None:
+                    if previous != last["id"]:
+                        meta["response"] = {"kind": "unknown_previous_response"}
+                        self.write_meta(seq, meta)
+                        ws_send_text(self.wfile, json.dumps({
+                            "type": "error", "status": 400,
+                            "error": {"type": "invalid_request_error",
+                                      "code": "previous_response_not_found",
+                                      "message": f"Previous response {previous} not found."}}))
+                        continue
+                    body["input"] = last["input"] + last["output"] + list(body.get("input") or [])
+                if body.get("model") in state.reject_models:
+                    meta["response"] = {"kind": "model_not_found"}
+                    self.write_meta(seq, meta)
+                    ws_send_text(self.wfile, json.dumps(dict(model_not_found(body["model"]),
+                                                             type="error", status=400)))
+                    continue
+                turn = count_tool_results_responses(body)
+                child = CHILD_MARKER in first_user_text(body)
+                plan = state.plan(body.get("tools"), turn, child, body)
+                full = json.dumps(body).encode()
+                input_tokens = state.input_tokens(len(full), turn)
+                split = state.usage.split(body, input_tokens)
+                model = body.get("model", "capture-model")
+                events = responses_events(plan, model, seq, split)
+                meta.update({"turn": turn, "child": child, "response": plan.describe(),
+                             "reported_input_tokens": input_tokens,
+                             "reported_usage": {"response.completed": responses_usage(split)}})
+                self.write_meta(seq, meta)
+                for event in events:
+                    ws_send_text(self.wfile, sse_data(event))
+                last.update(id=f"resp_cap_{seq}", input=list(body.get("input") or []),
+                            output=[responses_item(plan, seq, done=True)])
+
         def write_meta(self, seq: int, meta: dict) -> None:
             (state.out_dir / f"{seq:04d}.meta.json").write_text(
                 json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
@@ -602,10 +820,20 @@ def main() -> None:
                         help="Anthropic : message_delta ne porte que output_tokens (T04)")
     parser.add_argument("--prefix-cache", action="store_true",
                         help="lecture du cache = préfixe commun avec la requête précédente (T05)")
+    parser.add_argument("--connect-proxy-port", type=int, default=None,
+                        help="port du proxy CONNECT du smoke bench, pour la sonde réseau (T06)")
+    parser.add_argument("--reject-model", action="append", default=[],
+                        help="répond « modèle inconnu » pour cet id (T06, id faux simulé)")
+    parser.add_argument("--read-probe-path", action="append", default=[],
+                        help="chemin hors workspace que la sonde d'isolation tente de lire (T06)")
+    parser.add_argument("--no-websocket", action="store_true",
+                        help="refuse l'upgrade WebSocket (404) : force le repli SSE (T06)")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     state = CaptureState(args.out, args.scenario, args.inflate_from_turn, args.inflate_tokens,
-                         args.usage_split, args.prefix_cache)
+                         args.usage_split, args.prefix_cache, args.connect_proxy_port,
+                         tuple(args.reject_model), tuple(args.read_probe_path))
+    state.no_websocket = args.no_websocket
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state))
     port = server.server_address[1]
     if args.port_file:

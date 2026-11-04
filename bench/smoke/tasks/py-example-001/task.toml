@@ -1,0 +1,15 @@
+id = "py-example-001"
+lang = "python"
+source = { path = "repo" }
+setup = "uv venv -q .venv && uv pip install -q --python .venv/bin/python pytest==8.4.2"
+test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" tests"
+fail_to_pass = [
+  "tests/test_hidden.py::test_word_count_repeated_spaces",
+  "tests/test_hidden.py::test_word_count_newlines",
+]
+pass_to_pass = [
+  "tests/test_textstats.py::test_word_count_single_spaces",
+  "tests/test_hidden.py::test_mean_word_length",
+]
+timeout_s = 600
+tags = ["exemple"]

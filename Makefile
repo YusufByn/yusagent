@@ -207,3 +207,15 @@ legacy-upgrade-gates:
 	python3 scripts/release/test_npm_bridge.py
 
 .PHONY: legacy-upgrade-gates
+
+# yusAgent (T06, YA-14) : smoke bench local, voir bench/smoke/README.md. MODEL vide :
+# gpt-6.1-sol, gpt-6.1-terra et gpt-6-luna. CAPTURE=1 : validation sans modèle.
+smoke:
+	@test -n "$(BINARY)" || { echo "BINARY=<dossier>/prime-agent requis"; exit 1; }
+	python3 -I bench/smoke/run.py --binary "$(BINARY)" --provider "$(or $(PROVIDER),openai-codex)" \
+		--model "$(MODEL)" --effort "$(or $(EFFORT),high)" \
+		--settings "$(or $(SETTINGS),bench/smoke/settings/default.json)" --runs "$(or $(RUNS),1)" \
+		--tasks "$(TASKS)" $(if $(CAPTURE),--capture) \
+		$(if $(CAPTURE_FAIL),--capture-fail "$(CAPTURE_FAIL)")
+
+.PHONY: smoke

@@ -1,0 +1,33 @@
+{
+  "version": "2026-11-04",
+  "unit": "USD par million de tokens",
+  "note": "Tarif API public d'OpenAI, niveau Standard, relevé sur la page de chaque modèle et sur la page des tarifs. Contexte long : requête de plus de 272 000 tokens d'entrée, tarif long appliqué à toute la requête. L'abonnement ChatGPT n'a pas de surcoût de contexte long (page de GPT-6.1 Sol) : le coût théorique reste celui de l'API (YA-13).",
+  "pricing_page": "https://developers.openai.com/api/docs/pricing",
+  "long_context_threshold_input_tokens": 272000,
+  "models": {
+    "gpt-6.1-sol": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "retrieved": "2026-11-04",
+      "short": {"input": 2.00, "cached_input": 0.10, "cache_write_30m": 2.50, "cache_write_12h": 5.00, "output": 10.00},
+      "long": {"input": 4.00, "cached_input": 0.20, "cache_write_30m": 5.00, "cache_write_12h": 10.00, "output": 15.00}
+    },
+    "gpt-6.1-terra": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+      "retrieved": "2026-11-04",
+      "short": {"input": 1.00, "cached_input": 0.05, "cache_write_30m": 1.25, "cache_write_12h": 2.50, "output": 5.00},
+      "long": {"input": 2.00, "cached_input": 0.10, "cache_write_30m": 2.50, "cache_write_12h": 5.00, "output": 7.50}
+    },
+    "gpt-6-luna": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "retrieved": "2026-11-04",
+      "short": {"input": 0.10, "cached_input": 0.01, "cache_write_30m": 0.125, "cache_write_12h": 0.25, "output": 0.50},
+      "long": {"input": 0.20, "cached_input": 0.02, "cache_write_30m": 0.25, "cache_write_12h": 0.50, "output": 0.75}
+    },
+    "gpt-6-astra": {
+      "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+      "retrieved": "2026-11-04",
+      "short": {"input": 10.00, "cached_input": 1.00, "cache_write_30m": 12.50, "cache_write_12h": 25.00, "output": 50.00},
+      "long": {"input": 20.00, "cached_input": 2.00, "cache_write_30m": 25.00, "cache_write_12h": 50.00, "output": 75.00}
+    }
+  }
+}

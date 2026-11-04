@@ -1,0 +1,15 @@
+id = "node-example-001"
+lang = "node"
+source = { path = "repo" }
+setup = "node --version"
+test = "node --test --test-reporter=junit --test-reporter-destination=\"$SMOKE_JUNIT\" 'test/*.test.js'"
+fail_to_pass = [
+  "test/hidden.test.js::slugify collapses separators",
+  "test/hidden.test.js::slugify trims separators at both ends",
+]
+pass_to_pass = [
+  "test/slug.test.js::slugify lowercases a single word",
+  "test/hidden.test.js::slugify keeps digits",
+]
+timeout_s = 600
+tags = ["exemple"]
