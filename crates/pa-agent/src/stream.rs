@@ -130,6 +130,10 @@ pub type OnPayloadHook =
 /// read.
 pub type OnResponseHook = std::sync::Arc<dyn Fn(ProviderResponse, &Model) + Send + Sync>;
 
+/// yusAgent (T08, YA-13): hook invoked with the provider's raw usage object (wire JSON, usage
+/// only); mirror of `pa_ai::types::OnUsageHook`.
+pub type OnUsageHook = std::sync::Arc<dyn Fn(&serde_json::Value, &Model) + Send + Sync>;
+
 /// Stream request options (subset of the TS `SimpleStreamOptions` the loop
 /// uses, plus the request hooks the TS options carry).
 #[derive(Clone)]
@@ -146,6 +150,8 @@ pub struct StreamRequestOptions {
     pub signal: crate::abort::AbortSignal,
     pub on_payload: Option<OnPayloadHook>,
     pub on_response: Option<OnResponseHook>,
+    /// yusAgent (T08, YA-13): see [`OnUsageHook`].
+    pub on_usage: Option<OnUsageHook>,
     /// Extra request headers (TS `SimpleStreamOptions.headers`), merged
     /// over the provider's auth-resolved headers at the adapter seam.
     pub headers: Option<std::collections::BTreeMap<String, String>>,
@@ -164,6 +170,7 @@ impl std::fmt::Debug for StreamRequestOptions {
             .field("signal", &self.signal)
             .field("on_payload", &self.on_payload.is_some())
             .field("on_response", &self.on_response.is_some())
+            .field("on_usage", &self.on_usage.is_some())
             .field("headers", &self.headers)
             .finish()
     }
@@ -182,6 +189,7 @@ impl Default for StreamRequestOptions {
             signal: crate::abort::AbortSignal::never(),
             on_payload: None,
             on_response: None,
+            on_usage: None,
             headers: None,
         }
     }

@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 TOKEN_FIELDS = ("input", "output", "cacheRead", "cacheWrite", "cacheWrite5m", "cacheWrite1h",
-                "reasoning")
+                "cacheWrite30m", "cacheWrite12h", "reasoning")
 # Appels de la boucle : WebSocket attendu. Les appels annexes passent en SSE par
 # construction (compaction : crates/pa-core/src/session_engine/compaction_exec.rs:177,
 # /refine : refine.rs:664, résumé de branche : branch_summarization.rs:468).
@@ -129,6 +129,23 @@ def price_row(prices: dict, model: str, record: dict) -> tuple[dict | None, str 
     return entry.get(tier), tier
 
 
+def write_cost(row: dict, record: dict, write_key: str) -> float:
+    """Écriture en cache d'un appel, en USD × 10⁶ (T08, YA-13).
+
+    Avec la ventilation du provider (`cacheWrite30m`, `cacheWrite12h`), chaque part au tarif
+    de son TTL dans prices.json (`cache_write_30m`, `cache_write_12h`), le reste éventuel de
+    `cacheWrite` au tarif `write_key` ; sans ventilation, tout `cacheWrite` au tarif `write_key`.
+    """
+    total = record.get("cacheWrite") or 0
+    thirty = record.get("cacheWrite30m")
+    twelve = record.get("cacheWrite12h")
+    if thirty is None and twelve is None:
+        return total * row[write_key]
+    thirty, twelve = thirty or 0, twelve or 0
+    rest = max(0, total - thirty - twelve)
+    return thirty * row["cache_write_30m"] + twelve * row["cache_write_12h"] + rest * row[write_key]
+
+
 def request_cost(prices: dict, model: str, record: dict, write_key: str) -> float | None:
     """Coût théorique d'un appel au tarif API (YA-13). `None` sans tarif pour le modèle.
 
@@ -140,7 +157,7 @@ def request_cost(prices: dict, model: str, record: dict, write_key: str) -> floa
     per = 1_000_000
     return ((record.get("input") or 0) * row["input"]
             + (record.get("cacheRead") or 0) * row["cached_input"]
-            + (record.get("cacheWrite") or 0) * row[write_key]
+            + write_cost(row, record, write_key)
             + (record.get("output") or 0) * row["output"]) / per
 
 
@@ -151,7 +168,7 @@ def costs(prices: dict, model: str, records: list[dict], write_key: str) -> dict
     invalidation_cost = None
     if invalidated and model in prices.get("models", {}):
         invalidation_cost = sum(
-            (r.get("cacheWrite") or 0) * price_row(prices, model, r)[0][write_key] / 1_000_000
+            write_cost(price_row(prices, model, r)[0], r, write_key) / 1_000_000
             for r in invalidated)
     tiers = sorted({price_row(prices, model, r)[1] for r in records} - {None})
     return {"total": sum(known) if known and len(known) == len(per_request) else None,

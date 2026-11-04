@@ -24,6 +24,10 @@ mod tests;
 /// The `v` field of every line.
 pub const USAGE_LOG_VERSION: u64 = 1;
 
+/// yusAgent (T08, YA-13): the `costWarning` of a line whose raw usage reports 12 h cache
+/// writes: `cost` prices them at the catalog write rate (the 30 min one for `OpenAI`).
+pub const CACHE_WRITE_12H_WARNING: &str = "cacheWrite12h priced at the catalog write rate";
+
 /// How much of an existing journal is read back to continue its `seq`, `turn` and
 /// `sincePrevMs` after a restart (`--continue`).
 const RESTORE_TAIL_BYTES: u64 = 64 * 1024;
@@ -241,6 +245,10 @@ pub struct CallRecord {
     /// yusAgent (T05, YA-05): why the harness changed the request prefix on this call
     /// (`invalidation` field, agent-loop calls only); `None` writes nothing.
     pub invalidation: Option<Value>,
+    /// yusAgent (T08, YA-13): the provider's raw usage object, the last one the provider
+    /// reported through the usage hook (`providerUsage` without `attribution`, see
+    /// `split_attribution`); `None` writes nothing.
+    pub provider_usage: Option<Value>,
 }
 
 #[derive(Debug, Default)]
@@ -403,6 +411,24 @@ impl UsageJournal {
             );
             put("cacheWrite1h", json!(one_hour));
         }
+        // yusAgent (T08, YA-13): the TTL split of the raw usage (`OpenAI` Responses), as
+        // received; the cost prices every write at the catalog rate, flagged when 12 h shows.
+        if let Some(split) = record
+            .provider_usage
+            .as_ref()
+            .and_then(|usage| usage.pointer("/input_tokens_details/cache_write_tokens_details"))
+        {
+            let ttl = |key: &str| split.get(key).and_then(Value::as_u64);
+            if let Some(thirty_minutes) = ttl("ttl_30m_tokens") {
+                put("cacheWrite30m", json!(thirty_minutes));
+            }
+            if let Some(twelve_hours) = ttl("ttl_12h_tokens") {
+                put("cacheWrite12h", json!(twelve_hours));
+                if twelve_hours > 0 {
+                    put("costWarning", json!(CACHE_WRITE_12H_WARNING));
+                }
+            }
+        }
         if let Some(reasoning) = usage.reasoning {
             put("reasoning", json!(reasoning));
         }
@@ -418,8 +444,34 @@ impl UsageJournal {
         if let Some(invalidation) = &record.invalidation {
             put("invalidation", invalidation.clone());
         }
+        if let Some(provider_usage) = &record.provider_usage {
+            let (provider_usage, request_fields) = split_attribution(provider_usage);
+            put("providerUsage", provider_usage);
+            if let Some(request_fields) = request_fields {
+                put(
+                    "undocumentedAttribution",
+                    json!({ "request_fields": request_fields }),
+                );
+            }
+        }
         Value::Object(entry).to_string()
     }
+}
+
+/// yusAgent (T08, YA-13): the raw usage without `attribution`, an undocumented object of the
+/// Codex backend whose per-item list (`items`) grows with the conversation; its aggregated
+/// counters (`request_fields`: `instructions`, `tools`), when present, are returned apart.
+fn split_attribution(provider_usage: &Value) -> (Value, Option<Value>) {
+    let mut usage = provider_usage.clone();
+    let attribution = usage
+        .as_object_mut()
+        .and_then(|usage| usage.remove("attribution"));
+    let request_fields = attribution.and_then(|mut attribution| {
+        attribution
+            .as_object_mut()
+            .and_then(|attribution| attribution.remove("request_fields"))
+    });
+    (usage, request_fields)
 }
 
 /// `<dir>/<id>.usage.ndjson` for the session file `<dir>/<id>.jsonl`: JSON lines, but not the
@@ -537,6 +589,8 @@ struct Probe {
 struct ProbeState {
     ttft_ms: Option<f64>,
     history_reasoning: Option<HistoryReasoning>,
+    /// yusAgent (T08, YA-13): the last raw usage the provider reported.
+    provider_usage: Option<Value>,
     finished: bool,
 }
 
@@ -571,6 +625,10 @@ impl Probe {
         lock(&self.state).history_reasoning = Some(HistoryReasoning::from_payload(payload));
     }
 
+    fn observe_usage(&self, usage: &Value) {
+        lock(&self.state).provider_usage = Some(usage.clone());
+    }
+
     fn mark_first_token(&self) {
         let elapsed = self.elapsed_ms();
         lock(&self.state).ttft_ms.get_or_insert(elapsed);
@@ -578,13 +636,17 @@ impl Probe {
 
     /// Writes the call's line once; later calls are no-ops.
     fn finish(&self, stop_reason: &str, usage: UsageCounts) {
-        let (ttft_ms, history_reasoning) = {
+        let (ttft_ms, history_reasoning, provider_usage) = {
             let mut state = lock(&self.state);
             if state.finished {
                 return;
             }
             state.finished = true;
-            (state.ttft_ms, state.history_reasoning)
+            (
+                state.ttft_ms,
+                state.history_reasoning,
+                state.provider_usage.take(),
+            )
         };
         self.journal.append(&CallRecord {
             kind: self.kind,
@@ -600,6 +662,7 @@ impl Probe {
             history_reasoning,
             user_timestamp: self.user_timestamp,
             invalidation: self.invalidation.clone(),
+            provider_usage,
         });
     }
 }
@@ -657,6 +720,16 @@ pub fn instrument_stream_fn(
                         .and_then(|hook| hook(payload.clone(), model));
                     observer.observe_payload(next.as_ref().unwrap_or(&payload));
                     next
+                },
+            ));
+            let inner_usage = options.on_usage.take();
+            let observer = Arc::clone(&probe);
+            options.on_usage = Some(Arc::new(
+                move |usage: &Value, model: &pa_agent::types::Model| {
+                    if let Some(hook) = &inner_usage {
+                        hook(usage, model);
+                    }
+                    observer.observe_usage(usage);
                 },
             ));
             match inner(model, context, options).await {
@@ -784,6 +857,16 @@ impl AuxProbe {
                     .and_then(|hook| hook(payload.clone(), model));
                 observer.observe_payload(next.as_ref().unwrap_or(&payload));
                 next
+            },
+        ));
+        let inner_usage = options.base.on_usage.take();
+        let observer = Arc::clone(&probe);
+        options.base.on_usage = Some(Arc::new(
+            move |usage: &Value, model: &pa_types::ai::Model| {
+                if let Some(hook) = &inner_usage {
+                    hook(usage, model);
+                }
+                observer.observe_usage(usage);
             },
         ));
         Self(Some(probe))

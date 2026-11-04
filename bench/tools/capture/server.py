@@ -439,14 +439,14 @@ class UsageModel:
                 self.previous_units[key] = units
             read = min(total, common_prefix_bytes(previous_units, units) // 4) if previous_units else 0
             return {"total": total, "read": read, "write": total - read, "input": 0,
-                    "ttl_1h": asks_one_hour_ttl(body)}
+                    "ttl_1h": asks_one_hour_ttl(body), "ttl_12h": asks_twelve_hour_ttl(body)}
         with self.lock:
             previous = self.previous.get(key)
             self.previous[key] = total
         read = min(total, previous * 9 // 10) if previous else 0
         write = (total - read) * 8 // 10
         return {"total": total, "read": read, "write": write, "input": total - read - write,
-                "ttl_1h": asks_one_hour_ttl(body)}
+                "ttl_1h": asks_one_hour_ttl(body), "ttl_12h": asks_twelve_hour_ttl(body)}
 
 
 def compact(value) -> str:
@@ -493,6 +493,29 @@ def asks_one_hour_ttl(value) -> bool:
     return False
 
 
+def asks_twelve_hour_ttl(body: dict) -> bool:
+    """La requête Responses demande-t-elle le TTL de 12 h (T08, YA-13) ?
+
+    `prompt_cache_options.ttl` (défaut de la requête) ou un `prompt_cache_breakpoint.ttl`
+    (guide prompt caching d'OpenAI). Le harness n'envoie ni l'un ni l'autre : 30 min.
+    """
+    options = body.get("prompt_cache_options")
+    if isinstance(options, dict) and options.get("ttl") == "12h":
+        return True
+
+    def breakpoint_12h(value) -> bool:
+        if isinstance(value, dict):
+            point = value.get("prompt_cache_breakpoint")
+            if isinstance(point, dict) and point.get("ttl") == "12h":
+                return True
+            return any(breakpoint_12h(item) for item in value.values())
+        if isinstance(value, list):
+            return any(breakpoint_12h(item) for item in value)
+        return False
+
+    return breakpoint_12h(body.get("input"))
+
+
 def anthropic_usage(split: dict, output_tokens: int) -> dict:
     """Usage Anthropic : `input_tokens` hors cache, écriture ventilée par TTL."""
     one_hour = split["write"] if split["ttl_1h"] else 0
@@ -507,10 +530,15 @@ def anthropic_usage(split: dict, output_tokens: int) -> dict:
 
 
 def responses_usage(split: dict) -> dict:
-    """Usage OpenAI Responses : `input_tokens` inclut `cached_tokens`, pas d'écriture."""
+    """Usage OpenAI Responses : `input_tokens` inclut `cached_tokens` et `cache_write_tokens`,
+    écriture ventilée par TTL, les deux champs toujours renvoyés (T08, YA-13)."""
+    twelve = split["write"] if split.get("ttl_12h") else 0
     return {"input_tokens": split["total"], "output_tokens": OUTPUT_TOKENS,
             "total_tokens": split["total"] + OUTPUT_TOKENS,
-            "input_tokens_details": {"cached_tokens": split["read"]},
+            "input_tokens_details": {
+                "cached_tokens": split["read"], "cache_write_tokens": split["write"],
+                "cache_write_tokens_details": {"ttl_30m_tokens": split["write"] - twelve,
+                                               "ttl_12h_tokens": twelve}},
             "output_tokens_details": {"reasoning_tokens": REASONING_TOKENS}}
 
 

@@ -37,6 +37,7 @@ fn record(kind: CallKind, started_at: SystemTime, user_timestamp: Option<i64>) -
         history_reasoning: None,
         user_timestamp,
         invalidation: None,
+        provider_usage: None,
     }
 }
 
@@ -105,6 +106,11 @@ fn unreported_fields_are_absent_never_zero() {
         "historyReasoning",
         "purpose",
         "invalidation",
+        "cacheWrite30m",
+        "cacheWrite12h",
+        "costWarning",
+        "providerUsage",
+        "undocumentedAttribution",
     ] {
         assert!(entry.get(field).is_none(), "{field} must be absent");
     }
@@ -288,12 +294,25 @@ fn agent_message(usage: pa_agent::types::Usage) -> pa_agent::types::AssistantMes
 /// A provider that calls the payload hook with `payload`, then streams start, one text delta
 /// and done with `usage`.
 fn scripted(payload: Value, usage: pa_agent::types::Usage) -> StreamFn {
+    scripted_with_raw_usage(payload, usage, None)
+}
+
+/// [`scripted`], whose provider also reports `raw_usage` through the usage hook.
+fn scripted_with_raw_usage(
+    payload: Value,
+    usage: pa_agent::types::Usage,
+    raw_usage: Option<Value>,
+) -> StreamFn {
     Arc::new(move |_model, _context, options| {
         let payload = payload.clone();
         let usage = usage.clone();
+        let raw_usage = raw_usage.clone();
         Box::pin(async move {
             if let Some(hook) = options.on_payload.as_ref() {
                 assert!(hook(payload, &agent_model()).is_none(), "body untouched");
+            }
+            if let (Some(hook), Some(raw_usage)) = (options.on_usage.as_ref(), raw_usage) {
+                hook(&raw_usage, &agent_model());
             }
             let (handle, consumer) = event_stream();
             let partial = agent_message(pa_agent::types::Usage::zero());
@@ -366,6 +385,136 @@ async fn the_wrapper_journals_a_streamed_call() {
     assert!(entry["ttftMs"].is_number());
     assert_eq!(entry["historyReasoning"]["blocks"], json!(1));
     assert_eq!(entry["historyReasoning"]["textChars"], json!(8));
+    assert!(entry.get("providerUsage").is_none(), "no usage hook called");
+}
+
+// yusAgent (T08, YA-13): the raw usage the provider reports through the usage hook is
+// journaled as `providerUsage`, unchanged, with the TTL split read from it and a cost warning
+// for the 12 h share; an inner usage hook still runs.
+#[tokio::test]
+async fn the_raw_provider_usage_and_the_ttl_split_are_journaled() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = Arc::new(journal(dir.path(), None));
+    let raw = json!({"input_tokens": 1000, "output_tokens": 20, "total_tokens": 1020,
+        "input_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 300,
+            "cache_write_tokens_details": {"ttl_30m_tokens": 200, "ttl_12h_tokens": 100}},
+        "output_tokens_details": {"reasoning_tokens": 5}});
+    let usage = pa_agent::types::Usage {
+        input: 100,
+        output: 20,
+        cache_read: 600,
+        cache_write: 300,
+        total_tokens: 1020,
+        ..pa_agent::types::Usage::zero()
+    };
+    let stream_fn = instrument_stream_fn(
+        Some(Arc::clone(&journal)),
+        CallKind::Main,
+        scripted_with_raw_usage(json!({}), usage, Some(raw.clone())),
+    );
+    let seen = Arc::new(Mutex::new(None));
+    let inner_seen = Arc::clone(&seen);
+    let options = StreamRequestOptions {
+        on_usage: Some(Arc::new(
+            move |usage: &Value, _model: &pa_agent::types::Model| {
+                *lock(&inner_seen) = Some(usage.clone());
+            },
+        )),
+        ..Default::default()
+    };
+    let mut stream = stream_fn(agent_model(), LlmContext::default(), options)
+        .await
+        .unwrap();
+    while stream.next_event().await.is_some() {}
+    drop(stream);
+    let entry = &lines(journal.path())[0];
+    assert_eq!(entry["providerUsage"], raw);
+    assert_eq!(entry["cacheWrite"], json!(300));
+    assert_eq!(entry["cacheWrite30m"], json!(200));
+    assert_eq!(entry["cacheWrite12h"], json!(100));
+    assert_eq!(entry["costWarning"], json!(CACHE_WRITE_12H_WARNING));
+    assert!(entry.get("cacheWrite5m").is_none());
+    assert!(entry.get("cacheWrite1h").is_none());
+    assert_eq!(*lock(&seen), Some(raw), "the inner usage hook still runs");
+}
+
+// yusAgent (T08, YA-13): a split that does not add up to `cacheWrite` is written as received;
+// no cost warning without 12 h writes.
+#[test]
+fn a_ttl_split_is_written_as_received() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = journal(dir.path(), None);
+    let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
+    call.provider_usage = Some(json!({"input_tokens_details": {"cache_write_tokens": 100,
+        "cache_write_tokens_details": {"ttl_30m_tokens": 70, "ttl_12h_tokens": 0}}}));
+    journal.append(&call);
+    let entry = &lines(journal.path())[0];
+    assert_eq!(entry["cacheWrite"], json!(100));
+    assert_eq!(entry["cacheWrite30m"], json!(70));
+    assert_eq!(entry["cacheWrite12h"], json!(0));
+    assert!(entry.get("costWarning").is_none());
+}
+
+// yusAgent (T08, YA-13): a raw usage without the split (Anthropic, or Responses without it)
+// writes no TTL field.
+#[test]
+fn a_raw_usage_without_a_split_writes_no_ttl_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = journal(dir.path(), None);
+    let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
+    call.provider_usage = Some(json!({"input_tokens": 10, "cache_creation_input_tokens": 100}));
+    journal.append(&call);
+    let entry = &lines(journal.path())[0];
+    assert!(entry["providerUsage"].is_object());
+    for field in ["cacheWrite30m", "cacheWrite12h", "costWarning"] {
+        assert!(entry.get(field).is_none(), "{field} must be absent");
+    }
+}
+
+// yusAgent (T08, YA-13): the Codex backend's undocumented `attribution` leaves
+// `providerUsage`; its per-item list is dropped, its aggregated `request_fields` counters are
+// kept under `undocumentedAttribution`.
+#[test]
+fn the_undocumented_attribution_is_moved_out_of_the_raw_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = journal(dir.path(), None);
+    let counters = |input: u64, cached: u64| {
+        json!({"cache_write_tokens": 0, "cached_tokens": cached, "input_tokens": input,
+            "output_tokens": 0})
+    };
+    let usage = json!({"input_tokens": 7801, "output_tokens": 66, "total_tokens": 7867,
+        "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 7552},
+        "output_tokens_details": {"reasoning_tokens": 0}});
+    let mut raw = usage.clone();
+    raw["attribution"] = json!({
+        "items": {"fc_1": counters(28, 28), "msg_1": counters(94, 94)},
+        "request_fields": {"instructions": counters(7159, 7159), "tools": counters(163, 163)}});
+    let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
+    call.provider_usage = Some(raw);
+    journal.append(&call);
+    let entry = &lines(journal.path())[0];
+    assert_eq!(entry["providerUsage"], usage);
+    assert_eq!(
+        entry["undocumentedAttribution"],
+        json!({"request_fields": {"instructions": counters(7159, 7159),
+            "tools": counters(163, 163)}})
+    );
+    assert!(!entry.to_string().contains("fc_1"), "no per-item list");
+}
+
+// yusAgent (T08, YA-13): an `attribution` without aggregated counters writes no
+// `undocumentedAttribution`.
+#[test]
+fn an_attribution_without_request_fields_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = journal(dir.path(), None);
+    let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
+    call.provider_usage = Some(json!({"input_tokens": 10,
+        "attribution": {"items": {"fc_1": {"input_tokens": 10}}}}));
+    journal.append(&call);
+    let entry = &lines(journal.path())[0];
+    assert_eq!(entry["providerUsage"], json!({"input_tokens": 10}));
+    assert!(entry.get("undocumentedAttribution").is_none());
 }
 
 #[test]

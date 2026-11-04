@@ -72,13 +72,13 @@ Avant T03, le prompt système contient le chemin absolu de chaque `SKILL.md` emb
 
 ## Usage et journal d'usage (T04)
 
-Le serveur renvoie un usage réaliste (cache lu et écrit, écriture ventilée 5 min / 1 h, tokens de raisonnement) et note l'usage exact renvoyé dans `NNNN.meta.json` (`reported_usage`). `run.py` copie les journaux `<id>.usage.ndjson` de chaque cas dans `<cas>/usage/`, puis lance :
+Le serveur renvoie un usage réaliste (cache lu et écrit, écriture ventilée 5 min / 1 h pour Anthropic, 30 min / 12 h pour Responses et Codex selon `prompt_cache_options.ttl` ou `prompt_cache_breakpoint.ttl` de la requête depuis T08, tokens de raisonnement) et note l'usage exact renvoyé dans `NNNN.meta.json` (`reported_usage`). `run.py` copie les journaux `<id>.usage.ndjson` de chaque cas dans `<cas>/usage/`, puis lance :
 
 ```bash
 python3 -I bench/tools/capture/usage_check.py <run>
 ```
 
-Résultat : `<run>/usage-report.md` et `.json`. Pour chaque cas, l'usage des messages assistant (`message_end` de `out*.jsonl`) et chaque ligne de journal sont confrontés à l'usage renvoyé, champ par champ (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation par TTL, raisonnement), avec le taux de cache et le type d'appel. Un binaire antérieur à T04 n'a pas de journal : seule la première vérification s'applique. Sémantique des champs : `docs/usage.md`.
+Résultat : `<run>/usage-report.md` et `.json`. Pour chaque cas, l'usage des messages assistant (`message_end` de `out*.jsonl`) et chaque ligne de journal sont confrontés à l'usage renvoyé, champ par champ (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation par TTL, raisonnement), avec le taux de cache et le type d'appel ; pour Responses, `providerUsage` du journal doit être l'usage renvoyé tel quel, la ventilation 30 min / 12 h celle de cet usage, et `costWarning` présent seulement avec du 12 h ; ces champs sont absents des lignes Anthropic (T08). Un binaire antérieur à T04 n'a pas de journal : seule la première vérification s'applique. Sémantique des champs : `docs/usage.md`.
 
 ## Masquage (T05)
 

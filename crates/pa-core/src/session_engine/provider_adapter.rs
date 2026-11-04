@@ -79,6 +79,16 @@ fn agent_response_hook_to_ai(
     )
 }
 
+/// yusAgent (T08, YA-13): adapt the loop-level usage hook to the pa-ai hook shape; a failed
+/// model round-trip drops the hook call (advisory, never fatal).
+fn agent_usage_hook_to_ai(hook: pa_agent::stream::OnUsageHook) -> pa_ai::types::OnUsageHook {
+    std::sync::Arc::new(move |usage: &serde_json::Value, model: &Model| {
+        if let Some(agent_model) = json_round_trip::<_, pa_agent::types::Model>(model) {
+            hook(usage, &agent_model);
+        }
+    })
+}
+
 /// The mutable provider target a live session's stream reads per call
 /// (daemon `set_model` and the failover switch swap it).
 #[derive(Debug, Clone)]
@@ -166,6 +176,8 @@ pub fn stream_once(
             // hook may replace the wire payload, the response hook observes headers.
             on_payload: options.on_payload.map(agent_payload_hook_to_ai),
             on_response: options.on_response.map(agent_response_hook_to_ai),
+            // yusAgent (T08, YA-13): the raw provider usage, for the usage journal.
+            on_usage: options.on_usage.map(agent_usage_hook_to_ai),
             // StreamOptions carries a plain map; the target's ordered
             // (BTreeMap) resolution converts here, with the request's own
             // headers (the semantic request id) merged over it — TS

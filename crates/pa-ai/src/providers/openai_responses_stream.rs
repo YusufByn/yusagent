@@ -768,6 +768,10 @@ impl<'a> ResponsesStreamProcessor<'a> {
                     self.output.response_id = Some(id.to_string());
                 }
                 if let Some(usage) = response.get("usage") {
+                    // yusAgent (T08, YA-13): the raw usage object, for the usage journal.
+                    if let Some(on_usage) = &self.hooks.on_usage {
+                        on_usage(usage, self.model);
+                    }
                     let cached_tokens = usage
                         .get("input_tokens_details")
                         .and_then(|details| details.get("cached_tokens"))
@@ -777,15 +781,24 @@ impl<'a> ResponsesStreamProcessor<'a> {
                         .get("input_tokens")
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
+                    // yusAgent (T08, YA-13): cache writes are part of input_tokens and
+                    // excluded from cached_tokens; their TTL split stays in the raw usage.
+                    let cache_write_tokens = usage
+                        .get("input_tokens_details")
+                        .and_then(|details| details.get("cache_write_tokens"))
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
                     // OpenAI includes cached tokens in input_tokens; subtract them.
                     self.output.usage = Usage {
-                        input: input_tokens.saturating_sub(cached_tokens),
+                        input: input_tokens
+                            .saturating_sub(cached_tokens)
+                            .saturating_sub(cache_write_tokens),
                         output: usage
                             .get("output_tokens")
                             .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0),
                         cache_read: cached_tokens,
-                        cache_write: 0,
+                        cache_write: cache_write_tokens,
                         total_tokens: usage
                             .get("total_tokens")
                             .and_then(serde_json::Value::as_u64)

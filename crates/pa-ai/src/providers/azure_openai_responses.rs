@@ -388,7 +388,10 @@ async fn run_stream(
 
     let stream_result: Result<(), ProviderError>;
     {
-        let hooks = ResponsesStreamHooks::default();
+        let hooks = ResponsesStreamHooks {
+            on_usage: options.base.on_usage.clone(),
+            ..ResponsesStreamHooks::default()
+        };
         let mut processor =
             crate::providers::openai_responses_shared::ResponsesStreamProcessor::new(
                 model, output, writer, hooks,

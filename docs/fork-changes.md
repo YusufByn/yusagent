@@ -77,6 +77,21 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `.changes/ya-05.md` | ajout | Fragment de changelog. | T05 (YA-05) |
 | `Makefile` | modif. (11 lignes, en fin de fichier) | Cible `smoke` : appelle `bench/smoke/run.py` avec `BINARY`, `PROVIDER`, `MODEL`, `EFFORT`, `SETTINGS`, `RUNS`, `TASKS`, `CAPTURE`, `CAPTURE_FAIL`, `CAPTURE_SPAWN` (T07b). Aucune cible upstream touchée. Voir « Smoke bench (T06) » ci-dessous. | T06 (YA-14) |
 | `.github/pull_request_template.md` | modif. (2 lignes) | Case « Smoke bench lancé sur ce commit (lien ou chemin du rapport) » sous « Test/e2e evidence ». | T06 (YA-14) |
+| `crates/pa-ai/src/providers/openai_responses_stream.rs` | modif. (14 lignes) | Usage de `response.completed` : `cacheWrite` = `input_tokens_details.cache_write_tokens`, retiré de `input` (`:784-801`) ; appel du hook `on_usage` avec `response.usage` (`:771-774`). Voir « Usage (T08) » ci-dessous. | T08 (YA-13) |
+| `crates/pa-ai/src/types.rs` | modif. (8 lignes) | Type `OnUsageHook` (`:70`) et champ `on_usage` de `StreamOptions` (`:86`), Debug complété. | T08 (YA-13) |
+| `crates/pa-ai/src/providers/simple_options.rs` | modif. (1 ligne) | `on_usage` recopié vers les options du provider (`:60`). | T08 (YA-13) |
+| `crates/pa-ai/src/providers/openai_responses_hooks.rs` | modif. (2 lignes) | Champ `on_usage` de `ResponsesStreamHooks` (`:37`). | T08 (YA-13) |
+| `crates/pa-ai/src/providers/openai_responses.rs`, `azure_openai_responses.rs`, `openai_codex_responses/mod.rs` | modif. (1 à 4 lignes, 4 sites) | `on_usage` des options passé aux hooks du processeur (`openai_responses.rs:358`, `azure_openai_responses.rs:391-394`, `openai_codex_responses/mod.rs:447`, `:559`). | T08 (YA-13) |
+| `crates/pa-agent/src/stream.rs` | modif. (8 lignes) | Type `OnUsageHook` (`:135`) et champ `on_usage` de `StreamRequestOptions` (`:154`), Debug et Default complétés. | T08 (YA-13) |
+| `crates/pa-agent/src/agent_loop/response.rs` | modif. (1 ligne) | `on_usage: None` dans le littéral complet des options (`:147`), comme `on_payload`. | T08 (YA-13) |
+| `crates/pa-core/src/session_engine/provider_adapter.rs` | modif. (12 lignes) | `agent_usage_hook_to_ai` (`:84`) et passage du hook de la boucle à `pa_ai` (`:180`), comme `on_response`. | T08 (YA-13) |
+| `crates/pa-ai/src/providers/usage_tests.rs` | modif. (fichier du fork) | Fixtures Responses : écriture avec et sans ventilation, sans écriture, saturation de `input`, hook `on_usage`, coût des écritures au tarif du catalogue. | T08 (YA-13) |
+| `crates/pa-core/src/session_engine/usage_log.rs`, `usage_log/tests.rs` | modif. (fichiers du fork) | `providerUsage` sans `attribution` et `undocumentedAttribution` (compteurs agrégés `request_fields`) (`:447-456`, `split_attribution` `:464`), `cacheWrite30m` / `cacheWrite12h` lus dans l'usage brut et `costWarning` si du 12 h apparaît (`:413-431`) ; la sonde branche `on_usage` comme `on_payload`. Tests ajoutés. | T08 (YA-13) |
+| `bench/tools/capture/server.py`, `usage_check.py`, `README.md` | modif. (fichiers du fork) | Usage Responses et Codex avec `cache_write_tokens` et ventilation 30 min / 12 h ; vérification de `cacheWrite`, de la ventilation, de `costWarning`, de `providerUsage` (sans `attribution`) et de `undocumentedAttribution`. | T08 (YA-13) |
+| `bench/smoke/metrics.py`, `run.py`, `README.md` | modif. (fichiers du fork) | `request_cost` et coût des invalidations : `cacheWrite30m` et `cacheWrite12h` tarifés séparément depuis `prices.json` (`cache_write_30m`, `cache_write_12h`), sans ventilation au tarif 30 min comme avant ; notes du rapport mises à jour. | T08 (YA-13) |
+| `docs/usage.md` | modif. | Ligne Responses, `cacheRetention: long` et TTL 12 h, format du journal (`cacheWrite30m`, `cacheWrite12h`, `costWarning`, `providerUsage`). | T08 (YA-13) |
+| `docs/tickets/08-usage-ecriture-cache.md` | modif. | Décision du 04/11/2026 après la CI : ventilation hors de `Usage`. | T08 (YA-13) |
+| `.changes/ya-08.md` | ajout | Fragment de changelog. | T08 (YA-13) |
 
 ## Smoke bench (T06, YA-14)
 
@@ -134,6 +149,19 @@ Compaction : le seuil part de l'usage réel du dernier appel, plus une estimatio
 Symptôme : `the team picker mounted` échoue à `clipboard_auth_commands_e2e.rs:989`. Le rendu ne montre que l'écran d'accueil : le sélecteur d'équipe n'apparaît pas pendant les attentes fixes du plan headless (`WaitMs(400)` après `/login`, `:975-979`). Hypothèse : délai trop court sur un runner chargé (même tentative : le shard 6 est tombé sur « No space left on device »). Le test ne touche à rien de ce que modifient les tickets du fork (login headless sur le provider factice).
 
 Le run `ci.yml` de `main` après le merge de T04 (41707124985, `e76dfc0ad`) a aussi un shard 5 en échec, mais l'annotation dit « No space left on device » et le log n'est plus téléchargeable : cause non attribuable à ce test.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
+## Instabilité probable : `interactive_daemon_e2e` (T08)
+
+`crates/pa-cli/tests/interactive_daemon_e2e.rs`, test `tui_ctrl_s_stashes_and_restores_the_prompt_draft`, shard 4 de `ci.yml`.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 41903362499 | `6eed2da` | 1 | échec du shard 4 (41 réussis, 1 échec) |
+| 41903362499 | `6eed2da` | 2 | réussi, aucun changement de code |
+
+Symptôme : `connect supervisor: Failed to connect to the Prime Agent daemon` avec `Connection refused (os error 111)` à `interactive_daemon_e2e.rs:424`. Le test attend que le fichier du socket existe (`:405-407`) puis se connecte : le socket existe déjà mais le superviseur n'écoute pas encore. Hypothèse : course au démarrage du superviseur. T08 ne touche ni le daemon, ni la TUI, ni ce test.
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
@@ -368,3 +396,10 @@ Même règle : aucun test supprimé ni affaibli. Chaque modification porte un co
 - `run.py` : cas `usage-split-anthropic` et `refine-anthropic` (compaction avec `/refine` automatique réactivé) ; copie des journaux d'usage de chaque cas dans `<cas>/usage/` ; lance `usage_check.py`.
 - `usage_check.py` (nouveau) : confronte l'usage des messages assistant (`message_end`) et chaque ligne de journal à l'usage renvoyé par le serveur, champ par champ, avec le taux de cache et le type d'appel.
 - `compare.py` : option `--all`, qui compare chaque requête de chaque cas (UUID normalisés).
+
+## Usage (T08, YA-13)
+
+- **Aucun champ ajouté à `Usage`** (décision de Yusuf du 04/11/2026, après un premier essai) : deux `Option<u64>` de plus dans `pa_types::ai::Usage` faisaient passer l'écart entre `Assistant` et la variante suivante de 184 à 216 octets dans `pa_types::ai::Message`, `pa_types::session::AgentMessage` et l'enum de messages de `pa-agent` (seuil de `clippy::large_enum_variant` : 200, CI rouge). La ventilation 30 min / 12 h n'est que dans le journal d'usage, lue dans `providerUsage`. `Usage`, ses littéraux et `calculate_cost_values` (`crates/pa-ai/src/models.rs`) sont inchangés : toute écriture est tarifée au tarif d'écriture du catalogue, `costWarning` signale une écriture 12 h.
+- **Hook `on_usage`** : générique sur `pa_ai::types::StreamOptions` (option A du ticket), il reçoit l'objet usage brut du provider et le modèle. Seul le processeur Responses l'appelle (Responses, Azure, Codex). Écartés : un champ sur `AssistantMessage` (persisté dans les sessions) et une entrée `diagnostics` (lue par la logique de reprise et de bascule).
+- **Littéraux d'options complétés** : `on_usage` dans les littéraux complets de `pa_ai::types::StreamOptions` (`simple_options.rs`, `provider_adapter.rs`), de `StreamRequestOptions` (`pa-agent/src/stream.rs` Default, `agent_loop/response.rs`) et de `ResponsesStreamHooks` (`openai_responses.rs`, `openai_codex_responses/mod.rs` ×2) ; `azure_openai_responses.rs` passe de `ResponsesStreamHooks::default()` à un littéral `..Default`. Un cherry-pick upstream qui ajoute un littéral complet de l'un de ces types échouera à la compilation avec un message clair.
+- **Prompt et requêtes** : inchangés. Le hook observe l'usage de la réponse ; rien n'est ajouté au corps envoyé ni aux fichiers de session.
