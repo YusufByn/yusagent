@@ -1,0 +1,394 @@
+{
+  "written": "2026-11-04T18:37:14+00:00",
+  "command": "python3 -I bench/smoke/baseline.py bench/smoke/runs/20261104T144609Z-6d9561e-gpt-6.1-terra bench/smoke/runs/20261104T174431Z-6d9561e-gpt-6.1-terra bench/smoke/runs/20261104T180604Z-6d9561e-gpt-6.1-terra --exclude 20261104T144609Z-6d9561e-gpt-6.1-terra:node-little-coder-102,node-testsprite-356,node-tough-cookie-630",
+  "excluded": {
+    "20261104T144609Z-6d9561e-gpt-6.1-terra": [
+      "node-little-coder-102",
+      "node-testsprite-356",
+      "node-tough-cookie-630"
+    ]
+  },
+  "runs": [
+    {
+      "run": "20261104T144609Z-6d9561e-gpt-6.1-terra",
+      "commit": "edafd2eacf2dba7fdb19ed01f3ef7ec7d3d42485",
+      "binary_sha256": "b8e92ec54f3b73077418d0fd84ba81efe04c3ef349e65485aaef2da182f2f626",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261104T174431Z-6d9561e-gpt-6.1-terra",
+      "commit": "10fe917ab6aa53b930f2e5535a7f1ddb0e0ad670",
+      "binary_sha256": "b8e92ec54f3b73077418d0fd84ba81efe04c3ef349e65485aaef2da182f2f626",
+      "runs_per_task": 2
+    },
+    {
+      "run": "20261104T180604Z-6d9561e-gpt-6.1-terra",
+      "commit": "10fe917ab6aa53b930f2e5535a7f1ddb0e0ad670",
+      "binary_sha256": "b8e92ec54f3b73077418d0fd84ba81efe04c3ef349e65485aaef2da182f2f626",
+      "runs_per_task": 3
+    }
+  ],
+  "header": {
+    "mode": "réel",
+    "provider": "openai-codex",
+    "model": "gpt-6.1-terra",
+    "effort": "high",
+    "settings_non_default": {
+      "cacheRetention": "short"
+    },
+    "models_bundled_sha256": "f057223709acfc535ffc0395766889208e5104423ce3612ad10c242a2d7bec9d",
+    "prices_version": "2026-11-04"
+  },
+  "per_task": {
+    "node-filesize-376": {
+      "task_tree": "94694314914de5793bf86b1a4f837d0a5807ca81695b2d677b09a5ea844a496c",
+      "runs": 3,
+      "from_runs": [
+        "20261104T144609Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-2"
+      ],
+      "resolved_rate": 0.0,
+      "stable": false,
+      "cost": {
+        "mean": 0.136384,
+        "stdev": 0.023160727492028396,
+        "cv": 0.16981997515858455,
+        "values": [
+          0.1460926,
+          0.109949,
+          0.1531104
+        ]
+      },
+      "tokens": {
+        "mean": 627969.3333333334,
+        "stdev": 228800.23482141213,
+        "cv": 0.36434937611827983,
+        "values": [
+          641375,
+          392761,
+          849772
+        ]
+      },
+      "turns_mean": 15.333333333333334,
+      "context_peak_max": 35663,
+      "server_misses": 0,
+      "cache_avoidable_rate_mean": 0.9067193477862082
+    },
+    "node-koa-2029": {
+      "task_tree": "b4d28a49ffe517c7091360acd388fdb3ba5700c2d150465e1d11141cb0777b17",
+      "runs": 3,
+      "from_runs": [
+        "20261104T144609Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-2"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.0802378,
+        "stdev": 0.003634946057371415,
+        "cv": 0.045302165031586294,
+        "values": [
+          0.0831026,
+          0.081462,
+          0.0761488
+        ]
+      },
+      "tokens": {
+        "mean": 296218.3333333333,
+        "stdev": 54846.56104381872,
+        "cv": 0.1851558626592504,
+        "values": [
+          235225,
+          311950,
+          341480
+        ]
+      },
+      "turns_mean": 12.666666666666666,
+      "context_peak_max": 28206,
+      "server_misses": 0,
+      "cache_avoidable_rate_mean": 0.8198167331718872
+    },
+    "node-little-coder-102": {
+      "task_tree": "1608d823ff0f379901a283107d6e93468c500de18c9dd42e89282db601e9ccee",
+      "runs": 3,
+      "from_runs": [
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-2",
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-3"
+      ],
+      "resolved_rate": 0.6666666666666666,
+      "stable": false,
+      "cost": {
+        "mean": 0.2601032,
+        "stdev": 0.057164242868072694,
+        "cv": 0.21977523870553187,
+        "values": [
+          0.2177498,
+          0.325125,
+          0.2374348
+        ]
+      },
+      "tokens": {
+        "mean": 1340928,
+        "stdev": 602973.0072125948,
+        "cv": 0.4496684439526916,
+        "values": [
+          784225,
+          1981409,
+          1257150
+        ]
+      },
+      "turns_mean": 24.333333333333332,
+      "context_peak_max": 40805,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.9004995964155832
+    },
+    "node-testsprite-356": {
+      "task_tree": "d2c99a63045c373e1e943c362641a0ade00101bb62bf00652240282a803a5dc1",
+      "runs": 3,
+      "from_runs": [
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-2",
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-3"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.169054,
+        "stdev": 0.01665090426493408,
+        "cv": 0.09849458909540193,
+        "values": [
+          0.1825228,
+          0.15043700000000002,
+          0.1742022
+        ]
+      },
+      "tokens": {
+        "mean": 914490,
+        "stdev": 78126.90466798234,
+        "cv": 0.08543221322046424,
+        "values": [
+          892202,
+          849929,
+          1001339
+        ]
+      },
+      "turns_mean": 30,
+      "context_peak_max": 30705,
+      "server_misses": 4,
+      "cache_avoidable_rate_mean": 0.9255942558195264
+    },
+    "node-tough-cookie-630": {
+      "task_tree": "37a312dafcb92c0541c169ab3e67caa8ca9b45bab77644a9de190714285b30cd",
+      "runs": 3,
+      "from_runs": [
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-2",
+        "20261104T180604Z-6d9561e-gpt-6.1-terra/run-3"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.15064573333333334,
+        "stdev": 0.011922299592500329,
+        "cv": 0.07914130276839566,
+        "values": [
+          0.16376960000000002,
+          0.1476844,
+          0.1404832
+        ]
+      },
+      "tokens": {
+        "mean": 893820.6666666666,
+        "stdev": 22748.549169855498,
+        "cv": 0.025450909805757642,
+        "values": [
+          916900,
+          871418,
+          893144
+        ]
+      },
+      "turns_mean": 25.333333333333332,
+      "context_peak_max": 28117,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.9107459274631705
+    },
+    "py-graphiti-2030": {
+      "task_tree": "5713dad5dbe7e9e5a544f8709fcb280a96f3aa61e642784fc491c6d7756fdb37",
+      "runs": 3,
+      "from_runs": [
+        "20261104T144609Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-2"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.283382,
+        "stdev": 0.023845070072448918,
+        "cv": 0.08414461776841478,
+        "values": [
+          0.309731,
+          0.2632876,
+          0.2771274
+        ]
+      },
+      "tokens": {
+        "mean": 1634122,
+        "stdev": 296550.78541288676,
+        "cv": 0.1814740792993955,
+        "values": [
+          1383079,
+          1557962,
+          1961325
+        ]
+      },
+      "turns_mean": 29.666666666666668,
+      "context_peak_max": 32129,
+      "server_misses": 2,
+      "cache_avoidable_rate_mean": 0.9189049144022828
+    },
+    "py-langextract-584": {
+      "task_tree": "447d54b5b4765ddfa101cef923c1ed3b4828300661c8b16eb038ed426d0b75f9",
+      "runs": 3,
+      "from_runs": [
+        "20261104T144609Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-2"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.0791568,
+        "stdev": 0.018327774792374553,
+        "cv": 0.23153759111503439,
+        "values": [
+          0.0872638,
+          0.0581736,
+          0.092033
+        ]
+      },
+      "tokens": {
+        "mean": 410642.6666666667,
+        "stdev": 103094.11121074439,
+        "cv": 0.25105552729723907,
+        "values": [
+          316639,
+          394392,
+          520897
+        ]
+      },
+      "turns_mean": 20,
+      "context_peak_max": 20591,
+      "server_misses": 3,
+      "cache_avoidable_rate_mean": 0.9221644010716927
+    },
+    "py-shortuuid-118": {
+      "task_tree": "0aefe875a7530838dc9c344e97a3f1b6d0cef1fe76e66fce8359d2721374fc6e",
+      "runs": 3,
+      "from_runs": [
+        "20261104T144609Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-2"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.03850266666666667,
+        "stdev": 0.01023647612087936,
+        "cv": 0.2658640818180392,
+        "values": [
+          0.045098,
+          0.0267102,
+          0.043699800000000004
+        ]
+      },
+      "tokens": {
+        "mean": 149213.33333333334,
+        "stdev": 10131.538695249272,
+        "cv": 0.06789968744023728,
+        "values": [
+          138006,
+          151911,
+          157723
+        ]
+      },
+      "turns_mean": 7.333333333333333,
+      "context_peak_max": 13183,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.887119950057839
+    },
+    "py-tldextract-368": {
+      "task_tree": "0b793bff19ed1781a163d7463a3be5a80eb46f50bbbb517ce88817f3f43aca73",
+      "runs": 3,
+      "from_runs": [
+        "20261104T144609Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-2"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.073504,
+        "stdev": 0.032791178433231094,
+        "cv": 0.4461142037607626,
+        "values": [
+          0.1074328,
+          0.0419832,
+          0.071096
+        ]
+      },
+      "tokens": {
+        "mean": 359677.3333333333,
+        "stdev": 169133.89064682848,
+        "cv": 0.4702378353380488,
+        "values": [
+          511068,
+          177132,
+          390832
+        ]
+      },
+      "turns_mean": 22,
+      "context_peak_max": 16277,
+      "server_misses": 3,
+      "cache_avoidable_rate_mean": 0.941114169724368
+    },
+    "py-tldextract-383": {
+      "task_tree": "0984288d1aa3c6880c8947ee17693beadf22fb5520a20ece8e262c71900f54bf",
+      "runs": 3,
+      "from_runs": [
+        "20261104T144609Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-1",
+        "20261104T174431Z-6d9561e-gpt-6.1-terra/run-2"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.19096580000000002,
+        "stdev": 0.07732477129510311,
+        "cv": 0.4049142374975158,
+        "values": [
+          0.279855,
+          0.1392306,
+          0.1538118
+        ]
+      },
+      "tokens": {
+        "mean": 1003898.3333333334,
+        "stdev": 456791.5949416466,
+        "cv": 0.45501778394722564,
+        "values": [
+          1517931,
+          849285,
+          644479
+        ]
+      },
+      "turns_mean": 35.666666666666664,
+      "context_peak_max": 27763,
+      "server_misses": 6,
+      "cache_avoidable_rate_mean": 0.9234355352156222
+    }
+  }
+}
