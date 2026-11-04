@@ -4,7 +4,7 @@ license = "BSD-3-Clause"
 source = { git = "https://github.com/john-kurkowski/tldextract.git", commit = "544e3cc2082751de8ea1fa5fd49be71402992a78", gold = "89b9aebf6d9860cca2bd5fe6a5f3f506bb266363" }
 upstream = { repo = "john-kurkowski/tldextract", pr = "https://github.com/john-kurkowski/tldextract/pull/383", issue = "https://github.com/john-kurkowski/tldextract/issues/382" }
 files = []
-setup = "UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12 && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.1.1)"
+setup = "uv python install -q --mirror https://github.com/astral-sh/python-build-standalone/releases/download 3.12.14 && UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12.14 --managed-python --no-python-downloads && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.1.1)"
 test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" tests/custom_suffix_test.py tests/main_test.py"
 fail_to_pass = [
   "tests/custom_suffix_test.py::test_private_suffix_metadata_after_partial_match[region.example.com-private_components0-region-True]",

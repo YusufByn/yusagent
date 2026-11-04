@@ -4,7 +4,7 @@ license = "BSD-3-Clause"
 source = { git = "https://github.com/john-kurkowski/tldextract.git", commit = "c4a17b6f2fe86c58ce84bba8fade02d9cf041b57", gold = "35b88ebeaa9d771c83e3df24b40e73a5bd924962" }
 upstream = { repo = "john-kurkowski/tldextract", pr = "https://github.com/john-kurkowski/tldextract/pull/368", issue = "https://github.com/john-kurkowski/tldextract/issues/370" }
 files = []
-setup = "UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12 && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.1.1)"
+setup = "uv python install -q --mirror https://github.com/astral-sh/python-build-standalone/releases/download 3.12.14 && UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12.14 --managed-python --no-python-downloads && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.1.1)"
 test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" tests/main_test.py"
 fail_to_pass = [
   "tests/main_test.py::test_reverse_domain_name_notation_no_suffix",

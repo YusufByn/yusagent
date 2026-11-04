@@ -40,7 +40,12 @@ TASKS = HERE.parent / "tasks"
 LOCKS = HERE / "locks"
 MINE_CACHE = Path.home() / ".cache" / "yusagent-smoke" / "mine"
 
-PY_SETUP = ("UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12"
+# Interpréteur figé (T07) : 3.12.14 géré par uv, téléchargé depuis python-build-standalone
+# sur GitHub (`--mirror` : pas de détour par releases.astral.sh, hors liste blanche).
+PY_SETUP = ("uv python install -q --mirror "
+            "https://github.com/astral-sh/python-build-standalone/releases/download 3.12.14"
+            " && UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12.14"
+            " --managed-python --no-python-downloads"
             " && (.venv/bin/python -c 'import pytest' 2>/dev/null"
             " || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest=={pytest})")
 NODE_SETUP = "npm ci --ignore-scripts --no-audit --no-fund --loglevel=error"

@@ -4,7 +4,7 @@ license = "Apache-2.0"
 source = { git = "https://github.com/google/langextract.git", commit = "cebb3234f22a67115085187c7872431c7101e828", gold = "5a8490b16d16033319e3acf5514f2eefc99514ad" }
 upstream = { repo = "google/langextract", pr = "https://github.com/google/langextract/pull/584", issue = "https://github.com/google/langextract/issues/574" }
 files = ["uv.lock"]
-setup = "UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12 && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.2.0)"
+setup = "uv python install -q --mirror https://github.com/astral-sh/python-build-standalone/releases/download 3.12.14 && UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12.14 --managed-python --no-python-downloads && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.2.0)"
 test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" tests/data_lib_test.py"
 fail_to_pass = [
   "tests/data_lib_test.py::test_extractions_survive_dict_round_trip_none",

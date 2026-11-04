@@ -4,7 +4,7 @@ license = "Apache-2.0"
 source = { git = "https://github.com/getzep/graphiti.git", commit = "c38d7c1185ed5d6b699a8e2ba0856bc6a2cf0f1e", gold = "6e3e3cb98edfac4ca5be6129002d76cdf714ad09" }
 upstream = { repo = "getzep/graphiti", pr = "https://github.com/getzep/graphiti/pull/2030", issue = "https://github.com/getzep/graphiti/issues/2027" }
 files = []
-setup = "UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12 && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.0.3)"
+setup = "uv python install -q --mirror https://github.com/astral-sh/python-build-standalone/releases/download 3.12.14 && UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12.14 --managed-python --no-python-downloads && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.0.3)"
 test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" tests/utils/maintenance/test_bulk_utils.py tests/utils/maintenance/test_configurable_prompts.py tests/utils/maintenance/test_edge_operations.py"
 fail_to_pass = [
   "tests/utils/maintenance/test_bulk_utils.py::test_dedupe_edges_bulk_merges_episode_provenance_for_duplicates",
