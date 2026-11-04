@@ -120,6 +120,22 @@ NET_PROBE = (
     "print('SMOKE_CURL_PROXY', r.exit_code)"
 )
 
+# Sonde d'isolation (T06) : tente de lire, par chemin absolu, des fichiers hors du
+# workspace (tests cachés, copie pristine), en Python et par `bash()`. Chemins fixés au
+# lancement (`--read-probe-path`), une ligne par chemin et par voie, jamais le contenu.
+READ_PROBE_PATHS = "<read-probe-paths>"
+READ_PROBE = (
+    "import os, shlex\n"
+    f"for p in {READ_PROBE_PATHS}:\n"
+    "    try:\n"
+    "        os.listdir(p) if os.path.isdir(p) else open(p, 'rb').read(1)\n"
+    "        print('SMOKE_READ_PY', p, 'ok')\n"
+    "    except Exception as e:\n"
+    "        print('SMOKE_READ_PY', p, type(e).__name__)\n"
+    "    r = await bash(('ls ' if os.path.isdir(p) else 'cat ') + shlex.quote(p) + ' > /dev/null')\n"
+    "    print('SMOKE_READ_BASH', p, 'ok' if r.exit_code == 0 else f'exit={r.exit_code}')"
+)
+
 SCENARIOS: dict[str, list[str]] = {
     "basic": [
         "print(1)",
@@ -168,7 +184,7 @@ SCENARIOS: dict[str, list[str]] = {
     "mask": [mask_cell(turn) for turn in range(1, MASK_TURNS + 1)],
     # Smoke bench (T06, YA-14) : chaque scénario résout sa tâche d'exemple en
     # quelques cellules, après la sonde réseau ; `smoke-fail` ne corrige rien.
-    "smoke-probe": [NET_PROBE],
+    "smoke-probe": [NET_PROBE, READ_PROBE],
     "smoke-warmup": [],
     # Préparation du venv du kernel, hors sandbox : aucune sortie réseau dans la cellule.
     "smoke-kernel": ["print('SMOKE_KERNEL_READY', 1)"],
@@ -178,6 +194,7 @@ SCENARIOS: dict[str, list[str]] = {
         "import pathlib\np = pathlib.Path('textstats/__init__.py')\n"
         "p.write_text(p.read_text().replace(\"text.split(' ')\", 'text.split()'))\n"
         "print('SMOKE_EDIT', 'text.split()' in p.read_text())",
+        READ_PROBE,
     ],
     "smoke-node-example-001": [
         "print(open('src/slug.js').read())",
@@ -186,8 +203,9 @@ SCENARIOS: dict[str, list[str]] = {
         "p.write_text(p.read_text().replace(\"/[^a-z0-9]/g, '-')\","
         " \"/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')\"))\n"
         "print('SMOKE_EDIT', '+/g' in p.read_text())",
+        READ_PROBE,
     ],
-    "smoke-fail": ["print('SMOKE_NOOP')", NET_PROBE],
+    "smoke-fail": ["print('SMOKE_NOOP')", NET_PROBE, READ_PROBE],
 }
 CHILD_MARKER = "YA_CHILD_TASK"
 # L'enfant relève aussi ce que voit son propre kernel (YA-02).
@@ -336,11 +354,13 @@ class Plan:
 class CaptureState:
     def __init__(self, out_dir: Path, scenario: str, inflate_from_turn: int | None,
                  inflate_tokens: int, usage_split: bool = False, prefix_cache: bool = False,
-                 connect_proxy_port: int | None = None, reject_models: tuple[str, ...] = ()):
+                 connect_proxy_port: int | None = None, reject_models: tuple[str, ...] = (),
+                 read_probe_paths: tuple[str, ...] = ()):
         self.out_dir = out_dir
         self.usage = UsageModel(prefix_cache)
         self.usage_split = usage_split
         self.cells = [cell.replace(CONNECT_PROXY_PORT, str(connect_proxy_port or 9))
+                      .replace(READ_PROBE_PATHS, repr(list(read_probe_paths)))
                       for cell in SCENARIOS[scenario]]
         self.reject_models = set(reject_models)
         self.no_websocket = False
@@ -804,13 +824,15 @@ def main() -> None:
                         help="port du proxy CONNECT du smoke bench, pour la sonde réseau (T06)")
     parser.add_argument("--reject-model", action="append", default=[],
                         help="répond « modèle inconnu » pour cet id (T06, id faux simulé)")
+    parser.add_argument("--read-probe-path", action="append", default=[],
+                        help="chemin hors workspace que la sonde d'isolation tente de lire (T06)")
     parser.add_argument("--no-websocket", action="store_true",
                         help="refuse l'upgrade WebSocket (404) : force le repli SSE (T06)")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     state = CaptureState(args.out, args.scenario, args.inflate_from_turn, args.inflate_tokens,
                          args.usage_split, args.prefix_cache, args.connect_proxy_port,
-                         tuple(args.reject_model))
+                         tuple(args.reject_model), tuple(args.read_probe_path))
     state.no_websocket = args.no_websocket
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(state))
     port = server.server_address[1]

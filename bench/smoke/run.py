@@ -51,6 +51,9 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 CAPTURE = REPO / "bench" / "tools" / "capture"
 SANDBOX = CAPTURE / "sandbox.sb"
+# Phase agent : même réseau, plus aucune lecture de bench/smoke/ ni du cache des tâches
+# hors workspace (tests cachés).
+SANDBOX_AGENT = HERE / "sandbox-agent.sb"
 sys.path.insert(0, str(HERE))
 
 import metrics  # noqa: E402
@@ -241,10 +244,21 @@ def write_agent_config(agent_dir: Path, proxy_port: int, source: dict, settings:
         json.dumps({"cacheRetention": CACHE_RETENTION, **settings}, indent=2) + "\n")
 
 
+def agent_profile(cache: "Cache", workspace: Path) -> list[str]:
+    """Arguments de sandbox-exec pour une session d'agent dont le workspace est donné."""
+    tasks = (cache.root / "tasks").resolve()
+    workspace = workspace.resolve()
+    task_dir = workspace.parent if workspace.parent.parent == tasks else tasks
+    params = {"SMOKE_DIR": HERE, "TASKS_DIR": tasks, "TASK_DIR": task_dir,
+              "SOURCES_DIR": (cache.root / "sources").resolve(), "WORKSPACE_DIR": workspace}
+    return ["-f", str(SANDBOX_AGENT), *[a for k, v in params.items() for a in ("-D", f"{k}={v}")]]
+
+
 def run_process(cmd: list[str], env: dict, cwd: Path, out: Path, err: Path, timeout: int,
-                sandboxed: bool) -> dict:
+                sandboxed: bool, profile: list[str] | None = None) -> dict:
+    """Lance `cmd` ; sous sandbox, profil réseau du banc de capture sauf `profile` donné."""
     if sandboxed:
-        cmd = ["/usr/bin/sandbox-exec", "-f", str(SANDBOX), *cmd]
+        cmd = ["/usr/bin/sandbox-exec", *(profile or ["-f", str(SANDBOX)]), *cmd]
     started = time.monotonic()
     with out.open("w") as stdout, err.open("w") as stderr:
         proc = subprocess.Popen(cmd, env=env, cwd=cwd, stdin=subprocess.DEVNULL, stdout=stdout,
@@ -478,7 +492,8 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
     connect_before = len(proxies.read_log(connect.log.path))
     env = agent_env(cache, agent_dir, connect.port, capture)
     process = run_process(agent_cmd(binary, model, effort, prompt), env, cwd,
-                          out / "out.jsonl", out / "err.log", timeout, sandboxed=True)
+                          out / "out.jsonl", out / "err.log", timeout, sandboxed=True,
+                          profile=agent_profile(cache, cwd))
     copied = copy_new_sessions(agent_dir, before, out / "sessions")
     records = metrics.read_ndjson(copied["usage"])
     entries = metrics.session_entries(copied["sessions"])
@@ -490,12 +505,32 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
             "proxy_log": proxies.read_log(access.log_path), "connect": connect_entries}
 
 
-def probe(binary: Path, cache: Cache, out: Path, connect: proxies.ConnectProxy) -> dict:
+def work_dir(cache: Cache, name: str) -> Path:
+    """Projet vide hors de bench/smoke/ (refusé par le profil de la phase agent)."""
+    path = cache.root / "work" / name
+    shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True)
+    return path
+
+
+def read_probe_args(paths: list[Path]) -> list[str]:
+    return [arg for path in paths for arg in ("--read-probe-path", str(path.resolve()))]
+
+
+def hidden_targets(task: dict, cache: Cache) -> list[Path]:
+    """Chemins que la sonde d'isolation tente de lire : un test caché, la copie pristine."""
+    hidden = sorted(p for p in (task["dir"] / "hidden").rglob("*") if p.is_file())
+    _, pristine, marker = task_paths(task, cache)
+    return hidden[:1] + [pristine, marker]
+
+
+def probe(binary: Path, cache: Cache, out: Path, connect: proxies.ConnectProxy,
+          tasks: list[dict]) -> dict:
     """Sonde réseau sous sandbox, contre le serveur de capture (aucun modèle réel)."""
     write_fake_auth(cache.probe_agent)
-    project = out / "project"
-    project.mkdir(parents=True, exist_ok=True)
-    access = Access(out, True, "smoke-probe", connect.port)
+    project = work_dir(cache, "probe")
+    targets = hidden_targets(tasks[0], cache) if tasks else [HERE / "README.md"]
+    access = Access(out, True, "smoke-probe", connect.port, read_probe_args(targets))
     try:
         session = agent_session(binary, cache, cache.probe_agent, out, DEFAULT_MODELS[0],
                                 DEFAULT_EFFORT, PROBE_PROMPT, project, access, connect,
@@ -504,11 +539,12 @@ def probe(binary: Path, cache: Cache, out: Path, connect: proxies.ConnectProxy) 
         access.stop()
     markers = metrics.kernel_markers(session["entries"])
     connects = metrics.connect_summary(session["connect"])
-    direct = markers.get("SMOKE_CURL_DIRECT")
-    via_proxy = markers.get("SMOKE_CURL_PROXY")
+    direct = metrics.last_marker(markers, "SMOKE_CURL_DIRECT")
+    via_proxy = metrics.last_marker(markers, "SMOKE_CURL_PROXY")
     return {"exit": session["process"]["exit"],
-            "kernel_proxy_vars": markers.get("SMOKE_KERNEL_PROXY_VARS"),
-            "bash_proxy_vars": markers.get("SMOKE_BASH_PROXY_VARS"),
+            "kernel_proxy_vars": metrics.last_marker(markers, "SMOKE_KERNEL_PROXY_VARS"),
+            "bash_proxy_vars": metrics.last_marker(markers, "SMOKE_BASH_PROXY_VARS"),
+            "isolation": metrics.isolation(markers),
             "curl_direct_exit": direct, "curl_via_proxy_exit": via_proxy,
             "connect": connects,
             "network_cut": (direct not in (None, "0") and via_proxy not in (None, "0")
@@ -519,8 +555,7 @@ def warmup(binary: Path, cache: Cache, out: Path, model: str, effort: str, sourc
            settings: dict, connect: proxies.ConnectProxy, capture: bool,
            server_args: list[str]) -> dict:
     """Run de chauffe : le modèle doit répondre. Un id faux échoue ici, pas au run mesuré."""
-    project = out / "project"
-    project.mkdir(parents=True, exist_ok=True)
+    project = work_dir(cache, "warmup")
     access = Access(out, capture, "smoke-warmup", connect.port, server_args)
     try:
         session = agent_session(binary, cache, cache.agent, out, model, effort, WARMUP_PROMPT,
@@ -547,7 +582,8 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     workspace = restore(task, cache)
     prompt = (task["dir"] / "prompt.md").read_text()
     scenario = f"smoke-{'fail' if task['id'] in capture_fail else task['id']}"
-    access = Access(out, capture, scenario, connect.port, server_args)
+    access = Access(out, capture, scenario, connect.port,
+                    server_args + read_probe_args(hidden_targets(task, cache)))
     try:
         session = agent_session(binary, cache, cache.agent, out, model, effort, prompt,
                                 workspace, access, connect, source, settings, capture,
@@ -583,6 +619,10 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     if any(m != model for m in calls["models"]):
         anomalies.append(f"modèle journalisé {calls['models']} au lieu de {model}")
     connects = metrics.connect_summary(session["connect"])
+    markers = metrics.kernel_markers(entries)
+    isolated = metrics.isolation(markers)
+    if isolated and isolated["readable"]:
+        anomalies.append(f"lecture hors workspace réussie : {isolated['readable']}")
     return {
         "task": task["id"], "run": index, "status": status, "resolved": status == "resolved",
         "tests": graded["tests"], "agent": process, "final": final,
@@ -593,7 +633,8 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
         "transports": {k: v for k, v in transports.items() if k != "per_request"},
         "transport_failures_in_session": metrics.session_transport_failures(entries),
         "per_request": transports["per_request"],
-        "connect": connects, "kernel_markers": metrics.kernel_markers(entries),
+        "isolation": isolated,
+        "connect": connects, "kernel_markers": markers,
         "anomalies": anomalies,
     }
 
@@ -725,6 +766,9 @@ def write_report(run_dir: Path, report: dict) -> None:
               f" CONNECT refusés : {p['connect']['refused_hosts']})",
               f"- Variables de proxy vues par le kernel (noms) : {p['kernel_proxy_vars']} ; "
               f"par `bash()` : {p['bash_proxy_vars']}",
+              f"- Isolation des tests cachés : lectures hors workspace tentées "
+              f"{(p['isolation'] or {}).get('checked')}, réussies "
+              f"{(p['isolation'] or {}).get('readable')}",
               "", "## Run de chauffe", "",
               f"- OK : **{w['ok']}** (arrêt `{w['stop_reason']}`, {w['calls']} appel(s), "
               f"transports {w['transports']}, CONNECT acceptés {w['connect']['accepted']}, "
@@ -882,7 +926,7 @@ def main() -> None:
         try:
             # En enregistrement, le proxy CONNECT accepte tout hôte : pas de sonde.
             probe_result = None if args.record_hosts else probe(binary, cache,
-                                                                run_dir / "probe", connect)
+                                                                run_dir / "probe", connect, tasks)
             warm = warmup(binary, cache, run_dir / "warmup", model, args.effort, sources[model],
                           settings, connect, args.capture, warmup_args)
             if args.record_hosts:
@@ -920,7 +964,8 @@ def main() -> None:
             "binary_manifest": manifest, "binary_version": version_of([str(binary), "--version"]),
             "models_bundled_sha256": sha256(bundled), "provider": PROVIDER, "model": model,
             "model_source": sources[model].get("source"),
-            "model_fiche_source": sources[model].get("fiche_source"), "effort": args.effort,
+            "model_fiche_source": sources[model].get("fiche_source"),
+            "effort": args.effort,
             "settings_file": str(args.settings.resolve().relative_to(REPO))
             if args.settings.resolve().is_relative_to(REPO) else str(args.settings),
             "settings": settings, "settings_non_default": known_settings(settings),

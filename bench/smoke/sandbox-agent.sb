@@ -1,0 +1,20 @@
+;; Profil sandbox-exec de la phase agent du smoke bench (T06, YA-14).
+;; Réseau : les règles de bench/tools/capture/sandbox.sb (sortant limité à localhost,
+;; DNS refusé). Fichiers : contenu et écriture refusés pour bench/smoke/ (tâches,
+;; tests cachés, rapports) et pour le cache des tâches et des sources, sauf le
+;; workspace de la session. Les deux dossiers ancêtres du workspace dans le cache
+;; restent listables (noms seuls) : getcwd et realpath les lisent.
+;; Une règle sur file-read-data l'emporte sur une règle file-read* : les exceptions
+;; portent donc sur la même opération.
+(version 1)
+(allow default)
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote unix-socket))
+(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
+(deny file-read-data file-write*
+  (subpath (param "SMOKE_DIR"))
+  (subpath (param "TASKS_DIR"))
+  (subpath (param "SOURCES_DIR")))
+(allow file-read-data (literal (param "TASKS_DIR")) (literal (param "TASK_DIR")))
+(allow file-read-data file-write* (subpath (param "WORKSPACE_DIR")))

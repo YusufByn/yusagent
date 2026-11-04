@@ -182,9 +182,9 @@ def final_assistant(entries: list[dict]) -> dict:
     return {"stop_reason": last.get("stopReason"), "error": last.get("errorMessage")}
 
 
-def kernel_markers(entries: list[dict]) -> dict:
-    """Lignes `SMOKE_*` imprimées par les cellules (sonde réseau des scénarios de capture)."""
-    found = {}
+def kernel_markers(entries: list[dict]) -> dict[str, list[str]]:
+    """Lignes `SMOKE_*` imprimées par les cellules (sondes des scénarios de capture)."""
+    found: dict[str, list[str]] = {}
     for entry in entries:
         message = entry.get("message") or {}
         if message.get("role") != "toolResult":
@@ -193,8 +193,23 @@ def kernel_markers(entries: list[dict]) -> dict:
             for line in (part.get("text", "") if isinstance(part, dict) else "").splitlines():
                 if line.startswith("SMOKE_"):
                     name, _, value = line.partition(" ")
-                    found[name] = value.strip()
+                    found.setdefault(name, []).append(value.strip())
     return found
+
+
+def last_marker(markers: dict[str, list[str]], name: str) -> str | None:
+    values = markers.get(name)
+    return values[-1] if values else None
+
+
+def isolation(markers: dict[str, list[str]]) -> dict | None:
+    """Sonde d'isolation : lectures hors workspace tentées et réussies (doit être vide)."""
+    reads = ([f"python {v}" for v in markers.get("SMOKE_READ_PY", [])]
+             + [f"bash {v}" for v in markers.get("SMOKE_READ_BASH", [])])
+    if not reads:
+        return None
+    return {"checked": len(reads), "readable": [r for r in reads if r.endswith(" ok")],
+            "results": reads}
 
 
 def match_transports(records: list[dict], proxy_log: list[dict]) -> dict:

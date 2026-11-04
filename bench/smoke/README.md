@@ -47,9 +47,9 @@ python3 -I bench/smoke/compare.py <run A> <run B> --out <fichier>.md
 
 1. **Contrôles** : modèle de la liste fermée, au catalogue ou déclaré par une fiche complète ; login présent ; liste d'hôtes établie.
 2. **Préparation** (réseau autorisé, une fois par binaire ou par version de tâche) : venv du kernel contre le serveur de capture ; pour chaque tâche, copie ou clone, patch, `setup`, puis vérification sous sandbox que `fail_to_pass` échoue et `pass_to_pass` passe sur l'état cassé (sinon la tâche est invalide, arrêt).
-3. **Sonde réseau** (sandbox, serveur de capture, aucun modèle) : `curl` direct depuis `bash()` en échec, `curl https://example.com` par le proxy CONNECT refusé et journalisé, noms des variables de proxy vues par le kernel et par `bash()`.
+3. **Sonde réseau et isolation** (profil de la phase agent, serveur de capture, aucun modèle) : `curl` direct depuis `bash()` en échec, `curl https://example.com` par le proxy CONNECT refusé et journalisé, noms des variables de proxy vues par le kernel et par `bash()`, lecture d'un test caché et de la copie pristine par chemin absolu (Python et `bash()`) en échec. Les scénarios des tâches d'exemple refont ces lectures pendant la phase agent.
 4. **Run de chauffe** (sandbox, même accès que la phase agent) : le modèle doit répondre. Un id faux ou un jeton refusé fait échouer la préparation ici, pas le run mesuré. Rafraîchit le jeton si besoin.
-5. **Phase agent** (sandbox, localhost seulement) : copie fraîche du projet, `prime-agent -p --mode json --provider openai-codex --model <id> --thinking <effort>`, énoncé de `prompt.md`.
+5. **Phase agent** (sandbox `sandbox-agent.sb` : localhost seulement, et ni lecture ni écriture de `bench/smoke/` ni du cache des tâches hors workspace, donc ni `hidden/` ni la copie pristine) : copie fraîche du projet, `prime-agent -p --mode json --provider openai-codex --model <id> --thinking <effort>`, énoncé de `prompt.md`.
 6. **Notation** (sandbox) : `hidden/` copié dans le workspace, `test` lancé avec la variable `SMOKE_JUNIT` (rapport JUnit). Résolue = tous les `fail_to_pass` et `pass_to_pass` passent. Statuts : `resolved`, `failed`, `timeout`, `agent_error`, `harness_error`.
 
 Variables fixées pour le binaire : `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PI_CACHE_RETENTION=short` (et `cacheRetention` dans les réglages), `PRIME_AGENT_CODING_AGENT_DIR`, `PRIME_AGENT_KERNEL_VENV`, `HTTPS_PROXY`, `NO_PROXY=127.0.0.1,localhost`, `HOME` et `TMPDIR` isolés.
@@ -65,8 +65,8 @@ Variables fixées pour le binaire : `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_V
 
 `runs/<horodatage UTC>-<sha court>-<modèle>/` (ignoré par git) : `report.md`, `report.json`, `tasks.csv`, et par tâche les sessions, le journal d'usage, la sortie JSON du binaire, les journaux des proxys et de la notation. En mode capture, les requêtes reçues par le serveur de capture y sont aussi (en-têtes d'authentification masqués, identifiants factices).
 
-- **En-tête** : commit, sha256 du binaire et commit de son manifeste, sha256 de `models.bundled.json`, provider, modèle et source de sa fiche, effort, réglages non par défaut (`masking`, `rlm`, `cacheRetention`, `transport`), version et sha256 de `prices.json`, hôtes autorisés, nombre de runs.
-- **Par tâche** : statut, tokens (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation 5 min / 1 h, `reasoning`), appels par type, tours (appels `main`), taux de cache de session et médiane par requête de continuation, invalidations et coût d'écriture associé, coût théorique, durée, TTFT médian, sorties coupées (`length`), cellules `python_repl` en erreur par type (`SyntaxError` à part), CONNECT refusés, transport de chaque requête.
+- **En-tête** : commit, sha256 du binaire et commit de son manifeste, sha256 de `models.bundled.json`, provider, modèle, et source de sa fiche, effort, réglages non par défaut (`masking`, `rlm`, `cacheRetention`, `transport`), version et sha256 de `prices.json`, hôtes autorisés, nombre de runs.
+- **Par tâche** : statut, tokens (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation 5 min / 1 h, `reasoning`), appels par type, tours (appels `main`), taux de cache de session et médiane par requête de continuation, invalidations et coût d'écriture associé, coût théorique, durée, TTFT médian, sorties coupées (`length`), cellules `python_repl` en erreur par type (`SyntaxError` à part), CONNECT refusés, transport de chaque requête, lectures hors workspace réussies (anomalie, mode capture).
 - **Transport** : WebSocket attendu pour les appels de boucle (`main`, `subagent`). Toute requête de boucle en SSE est comptée et signalée comme anomalie. Compaction, `/refine` et résumé de branche passent en SSE par construction (`compaction_exec.rs:177`, `refine.rs:664`, `branch_summarization.rs:468`, dans `crates/pa-core/src/session_engine/`).
 - **Totaux** : tâches résolues, coût total et par tâche résolue, tokens, tours médians, taux de cache, anomalies. Avec `RUNS>1` : taux de résolution, bascule et écart-type par tâche.
 - **Secrets** : recherche, dans tout le dossier de run, des valeurs factices de `bench/tools/capture/run.py`, de l'identifiant factice du mode capture et, en run réel, des valeurs de `auth.json`.
@@ -97,6 +97,7 @@ tasks/<id>/
 |---|---|
 | `run.py` | Runner (contrôles, préparation, sonde, chauffe, phase agent, notation, rapport) |
 | `proxies.py` | Reverse proxy à cible fixe et proxy CONNECT à liste blanche |
+| `sandbox-agent.sb` | Profil sandbox de la phase agent (réseau localhost, tests cachés et cache des tâches illisibles) |
 | `metrics.py` | Mesures depuis le journal d'usage, la session et les journaux des proxys |
 | `compare.py` | Comparaison appariée de deux runs |
 | `prices.json` | Tarifs API (source, date) |
