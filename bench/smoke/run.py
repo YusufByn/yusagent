@@ -633,6 +633,7 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
         "transports": {k: v for k, v in transports.items() if k != "per_request"},
         "transport_failures_in_session": metrics.session_transport_failures(entries),
         "per_request": transports["per_request"],
+        "context_peak": metrics.context_peak(records),
         "isolation": isolated,
         "connect": connects, "kernel_markers": markers,
         "anomalies": anomalies,
@@ -691,6 +692,8 @@ def aggregate(results: list[dict]) -> dict:
             "tokens_mean": statistics.mean(tokens),
             "tokens_stdev": statistics.stdev(tokens) if len(tokens) > 1 else None,
             "turns_mean": statistics.mean(r["calls"]["turns"] for r in runs),
+            "context_peak_max": max((r["context_peak"] for r in runs
+                                     if r["context_peak"] is not None), default=None),
             "tokens_by_category_mean": {
                 k: (statistics.mean(r["tokens"][k] for r in runs)
                     if all(r["tokens"][k] is not None for r in runs) else None)
@@ -730,7 +733,8 @@ def fmt(value, digits: int = 4) -> str:
 def write_report(run_dir: Path, report: dict) -> None:
     (run_dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     fields = ["task", "run", "status", "cost", "input", "output", "cacheRead", "cacheWrite",
-              "reasoning", "turns", "calls", "cache_session_rate", "cache_continuation_median",
+              "reasoning", "context_peak", "turns", "calls", "cache_session_rate",
+              "cache_continuation_median",
               "ttft_median_ms", "seconds", "websocket", "sse", "loop_on_sse", "connect_refused",
               "cell_errors", "syntax_errors", "truncated"]
     with (run_dir / "tasks.csv").open("w", newline="") as handle:
@@ -742,6 +746,7 @@ def write_report(run_dir: Path, report: dict) -> None:
                 "cost": r["cost"]["total"], **{k: r["tokens"][k] for k in
                                                ("input", "output", "cacheRead", "cacheWrite",
                                                 "reasoning")},
+                "context_peak": r["context_peak"],
                 "turns": r["calls"]["turns"], "calls": r["calls"]["total"],
                 "cache_session_rate": r["cache"]["session_rate"],
                 "cache_continuation_median": r["cache"]["continuation_median"],
@@ -756,7 +761,7 @@ def write_report(run_dir: Path, report: dict) -> None:
              "| Champ | Valeur |", "|---|---|"]
     for key in ("mode", "commit", "commit_dirty", "binary", "binary_sha256", "binary_manifest",
                 "binary_version", "models_bundled_sha256", "provider", "model", "model_source",
-                "effort", "settings_file", "settings_non_default", "prices_version",
+                "model_fiche_hypotheses", "effort", "settings_file", "settings_non_default", "prices_version",
                 "prices_sha256", "cache_write_price", "hosts", "runs", "tasks"):
         lines.append(f"| {key} | `{json.dumps(h.get(key), ensure_ascii=False)}` |")
     p, w = report["probe"], report["warmup"]
@@ -783,16 +788,17 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"- Appels de boucle en SSE (anomalie) : **{t['loop_on_sse']}** ; CONNECT refusés :"
               f" {t['connect_refused']} ; anomalies : {t['anomalies']}",
               "", "## Tâches", "",
-              "| Tâche | Run | Statut | Coût $ | input | output | cacheRead | reasoning | Tours |"
+              "| Tâche | Run | Statut | Coût $ | input | output | cacheRead | reasoning |"
+              " Pic de contexte | Tours |"
               " Cache session | Cache contin. (méd.) | TTFT méd. ms | Durée s | WS | SSE |"
               " Cellules en erreur (Syntax) | Coupées |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in report["results"]:
         lines.append(
             f"| {r['task']} | {r['run']} | {r['status']} | {fmt(r['cost']['total'])} | "
             f"{fmt(r['tokens']['input'])} | {fmt(r['tokens']['output'])} | "
             f"{fmt(r['tokens']['cacheRead'])} | {fmt(r['tokens']['reasoning'])} | "
-            f"{r['calls']['turns']} | {fmt(r['cache']['session_rate'])} | "
+            f"{fmt(r['context_peak'])} | {r['calls']['turns']} | {fmt(r['cache']['session_rate'])} | "
             f"{fmt(r['cache']['continuation_median'])} | {fmt(r['calls']['ttft_median_ms'], 1)} | "
             f"{r['agent']['seconds']} | {r['transports']['requests'].get('websocket', 0)} | "
             f"{r['transports']['requests'].get('sse', 0)} | {r['cells']['errors']} "
@@ -965,6 +971,7 @@ def main() -> None:
             "models_bundled_sha256": sha256(bundled), "provider": PROVIDER, "model": model,
             "model_source": sources[model].get("source"),
             "model_fiche_source": sources[model].get("fiche_source"),
+            "model_fiche_hypotheses": (sources[model].get("fiche_source") or {}).get("hypotheses"),
             "effort": args.effort,
             "settings_file": str(args.settings.resolve().relative_to(REPO))
             if args.settings.resolve().is_relative_to(REPO) else str(args.settings),

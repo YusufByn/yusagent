@@ -212,6 +212,11 @@ def isolation(markers: dict[str, list[str]]) -> dict | None:
             "results": reads}
 
 
+def context_peak(records: list[dict]) -> int | None:
+    """Plus gros prompt envoyé (input + cacheRead + cacheWrite), en tokens."""
+    return max((prompt_size(r) for r in records), default=None)
+
+
 def match_transports(records: list[dict], proxy_log: list[dict]) -> dict:
     """Transport de chaque appel modèle : appariement journal d'usage ↔ reverse proxy.
 
