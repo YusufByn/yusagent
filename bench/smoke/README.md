@@ -46,7 +46,7 @@ python3 -I bench/smoke/compare.py <run A> <run B> --out <fichier>.md
 ## Déroulé
 
 1. **Contrôles** : modèle de la liste fermée, au catalogue ou déclaré par une fiche complète ; login présent ; liste d'hôtes établie.
-2. **Préparation** (réseau autorisé, une fois par binaire ou par version de tâche) : venv du kernel contre le serveur de capture ; pour chaque tâche, copie ou clone, patch, `setup`, puis vérification sous sandbox que `fail_to_pass` échoue et `pass_to_pass` passe sur l'état cassé (sinon la tâche est invalide, arrêt).
+2. **Préparation** (une fois par binaire ou par version de tâche) : venv du kernel contre le serveur de capture ; pour chaque tâche, copie ou clone, patch, fichiers de `files`, `setup`, puis vérification sous sandbox que `fail_to_pass` échoue et `pass_to_pass` passe sur l'état cassé (sinon la tâche est invalide, arrêt). `setup` et `test` tournent sous `sandbox-task.sb` (voir « Code des tâches »). Source `git` : après `setup`, l'historique est remplacé par un seul commit, pour que le commit de correction et la suite de l'historique ne soient pas lisibles par l'agent.
 3. **Sonde réseau et isolation** (profil de la phase agent, serveur de capture, aucun modèle) : `curl` direct depuis `bash()` en échec, `curl https://example.com` par le proxy CONNECT refusé et journalisé, noms des variables de proxy vues par le kernel et par `bash()`, lecture d'un test caché et de la copie pristine par chemin absolu (Python et `bash()`) en échec. Les scénarios des tâches d'exemple refont ces lectures pendant la phase agent.
 4. **Run de chauffe** (sandbox, même accès que la phase agent) : le modèle doit répondre. Un id faux ou un jeton refusé fait échouer la préparation ici, pas le run mesuré. Rafraîchit le jeton si besoin.
 5. **Phase agent** (sandbox `sandbox-agent.sb` : localhost seulement, et ni lecture ni écriture de `bench/smoke/` ni du cache des tâches hors workspace, donc ni `hidden/` ni la copie pristine) : copie fraîche du projet, `prime-agent -p --mode json --provider openai-codex --model <id> --thinking <effort>`, énoncé de `prompt.md`.
@@ -89,7 +89,19 @@ tasks/<id>/
   hidden/     # tests copiés après la phase agent
 ```
 
-`source` : `{ path = "repo" }` (dossier local) ou `{ git = "<url>", commit = "<sha>", patch = "break.patch" }`. `test` doit écrire un rapport JUnit dans `$SMOKE_JUNIT` ; un identifiant de test vaut `<fichier relatif>::<nom>` (ou `<classe>::<nom>`). Les tâches marquées `exemple` (`py-example-001`, `node-example-001`) valident le format et ne comptent pas dans le banc : elles ne tournent par défaut qu'en mode capture.
+`source` : `{ path = "repo" }` (dossier local) ou `{ git = "<url>", commit = "<sha>", gold = "<sha>", patch = "break.patch" }` (`commit` : parent de la correction ; `gold` : commit de correction, pour `--validate-gold`). Champs des tâches publiques : `license`, `upstream` (dépôt, PR, issue), `files` (fichiers de `files/` copiés dans le workspace avant `setup`, par exemple le `uv.lock` figé à la revalidation quand le dépôt n'en a pas ; `files/freeze.txt` garde l'environnement de référence). Tags : `python` ou `node`, `multi-fichiers`, `difficile` ; une tâche `difficile` résolue en moins de 10 tours est signalée dans les anomalies. Les tâches du banc n'ont pas de scénario de capture qui les résout : en mode capture, elles jouent `smoke-fail`. Construction : `tools/make_task.py` depuis un candidat de `tools/candidates.csv` ; l'énoncé est réécrit à la main. `test` doit écrire un rapport JUnit dans `$SMOKE_JUNIT` ; un identifiant de test vaut `<fichier relatif>::<nom>` (ou `<classe>::<nom>`). Les tâches marquées `exemple` (`py-example-001`, `node-example-001`) valident le format et ne comptent pas dans le banc : elles ne tournent par défaut qu'en mode capture.
+
+### Validation sans modèle
+
+```bash
+python3 -I bench/smoke/run.py --validate-gold [--tasks id1,id2] [--validate-runs 3]
+```
+
+Sans binaire ni modèle : préparation de chaque tâche, puis 3 fois l'état cassé (`fail_to_pass` en échec, `pass_to_pass` en succès) et 3 fois la correction officielle (diff de `commit` à `gold` sans les tests cachés, tout en succès), tests sous sandbox réseau coupé. Rapport : `runs/<horodatage>-validate/validate.md`. Une tâche instable est remplacée.
+
+### Code des tâches
+
+`setup` et `test` exécutent le code de dépôts tiers. Ils tournent sous `sandbox-task.sb` : écriture limitée au dossier de la tâche dans le cache, aux caches uv et npm, aux Pythons gérés par uv et au `HOME`/`TMPDIR` du banc ; lecture du contenu de `$HOME` refusée sauf ces dossiers et la toolchain Node (le login du banc et `bench/smoke/` restent illisibles) ; réseau limité à localhost. `setup` passe par un proxy CONNECT à liste blanche (`hosts/setup.txt` : PyPI, npm, GitHub), `test` n'a pas de proxy.
 
 ## Fichiers
 
@@ -98,6 +110,11 @@ tasks/<id>/
 | `run.py` | Runner (contrôles, préparation, sonde, chauffe, phase agent, notation, rapport) |
 | `proxies.py` | Reverse proxy à cible fixe et proxy CONNECT à liste blanche |
 | `sandbox-agent.sb` | Profil sandbox de la phase agent (réseau localhost, tests cachés et cache des tâches illisibles) |
+| `sandbox-task.sb` | Profil sandbox de `setup` et `test` des tâches (écriture et lecture de `$HOME` limitées, réseau localhost) |
+| `hosts/setup.txt` | Hôtes autorisés au proxy CONNECT de `setup` |
+| `tools/mine.py`, `tools/mine.sb`, `tools/mine-hosts.txt` | Minage et validation des candidats (T07), sandbox et hôtes de la revalidation macOS |
+| `tools/discovered.json`, `tools/candidates.csv` | PR découvertes, candidats validés (Linux, écarts macOS) |
+| `tools/make_task.py` | Construction d'une tâche depuis un candidat |
 | `metrics.py` | Mesures depuis le journal d'usage, la session et les journaux des proxys |
 | `compare.py` | Comparaison appariée de deux runs |
 | `prices.json` | Tarifs API (source, date) |
