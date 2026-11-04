@@ -987,6 +987,11 @@ def aggregate(results: list[dict]) -> dict:
             "runs": len(runs), "resolved_rate": rate, "flip": 0 < rate < 1,
             "cost_mean": statistics.mean(cost) if cost else None,
             "cost_stdev": statistics.stdev(cost) if len(cost) > 1 else None,
+            # T08b : `None` si un run n'a pas de coût pessimiste (rapport antérieur).
+            "cost_pessimistic_mean": (
+                statistics.mean(r["cost"]["pessimistic_total"] for r in runs)
+                if runs and all(r["cost"].get("pessimistic_total") is not None for r in runs)
+                else None),
             "tokens_mean": statistics.mean(tokens),
             "tokens_stdev": statistics.stdev(tokens) if len(tokens) > 1 else None,
             "turns_mean": statistics.mean(r["calls"]["turns"] for r in runs),
@@ -1005,6 +1010,8 @@ def totals(results: list[dict]) -> dict:
     resolved = sum(r["resolved"] for r in results)
     costs = [r["cost"]["total"] for r in results]
     cost = sum(costs) if costs and None not in costs else None
+    pessimistic = [r["cost"].get("pessimistic_total") for r in results]
+    cost_pessimistic = sum(pessimistic) if pessimistic and None not in pessimistic else None
     read = sum(r["tokens"]["cacheRead"] or 0 for r in results)
     tokens = {k: (sum(r["tokens"][k] for r in results)
                   if results and all(r["tokens"][k] is not None for r in results) else None)
@@ -1013,6 +1020,10 @@ def totals(results: list[dict]) -> dict:
     return {"task_runs": len(results), "resolved": resolved,
             "cost": cost, "cost_per_resolved": cost / resolved if cost is not None and resolved
             else None,
+            "cost_pessimistic": cost_pessimistic,
+            "cost_pessimistic_per_resolved": (cost_pessimistic / resolved
+                                              if cost_pessimistic is not None and resolved
+                                              else None),
             "tokens": tokens,
             "turns_median": metrics.median([r["calls"]["turns"] for r in results]),
             "cache_rate_all_calls": read / prompt if prompt else None,
@@ -1043,6 +1054,11 @@ def pct(value: float | None) -> float | None:
     return None if value is None else 100 * value
 
 
+def pct_change(a: float | None, b: float | None) -> float | None:
+    """Écart de `b` par rapport à `a`, en % ; `None` si l'un manque ou si `a` est nul."""
+    return None if a in (None, 0) or b is None else (b - a) / a * 100
+
+
 def fmt(value, digits: int = 4) -> str:
     if value is None:
         return "null"
@@ -1053,8 +1069,8 @@ def fmt(value, digits: int = 4) -> str:
 
 def write_report(run_dir: Path, report: dict) -> None:
     (run_dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
-    fields = ["task", "run", "status", "cost", "input", "output", "cacheRead", "cacheWrite",
-              "reasoning", "context_peak", "turns", "calls", "cache_session_rate",
+    fields = ["task", "run", "status", "cost", "cost_pessimistic", "input", "output", "cacheRead",
+              "cacheWrite", "reasoning", "context_peak", "turns", "calls", "cache_session_rate",
               "cache_continuation_median", "cache_avoidable_rate", "server_misses",
               "ttft_median_ms", "seconds", "websocket", "sse", "loop_on_sse", "connect_refused",
               "cell_errors", "syntax_errors", "truncated", "subagent_sessions", "subagent_calls",
@@ -1065,7 +1081,9 @@ def write_report(run_dir: Path, report: dict) -> None:
         for r in report["results"]:
             writer.writerow({
                 "task": r["task"], "run": r["run"], "status": r["status"],
-                "cost": r["cost"]["total"], **{k: r["tokens"][k] for k in
+                "cost": r["cost"]["total"],
+                "cost_pessimistic": r["cost"].get("pessimistic_total"),
+                **{k: r["tokens"][k] for k in
                                                ("input", "output", "cacheRead", "cacheWrite",
                                                 "reasoning")},
                 "context_peak": r["context_peak"],
@@ -1109,8 +1127,11 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"refusés {w['connect']['refused']})",
               "", "## Totaux", "",
               f"- Tâches résolues : **{t['resolved']} / {t['task_runs']}**",
-              f"- Coût théorique : {fmt(t['cost'])} $ ; par tâche résolue : "
-              f"{fmt(t['cost_per_resolved'])} $",
+              f"- Coût théorique : {fmt(t['cost'])} $ (rapporté) ; pessimiste : "
+              f"{fmt(t.get('cost_pessimistic'))} $ "
+              f"({fmt(pct_change(t['cost'], t.get('cost_pessimistic')), 1)} %)",
+              f"- Par tâche résolue : {fmt(t['cost_per_resolved'])} $ (rapporté) ; pessimiste : "
+              f"{fmt(t.get('cost_pessimistic_per_resolved'))} $",
               f"- Tokens : {json.dumps(t['tokens'])}",
               f"- Tours médians : {fmt(t['turns_median'], 1)} ; taux de cache (tous appels) : "
               f"{fmt(t['cache_rate_all_calls'])} ; miss serveur : {t['server_misses']}",
@@ -1121,16 +1142,20 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"{fmt(sub.get('cost'))} $ ({fmt(pct(sub.get('cost_share')), 1)} % du coût), taux de "
               f"cache (tous appels) {fmt(sub.get('cache_rate_all_calls'))}",
               "", "## Tâches", "",
-              "| Tâche | Run | Statut | Coût $ | input | output | cacheRead | reasoning |"
+              "| Tâche | Run | Statut | Coût $ | Coût pess. $ | input | output | cacheRead |"
+              " cacheWrite | reasoning |"
               " Pic de contexte | Tours |"
               " Cache session | Cache contin. (méd.) | Cache évitable | Miss serveur |"
               " TTFT méd. ms | Durée s | WS | SSE | Cellules en erreur (Syntax) | Coupées |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+              "---|---|"]
     for r in report["results"]:
         lines.append(
             f"| {r['task']} | {r['run']} | {r['status']} | {fmt(r['cost']['total'])} | "
+            f"{fmt(r['cost'].get('pessimistic_total'))} | "
             f"{fmt(r['tokens']['input'])} | {fmt(r['tokens']['output'])} | "
-            f"{fmt(r['tokens']['cacheRead'])} | {fmt(r['tokens']['reasoning'])} | "
+            f"{fmt(r['tokens']['cacheRead'])} | {fmt(r['tokens']['cacheWrite'])} | "
+            f"{fmt(r['tokens']['reasoning'])} | "
             f"{fmt(r['context_peak'])} | {r['calls']['turns']} | {fmt(r['cache']['session_rate'])} | "
             f"{fmt(r['cache']['continuation_median'])} | {fmt(r['cache'].get('avoidable_rate'))} | "
             f"{len(r.get('server_misses', []))} | {fmt(r['calls']['ttft_median_ms'], 1)} | "
@@ -1193,6 +1218,11 @@ def report_notes(prices: dict, effort: str) -> list[str]:
         "écriture ventilée par le provider au tarif de son TTL (`cache_write_30m`, "
         f"`cache_write_12h`), sinon au tarif `{CACHE_WRITE_PRICE}` (le corps Codex ne porte pas "
         "de rétention), contexte long au-delà du seuil de prices.json.",
+        f"Coût pessimiste (T08b) : même calcul, `input` non caché au tarif "
+        f"`{metrics.PESSIMISTIC_INPUT_PRICE}` au lieu du tarif d'entrée, comme si tout ce qui "
+        "n'a pas été lu en cache y avait été écrit. Plafond pour un provider qui n'annonce pas "
+        "ses écritures (Codex : `cache_write_tokens` toujours à 0, docs/usage.md) ; trop haut "
+        "pour un provider qui les annonce.",
         "Transport : WebSocket attendu pour les appels de boucle (main, subagent) ; "
         "compaction, /refine et résumé de branche passent en SSE par construction.",
         "Taux de cache de session : cacheRead / (input + cacheRead + cacheWrite) sur les "

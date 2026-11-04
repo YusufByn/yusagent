@@ -34,6 +34,12 @@ TOKEN_FIELDS = ("input", "output", "cacheRead", "cacheWrite", "cacheWrite5m", "c
 # construction (compaction : crates/pa-core/src/session_engine/compaction_exec.rs:177,
 # /refine : refine.rs:664, résumé de branche : branch_summarization.rs:468).
 LOOP_KINDS = {"main", "subagent"}
+# Coût pessimiste (T08b, YA-13) : l'`input` non caché au tarif d'écriture 30 min, comme si
+# tout ce qui n'a pas été lu en cache y avait été écrit. Plafond pour un provider qui
+# n'annonce pas ses écritures (Codex : `cache_write_tokens` toujours à 0, docs/usage.md) ;
+# trop haut pour un provider qui les annonce. 30 min et non 12 h : le harness ne demande
+# jamais 12 h.
+PESSIMISTIC_INPUT_PRICE = "cache_write_30m"
 ERROR_LINE = re.compile(r"^(\w+(?:Error|Exception|Exit|Interrupt))\b")
 
 
@@ -161,9 +167,27 @@ def request_cost(prices: dict, model: str, record: dict, write_key: str) -> floa
             + (record.get("output") or 0) * row["output"]) / per
 
 
+def pessimistic_request_cost(prices: dict, model: str, record: dict,
+                             write_key: str) -> float | None:
+    """`request_cost` avec l'`input` non caché au tarif `PESSIMISTIC_INPUT_PRICE` (T08b).
+
+    Mêmes termes sinon : `cacheRead` au tarif de lecture, `cacheWrite` au tarif de son TTL,
+    `output` au tarif de sortie, contexte long au-delà du seuil. `None` sans tarif.
+    """
+    row, _ = price_row(prices, model, record)
+    if row is None:
+        return None
+    per = 1_000_000
+    return ((record.get("input") or 0) * row[PESSIMISTIC_INPUT_PRICE]
+            + (record.get("cacheRead") or 0) * row["cached_input"]
+            + write_cost(row, record, write_key)
+            + (record.get("output") or 0) * row["output"]) / per
+
+
 def costs(prices: dict, model: str, records: list[dict], write_key: str) -> dict:
     per_request = [request_cost(prices, model, r, write_key) for r in records]
     known = [c for c in per_request if c is not None]
+    pessimistic = [pessimistic_request_cost(prices, model, r, write_key) for r in records]
     invalidated = [r for r in records if "invalidation" in r]
     invalidation_cost = None
     if invalidated and model in prices.get("models", {}):
@@ -172,6 +196,8 @@ def costs(prices: dict, model: str, records: list[dict], write_key: str) -> dict
             for r in invalidated)
     tiers = sorted({price_row(prices, model, r)[1] for r in records} - {None})
     return {"total": sum(known) if known and len(known) == len(per_request) else None,
+            "pessimistic_total": (sum(pessimistic) if pessimistic and None not in pessimistic
+                                  else None),
             "missing_price": model not in prices.get("models", {}),
             "tiers": tiers,
             "invalidations": {"count": len(invalidated),
