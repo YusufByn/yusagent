@@ -15,7 +15,8 @@
 #   shard s'arrête ; le résultat est dans le log et dans le résumé.
 # - Par candidat : 1 run rouge, 3 runs verts, suite complète (durée).
 # - workflow_dispatch n'est utilisable qu'une fois le fichier sur la branche par
-#   défaut : d'ici là, déclenchement par push sur ya-07 limité à bench/smoke/tools/.
+#   défaut : d'ici là, déclenchement par push sur ya-07 limité au mineur et à sa
+#   liste de PR.
 name: ya-mine-validate
 
 on:
@@ -25,9 +26,8 @@ on:
       - "ya-07"
     paths:
       - ".github/workflows/ya-mine-validate.yml"
-      - "bench/smoke/tools/**"
-      - "!bench/smoke/tools/candidates.csv"
-      - "!bench/smoke/tools/locks/**"
+      - "bench/smoke/tools/mine.py"
+      - "bench/smoke/tools/discovered.json"
 
 permissions:
   contents: read
