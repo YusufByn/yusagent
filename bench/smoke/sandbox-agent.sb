@@ -1,17 +1,45 @@
-;; Profil sandbox-exec de la phase agent du smoke bench (T06, YA-14).
+;; Profil sandbox-exec de la phase agent du smoke bench (T06, T07, YA-14).
 ;; Réseau : les règles de bench/tools/capture/sandbox.sb (sortant limité à localhost,
-;; DNS refusé). Fichiers : contenu et écriture refusés pour bench/smoke/ (tâches,
-;; tests cachés, rapports) et pour le cache des tâches et des sources, sauf le
-;; workspace de la session. Les deux dossiers ancêtres du workspace dans le cache
-;; restent listables (noms seuls) : getcwd et realpath les lisent.
-;; Une règle sur file-read-data l'emporte sur une règle file-read* : les exceptions
-;; portent donc sur la même opération.
+;; DNS refusé).
+;; Lecture : contenu de $HOME refusé, sauf une liste blanche (T07, mêmes principes que
+;; tools/mine.sb) : workspace de la session, dossier agent du banc (login, sessions),
+;; dossier du binaire, HOME et TMPDIR du banc (Python du kernel géré par uv), venv du
+;; kernel, Pythons gérés par uv (venvs des tâches), toolchain Node. Les métadonnées
+;; (stat, realpath) restent lisibles.
+;; Écriture : workspace, dossier agent, HOME et TMPDIR du banc, venv du kernel, dossiers
+;; temporaires du système.
+;; Contenu et écriture refusés en plus, où qu'ils soient : bench/smoke/ (tâches, tests
+;; cachés, rapports), cache des tâches et des sources, sauf le workspace. Les deux
+;; dossiers ancêtres du workspace dans le cache restent listables (noms seuls) : getcwd
+;; et realpath les lisent. Une règle sur file-read-data l'emporte sur une règle
+;; file-read* : les exceptions portent donc sur la même opération.
+;; Paramètres : HOME_DIR, WORKSPACE_DIR, AGENT_DIR, BIN_DIR, SMOKE_HOME, SMOKE_TMP,
+;; KERNEL_VENV, UV_PYTHON, NODE_HOME, SMOKE_DIR, TASKS_DIR, TASK_DIR, SOURCES_DIR.
 (version 1)
 (allow default)
 (deny network-outbound)
 (allow network-outbound (remote ip "localhost:*"))
 (allow network-outbound (remote unix-socket))
 (deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
+(deny file-write*)
+(allow file-write*
+  (subpath (param "WORKSPACE_DIR"))
+  (subpath (param "AGENT_DIR"))
+  (subpath (param "SMOKE_HOME"))
+  (subpath (param "SMOKE_TMP"))
+  (subpath (param "KERNEL_VENV"))
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  (subpath "/dev"))
+(deny file-read-data (subpath (param "HOME_DIR")))
+(allow file-read-data
+  (subpath (param "AGENT_DIR"))
+  (subpath (param "BIN_DIR"))
+  (subpath (param "SMOKE_HOME"))
+  (subpath (param "SMOKE_TMP"))
+  (subpath (param "KERNEL_VENV"))
+  (subpath (param "UV_PYTHON"))
+  (subpath (param "NODE_HOME")))
 (deny file-read-data file-write*
   (subpath (param "SMOKE_DIR"))
   (subpath (param "TASKS_DIR"))

@@ -276,13 +276,21 @@ def write_agent_config(agent_dir: Path, proxy_port: int, source: dict, settings:
         json.dumps({"cacheRetention": CACHE_RETENTION, **settings}, indent=2) + "\n")
 
 
-def agent_profile(cache: "Cache", workspace: Path) -> list[str]:
+def agent_profile(cache: "Cache", workspace: Path, binary: Path | None,
+                  agent_dir: Path) -> list[str]:
     """Arguments de sandbox-exec pour une session d'agent dont le workspace est donné."""
     tasks = (cache.root / "tasks").resolve()
     workspace = workspace.resolve()
     task_dir = workspace.parent if workspace.parent.parent == tasks else tasks
-    params = {"SMOKE_DIR": HERE, "TASKS_DIR": tasks, "TASK_DIR": task_dir,
-              "SOURCES_DIR": (cache.root / "sources").resolve(), "WORKSPACE_DIR": workspace}
+    node = shutil.which("node")
+    params = {"HOME_DIR": Path.home().resolve(), "WORKSPACE_DIR": workspace,
+              "AGENT_DIR": agent_dir.resolve(),
+              "BIN_DIR": binary.resolve().parent if binary else "/nonexistent",
+              "SMOKE_HOME": cache.home.resolve(), "SMOKE_TMP": cache.tmp.resolve(),
+              "KERNEL_VENV": cache.kernel_venv.resolve(), "UV_PYTHON": cache.uv_python.resolve(),
+              "NODE_HOME": Path(node).resolve().parents[1] if node else "/nonexistent",
+              "SMOKE_DIR": HERE, "TASKS_DIR": tasks, "TASK_DIR": task_dir,
+              "SOURCES_DIR": (cache.root / "sources").resolve()}
     return ["-f", str(SANDBOX_AGENT), *[a for k, v in params.items() for a in ("-D", f"{k}={v}")]]
 
 
@@ -437,19 +445,20 @@ def junit_results(path: Path, workspace: Path) -> dict[str, str]:
     return results
 
 
-def run_tests(task: dict, workspace: Path, out: Path, cache: Cache, sandboxed: bool) -> dict:
+def run_tests(task: dict, workspace: Path, out: Path, cache: Cache, sandboxed: bool,
+              profile: list[str] | None = None) -> dict:
     """Copie `hidden/` dans le workspace et lance `test` ; résultat par identifiant."""
     hidden = task["dir"] / "hidden"
     if hidden.exists():
         shutil.copytree(hidden, workspace, dirs_exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
-    # Le profil de tâche n'écrit que dans le cache de la tâche : rapport copié ensuite.
-    junit = cache.root / "tasks" / task["id"] / "junit.xml"
+    # Rapport dans le TMPDIR du banc (inscriptible sous les deux profils), copié ensuite.
+    junit = cache.tmp / f"junit-{task['id']}.xml"
     junit.unlink(missing_ok=True)
     env = task_env(cache, SMOKE_JUNIT=str(junit), UV_OFFLINE="1")
     result = run_process(["/bin/sh", "-c", task["test"]], env, workspace, out / "test.out",
                          out / "test.err", GRADE_TIMEOUT_S, sandboxed,
-                         profile=task_profile(cache, task))
+                         profile=profile or task_profile(cache, task))
     if junit.exists():
         shutil.copyfile(junit, out / "junit.xml")
     found = junit_results(junit, workspace)
@@ -493,6 +502,7 @@ def prepare_task(task: dict, cache: Cache) -> dict:
         shutil.copyfile(task["dir"] / "files" / name, workspace / name)
     logs = cache.root / "tasks" / task["id"] / "prepare"
     logs.mkdir(parents=True, exist_ok=True)
+    (logs / "connect.ndjson").unlink(missing_ok=True)  # une préparation, un journal
     connect = proxies.ConnectProxy(logs / "connect.ndjson", proxies.load_hosts(SETUP_HOSTS))
     proxies.serve(connect)
     url = f"http://127.0.0.1:{connect.port}"
@@ -514,6 +524,9 @@ def prepare_task(task: dict, cache: Cache) -> dict:
     if "git" in source:
         reset_history(workspace)
     shutil.copytree(workspace, pristine, symlinks=True)
+    leaks = history_leaks(task, cache, pristine) if "git" in source else None
+    if leaks and leaks["leaks"]:
+        fail(f"tâche {task['id']} : trace du correctif dans le workspace : {leaks['leaks']}")
     graded = run_tests(task, workspace, logs, cache, sandboxed=True)
     wrong = {tid: status for tid, status in graded["tests"].items()
              if status != ("failed" if tid in task.get("fail_to_pass", []) else "passed")}
@@ -521,7 +534,7 @@ def prepare_task(task: dict, cache: Cache) -> dict:
         fail(f"tâche {task['id']} invalide sur l'état cassé : {wrong} (attendu : fail_to_pass "
              f"en échec, pass_to_pass en succès), voir {logs}")
     info = {"task": task["id"], "tree": tree_hash(task["dir"]), "broken_state": graded["tests"],
-            "setup_refused_hosts": refused}
+            "setup_refused_hosts": refused, "history_check": leaks}
     marker.write_text(json.dumps(info, indent=2) + "\n")
     return info
 
@@ -536,7 +549,56 @@ def reset_history(workspace: Path) -> None:
     subprocess.run(["git", "add", "-A"], **quiet)
     subprocess.run(["git", "-c", "user.name=smoke", "-c", "user.email=smoke@localhost",
                     "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+                    "-c", "gc.auto=0",  # pas de packfile : objets libres, vérifiables un à un
                     "commit", "-q", "-m", "base"], **quiet)
+
+
+def history_leaks(task: dict, cache: Cache, workspace: Path) -> dict:
+    """Le workspace ne doit contenir aucune trace du correctif : un seul commit atteignable
+    (reflog compris), ni packfile, ni ORIG_HEAD/FETCH_HEAD/packed-refs, ni objet
+    inaccessible, ni blob de la version corrigée d'un fichier du correctif (base d'objets
+    ou fichier de l'arbre, `.venv` et `node_modules` compris)."""
+    def git_ws(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(workspace), *args], capture_output=True, text=True)
+    leaks = []
+    commits = git_ws("rev-list", "--all", "--reflog").stdout.split()
+    if len(commits) != 1:
+        leaks.append(f"{len(commits)} commits atteignables")
+    for name in ("ORIG_HEAD", "FETCH_HEAD", "packed-refs"):
+        if (workspace / ".git" / name).exists():
+            leaks.append(f".git/{name}")
+    packs = sorted((workspace / ".git" / "objects" / "pack").glob("*.pack"))
+    if packs:
+        leaks.append(f"{len(packs)} packfile(s)")
+    unreachable = git_ws("fsck", "--unreachable", "--no-reflogs", "--no-progress").stdout.split("\n")
+    unreachable = [line for line in unreachable if line.strip()]
+    if unreachable:
+        leaks.append(f"{len(unreachable)} objet(s) inaccessible(s)")
+    source = task["source"]
+    gold_blobs: dict[str, str] = {}
+    if "gold" in source:
+        clone = cache.root / "sources" / task["id"]
+        changed = subprocess.run(["git", "-C", str(clone), "diff", "--name-only", "--diff-filter=AMR",
+                                  source["commit"], source["gold"]], capture_output=True,
+                                 text=True, check=True).stdout.split()
+        for path in changed:
+            oid = subprocess.run(["git", "-C", str(clone), "rev-parse", f"{source['gold']}:{path}"],
+                                 capture_output=True, text=True).stdout.strip()
+            if oid:
+                gold_blobs[oid] = path
+        for oid, path in gold_blobs.items():
+            if git_ws("cat-file", "-e", oid).returncode == 0:
+                leaks.append(f"objet git de la version corrigée de {path}")
+        names = {Path(p).name for p in gold_blobs.values()}
+        candidates = [f for f in workspace.rglob("*") if f.name in names and f.is_file()
+                      and ".git" not in f.relative_to(workspace).parts[:1]]
+        for f in candidates:
+            oid = subprocess.run(["git", "hash-object", "--no-filters", str(f)], capture_output=True,
+                                 text=True).stdout.strip()
+            if oid in gold_blobs:
+                leaks.append(f"fichier {f.relative_to(workspace)} = version corrigée de "
+                             f"{gold_blobs[oid]}")
+    return {"commits": len(commits), "gold_blobs_checked": len(gold_blobs), "leaks": leaks}
 
 
 def restore(task: dict, cache: Cache) -> Path:
@@ -560,9 +622,11 @@ def apply_gold(task: dict, cache: Cache, workspace: Path) -> str | None:
     return None if applied.returncode == 0 else applied.stderr.decode(errors="replace")[-500:]
 
 
-def validate_gold(tasks: list[dict], cache: Cache, out: Path, runs: int) -> bool:
+def validate_gold(tasks: list[dict], cache: Cache, out: Path, runs: int,
+                  profile_name: str = "task") -> bool:
     """Sans modèle : état cassé (fail_to_pass en échec, pass_to_pass en succès) et
-    correction officielle (tout en succès), `runs` fois chacun, tests sous sandbox."""
+    correction officielle (tout en succès), `runs` fois chacun, tests sous sandbox :
+    `sandbox-task.sb` (notation) ou `sandbox-agent.sb` (conditions de la phase agent)."""
     report = []
     for task in tasks:
         if "gold" not in task["source"]:
@@ -573,8 +637,10 @@ def validate_gold(tasks: list[dict], cache: Cache, out: Path, runs: int) -> bool
             for index in range(1, runs + 1):
                 workspace = restore(task, cache)
                 error = apply_gold(task, cache, workspace) if state == "gold" else None
+                profile = (agent_profile(cache, workspace, None, cache.agent)
+                           if profile_name == "agent" else None)
                 graded = (run_tests(task, workspace, out / task["id"] / f"{state}-{index}", cache,
-                                    sandboxed=True) if error is None else
+                                    sandboxed=True, profile=profile) if error is None else
                           {"tests": {}, "junit": False, "process": None})
                 expected = {tid: ("failed" if state == "broken" and tid in f2p else "passed")
                             for tid in graded["tests"]}
@@ -588,7 +654,8 @@ def validate_gold(tasks: list[dict], cache: Cache, out: Path, runs: int) -> bool
         report.append({"task": task["id"], "ok": all(c["ok"] for c in checks), "checks": checks})
     (out / "validate.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     lines = ["# Validation des tâches (--validate-gold)", "",
-             f"{runs} exécutions de chaque vérification, tests sous `sandbox-task.sb`.", "",
+             f"{runs} exécutions de chaque vérification, tests sous "
+             f"`sandbox-{profile_name}.sb`.", "",
              "| Tâche | État cassé | Correction officielle | Durée max des tests s | Valide |",
              "|---|---|---|---|---|"]
     for r in report:
@@ -616,7 +683,7 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
     env = agent_env(cache, agent_dir, connect.port, capture)
     process = run_process(agent_cmd(binary, model, effort, prompt), env, cwd,
                           out / "out.jsonl", out / "err.log", timeout, sandboxed=True,
-                          profile=agent_profile(cache, cwd))
+                          profile=agent_profile(cache, cwd, binary, agent_dir))
     copied = copy_new_sessions(agent_dir, before, out / "sessions")
     records = metrics.read_ndjson(copied["usage"])
     entries = metrics.session_entries(copied["sessions"])
@@ -640,11 +707,17 @@ def read_probe_args(paths: list[Path]) -> list[str]:
     return [arg for path in paths for arg in ("--read-probe-path", str(path.resolve()))]
 
 
+# Chemins réels de $HOME que la phase agent ne doit pas lire (T07) : clés, caches uv et npm.
+HOME_TARGETS = (".ssh", ".cache/uv", ".npm")
+
+
 def hidden_targets(task: dict, cache: Cache) -> list[Path]:
-    """Chemins que la sonde d'isolation tente de lire : un test caché, la copie pristine."""
+    """Chemins que la sonde d'isolation tente de lire : un test caché, la copie pristine,
+    et ceux de HOME_TARGETS qui existent."""
     hidden = sorted(p for p in (task["dir"] / "hidden").rglob("*") if p.is_file())
     _, pristine, marker = task_paths(task, cache)
-    return hidden[:1] + [pristine, marker]
+    home = [Path.home() / t for t in HOME_TARGETS if (Path.home() / t).exists()]
+    return hidden[:1] + [pristine, marker] + home
 
 
 def probe(binary: Path, cache: Cache, out: Path, connect: proxies.ConnectProxy,
@@ -652,7 +725,9 @@ def probe(binary: Path, cache: Cache, out: Path, connect: proxies.ConnectProxy,
     """Sonde réseau sous sandbox, contre le serveur de capture (aucun modèle réel)."""
     write_fake_auth(cache.probe_agent)
     project = work_dir(cache, "probe")
-    targets = hidden_targets(tasks[0], cache) if tasks else [HERE / "README.md"]
+    targets = (hidden_targets(tasks[0], cache) if tasks else
+               [HERE / "README.md"] + [Path.home() / t for t in HOME_TARGETS
+                                       if (Path.home() / t).exists()])
     access = Access(out, True, "smoke-probe", connect.port, read_probe_args(targets))
     try:
         session = agent_session(binary, cache, cache.probe_agent, out, DEFAULT_MODELS[0],
@@ -731,6 +806,7 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     else:
         status = "resolved" if resolved else "failed"
     transports = metrics.match_transports(records, session["proxy_log"])
+    misses = metrics.server_misses(records, transports["per_request"])
     calls = metrics.calls(records)
     anomalies = []
     if transports["loop_on_sse"]:
@@ -755,7 +831,9 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
         "task": task["id"], "run": index, "status": status, "resolved": status == "resolved",
         "tests": graded["tests"], "agent": process, "final": final,
         "tokens": metrics.token_totals(records), "calls": calls,
-        "cache": metrics.cache_rates(records),
+        "cache": {**metrics.cache_rates(records),
+                  "avoidable_rate": metrics.avoidable_cache_rate(records, misses)},
+        "server_misses": misses,
         "cost": metrics.costs(prices, model, records, CACHE_WRITE_PRICE),
         "cells": metrics.cell_errors(entries),
         "transports": {k: v for k, v in transports.items() if k != "per_request"},
@@ -820,6 +898,7 @@ def aggregate(results: list[dict]) -> dict:
             "tokens_mean": statistics.mean(tokens),
             "tokens_stdev": statistics.stdev(tokens) if len(tokens) > 1 else None,
             "turns_mean": statistics.mean(r["calls"]["turns"] for r in runs),
+            "server_misses": sum(len(r.get("server_misses", [])) for r in runs),
             "context_peak_max": max((r["context_peak"] for r in runs
                                      if r["context_peak"] is not None), default=None),
             "tokens_by_category_mean": {
@@ -846,6 +925,7 @@ def totals(results: list[dict]) -> dict:
             "turns_median": metrics.median([r["calls"]["turns"] for r in results]),
             "cache_rate_all_calls": read / prompt if prompt else None,
             "loop_on_sse": sum(r["transports"]["loop_on_sse"] for r in results),
+            "server_misses": sum(len(r.get("server_misses", [])) for r in results),
             "connect_refused": sum(r["connect"]["refused"] for r in results),
             "anomalies": sum(len(r["anomalies"]) for r in results)}
 
@@ -862,7 +942,7 @@ def write_report(run_dir: Path, report: dict) -> None:
     (run_dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     fields = ["task", "run", "status", "cost", "input", "output", "cacheRead", "cacheWrite",
               "reasoning", "context_peak", "turns", "calls", "cache_session_rate",
-              "cache_continuation_median",
+              "cache_continuation_median", "cache_avoidable_rate", "server_misses",
               "ttft_median_ms", "seconds", "websocket", "sse", "loop_on_sse", "connect_refused",
               "cell_errors", "syntax_errors", "truncated"]
     with (run_dir / "tasks.csv").open("w", newline="") as handle:
@@ -878,6 +958,8 @@ def write_report(run_dir: Path, report: dict) -> None:
                 "turns": r["calls"]["turns"], "calls": r["calls"]["total"],
                 "cache_session_rate": r["cache"]["session_rate"],
                 "cache_continuation_median": r["cache"]["continuation_median"],
+                "cache_avoidable_rate": r["cache"].get("avoidable_rate"),
+                "server_misses": len(r.get("server_misses", [])),
                 "ttft_median_ms": r["calls"]["ttft_median_ms"], "seconds": r["agent"]["seconds"],
                 "websocket": r["transports"]["requests"].get("websocket", 0),
                 "sse": r["transports"]["requests"].get("sse", 0),
@@ -912,22 +994,23 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"{fmt(t['cost_per_resolved'])} $",
               f"- Tokens : {json.dumps(t['tokens'])}",
               f"- Tours médians : {fmt(t['turns_median'], 1)} ; taux de cache (tous appels) : "
-              f"{fmt(t['cache_rate_all_calls'])}",
+              f"{fmt(t['cache_rate_all_calls'])} ; miss serveur : {t['server_misses']}",
               f"- Appels de boucle en SSE (anomalie) : **{t['loop_on_sse']}** ; CONNECT refusés :"
               f" {t['connect_refused']} ; anomalies : {t['anomalies']}",
               "", "## Tâches", "",
               "| Tâche | Run | Statut | Coût $ | input | output | cacheRead | reasoning |"
               " Pic de contexte | Tours |"
-              " Cache session | Cache contin. (méd.) | TTFT méd. ms | Durée s | WS | SSE |"
-              " Cellules en erreur (Syntax) | Coupées |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              " Cache session | Cache contin. (méd.) | Cache évitable | Miss serveur |"
+              " TTFT méd. ms | Durée s | WS | SSE | Cellules en erreur (Syntax) | Coupées |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in report["results"]:
         lines.append(
             f"| {r['task']} | {r['run']} | {r['status']} | {fmt(r['cost']['total'])} | "
             f"{fmt(r['tokens']['input'])} | {fmt(r['tokens']['output'])} | "
             f"{fmt(r['tokens']['cacheRead'])} | {fmt(r['tokens']['reasoning'])} | "
             f"{fmt(r['context_peak'])} | {r['calls']['turns']} | {fmt(r['cache']['session_rate'])} | "
-            f"{fmt(r['cache']['continuation_median'])} | {fmt(r['calls']['ttft_median_ms'], 1)} | "
+            f"{fmt(r['cache']['continuation_median'])} | {fmt(r['cache'].get('avoidable_rate'))} | "
+            f"{len(r.get('server_misses', []))} | {fmt(r['calls']['ttft_median_ms'], 1)} | "
             f"{r['agent']['seconds']} | {r['transports']['requests'].get('websocket', 0)} | "
             f"{r['transports']['requests'].get('sse', 0)} | {r['cells']['errors']} "
             f"({r['cells']['syntax_errors']}) | {r['calls']['truncated']} |")
@@ -939,6 +1022,14 @@ def write_report(run_dir: Path, report: dict) -> None:
             lines.append(f"| {task} | {a['runs']} | {fmt(a['resolved_rate'], 2)} | {a['flip']} | "
                          f"{fmt(a['cost_mean'])} | {fmt(a['cost_stdev'])} | "
                          f"{fmt(a['tokens_mean'], 1)} | {fmt(a['tokens_stdev'], 1)} |")
+    misses = [(r["task"], r["run"], m) for r in report["results"]
+              for m in r.get("server_misses", [])]
+    lines += ["", "## Miss serveur", "",
+              "Appel de la boucle hors premier de session, `cacheRead = 0`, sans invalidation "
+              "journalisée.", ""]
+    lines += [f"- {task} (run {run}) : seq {m['seq']}, prompt {m['prompt']}, depuis l'appel "
+              f"précédent {fmt(m['since_prev_ms'])} ms, transport {m['transport']}, "
+              f"continuation {m['continuation']}" for task, run, m in misses] or ["- aucun"]
     anomalies = [(r["task"], r["run"], a) for r in report["results"] for a in r["anomalies"]]
     lines += ["", "## Anomalies", ""]
     lines += [f"- {task} (run {run}) : {a}" for task, run, a in anomalies] or ["- aucune"]
@@ -1002,12 +1093,17 @@ def parse_args() -> argparse.Namespace:
                         help="mode capture : tâches jouées par le scénario qui échoue")
     parser.add_argument("--capture-reject-model", default="",
                         help="mode capture : le serveur refuse cet id au run de chauffe")
+    parser.add_argument("--capture-server-miss-at-turn", type=int, default=None,
+                        help="mode capture : à ce tour, le serveur annonce cacheRead = 0 (miss "
+                             "serveur simulé, T07)")
     parser.add_argument("--capture-no-websocket", action="store_true",
                         help="mode capture : le serveur refuse le WebSocket (repli SSE, anomalie)")
     parser.add_argument("--validate-gold", action="store_true",
                         help="sans modèle ni binaire : état cassé et correction officielle "
                              f"des tâches, {VALIDATE_RUNS} fois chacun")
     parser.add_argument("--validate-runs", type=int, default=VALIDATE_RUNS)
+    parser.add_argument("--validate-profile", choices=["task", "agent"], default="task",
+                        help="profil des tests de --validate-gold (agent : phase agent)")
     parser.add_argument("--record-hosts", action="store_true",
                         help="run de chauffe réel, proxy CONNECT en enregistrement : écrit "
                              f"{HOSTS.relative_to(REPO)}")
@@ -1023,9 +1119,10 @@ def main() -> None:
         tasks = load_tasks([t for t in args.tasks.split(",") if t] or None, False)
         for task in tasks:
             prepare_task(task, cache)
-        out = args.out / f"{utc_stamp()}-validate"
+        out = args.out / f"{utc_stamp()}-validate-{args.validate_profile}"
         out.mkdir(parents=True)
-        sys.exit(0 if validate_gold(tasks, cache, out, args.validate_runs) else 1)
+        sys.exit(0 if validate_gold(tasks, cache, out, args.validate_runs,
+                                    args.validate_profile) else 1)
     if args.binary is None:
         fail("--binary requis")
     binary = args.binary.resolve()
@@ -1056,6 +1153,8 @@ def main() -> None:
     warmup_args = [arg for m in args.capture_reject_model.split(",") if m
                    for arg in ("--reject-model", m)]
     task_args = ["--no-websocket"] if args.capture_no_websocket else []
+    if args.capture_server_miss_at_turn is not None:
+        task_args += ["--server-miss-at-turn", str(args.capture_server_miss_at_turn)]
     prices = json.loads(PRICES.read_text())
 
     prepare_kernel(binary, cache)
@@ -1135,7 +1234,7 @@ def main() -> None:
             "compaction, /refine et résumé de branche passent en SSE par construction.",
             "Taux de cache de session : cacheRead / (input + cacheRead + cacheWrite) sur les "
             "appels de boucle ; continuation : appels de boucle hors premier de leur session et "
-            "hors invalidation journalisée.",
+            "hors invalidation journalisée ; évitable : mêmes appels, hors miss serveur.",
         ]
         if args.effort != DEFAULT_EFFORT:
             notes.append(f"Effort {args.effort} au lieu de {DEFAULT_EFFORT} (décision du 04/11).")
