@@ -105,8 +105,6 @@ fn tokens_before_anchors_on_last_valid_usage_plus_trailing() {
         cost: pa_types::ai::UsageCost::default(),
         reasoning: None,
         cache_write_1h: None,
-        cache_write_30m: None,
-        cache_write_12h: None,
     };
     let probe = |text: &str| {
         AgentMessage::User(pa_types::ai::UserMessage {

@@ -30,8 +30,6 @@ fn record(kind: CallKind, started_at: SystemTime, user_timestamp: Option<i64>) -
             cache_read: 800,
             cache_write: 100,
             cache_write_1h: None,
-            cache_write_30m: None,
-            cache_write_12h: None,
             reasoning: None,
             total_tokens: 1050,
             cost: 0.0125,
@@ -110,6 +108,7 @@ fn unreported_fields_are_absent_never_zero() {
         "invalidation",
         "cacheWrite30m",
         "cacheWrite12h",
+        "costWarning",
         "providerUsage",
     ] {
         assert!(entry.get(field).is_none(), "{field} must be absent");
@@ -346,8 +345,6 @@ async fn the_wrapper_journals_a_streamed_call() {
         cost: UsageCost::default(),
         reasoning: Some(312),
         cache_write_1h: None,
-        cache_write_30m: None,
-        cache_write_12h: None,
     };
     let payload = json!({"messages": [{"role": "assistant", "content": [
         {"type": "thinking", "thinking": "abcdefgh", "signature": "s"}]}]});
@@ -391,8 +388,8 @@ async fn the_wrapper_journals_a_streamed_call() {
 }
 
 // yusAgent (T08, YA-13): the raw usage the provider reports through the usage hook is
-// journaled as `providerUsage`, unchanged, with the TTL split of the normalized usage; an
-// inner usage hook still runs.
+// journaled as `providerUsage`, unchanged, with the TTL split read from it and a cost warning
+// for the 12 h share; an inner usage hook still runs.
 #[tokio::test]
 async fn the_raw_provider_usage_and_the_ttl_split_are_journaled() {
     let dir = tempfile::tempdir().unwrap();
@@ -407,8 +404,6 @@ async fn the_raw_provider_usage_and_the_ttl_split_are_journaled() {
         cache_read: 600,
         cache_write: 300,
         total_tokens: 1020,
-        cache_write_30m: Some(200),
-        cache_write_12h: Some(100),
         ..pa_agent::types::Usage::zero()
     };
     let stream_fn = instrument_stream_fn(
@@ -436,24 +431,43 @@ async fn the_raw_provider_usage_and_the_ttl_split_are_journaled() {
     assert_eq!(entry["cacheWrite"], json!(300));
     assert_eq!(entry["cacheWrite30m"], json!(200));
     assert_eq!(entry["cacheWrite12h"], json!(100));
+    assert_eq!(entry["costWarning"], json!(CACHE_WRITE_12H_WARNING));
     assert!(entry.get("cacheWrite5m").is_none());
     assert!(entry.get("cacheWrite1h").is_none());
     assert_eq!(*lock(&seen), Some(raw), "the inner usage hook still runs");
 }
 
-// yusAgent (T08, YA-13): a split that does not add up to `cacheWrite` is written as received.
+// yusAgent (T08, YA-13): a split that does not add up to `cacheWrite` is written as received;
+// no cost warning without 12 h writes.
 #[test]
 fn a_ttl_split_is_written_as_received() {
     let dir = tempfile::tempdir().unwrap();
     let journal = journal(dir.path(), None);
     let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
-    call.usage.cache_write_30m = Some(70);
-    call.usage.cache_write_12h = Some(0);
+    call.provider_usage = Some(json!({"input_tokens_details": {"cache_write_tokens": 100,
+        "cache_write_tokens_details": {"ttl_30m_tokens": 70, "ttl_12h_tokens": 0}}}));
     journal.append(&call);
     let entry = &lines(journal.path())[0];
     assert_eq!(entry["cacheWrite"], json!(100));
     assert_eq!(entry["cacheWrite30m"], json!(70));
     assert_eq!(entry["cacheWrite12h"], json!(0));
+    assert!(entry.get("costWarning").is_none());
+}
+
+// yusAgent (T08, YA-13): a raw usage without the split (Anthropic, or Responses without it)
+// writes no TTL field.
+#[test]
+fn a_raw_usage_without_a_split_writes_no_ttl_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = journal(dir.path(), None);
+    let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
+    call.provider_usage = Some(json!({"input_tokens": 10, "cache_creation_input_tokens": 100}));
+    journal.append(&call);
+    let entry = &lines(journal.path())[0];
+    assert!(entry["providerUsage"].is_object());
+    for field in ["cacheWrite30m", "cacheWrite12h", "costWarning"] {
+        assert!(entry.get(field).is_none(), "{field} must be absent");
+    }
 }
 
 #[test]

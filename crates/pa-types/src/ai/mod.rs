@@ -442,22 +442,6 @@ pub struct Usage {
         skip_serializing_if = "Option::is_none"
     )]
     pub cache_write_1h: Option<u64>,
-    /// yusAgent (T08, YA-13): the part of `cache_write` written with the 30 min TTL, when the
-    /// provider reports the split (`OpenAI` Responses `cache_write_tokens_details`).
-    #[serde(
-        rename = "cacheWrite30m",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub cache_write_30m: Option<u64>,
-    /// yusAgent (T08, YA-13): the part of `cache_write` written with the 12 h TTL, when the
-    /// provider reports the split.
-    #[serde(
-        rename = "cacheWrite12h",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub cache_write_12h: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

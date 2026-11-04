@@ -448,8 +448,6 @@ pub(crate) fn parse_chunk_usage(
             .and_then(|details| details.get("reasoning_tokens"))
             .and_then(Value::as_u64),
         cache_write_1h: None,
-        cache_write_30m: None,
-        cache_write_12h: None,
     };
     calculate_cost(
         model,

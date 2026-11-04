@@ -508,8 +508,6 @@ mod tests {
             },
             reasoning: None,
             cache_write_1h: None,
-            cache_write_30m: None,
-            cache_write_12h: None,
         }
     }
 

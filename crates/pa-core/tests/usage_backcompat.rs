@@ -1,7 +1,6 @@
 //! yusAgent (T04, YA-13): the optional `reasoning` and `cacheWrite1h` usage fields keep session
 //! files compatible both ways. A session written before them reads back with both absent, and a
-//! usage without them serializes exactly as before. T08 (YA-13): same for `cacheWrite30m` and
-//! `cacheWrite12h`.
+//! usage without them serializes exactly as before.
 
 use std::path::Path;
 
@@ -44,31 +43,6 @@ fn a_session_written_before_the_fields_reads_back() {
     assert_eq!(usage.cache_write, 40);
     assert_eq!(usage.reasoning, None);
     assert_eq!(usage.cache_write_1h, None);
-    assert_eq!(usage.cache_write_30m, None);
-    assert_eq!(usage.cache_write_12h, None);
-}
-
-/// yusAgent (T08, YA-13): a session written by T04 (with `reasoning` and `cacheWrite1h`, before
-/// the 30 min / 12 h split) reads back without the split.
-#[test]
-fn a_session_written_before_the_ttl_split_reads_back() {
-    let usage = OLD_USAGE.replacen(r#""cost""#, r#""reasoning":5,"cacheWrite1h":40,"cost""#, 1);
-    let usage = read_back_usage(&session_file(&usage));
-    assert_eq!(usage.cache_write_1h, Some(40));
-    assert_eq!(usage.cache_write_30m, None);
-    assert_eq!(usage.cache_write_12h, None);
-}
-
-#[test]
-fn a_session_with_the_ttl_split_reads_it() {
-    let usage = OLD_USAGE.replacen(
-        r#""cost""#,
-        r#""cacheWrite30m":30,"cacheWrite12h":10,"cost""#,
-        1,
-    );
-    let usage = read_back_usage(&session_file(&usage));
-    assert_eq!(usage.cache_write_30m, Some(30));
-    assert_eq!(usage.cache_write_12h, Some(10));
 }
 
 #[test]
@@ -91,8 +65,6 @@ fn absent_fields_serialize_as_before() {
     assert_eq!(keys(&serde_json::to_value(usage).unwrap()), keys(&old));
     let agent: pa_agent::types::Usage = serde_json::from_str(OLD_USAGE).unwrap();
     assert_eq!(agent.reasoning, None);
-    assert_eq!(agent.cache_write_30m, None);
-    assert_eq!(agent.cache_write_12h, None);
     assert_eq!(keys(&serde_json::to_value(&agent).unwrap()), keys(&old));
 }
 
@@ -103,18 +75,10 @@ fn the_fields_cross_the_crate_boundary() {
     let usage = pa_types::ai::Usage {
         reasoning: Some(7),
         cache_write_1h: Some(3),
-        cache_write_30m: Some(20),
-        cache_write_12h: Some(4),
         ..pa_types::ai::Usage::default()
     };
     let agent: pa_agent::types::Usage =
         serde_json::from_value(serde_json::to_value(usage).unwrap()).unwrap();
     assert_eq!(agent.reasoning, Some(7));
     assert_eq!(agent.cache_write_1h, Some(3));
-    assert_eq!(agent.cache_write_30m, Some(20));
-    assert_eq!(agent.cache_write_12h, Some(4));
-    let back: pa_types::ai::Usage =
-        serde_json::from_value(serde_json::to_value(&agent).unwrap()).unwrap();
-    assert_eq!(back.cache_write_30m, Some(20));
-    assert_eq!(back.cache_write_12h, Some(4));
 }

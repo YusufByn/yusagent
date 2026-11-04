@@ -167,8 +167,6 @@ impl From<ScanUsage> for Usage {
             },
             reasoning: None,
             cache_write_1h: None,
-            cache_write_30m: None,
-            cache_write_12h: None,
         }
     }
 }
@@ -237,8 +235,6 @@ impl From<PersistedUsage> for Usage {
             },
             reasoning: None,
             cache_write_1h: None,
-            cache_write_30m: None,
-            cache_write_12h: None,
         }
     }
 }

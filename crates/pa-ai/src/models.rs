@@ -36,11 +36,8 @@ pub fn calculate_cost_values(
     let output = (model.cost.output.as_f64() / 1_000_000.0) * usage.output as f64;
     #[allow(clippy::cast_precision_loss)]
     let cache_read = (model.cost.cache_read.as_f64() / 1_000_000.0) * usage.cache_read as f64;
-    // yusAgent (T08, YA-13): the catalog has one write rate (`OpenAI`: the 30 min one); the
-    // 12 h share, when reported, is billed at twice that rate, an approximation (docs/usage.md).
-    let cache_write_tokens = usage.cache_write + usage.cache_write_12h.unwrap_or(0);
     #[allow(clippy::cast_precision_loss)]
-    let cache_write = (cache_write_cost / 1_000_000.0) * cache_write_tokens as f64;
+    let cache_write = (cache_write_cost / 1_000_000.0) * usage.cache_write as f64;
     UsageCost {
         input: JsNumber::from(input),
         output: JsNumber::from(output),

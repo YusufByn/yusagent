@@ -24,6 +24,10 @@ mod tests;
 /// The `v` field of every line.
 pub const USAGE_LOG_VERSION: u64 = 1;
 
+/// yusAgent (T08, YA-13): the `costWarning` of a line whose raw usage reports 12 h cache
+/// writes: `cost` prices them at the catalog write rate (the 30 min one for `OpenAI`).
+pub const CACHE_WRITE_12H_WARNING: &str = "cacheWrite12h priced at the catalog write rate";
+
 /// How much of an existing journal is read back to continue its `seq`, `turn` and
 /// `sincePrevMs` after a restart (`--continue`).
 const RESTORE_TAIL_BYTES: u64 = 64 * 1024;
@@ -62,10 +66,6 @@ pub struct UsageCounts {
     pub cache_write: u64,
     /// The 1 h share of `cache_write`, when the provider reports the split.
     pub cache_write_1h: Option<u64>,
-    /// yusAgent (T08, YA-13): the 30 min and 12 h shares of `cache_write`, when the provider
-    /// reports the split (`OpenAI` Responses), as received.
-    pub cache_write_30m: Option<u64>,
-    pub cache_write_12h: Option<u64>,
     /// Reasoning tokens (a subset of `output`), when the provider reports them.
     pub reasoning: Option<u64>,
     pub total_tokens: u64,
@@ -93,8 +93,6 @@ impl From<&pa_agent::types::Usage> for UsageCounts {
             cache_read: usage.cache_read,
             cache_write: usage.cache_write,
             cache_write_1h: usage.cache_write_1h,
-            cache_write_30m: usage.cache_write_30m,
-            cache_write_12h: usage.cache_write_12h,
             reasoning: usage.reasoning,
             total_tokens: usage.total_tokens,
             cost: usage.cost.total,
@@ -110,8 +108,6 @@ impl From<&pa_types::ai::Usage> for UsageCounts {
             cache_read: usage.cache_read,
             cache_write: usage.cache_write,
             cache_write_1h: usage.cache_write_1h,
-            cache_write_30m: usage.cache_write_30m,
-            cache_write_12h: usage.cache_write_12h,
             reasoning: usage.reasoning,
             total_tokens: usage.total_tokens,
             cost: usage.cost.total.as_f64(),
@@ -414,11 +410,23 @@ impl UsageJournal {
             );
             put("cacheWrite1h", json!(one_hour));
         }
-        if let Some(thirty_minutes) = usage.cache_write_30m {
-            put("cacheWrite30m", json!(thirty_minutes));
-        }
-        if let Some(twelve_hours) = usage.cache_write_12h {
-            put("cacheWrite12h", json!(twelve_hours));
+        // yusAgent (T08, YA-13): the TTL split of the raw usage (`OpenAI` Responses), as
+        // received; the cost prices every write at the catalog rate, flagged when 12 h shows.
+        if let Some(split) = record
+            .provider_usage
+            .as_ref()
+            .and_then(|usage| usage.pointer("/input_tokens_details/cache_write_tokens_details"))
+        {
+            let ttl = |key: &str| split.get(key).and_then(Value::as_u64);
+            if let Some(thirty_minutes) = ttl("ttl_30m_tokens") {
+                put("cacheWrite30m", json!(thirty_minutes));
+            }
+            if let Some(twelve_hours) = ttl("ttl_12h_tokens") {
+                put("cacheWrite12h", json!(twelve_hours));
+                if twelve_hours > 0 {
+                    put("costWarning", json!(CACHE_WRITE_12H_WARNING));
+                }
+            }
         }
         if let Some(reasoning) = usage.reasoning {
             put("reasoning", json!(reasoning));

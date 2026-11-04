@@ -190,8 +190,6 @@ async fn split_turn_compaction_runs_two_summarizer_calls_and_merges_the_turn_con
                 cost: pa_types::ai::UsageCost::default(),
                 reasoning: None,
                 cache_write_1h: None,
-                cache_write_30m: None,
-                cache_write_12h: None,
             }
         };
         let mut expected = usage_of(first.0, first.1);
@@ -523,8 +521,6 @@ async fn split_turn_without_history_makes_only_the_prefix_call() {
             cost: pa_types::ai::UsageCost::default(),
             reasoning: None,
             cache_write_1h: None,
-            cache_write_30m: None,
-            cache_write_12h: None,
         })
     );
     registration.unregister();

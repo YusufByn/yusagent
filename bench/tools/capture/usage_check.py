@@ -9,8 +9,8 @@ Pour chaque cas, l'usage attendu de chaque requête est recalculé depuis
   - Anthropic : message_start puis message_delta, comptes cumulés (un champ du
     message_delta remplace celui du message_start) ; `input` hors cache ;
   - OpenAI Responses : `input` = input_tokens - cached_tokens - cache_write_tokens,
-    `cacheWrite` = cache_write_tokens, ventilation 30 min / 12 h telle que renvoyée,
-    et `providerUsage` du journal égal à l'usage renvoyé (T08, YA-13).
+    `cacheWrite` = cache_write_tokens ; au journal, ventilation 30 min / 12 h lue dans
+    `providerUsage` (égal à l'usage renvoyé) et `costWarning` si du 12 h apparaît (T08, YA-13).
 
 Deux sources sont confrontées à cet attendu :
   1. l'usage du message assistant (événements `message_end` de `out*.jsonl`),
@@ -28,6 +28,9 @@ import sys
 from pathlib import Path
 
 FIELDS = ("input", "output", "cacheRead", "cacheWrite")
+# `costWarning` d'une ligne dont l'usage brut a des écritures 12 h (T08) :
+# CACHE_WRITE_12H_WARNING, crates/pa-core/src/session_engine/usage_log.rs.
+COST_WARNING_12H = "cacheWrite12h priced at the catalog write rate"
 
 
 def expected_usage(meta: dict) -> dict | None:
@@ -49,6 +52,8 @@ def expected_usage(meta: dict) -> dict | None:
             "output": usage["output_tokens"], "cacheRead": cached, "cacheWrite": write,
             "cacheWrite1h": None, "cacheWrite30m": split.get("ttl_30m_tokens"),
             "cacheWrite12h": split.get("ttl_12h_tokens"),
+            "costWarning": (COST_WARNING_12H if (split.get("ttl_12h_tokens") or 0) > 0
+                            else None),
             "reasoning": usage["output_tokens_details"]["reasoning_tokens"],
             "providerUsage": usage}
 
@@ -129,12 +134,12 @@ def check_case(case_dir: Path) -> dict:
         expected = dict(req["expected"])
         diff = compare(expected, entry, FIELDS)
         for optional in ("reasoning", "cacheWrite1h", "cacheWrite30m", "cacheWrite12h",
-                         "providerUsage"):
+                         "costWarning", "providerUsage"):
             if expected.get(optional) is not None and entry.get(optional) != expected[optional]:
                 diff.append(f"{optional}: attendu {expected[optional]!r}, "
                             f"lu {entry.get(optional)!r}")
         # Présents seulement quand le provider les donne (T08, YA-13).
-        for absent in ("cacheWrite30m", "cacheWrite12h", "providerUsage"):
+        for absent in ("cacheWrite30m", "cacheWrite12h", "costWarning", "providerUsage"):
             if expected.get(absent) is None and absent in entry:
                 diff.append(f"{absent}: absent attendu, lu {entry[absent]!r}")
         if expected["cacheWrite1h"] is not None:

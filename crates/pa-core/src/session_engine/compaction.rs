@@ -548,8 +548,6 @@ mod tests {
                     cost: pa_types::ai::UsageCost::default(),
                     reasoning: None,
                     cache_write_1h: None,
-                    cache_write_30m: None,
-                    cache_write_12h: None,
                 },
                 stop_reason: pa_types::ai::StopReason::Stop,
                 stop_reason_raw: None,
@@ -592,8 +590,6 @@ mod tests {
                 cost: pa_types::ai::UsageCost::default(),
                 reasoning: None,
                 cache_write_1h: None,
-                cache_write_30m: None,
-                cache_write_12h: None,
             },
             stop_reason: pa_types::ai::StopReason::Stop,
             stop_reason_raw: None,
@@ -781,8 +777,6 @@ mod tests {
             cost: pa_types::ai::UsageCost::default(),
             reasoning: None,
             cache_write_1h: None,
-            cache_write_30m: None,
-            cache_write_12h: None,
         };
         assert_eq!(calculate_context_tokens(&usage), 100);
     }
@@ -923,8 +917,6 @@ mod tests {
                         cost: pa_types::ai::UsageCost::default(),
                         reasoning: None,
                         cache_write_1h: None,
-                        cache_write_30m: None,
-                        cache_write_12h: None,
                     },
                     stop_reason: pa_types::ai::StopReason::Aborted,
                     stop_reason_raw: None,

@@ -272,8 +272,6 @@ impl GoogleStreamState {
                     .get("thoughtsTokenCount")
                     .and_then(serde_json::Value::as_u64),
                 cache_write_1h: None,
-                cache_write_30m: None,
-                cache_write_12h: None,
             };
             calculate_cost(model, &mut output.usage, None);
         }

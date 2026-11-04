@@ -781,8 +781,13 @@ impl<'a> ResponsesStreamProcessor<'a> {
                         .get("input_tokens")
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
-                    let (cache_write_tokens, cache_write_30m, cache_write_12h) =
-                        read_cache_write(usage);
+                    // yusAgent (T08, YA-13): cache writes are part of input_tokens and
+                    // excluded from cached_tokens; their TTL split stays in the raw usage.
+                    let cache_write_tokens = usage
+                        .get("input_tokens_details")
+                        .and_then(|details| details.get("cache_write_tokens"))
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
                     // OpenAI includes cached tokens in input_tokens; subtract them.
                     self.output.usage = Usage {
                         input: input_tokens
@@ -805,8 +810,6 @@ impl<'a> ResponsesStreamProcessor<'a> {
                             .and_then(|details| details.get("reasoning_tokens"))
                             .and_then(serde_json::Value::as_u64),
                         cache_write_1h: None,
-                        cache_write_30m,
-                        cache_write_12h,
                     };
                 }
                 calculate_cost(self.model, &mut self.output.usage, None);
@@ -955,23 +958,4 @@ fn map_responses_stop_reason(status: Option<&str>) -> StopReason {
         Some("incomplete") => StopReason::Length,
         Some(_) => StopReason::Error,
     }
-}
-
-/// yusAgent (T08, YA-13): `input_tokens_details.cache_write_tokens` (part of `input_tokens`,
-/// excluded from `cached_tokens`; 0 when absent) and its split by TTL,
-/// `cache_write_tokens_details.ttl_30m_tokens` / `ttl_12h_tokens`, read as received (`None`
-/// when absent). <https://developers.openai.com/api/docs/guides/prompt-caching>
-fn read_cache_write(usage: &Value) -> (u64, Option<u64>, Option<u64>) {
-    let details = usage.get("input_tokens_details");
-    let tokens = details
-        .and_then(|details| details.get("cache_write_tokens"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let split = details.and_then(|details| details.get("cache_write_tokens_details"));
-    let ttl = |key: &str| {
-        split
-            .and_then(|split| split.get(key))
-            .and_then(Value::as_u64)
-    };
-    (tokens, ttl("ttl_30m_tokens"), ttl("ttl_12h_tokens"))
 }

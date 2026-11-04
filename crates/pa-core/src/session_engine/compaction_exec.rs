@@ -496,8 +496,6 @@ mod tests {
             cost: pa_types::ai::UsageCost::default(),
             reasoning: None,
             cache_write_1h: None,
-            cache_write_30m: None,
-            cache_write_12h: None,
         };
         let result = CompactionResult {
             summary: "the overflow summary".to_string(),
@@ -693,8 +691,6 @@ mod tests {
             },
             reasoning: None,
             cache_write_1h: None,
-            cache_write_30m: None,
-            cache_write_12h: None,
         };
         // Binary-exact costs so the sum assertion compares exactly.
         let (first_cost, second_cost) = (0.25, 0.5);
