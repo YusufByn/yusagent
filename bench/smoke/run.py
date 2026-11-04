@@ -32,6 +32,7 @@ import argparse
 import base64
 import csv
 import hashlib
+import html
 import importlib.util
 import json
 import os
@@ -54,6 +55,9 @@ SANDBOX = CAPTURE / "sandbox.sb"
 # Phase agent : même réseau, plus aucune lecture de bench/smoke/ ni du cache des tâches
 # hors workspace (tests cachés).
 SANDBOX_AGENT = HERE / "sandbox-agent.sb"
+# Code des dépôts de tâche (`setup`, `test`) : écriture et lecture de $HOME limitées au
+# dossier de la tâche et aux caches, réseau par le proxy à liste blanche (T07).
+SANDBOX_TASK = HERE / "sandbox-task.sb"
 sys.path.insert(0, str(HERE))
 
 import metrics  # noqa: E402
@@ -69,6 +73,7 @@ MODEL_FICHES = HERE / "models" / f"{PROVIDER}.json"
 FICHE_FIELDS = ("contextWindow", "maxTokens", "thinkingLevelMap", "reasoning")
 PRICES = HERE / "prices.json"
 HOSTS = HERE / "hosts" / f"{PROVIDER}.txt"
+SETUP_HOSTS = HERE / "hosts" / "setup.txt"
 TASKS = HERE / "tasks"
 RUNS = HERE / "runs"
 DEFAULT_CACHE = Path.home() / ".cache" / "yusagent-smoke"
@@ -81,6 +86,8 @@ WARMUP_PROMPT = "Réponds uniquement : OK."
 PROBE_PROMPT = "Exécute la sonde réseau."
 GRADE_TIMEOUT_S = 300
 PREP_TIMEOUT_S = 900
+VALIDATE_RUNS = 3  # exécutions de chaque vérification de --validate-gold (instabilité)
+HARD_MIN_TURNS = 10  # tâche `difficile` résolue en moins de tours : signalée (T07)
 
 
 def load_capture_run():
@@ -190,9 +197,9 @@ def tool_path() -> str:
 
 
 class Cache:
-    def __init__(self, root: Path, binary: Path, capture: bool):
+    def __init__(self, root: Path, binary: Path | None, capture: bool):
         self.root = root
-        self.binary_sha = sha256(binary)
+        self.binary_sha = sha256(binary) if binary else "aucun-binaire"
         self.home = root / "home"
         self.tmp = root / "tmp"
         self.kernel_venv = root / "kernel-venv" / self.binary_sha[:16]
@@ -200,8 +207,33 @@ class Cache:
         # la sonde utilisent leurs propres dossiers, avec un identifiant factice.
         self.agent = root / ("capture-agent" if capture else "agent")
         self.probe_agent = root / "probe-agent"
-        for path in (self.home, self.tmp):
+        self.uv_cache = root / "uv-cache"
+        self.uv_python = root / "uv-python"
+        self.npm_cache = root / "npm-cache"
+        for path in (self.home, self.tmp, self.uv_cache, self.uv_python, self.npm_cache):
             path.mkdir(parents=True, exist_ok=True)
+
+
+def task_env(cache: Cache, **extra: str) -> dict:
+    """Environnement du code des dépôts de tâche (`setup`, `test`)."""
+    return {"PATH": tool_path(), "HOME": str(cache.home), "TMPDIR": str(cache.tmp),
+            "LANG": "en_US.UTF-8", "DO_NOT_TRACK": "1", "UV_CACHE_DIR": str(cache.uv_cache),
+            "UV_PYTHON_INSTALL_DIR": str(cache.uv_python), "npm_config_cache": str(cache.npm_cache),
+            "npm_config_audit": "false", "npm_config_fund": "false",
+            "npm_config_update_notifier": "false", "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1", **extra}
+
+
+def task_profile(cache: Cache, task: dict) -> list[str]:
+    """Arguments de sandbox-exec pour le code d'une tâche (`sandbox-task.sb`)."""
+    node = shutil.which("node")
+    params = {"HOME_DIR": Path.home().resolve(),
+              "TASK_CACHE": (cache.root / "tasks" / task["id"]).resolve(),
+              "UV_CACHE": cache.uv_cache.resolve(), "UV_PYTHON": cache.uv_python.resolve(),
+              "NPM_CACHE": cache.npm_cache.resolve(), "SMOKE_HOME": cache.home.resolve(),
+              "SMOKE_TMP": cache.tmp.resolve(),
+              "NODE_HOME": Path(node).resolve().parents[1] if node else "/nonexistent"}
+    return ["-f", str(SANDBOX_TASK), *[a for k, v in params.items() for a in ("-D", f"{k}={v}")]]
 
 
 def agent_env(cache: Cache, agent_dir: Path, connect_port: int | None, capture: bool) -> dict:
@@ -383,7 +415,8 @@ def junit_results(path: Path, workspace: Path) -> dict[str, str]:
         return {}
     results = {}
     for case in ET.parse(path).getroot().iter("testcase"):
-        name = case.get("name", "")
+        # Node 24.21 (macOS) échappe deux fois les guillemets du nom : `&quot;` reste.
+        name = html.unescape(case.get("name", ""))
         failed = any(child.tag in ("failure", "error") for child in case) or case.get("failure")
         skipped = any(child.tag == "skipped" for child in case)
         status = "failed" if failed else "skipped" if skipped else "passed"
@@ -410,12 +443,15 @@ def run_tests(task: dict, workspace: Path, out: Path, cache: Cache, sandboxed: b
     if hidden.exists():
         shutil.copytree(hidden, workspace, dirs_exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
-    junit = out / "junit.xml"
+    # Le profil de tâche n'écrit que dans le cache de la tâche : rapport copié ensuite.
+    junit = cache.root / "tasks" / task["id"] / "junit.xml"
     junit.unlink(missing_ok=True)
-    env = {"PATH": tool_path(), "HOME": str(cache.home), "TMPDIR": str(cache.tmp),
-           "LANG": "en_US.UTF-8", "SMOKE_JUNIT": str(junit), "UV_OFFLINE": "1"}
+    env = task_env(cache, SMOKE_JUNIT=str(junit), UV_OFFLINE="1")
     result = run_process(["/bin/sh", "-c", task["test"]], env, workspace, out / "test.out",
-                         out / "test.err", GRADE_TIMEOUT_S, sandboxed)
+                         out / "test.err", GRADE_TIMEOUT_S, sandboxed,
+                         profile=task_profile(cache, task))
+    if junit.exists():
+        shutil.copyfile(junit, out / "junit.xml")
     found = junit_results(junit, workspace)
     tests = {tid: found.get(tid, "missing")
              for tid in task.get("fail_to_pass", []) + task.get("pass_to_pass", [])}
@@ -434,7 +470,7 @@ def prepare_task(task: dict, cache: Cache) -> dict:
     workspace, pristine, marker = task_paths(task, cache)
     if marker.exists():
         return json.loads(marker.read_text())
-    print(f"préparation : tâche {task['id']} (réseau autorisé)")
+    print(f"préparation : tâche {task['id']} (setup par le proxy à liste blanche)")
     shutil.rmtree(workspace, ignore_errors=True)
     shutil.rmtree(pristine, ignore_errors=True)
     source = task["source"]
@@ -452,14 +488,31 @@ def prepare_task(task: dict, cache: Cache) -> dict:
     if source.get("patch"):
         subprocess.run(["git", "apply", str(task["dir"] / source["patch"])], cwd=workspace,
                        check=True)
+    # Fichiers de la tâche copiés avant `setup` (versions figées : uv.lock).
+    for name in task.get("files", []):
+        shutil.copyfile(task["dir"] / "files" / name, workspace / name)
     logs = cache.root / "tasks" / task["id"] / "prepare"
     logs.mkdir(parents=True, exist_ok=True)
-    env = {"PATH": tool_path(), "HOME": str(cache.home), "TMPDIR": str(cache.tmp),
-           "LANG": "en_US.UTF-8", "UV_CACHE_DIR": str(cache.root / "uv-cache")}
-    setup = run_process(["/bin/sh", "-c", task.get("setup", "true")], env, workspace,
-                        logs / "setup.out", logs / "setup.err", PREP_TIMEOUT_S, sandboxed=False)
+    connect = proxies.ConnectProxy(logs / "connect.ndjson", proxies.load_hosts(SETUP_HOSTS))
+    proxies.serve(connect)
+    url = f"http://127.0.0.1:{connect.port}"
+    env = task_env(cache, HTTPS_PROXY=url, HTTP_PROXY=url, https_proxy=url, http_proxy=url,
+                   npm_config_https_proxy=url, npm_config_proxy=url,
+                   NO_PROXY="127.0.0.1,localhost")
+    try:
+        setup = run_process(["/bin/sh", "-c", task.get("setup", "true")], env, workspace,
+                            logs / "setup.out", logs / "setup.err", PREP_TIMEOUT_S,
+                            sandboxed=True, profile=task_profile(cache, task))
+    finally:
+        connect.shutdown()
+        connect.server_close()
+    refused = sorted({e["host"] for e in proxies.read_log(logs / "connect.ndjson")
+                      if not e.get("accepted") and e.get("host")})
     if setup["exit"] != 0:
-        fail(f"tâche {task['id']} : setup en échec, voir {logs}/setup.err")
+        fail(f"tâche {task['id']} : setup en échec, voir {logs}/setup.err "
+             f"(hôtes refusés : {refused or 'aucun'})")
+    if "git" in source:
+        reset_history(workspace)
     shutil.copytree(workspace, pristine, symlinks=True)
     graded = run_tests(task, workspace, logs, cache, sandboxed=True)
     wrong = {tid: status for tid, status in graded["tests"].items()
@@ -467,9 +520,23 @@ def prepare_task(task: dict, cache: Cache) -> dict:
     if wrong:
         fail(f"tâche {task['id']} invalide sur l'état cassé : {wrong} (attendu : fail_to_pass "
              f"en échec, pass_to_pass en succès), voir {logs}")
-    info = {"task": task["id"], "tree": tree_hash(task["dir"]), "broken_state": graded["tests"]}
+    info = {"task": task["id"], "tree": tree_hash(task["dir"]), "broken_state": graded["tests"],
+            "setup_refused_hosts": refused}
     marker.write_text(json.dumps(info, indent=2) + "\n")
     return info
+
+
+def reset_history(workspace: Path) -> None:
+    """Historique du dépôt remplacé par un seul commit : le commit de correction et tout ce
+    qui le suit ne doivent pas être lisibles par l'agent (`git log --all`, `git show`)."""
+    shutil.rmtree(workspace / ".git")
+    quiet = {"cwd": workspace, "check": True, "capture_output": True}
+    subprocess.run(["git", "init", "-q"], **quiet)
+    (workspace / ".git" / "info" / "exclude").write_text(".venv/\nnode_modules/\n")
+    subprocess.run(["git", "add", "-A"], **quiet)
+    subprocess.run(["git", "-c", "user.name=smoke", "-c", "user.email=smoke@localhost",
+                    "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+                    "commit", "-q", "-m", "base"], **quiet)
 
 
 def restore(task: dict, cache: Cache) -> Path:
@@ -477,6 +544,62 @@ def restore(task: dict, cache: Cache) -> Path:
     shutil.rmtree(workspace, ignore_errors=True)
     shutil.copytree(pristine, workspace, symlinks=True)
     return workspace
+
+
+def apply_gold(task: dict, cache: Cache, workspace: Path) -> str | None:
+    """Correction officielle : diff du commit parent au commit `gold`, tests cachés exclus."""
+    source = task["source"]
+    clone = cache.root / "sources" / task["id"]
+    hidden = task["dir"] / "hidden"
+    excluded = [f":(exclude){p.relative_to(hidden).as_posix()}"
+                for p in sorted(hidden.rglob("*")) if p.is_file()] if hidden.exists() else []
+    diff = subprocess.run(["git", "-C", str(clone), "diff", "--binary", source["commit"],
+                           source["gold"], "--", ".", *excluded], capture_output=True, check=True)
+    applied = subprocess.run(["git", "apply", "--whitespace=nowarn", "-"], input=diff.stdout,
+                             cwd=workspace, capture_output=True)
+    return None if applied.returncode == 0 else applied.stderr.decode(errors="replace")[-500:]
+
+
+def validate_gold(tasks: list[dict], cache: Cache, out: Path, runs: int) -> bool:
+    """Sans modèle : état cassé (fail_to_pass en échec, pass_to_pass en succès) et
+    correction officielle (tout en succès), `runs` fois chacun, tests sous sandbox."""
+    report = []
+    for task in tasks:
+        if "gold" not in task["source"]:
+            fail(f"tâche {task['id']} : `source.gold` (commit de correction) absent")
+        f2p = set(task.get("fail_to_pass", []))
+        checks = []
+        for state in ("broken", "gold"):
+            for index in range(1, runs + 1):
+                workspace = restore(task, cache)
+                error = apply_gold(task, cache, workspace) if state == "gold" else None
+                graded = (run_tests(task, workspace, out / task["id"] / f"{state}-{index}", cache,
+                                    sandboxed=True) if error is None else
+                          {"tests": {}, "junit": False, "process": None})
+                expected = {tid: ("failed" if state == "broken" and tid in f2p else "passed")
+                            for tid in graded["tests"]}
+                wrong = {tid: st for tid, st in graded["tests"].items() if st != expected[tid]}
+                ok = error is None and graded["junit"] and not wrong
+                checks.append({"state": state, "run": index, "ok": ok, "wrong": wrong,
+                               "apply_error": error,
+                               "seconds": (graded["process"] or {}).get("seconds")})
+                print(f"  {task['id']} {state} {index}/{runs} : {'ok' if ok else 'ÉCHEC'}"
+                      f"{'' if ok else f' {error or wrong}'}")
+        report.append({"task": task["id"], "ok": all(c["ok"] for c in checks), "checks": checks})
+    (out / "validate.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+    lines = ["# Validation des tâches (--validate-gold)", "",
+             f"{runs} exécutions de chaque vérification, tests sous `sandbox-task.sb`.", "",
+             "| Tâche | État cassé | Correction officielle | Durée max des tests s | Valide |",
+             "|---|---|---|---|---|"]
+    for r in report:
+        by = {s: [c for c in r["checks"] if c["state"] == s] for s in ("broken", "gold")}
+        secs = [c["seconds"] for c in r["checks"] if c["seconds"] is not None]
+        lines.append(f"| {r['task']} | {sum(c['ok'] for c in by['broken'])}/{runs} | "
+                     f"{sum(c['ok'] for c in by['gold'])}/{runs} | {max(secs, default=None)} | "
+                     f"{'oui' if r['ok'] else 'NON'} |")
+    (out / "validate.md").write_text("\n".join(lines) + "\n")
+    print(f"rapport : {out / 'validate.md'}")
+    return all(r["ok"] for r in report)
 
 
 # --- Sonde, chauffe, phase agent ---------------------------------------------
@@ -581,7 +704,9 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
              prices: dict) -> dict:
     workspace = restore(task, cache)
     prompt = (task["dir"] / "prompt.md").read_text()
-    scenario = f"smoke-{'fail' if task['id'] in capture_fail else task['id']}"
+    # Seules les tâches d'exemple ont un scénario de capture qui les résout.
+    solvable = "exemple" in task.get("tags", []) and task["id"] not in capture_fail
+    scenario = f"smoke-{task['id'] if solvable else 'fail'}"
     access = Access(out, capture, scenario, connect.port,
                     server_args + read_probe_args(hidden_targets(task, cache)))
     try:
@@ -623,6 +748,9 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     isolated = metrics.isolation(markers)
     if isolated and isolated["readable"]:
         anomalies.append(f"lecture hors workspace réussie : {isolated['readable']}")
+    if "difficile" in task.get("tags", []) and status == "resolved" and calls["turns"] < HARD_MIN_TURNS:
+        anomalies.append(f"tâche difficile résolue en {calls['turns']} tours (< {HARD_MIN_TURNS}) :"
+                         " à signaler, pas de remplacement sans accord")
     return {
         "task": task["id"], "run": index, "status": status, "resolved": status == "resolved",
         "tests": graded["tests"], "agent": process, "final": final,
@@ -859,7 +987,7 @@ def auth_values(agent_dir: Path) -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--binary", required=True, type=Path)
+    parser.add_argument("--binary", type=Path, help="requis sauf avec --validate-gold")
     parser.add_argument("--provider", default=PROVIDER)
     parser.add_argument("--model", default="", help="vide : " + ", ".join(DEFAULT_MODELS))
     parser.add_argument("--effort", default=DEFAULT_EFFORT)
@@ -876,6 +1004,10 @@ def parse_args() -> argparse.Namespace:
                         help="mode capture : le serveur refuse cet id au run de chauffe")
     parser.add_argument("--capture-no-websocket", action="store_true",
                         help="mode capture : le serveur refuse le WebSocket (repli SSE, anomalie)")
+    parser.add_argument("--validate-gold", action="store_true",
+                        help="sans modèle ni binaire : état cassé et correction officielle "
+                             f"des tâches, {VALIDATE_RUNS} fois chacun")
+    parser.add_argument("--validate-runs", type=int, default=VALIDATE_RUNS)
     parser.add_argument("--record-hosts", action="store_true",
                         help="run de chauffe réel, proxy CONNECT en enregistrement : écrit "
                              f"{HOSTS.relative_to(REPO)}")
@@ -886,6 +1018,16 @@ def main() -> None:
     args = parse_args()
     if platform.system() != "Darwin" or not Path("/usr/bin/sandbox-exec").exists():
         fail("macOS et sandbox-exec requis")
+    if args.validate_gold:
+        cache = Cache(args.cache.expanduser().resolve(), None, False)
+        tasks = load_tasks([t for t in args.tasks.split(",") if t] or None, False)
+        for task in tasks:
+            prepare_task(task, cache)
+        out = args.out / f"{utc_stamp()}-validate"
+        out.mkdir(parents=True)
+        sys.exit(0 if validate_gold(tasks, cache, out, args.validate_runs) else 1)
+    if args.binary is None:
+        fail("--binary requis")
     binary = args.binary.resolve()
     if not binary.is_file():
         fail(f"binaire introuvable : {binary}")

@@ -1,0 +1,8 @@
+# Hôtes autorisés au proxy CONNECT du `setup` des tâches (port 443), mêmes hôtes que
+# bench/smoke/tools/mine-hosts.txt (revalidation des candidats, 04/11/2026).
+pypi.org                              # index PyPI (uv)
+files.pythonhosted.org                # fichiers PyPI
+registry.npmjs.org                    # registre npm
+github.com                            # Pythons gérés par uv (python-build-standalone)
+objects.githubusercontent.com         # redirection des téléchargements GitHub
+release-assets.githubusercontent.com  # redirection des téléchargements GitHub
