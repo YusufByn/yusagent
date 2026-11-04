@@ -1186,11 +1186,13 @@ def write_report(run_dir: Path, report: dict) -> None:
 def report_notes(prices: dict, effort: str) -> list[str]:
     notes = [
         "Tokens et usage : journal d'usage du harness (`<id>.usage.ndjson`), rien n'est "
-        "recalculé. Pour l'API Responses, `cacheWrite` vaut 0 après normalisation "
-        "(docs/usage.md) : l'écriture en cache est comptée au tarif d'entrée.",
+        "recalculé. Pour l'API Responses, `cacheWrite` = `cache_write_tokens` du provider "
+        "(T08, docs/usage.md), 0 quand le provider ne le renvoie pas : l'écriture est alors "
+        "comptée au tarif d'entrée.",
         f"Coût théorique : tarif API Standard de prices.json (version {prices.get('version')}), "
-        f"écriture au tarif `{CACHE_WRITE_PRICE}` (le corps Codex ne porte pas de rétention), "
-        "contexte long au-delà du seuil de prices.json.",
+        "écriture ventilée par le provider au tarif de son TTL (`cache_write_30m`, "
+        f"`cache_write_12h`), sinon au tarif `{CACHE_WRITE_PRICE}` (le corps Codex ne porte pas "
+        "de rétention), contexte long au-delà du seuil de prices.json.",
         "Transport : WebSocket attendu pour les appels de boucle (main, subagent) ; "
         "compaction, /refine et résumé de branche passent en SSE par construction.",
         "Taux de cache de session : cacheRead / (input + cacheRead + cacheWrite) sur les "
