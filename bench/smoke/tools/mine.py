@@ -113,7 +113,12 @@ TAIL_LINES = 20  # lignes gardées de la sortie d'installation
 
 # Causes d'échec d'installation, dans l'ordre de test sur la fin de la sortie.
 INSTALL_CAUSES = [
-    ("uv_no_build", re.compile(r"no-build|has no binary distribution|source distributions? (is|are) disabled", re.I)),
+    # UV_NO_BUILD : dépendance publiée en sdist seulement, ou projet local lui-même
+    # (« Building source distributions for `<projet>` is disabled », vu avec uv 0.12.17).
+    ("uv_no_build_dep", re.compile(r"marked as `--no-build` but has no binary|"
+                                   r"Wheels are required for .* building from source is disabled", re.I)),
+    ("uv_no_build", re.compile(r"Building source distributions for `[^`]+` is disabled|no-build", re.I)),
+    ("groups_conflict", re.compile(r"are incompatible with the conflicts", re.I)),
     ("python_version", re.compile(r"requires-python|No interpreter found|Python requirement|"
                                   r"unsupported Python", re.I)),
     ("resolution", re.compile(r"No solution found|unsatisfiable|ERESOLVE|Could not resolve dependency", re.I)),
@@ -171,13 +176,24 @@ def clean_tail(text: str, home: str = str(Path.home())) -> str:
     return "\n".join(lines[-TAIL_LINES:])[-2500:]
 
 
-def install_cause(res: dict) -> str:
+def install_cause(res: dict, project: str = "") -> str:
     if res["timeout"]:
         return "timeout"
     for cause, pattern in INSTALL_CAUSES:
         if pattern.search(res["out"]):
+            if cause == "uv_no_build":
+                m = re.search(r"Building source distributions for `([^`]+)` is disabled", res["out"])
+                same = m and re.sub(r"[-_.]+", "-", m.group(1).lower()) == re.sub(
+                    r"[-_.]+", "-", project.lower())
+                return "uv_no_build_projet" if same else "uv_no_build_dep"
             return cause
     return "other"
+
+
+def project_name(work: Path) -> str:
+    m = re.search(r'(?m)^name\s*=\s*"([^"]+)"', (work / "pyproject.toml").read_text(errors="replace")) \
+        if (work / "pyproject.toml").exists() else None
+    return m.group(1) if m else ""
 
 
 def norm_key(key: str) -> str:
@@ -699,7 +715,8 @@ def _run_states(c: dict, rec: dict, cache: Path, env: dict, slug: str, log_path:
     rec["install_seconds"] = inst["seconds"]
     rec["install_tail"] = clean_tail(inst["out"])
     if inst["exit"] != 0:
-        rec["install_cause"] = install_cause(inst)
+        rec["project"] = project_name(work) if c["lang"] == "python" else ""
+        rec["install_cause"] = install_cause(inst, rec["project"])
         raise Reject("install", f"{rec['install_cause']}, exit {inst['exit']}")
     if c["lang"] == "python" and LOCKS_DIR is not None:
         save_python_versions(c, rec, work, env, slug, had_lock, log_path)
@@ -967,8 +984,12 @@ def write_csv(args: argparse.Namespace) -> None:
              "| Cause de rejet | Nombre | Part des validés |", "|---|---|---|"]
     for cause, n in causes.most_common():
         lines.append(f"| {CAUSES[cause]} | {n} | {100 * n / total:.1f} % |")
-    inst = Counter(r.get("install_cause", "inconnue") for r in records.values()
-                   if r["cause"] == "install")
+    def cause_of(r: dict) -> str:
+        if r.get("install_tail"):  # reclassement avec les règles courantes
+            return install_cause({"timeout": False, "out": r["install_tail"]},
+                                 r.get("project") or r["repo"].split("/")[1])
+        return r.get("install_cause", "inconnue")
+    inst = Counter(cause_of(r) for r in records.values() if r["cause"] == "install")
     if inst:
         lines += ["", "| Échec d'installation, cause | Nombre |", "|---|---|"]
         lines += [f"| {k} | {n} |" for k, n in inst.most_common()]
