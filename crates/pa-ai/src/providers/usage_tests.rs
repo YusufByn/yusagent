@@ -22,15 +22,17 @@ fn model(api: &str, provider: &str) -> Model {
 
 /// The usage after one `response.completed` event carrying `usage`.
 fn responses_usage(usage: &Value) -> Usage {
-    let model = model("openai-responses", "openai");
+    responses_usage_with(
+        &model("openai-responses", "openai"),
+        ResponsesStreamHooks::default(),
+        usage,
+    )
+}
+
+fn responses_usage_with(model: &Model, hooks: ResponsesStreamHooks, usage: &Value) -> Usage {
     let mut output = initial_assistant_message("openai-responses", "openai", "m");
     let (writer, _stream) = create_assistant_message_event_stream();
-    let mut processor = ResponsesStreamProcessor::new(
-        &model,
-        &mut output,
-        &writer,
-        ResponsesStreamHooks::default(),
-    );
+    let mut processor = ResponsesStreamProcessor::new(model, &mut output, &writer, hooks);
     processor
         .handle_event(&json!({"type": "response.completed",
             "response": {"id": "resp_1", "status": "completed", "output": [], "usage": usage}}))
@@ -61,6 +63,131 @@ fn responses_without_output_details_has_no_reasoning() {
         "input_tokens": 10, "output_tokens": 5, "total_tokens": 15}));
     assert_eq!(usage.input, 10);
     assert_eq!(usage.reasoning, None);
+}
+
+// yusAgent (T08, YA-13): cache writes. `input_tokens_details.cache_write_tokens` is part of
+// `input_tokens` and excluded from `cached_tokens`; `cache_write_tokens_details` splits it by
+// TTL (<https://developers.openai.com/api/docs/guides/prompt-caching>).
+
+fn responses_write_usage(split: Option<Value>) -> Value {
+    let mut details = json!({"cached_tokens": 600, "cache_write_tokens": 300});
+    if let Some(split) = split {
+        details["cache_write_tokens_details"] = split;
+    }
+    json!({"input_tokens": 1000, "input_tokens_details": details,
+        "output_tokens": 20, "total_tokens": 1020})
+}
+
+#[test]
+fn responses_reads_cache_writes_with_their_ttl_split() {
+    let usage = responses_usage(&responses_write_usage(Some(
+        json!({"ttl_30m_tokens": 200, "ttl_12h_tokens": 100}),
+    )));
+    assert_eq!(
+        usage.input, 100,
+        "input_tokens - cached_tokens - cache_write_tokens"
+    );
+    assert_eq!(usage.cache_read, 600);
+    assert_eq!(usage.cache_write, 300);
+    assert_eq!(usage.input + usage.cache_read + usage.cache_write, 1000);
+    assert_eq!(usage.cache_write_30m, Some(200));
+    assert_eq!(usage.cache_write_12h, Some(100));
+    assert_eq!(usage.cache_write_1h, None, "1 h stays Anthropic's");
+    assert_eq!(usage.total_tokens, 1020);
+}
+
+#[test]
+fn responses_reads_cache_writes_without_a_split() {
+    let usage = responses_usage(&responses_write_usage(None));
+    assert_eq!(usage.input, 100);
+    assert_eq!(usage.cache_write, 300);
+    assert_eq!(usage.cache_write_30m, None);
+    assert_eq!(usage.cache_write_12h, None);
+}
+
+#[test]
+fn responses_without_cache_writes_is_unchanged() {
+    let usage = responses_usage(&json!({
+        "input_tokens": 1000, "input_tokens_details": {"cached_tokens": 900},
+        "output_tokens": 5, "total_tokens": 1005}));
+    assert_eq!(usage.input, 100);
+    assert_eq!(usage.cache_write, 0);
+    assert_eq!(usage.cache_write_30m, None);
+    assert_eq!(usage.cache_write_12h, None);
+}
+
+#[test]
+fn responses_input_saturates_at_zero() {
+    let usage = responses_usage(&json!({
+        "input_tokens": 100, "output_tokens": 1, "total_tokens": 101,
+        "input_tokens_details": {"cached_tokens": 80, "cache_write_tokens": 50}}));
+    assert_eq!(usage.input, 0);
+}
+
+#[test]
+fn responses_reports_the_raw_usage_to_the_usage_hook() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let hook_seen = std::sync::Arc::clone(&seen);
+    let hooks = ResponsesStreamHooks {
+        on_usage: Some(std::sync::Arc::new(move |usage: &Value, model: &Model| {
+            hook_seen
+                .lock()
+                .unwrap()
+                .push((usage.clone(), model.id.clone()));
+        })),
+        ..ResponsesStreamHooks::default()
+    };
+    let raw = responses_write_usage(Some(json!({"ttl_30m_tokens": 300, "ttl_12h_tokens": 0})));
+    responses_usage_with(&model("openai-responses", "openai"), hooks, &raw);
+    assert_eq!(*seen.lock().unwrap(), vec![(raw, "m".to_string())]);
+}
+
+/// Terra's catalog rates: input 1.00, cache read 0.05, cache write (30 min) 1.25, output 5.00
+/// per million tokens.
+fn priced_model() -> Model {
+    let mut model = model("openai-responses", "openai");
+    model.cost = serde_json::from_value(
+        json!({"input": 1.0, "output": 5.0, "cacheRead": 0.05, "cacheWrite": 1.25}),
+    )
+    .unwrap();
+    model
+}
+
+fn cache_write_cost(split: Option<Value>) -> f64 {
+    responses_usage_with(
+        &priced_model(),
+        ResponsesStreamHooks::default(),
+        &responses_write_usage(split),
+    )
+    .cost
+    .cache_write
+    .as_f64()
+}
+
+/// 30 min writes at the catalog write rate; 12 h writes at twice that rate (the guide: 1.25x
+/// and 2.5x the input rate), an approximation documented in `docs/usage.md`.
+#[test]
+fn twelve_hour_writes_cost_twice_the_catalog_write_rate() {
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+    // 300 tokens at 1.25 / M.
+    assert!(close(cache_write_cost(None), 300.0 * 1.25e-6));
+    assert!(close(
+        cache_write_cost(Some(json!({"ttl_30m_tokens": 300, "ttl_12h_tokens": 0}))),
+        300.0 * 1.25e-6
+    ));
+    // 200 tokens at 1.25 / M, 100 at 2.50 / M.
+    assert!(close(
+        cache_write_cost(Some(json!({"ttl_30m_tokens": 200, "ttl_12h_tokens": 100}))),
+        200.0 * 1.25e-6 + 100.0 * 2.5e-6
+    ));
+    let usage = responses_usage_with(
+        &priced_model(),
+        ResponsesStreamHooks::default(),
+        &responses_write_usage(Some(json!({"ttl_30m_tokens": 200, "ttl_12h_tokens": 100}))),
+    );
+    // 100 input at 1.00, 600 read at 0.05, 20 output at 5.00, writes as above.
+    let total = 100.0e-6 + 600.0 * 0.05e-6 + 20.0 * 5.0e-6 + 200.0 * 1.25e-6 + 100.0 * 2.5e-6;
+    assert!(close(usage.cost.total.as_f64(), total));
 }
 
 /// Gemini: `promptTokenCount` includes `cachedContentTokenCount`, `totalTokenCount` adds

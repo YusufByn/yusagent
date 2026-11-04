@@ -355,6 +355,7 @@ async fn run_stream(
         apply_service_tier_pricing: Some(Box::new(move |usage, service_tier| {
             apply_service_tier_pricing(usage, service_tier.as_deref(), &model_id);
         })),
+        on_usage: options.base.on_usage.clone(),
     };
 
     let stream_result: Result<(), ProviderError>;

@@ -896,6 +896,8 @@ fn durable_compaction_row_serializes_in_the_ts_key_order() {
             cost: pa_types::ai::UsageCost::default(),
             reasoning: None,
             cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         }),
         harness_digest: Some("# Continual Harness State".to_string()),
         harness_state_fingerprint: None,

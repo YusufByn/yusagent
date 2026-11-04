@@ -175,6 +175,8 @@ async fn turn_boundary_host_requests_round_trip_through_a_real_kernel() {
                     cost: pa_agent::types::UsageCost::default(),
                     reasoning: None,
                     cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 };
             }
         }

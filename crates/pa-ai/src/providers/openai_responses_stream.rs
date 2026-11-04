@@ -768,6 +768,10 @@ impl<'a> ResponsesStreamProcessor<'a> {
                     self.output.response_id = Some(id.to_string());
                 }
                 if let Some(usage) = response.get("usage") {
+                    // yusAgent (T08, YA-13): the raw usage object, for the usage journal.
+                    if let Some(on_usage) = &self.hooks.on_usage {
+                        on_usage(usage, self.model);
+                    }
                     let cached_tokens = usage
                         .get("input_tokens_details")
                         .and_then(|details| details.get("cached_tokens"))
@@ -777,15 +781,19 @@ impl<'a> ResponsesStreamProcessor<'a> {
                         .get("input_tokens")
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0);
+                    let (cache_write_tokens, cache_write_30m, cache_write_12h) =
+                        read_cache_write(usage);
                     // OpenAI includes cached tokens in input_tokens; subtract them.
                     self.output.usage = Usage {
-                        input: input_tokens.saturating_sub(cached_tokens),
+                        input: input_tokens
+                            .saturating_sub(cached_tokens)
+                            .saturating_sub(cache_write_tokens),
                         output: usage
                             .get("output_tokens")
                             .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0),
                         cache_read: cached_tokens,
-                        cache_write: 0,
+                        cache_write: cache_write_tokens,
                         total_tokens: usage
                             .get("total_tokens")
                             .and_then(serde_json::Value::as_u64)
@@ -797,6 +805,8 @@ impl<'a> ResponsesStreamProcessor<'a> {
                             .and_then(|details| details.get("reasoning_tokens"))
                             .and_then(serde_json::Value::as_u64),
                         cache_write_1h: None,
+                        cache_write_30m,
+                        cache_write_12h,
                     };
                 }
                 calculate_cost(self.model, &mut self.output.usage, None);
@@ -945,4 +955,23 @@ fn map_responses_stop_reason(status: Option<&str>) -> StopReason {
         Some("incomplete") => StopReason::Length,
         Some(_) => StopReason::Error,
     }
+}
+
+/// yusAgent (T08, YA-13): `input_tokens_details.cache_write_tokens` (part of `input_tokens`,
+/// excluded from `cached_tokens`; 0 when absent) and its split by TTL,
+/// `cache_write_tokens_details.ttl_30m_tokens` / `ttl_12h_tokens`, read as received (`None`
+/// when absent). <https://developers.openai.com/api/docs/guides/prompt-caching>
+fn read_cache_write(usage: &Value) -> (u64, Option<u64>, Option<u64>) {
+    let details = usage.get("input_tokens_details");
+    let tokens = details
+        .and_then(|details| details.get("cache_write_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let split = details.and_then(|details| details.get("cache_write_tokens_details"));
+    let ttl = |key: &str| {
+        split
+            .and_then(|split| split.get(key))
+            .and_then(Value::as_u64)
+    };
+    (tokens, ttl("ttl_30m_tokens"), ttl("ttl_12h_tokens"))
 }

@@ -33,6 +33,8 @@ pub struct ResponsesStreamHooks {
     pub request_service_tier: Option<crate::types::ServiceTier>,
     pub resolve_service_tier: Option<ResolveServiceTierFn>,
     pub apply_service_tier_pricing: Option<ApplyServiceTierPricingFn>,
+    /// yusAgent (T08, YA-13): `StreamOptions::on_usage`, called with `response.usage`.
+    pub on_usage: Option<crate::types::OnUsageHook>,
 }
 
 /// Multipliers per <https://developers.openai.com/api/docs/pricing>.

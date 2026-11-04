@@ -70,6 +70,8 @@ fn assistant_entry(text: &str) -> SessionMessage {
             cost: pa_types::ai::UsageCost::default(),
             reasoning: None,
             cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         },
         stop_reason: StopReason::Stop,
         stop_reason_raw: None,
@@ -640,6 +642,8 @@ fn context_usage_anchors_on_the_last_valid_assistant_usage() {
         cost: pa_types::ai::UsageCost::default(),
         reasoning: None,
         cache_write_1h: None,
+        cache_write_30m: None,
+        cache_write_12h: None,
     };
     session.append_message(assistant).unwrap();
     session

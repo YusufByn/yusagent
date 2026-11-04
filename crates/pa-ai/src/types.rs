@@ -64,6 +64,11 @@ pub type OnPayloadHook =
 /// Hook invoked after the HTTP response is received and before the body is read.
 pub type OnResponseHook = std::sync::Arc<dyn Fn(ProviderResponse, &Model) + Send + Sync>;
 
+/// yusAgent (T08, YA-13): hook invoked with the provider's raw usage object (usage only, no
+/// message content) when the response reports it. No format is assumed: each provider passes
+/// its own wire object. Called by the `OpenAI` Responses processor.
+pub type OnUsageHook = std::sync::Arc<dyn Fn(&serde_json::Value, &Model) + Send + Sync>;
+
 /// Options shared by all providers.
 #[derive(Clone, Default)]
 pub struct StreamOptions {
@@ -77,6 +82,8 @@ pub struct StreamOptions {
     pub session_id: Option<String>,
     pub on_payload: Option<OnPayloadHook>,
     pub on_response: Option<OnResponseHook>,
+    /// yusAgent (T08, YA-13): see [`OnUsageHook`].
+    pub on_usage: Option<OnUsageHook>,
     pub headers: Option<std::collections::HashMap<String, String>>,
     pub timeout_ms: Option<u64>,
     pub metadata: Option<std::collections::HashMap<String, serde_json::Value>>,
@@ -95,6 +102,7 @@ impl std::fmt::Debug for StreamOptions {
             .field("session_id", &self.session_id)
             .field("on_payload", &self.on_payload.is_some())
             .field("on_response", &self.on_response.is_some())
+            .field("on_usage", &self.on_usage.is_some())
             .field("headers", &self.headers)
             .field("timeout_ms", &self.timeout_ms)
             .field("metadata", &self.metadata)

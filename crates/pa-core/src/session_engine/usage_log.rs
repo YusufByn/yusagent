@@ -62,6 +62,10 @@ pub struct UsageCounts {
     pub cache_write: u64,
     /// The 1 h share of `cache_write`, when the provider reports the split.
     pub cache_write_1h: Option<u64>,
+    /// yusAgent (T08, YA-13): the 30 min and 12 h shares of `cache_write`, when the provider
+    /// reports the split (`OpenAI` Responses), as received.
+    pub cache_write_30m: Option<u64>,
+    pub cache_write_12h: Option<u64>,
     /// Reasoning tokens (a subset of `output`), when the provider reports them.
     pub reasoning: Option<u64>,
     pub total_tokens: u64,
@@ -89,6 +93,8 @@ impl From<&pa_agent::types::Usage> for UsageCounts {
             cache_read: usage.cache_read,
             cache_write: usage.cache_write,
             cache_write_1h: usage.cache_write_1h,
+            cache_write_30m: usage.cache_write_30m,
+            cache_write_12h: usage.cache_write_12h,
             reasoning: usage.reasoning,
             total_tokens: usage.total_tokens,
             cost: usage.cost.total,
@@ -104,6 +110,8 @@ impl From<&pa_types::ai::Usage> for UsageCounts {
             cache_read: usage.cache_read,
             cache_write: usage.cache_write,
             cache_write_1h: usage.cache_write_1h,
+            cache_write_30m: usage.cache_write_30m,
+            cache_write_12h: usage.cache_write_12h,
             reasoning: usage.reasoning,
             total_tokens: usage.total_tokens,
             cost: usage.cost.total.as_f64(),
@@ -241,6 +249,9 @@ pub struct CallRecord {
     /// yusAgent (T05, YA-05): why the harness changed the request prefix on this call
     /// (`invalidation` field, agent-loop calls only); `None` writes nothing.
     pub invalidation: Option<Value>,
+    /// yusAgent (T08, YA-13): the provider's raw usage object (`providerUsage`), the last one
+    /// the provider reported through the usage hook; `None` writes nothing.
+    pub provider_usage: Option<Value>,
 }
 
 #[derive(Debug, Default)]
@@ -403,6 +414,12 @@ impl UsageJournal {
             );
             put("cacheWrite1h", json!(one_hour));
         }
+        if let Some(thirty_minutes) = usage.cache_write_30m {
+            put("cacheWrite30m", json!(thirty_minutes));
+        }
+        if let Some(twelve_hours) = usage.cache_write_12h {
+            put("cacheWrite12h", json!(twelve_hours));
+        }
         if let Some(reasoning) = usage.reasoning {
             put("reasoning", json!(reasoning));
         }
@@ -417,6 +434,9 @@ impl UsageJournal {
         }
         if let Some(invalidation) = &record.invalidation {
             put("invalidation", invalidation.clone());
+        }
+        if let Some(provider_usage) = &record.provider_usage {
+            put("providerUsage", provider_usage.clone());
         }
         Value::Object(entry).to_string()
     }
@@ -537,6 +557,8 @@ struct Probe {
 struct ProbeState {
     ttft_ms: Option<f64>,
     history_reasoning: Option<HistoryReasoning>,
+    /// yusAgent (T08, YA-13): the last raw usage the provider reported.
+    provider_usage: Option<Value>,
     finished: bool,
 }
 
@@ -571,6 +593,10 @@ impl Probe {
         lock(&self.state).history_reasoning = Some(HistoryReasoning::from_payload(payload));
     }
 
+    fn observe_usage(&self, usage: &Value) {
+        lock(&self.state).provider_usage = Some(usage.clone());
+    }
+
     fn mark_first_token(&self) {
         let elapsed = self.elapsed_ms();
         lock(&self.state).ttft_ms.get_or_insert(elapsed);
@@ -578,13 +604,17 @@ impl Probe {
 
     /// Writes the call's line once; later calls are no-ops.
     fn finish(&self, stop_reason: &str, usage: UsageCounts) {
-        let (ttft_ms, history_reasoning) = {
+        let (ttft_ms, history_reasoning, provider_usage) = {
             let mut state = lock(&self.state);
             if state.finished {
                 return;
             }
             state.finished = true;
-            (state.ttft_ms, state.history_reasoning)
+            (
+                state.ttft_ms,
+                state.history_reasoning,
+                state.provider_usage.take(),
+            )
         };
         self.journal.append(&CallRecord {
             kind: self.kind,
@@ -600,6 +630,7 @@ impl Probe {
             history_reasoning,
             user_timestamp: self.user_timestamp,
             invalidation: self.invalidation.clone(),
+            provider_usage,
         });
     }
 }
@@ -657,6 +688,16 @@ pub fn instrument_stream_fn(
                         .and_then(|hook| hook(payload.clone(), model));
                     observer.observe_payload(next.as_ref().unwrap_or(&payload));
                     next
+                },
+            ));
+            let inner_usage = options.on_usage.take();
+            let observer = Arc::clone(&probe);
+            options.on_usage = Some(Arc::new(
+                move |usage: &Value, model: &pa_agent::types::Model| {
+                    if let Some(hook) = &inner_usage {
+                        hook(usage, model);
+                    }
+                    observer.observe_usage(usage);
                 },
             ));
             match inner(model, context, options).await {
@@ -784,6 +825,16 @@ impl AuxProbe {
                     .and_then(|hook| hook(payload.clone(), model));
                 observer.observe_payload(next.as_ref().unwrap_or(&payload));
                 next
+            },
+        ));
+        let inner_usage = options.base.on_usage.take();
+        let observer = Arc::clone(&probe);
+        options.base.on_usage = Some(Arc::new(
+            move |usage: &Value, model: &pa_types::ai::Model| {
+                if let Some(hook) = &inner_usage {
+                    hook(usage, model);
+                }
+                observer.observe_usage(usage);
             },
         ));
         Self(Some(probe))

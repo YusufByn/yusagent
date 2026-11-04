@@ -169,6 +169,20 @@ pub struct Usage {
         skip_serializing_if = "Option::is_none"
     )]
     pub cache_write_1h: Option<u64>,
+    /// yusAgent (T08, YA-13): mirror of `pa_types::ai::Usage::cache_write_30m`.
+    #[serde(
+        rename = "cacheWrite30m",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cache_write_30m: Option<u64>,
+    /// yusAgent (T08, YA-13): mirror of `pa_types::ai::Usage::cache_write_12h`.
+    #[serde(
+        rename = "cacheWrite12h",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cache_write_12h: Option<u64>,
 }
 
 impl Usage {
@@ -189,6 +203,8 @@ impl Usage {
             },
             reasoning: None,
             cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         }
     }
 }

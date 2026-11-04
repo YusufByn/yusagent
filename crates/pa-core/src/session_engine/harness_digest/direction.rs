@@ -38,6 +38,8 @@ fn wire_assistant(text: &str) -> pa_types::session::AgentMessage {
             cost: pa_types::ai::UsageCost::default(),
             reasoning: None,
             cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         },
         stop_reason: StopReason::Stop,
         stop_reason_raw: None,

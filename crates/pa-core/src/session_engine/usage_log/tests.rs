@@ -30,6 +30,8 @@ fn record(kind: CallKind, started_at: SystemTime, user_timestamp: Option<i64>) -
             cache_read: 800,
             cache_write: 100,
             cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
             reasoning: None,
             total_tokens: 1050,
             cost: 0.0125,
@@ -37,6 +39,7 @@ fn record(kind: CallKind, started_at: SystemTime, user_timestamp: Option<i64>) -
         history_reasoning: None,
         user_timestamp,
         invalidation: None,
+        provider_usage: None,
     }
 }
 
@@ -105,6 +108,9 @@ fn unreported_fields_are_absent_never_zero() {
         "historyReasoning",
         "purpose",
         "invalidation",
+        "cacheWrite30m",
+        "cacheWrite12h",
+        "providerUsage",
     ] {
         assert!(entry.get(field).is_none(), "{field} must be absent");
     }
@@ -288,12 +294,25 @@ fn agent_message(usage: pa_agent::types::Usage) -> pa_agent::types::AssistantMes
 /// A provider that calls the payload hook with `payload`, then streams start, one text delta
 /// and done with `usage`.
 fn scripted(payload: Value, usage: pa_agent::types::Usage) -> StreamFn {
+    scripted_with_raw_usage(payload, usage, None)
+}
+
+/// [`scripted`], whose provider also reports `raw_usage` through the usage hook.
+fn scripted_with_raw_usage(
+    payload: Value,
+    usage: pa_agent::types::Usage,
+    raw_usage: Option<Value>,
+) -> StreamFn {
     Arc::new(move |_model, _context, options| {
         let payload = payload.clone();
         let usage = usage.clone();
+        let raw_usage = raw_usage.clone();
         Box::pin(async move {
             if let Some(hook) = options.on_payload.as_ref() {
                 assert!(hook(payload, &agent_model()).is_none(), "body untouched");
+            }
+            if let (Some(hook), Some(raw_usage)) = (options.on_usage.as_ref(), raw_usage) {
+                hook(&raw_usage, &agent_model());
             }
             let (handle, consumer) = event_stream();
             let partial = agent_message(pa_agent::types::Usage::zero());
@@ -327,6 +346,8 @@ async fn the_wrapper_journals_a_streamed_call() {
         cost: UsageCost::default(),
         reasoning: Some(312),
         cache_write_1h: None,
+        cache_write_30m: None,
+        cache_write_12h: None,
     };
     let payload = json!({"messages": [{"role": "assistant", "content": [
         {"type": "thinking", "thinking": "abcdefgh", "signature": "s"}]}]});
@@ -366,6 +387,73 @@ async fn the_wrapper_journals_a_streamed_call() {
     assert!(entry["ttftMs"].is_number());
     assert_eq!(entry["historyReasoning"]["blocks"], json!(1));
     assert_eq!(entry["historyReasoning"]["textChars"], json!(8));
+    assert!(entry.get("providerUsage").is_none(), "no usage hook called");
+}
+
+// yusAgent (T08, YA-13): the raw usage the provider reports through the usage hook is
+// journaled as `providerUsage`, unchanged, with the TTL split of the normalized usage; an
+// inner usage hook still runs.
+#[tokio::test]
+async fn the_raw_provider_usage_and_the_ttl_split_are_journaled() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = Arc::new(journal(dir.path(), None));
+    let raw = json!({"input_tokens": 1000, "output_tokens": 20, "total_tokens": 1020,
+        "input_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 300,
+            "cache_write_tokens_details": {"ttl_30m_tokens": 200, "ttl_12h_tokens": 100}},
+        "output_tokens_details": {"reasoning_tokens": 5}});
+    let usage = pa_agent::types::Usage {
+        input: 100,
+        output: 20,
+        cache_read: 600,
+        cache_write: 300,
+        total_tokens: 1020,
+        cache_write_30m: Some(200),
+        cache_write_12h: Some(100),
+        ..pa_agent::types::Usage::zero()
+    };
+    let stream_fn = instrument_stream_fn(
+        Some(Arc::clone(&journal)),
+        CallKind::Main,
+        scripted_with_raw_usage(json!({}), usage, Some(raw.clone())),
+    );
+    let seen = Arc::new(Mutex::new(None));
+    let inner_seen = Arc::clone(&seen);
+    let options = StreamRequestOptions {
+        on_usage: Some(Arc::new(
+            move |usage: &Value, _model: &pa_agent::types::Model| {
+                *lock(&inner_seen) = Some(usage.clone());
+            },
+        )),
+        ..Default::default()
+    };
+    let mut stream = stream_fn(agent_model(), LlmContext::default(), options)
+        .await
+        .unwrap();
+    while stream.next_event().await.is_some() {}
+    drop(stream);
+    let entry = &lines(journal.path())[0];
+    assert_eq!(entry["providerUsage"], raw);
+    assert_eq!(entry["cacheWrite"], json!(300));
+    assert_eq!(entry["cacheWrite30m"], json!(200));
+    assert_eq!(entry["cacheWrite12h"], json!(100));
+    assert!(entry.get("cacheWrite5m").is_none());
+    assert!(entry.get("cacheWrite1h").is_none());
+    assert_eq!(*lock(&seen), Some(raw), "the inner usage hook still runs");
+}
+
+// yusAgent (T08, YA-13): a split that does not add up to `cacheWrite` is written as received.
+#[test]
+fn a_ttl_split_is_written_as_received() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = journal(dir.path(), None);
+    let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
+    call.usage.cache_write_30m = Some(70);
+    call.usage.cache_write_12h = Some(0);
+    journal.append(&call);
+    let entry = &lines(journal.path())[0];
+    assert_eq!(entry["cacheWrite"], json!(100));
+    assert_eq!(entry["cacheWrite30m"], json!(70));
+    assert_eq!(entry["cacheWrite12h"], json!(0));
 }
 
 #[test]

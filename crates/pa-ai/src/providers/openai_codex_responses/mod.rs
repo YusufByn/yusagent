@@ -444,6 +444,7 @@ async fn run_websocket_attempt(
             apply_service_tier_pricing: Some(Box::new(move |usage, service_tier| {
                 apply_codex_service_tier_pricing(usage, service_tier.as_deref(), &model_id);
             })),
+            on_usage: options.base.on_usage.clone(),
         };
         let mut start_emitted = false;
         let mut processor = ResponsesStreamProcessor::new(model, output, writer, hooks);
@@ -555,6 +556,7 @@ async fn run_sse_stream(
         apply_service_tier_pricing: Some(Box::new(move |usage, service_tier| {
             apply_codex_service_tier_pricing(usage, service_tier.as_deref(), &model_id);
         })),
+        on_usage: options.base.on_usage.clone(),
     };
     let mut processor = ResponsesStreamProcessor::new(model, output, writer, hooks);
     // The TS catch settles partial tool calls before the error event carries the message.
