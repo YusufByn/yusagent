@@ -112,7 +112,7 @@ Interpréteur des tâches Python figé : CPython 3.12.14 géré par uv, install�
 
 ### Seuils de `compare.py`
 
-Alerte (le run de PR est alors relancé 2 fois) : tâche stable en baseline (résolue à tous ses runs, 3 au moins) non résolue en B ; tâche résolue en A et non en B ; écart de coût ou de tokens au-delà de max(2 × CV de la tâche en baseline, 5 %). Sans baseline, seules les régressions de résolution sont signalées. Mode capture : `--capture-server-miss-at-turn N` fait annoncer `cacheRead = 0` au tour N (miss serveur simulé).
+Alerte (le run de PR est alors relancé 2 fois) : tâche stable en baseline (résolue à tous ses runs, 3 au moins) non résolue en B ; tâche résolue en A et non en B ; écart de coût ou de tokens au-delà de max(2 × CV de la tâche en baseline, 5 %). Sans baseline, seules les régressions de résolution sont signalées. Une tâche dont l'empreinte diffère entre B et A ou la baseline, ou y est inconnue (run sans empreinte : `--rereport`), est exclue de la comparaison, sans alerte, et listée dans « Tâches exclues de la comparaison » (« version de tâche différente ») ; les totaux restent ceux des runs complets. Mode capture : `--capture-server-miss-at-turn N` fait annoncer `cacheRead = 0` au tour N (miss serveur simulé).
 
 ### Code des tâches
 
