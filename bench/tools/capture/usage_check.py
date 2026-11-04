@@ -55,7 +55,13 @@ def expected_usage(meta: dict) -> dict | None:
             "costWarning": (COST_WARNING_12H if (split.get("ttl_12h_tokens") or 0) > 0
                             else None),
             "reasoning": usage["output_tokens_details"]["reasoning_tokens"],
-            "providerUsage": usage}
+            # Le journal retire `attribution` (Codex, non documenté) et n'en garde que
+            # `request_fields`, sous `undocumentedAttribution` (T08).
+            "providerUsage": {k: v for k, v in usage.items() if k != "attribution"},
+            "undocumentedAttribution": (
+                {"request_fields": usage["attribution"]["request_fields"]}
+                if isinstance(usage.get("attribution"), dict)
+                and "request_fields" in usage["attribution"] else None)}
 
 
 def anthropic_expected(usage: dict) -> dict:
@@ -134,12 +140,13 @@ def check_case(case_dir: Path) -> dict:
         expected = dict(req["expected"])
         diff = compare(expected, entry, FIELDS)
         for optional in ("reasoning", "cacheWrite1h", "cacheWrite30m", "cacheWrite12h",
-                         "costWarning", "providerUsage"):
+                         "costWarning", "providerUsage", "undocumentedAttribution"):
             if expected.get(optional) is not None and entry.get(optional) != expected[optional]:
                 diff.append(f"{optional}: attendu {expected[optional]!r}, "
                             f"lu {entry.get(optional)!r}")
         # Présents seulement quand le provider les donne (T08, YA-13).
-        for absent in ("cacheWrite30m", "cacheWrite12h", "costWarning", "providerUsage"):
+        for absent in ("cacheWrite30m", "cacheWrite12h", "costWarning", "providerUsage",
+                       "undocumentedAttribution"):
             if expected.get(absent) is None and absent in entry:
                 diff.append(f"{absent}: absent attendu, lu {entry[absent]!r}")
         if expected["cacheWrite1h"] is not None:

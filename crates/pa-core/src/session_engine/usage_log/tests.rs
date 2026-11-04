@@ -110,6 +110,7 @@ fn unreported_fields_are_absent_never_zero() {
         "cacheWrite12h",
         "costWarning",
         "providerUsage",
+        "undocumentedAttribution",
     ] {
         assert!(entry.get(field).is_none(), "{field} must be absent");
     }
@@ -468,6 +469,52 @@ fn a_raw_usage_without_a_split_writes_no_ttl_field() {
     for field in ["cacheWrite30m", "cacheWrite12h", "costWarning"] {
         assert!(entry.get(field).is_none(), "{field} must be absent");
     }
+}
+
+// yusAgent (T08, YA-13): the Codex backend's undocumented `attribution` leaves
+// `providerUsage`; its per-item list is dropped, its aggregated `request_fields` counters are
+// kept under `undocumentedAttribution`.
+#[test]
+fn the_undocumented_attribution_is_moved_out_of_the_raw_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = journal(dir.path(), None);
+    let counters = |input: u64, cached: u64| {
+        json!({"cache_write_tokens": 0, "cached_tokens": cached, "input_tokens": input,
+            "output_tokens": 0})
+    };
+    let usage = json!({"input_tokens": 7801, "output_tokens": 66, "total_tokens": 7867,
+        "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 7552},
+        "output_tokens_details": {"reasoning_tokens": 0}});
+    let mut raw = usage.clone();
+    raw["attribution"] = json!({
+        "items": {"fc_1": counters(28, 28), "msg_1": counters(94, 94)},
+        "request_fields": {"instructions": counters(7159, 7159), "tools": counters(163, 163)}});
+    let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
+    call.provider_usage = Some(raw);
+    journal.append(&call);
+    let entry = &lines(journal.path())[0];
+    assert_eq!(entry["providerUsage"], usage);
+    assert_eq!(
+        entry["undocumentedAttribution"],
+        json!({"request_fields": {"instructions": counters(7159, 7159),
+            "tools": counters(163, 163)}})
+    );
+    assert!(!entry.to_string().contains("fc_1"), "no per-item list");
+}
+
+// yusAgent (T08, YA-13): an `attribution` without aggregated counters writes no
+// `undocumentedAttribution`.
+#[test]
+fn an_attribution_without_request_fields_is_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = journal(dir.path(), None);
+    let mut call = record(CallKind::Main, SystemTime::now(), Some(1));
+    call.provider_usage = Some(json!({"input_tokens": 10,
+        "attribution": {"items": {"fc_1": {"input_tokens": 10}}}}));
+    journal.append(&call);
+    let entry = &lines(journal.path())[0];
+    assert_eq!(entry["providerUsage"], json!({"input_tokens": 10}));
+    assert!(entry.get("undocumentedAttribution").is_none());
 }
 
 #[test]

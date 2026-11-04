@@ -245,8 +245,9 @@ pub struct CallRecord {
     /// yusAgent (T05, YA-05): why the harness changed the request prefix on this call
     /// (`invalidation` field, agent-loop calls only); `None` writes nothing.
     pub invalidation: Option<Value>,
-    /// yusAgent (T08, YA-13): the provider's raw usage object (`providerUsage`), the last one
-    /// the provider reported through the usage hook; `None` writes nothing.
+    /// yusAgent (T08, YA-13): the provider's raw usage object, the last one the provider
+    /// reported through the usage hook (`providerUsage` without `attribution`, see
+    /// `split_attribution`); `None` writes nothing.
     pub provider_usage: Option<Value>,
 }
 
@@ -444,10 +445,33 @@ impl UsageJournal {
             put("invalidation", invalidation.clone());
         }
         if let Some(provider_usage) = &record.provider_usage {
-            put("providerUsage", provider_usage.clone());
+            let (provider_usage, request_fields) = split_attribution(provider_usage);
+            put("providerUsage", provider_usage);
+            if let Some(request_fields) = request_fields {
+                put(
+                    "undocumentedAttribution",
+                    json!({ "request_fields": request_fields }),
+                );
+            }
         }
         Value::Object(entry).to_string()
     }
+}
+
+/// yusAgent (T08, YA-13): the raw usage without `attribution`, an undocumented object of the
+/// Codex backend whose per-item list (`items`) grows with the conversation; its aggregated
+/// counters (`request_fields`: `instructions`, `tools`), when present, are returned apart.
+fn split_attribution(provider_usage: &Value) -> (Value, Option<Value>) {
+    let mut usage = provider_usage.clone();
+    let attribution = usage
+        .as_object_mut()
+        .and_then(|usage| usage.remove("attribution"));
+    let request_fields = attribution.and_then(|mut attribution| {
+        attribution
+            .as_object_mut()
+            .and_then(|attribution| attribution.remove("request_fields"))
+    });
+    (usage, request_fields)
 }
 
 /// `<dir>/<id>.usage.ndjson` for the session file `<dir>/<id>.jsonl`: JSON lines, but not the
