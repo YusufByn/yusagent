@@ -9,6 +9,17 @@ Ticket CDC : YA-13. Base : T04 (usage normalisé, journal d'usage), diagnostic d
 - Upstream ne le lit pas non plus côté Responses : sur `upstream/main` (`bba5bcf3f`, 04/11/2026), `cache_write_tokens` n'est lu que pour Chat Completions (OpenRouter, `crates/pa-ai/src/providers/openai_completions/convert.rs:417`) ; aucun commit upstream sur `openai_responses_stream.rs` depuis la base du fork (`c83ac68b3`). Rien à cherry-pick.
 - Le banc ne garde pas la réponse brute : on ne sait pas encore si le backend Codex (`chatgpt.com/backend-api/codex`) renvoie ces champs.
 
+## Décision du 04/11/2026, après la CI (fait foi sur la suite du ticket)
+
+Premier essai : `cache_write_30m` / `cache_write_12h` en `Option<u64>` sur `Usage`. La CI (`ci.yml`, run 41899286040) est rouge sur `clippy::large_enum_variant` : l'écart entre `Assistant` et la variante suivante passe de 184 à 216 octets (seuil 200) dans `pa_types::ai::Message` (`crates/pa-types/src/ai/mod.rs:496`), `pa_types::session::AgentMessage` (`crates/pa-types/src/session.rs:141`) et l'enum de messages de `pa-agent` (`crates/pa-agent/src/types.rs:356`). Décision de Yusuf :
+
+- `cache_write_30m` et `cache_write_12h` retirés de `Usage` et de son miroir, littéraux complets non touchés.
+- Gardés : `cache_write` = `cache_write_tokens`, `input` = `input_tokens − cached_tokens − cache_write_tokens`.
+- `cacheWrite30m` et `cacheWrite12h` dérivés dans le journal d'usage depuis `providerUsage` (hook `on_usage`), avec un signalement si du 12 h apparaît (`costWarning`).
+- Coût du harness : toute écriture au tarif d'écriture du catalogue, documenté dans `docs/usage.md` ; le banc tarife toujours depuis `prices.json`.
+
+Les sections ci-dessous gardent la version d'origine ; les points remplacés sont marqués.
+
 ## Mapping (validé)
 
 | Champ Responses | Champ interne (`pa_types::ai::Usage`) |
@@ -16,13 +27,13 @@ Ticket CDC : YA-13. Base : T04 (usage normalisé, journal d'usage), diagnostic d
 | `input_tokens_details.cached_tokens` | `cache_read` (inchangé) |
 | `input_tokens_details.cache_write_tokens` | `cache_write` (0 si absent, comme aujourd'hui) |
 | `input_tokens − cached_tokens − cache_write_tokens` | `input` (saturé à 0) |
-| `cache_write_tokens_details.ttl_30m_tokens` | nouveau `cache_write_30m: Option<u64>` |
-| `cache_write_tokens_details.ttl_12h_tokens` | nouveau `cache_write_12h: Option<u64>` |
+| `cache_write_tokens_details.ttl_30m_tokens` | ~~nouveau `cache_write_30m: Option<u64>`~~ remplacé : `cacheWrite30m` du journal, lu dans `providerUsage` |
+| `cache_write_tokens_details.ttl_12h_tokens` | ~~nouveau `cache_write_12h: Option<u64>`~~ remplacé : `cacheWrite12h` du journal, lu dans `providerUsage`, avec `costWarning` si > 0 |
 | `total_tokens` | `total_tokens` (inchangé) |
 
 - `cache_write_1h` reste propre à Anthropic (reste à 5 min) : 30 min et 12 h ne sont ni 5 min ni 1 h, on n'y range rien.
 - Journal d'usage : `cacheWrite30m` et `cacheWrite12h` seulement quand le provider donne la ventilation ; `cacheWrite5m` / `cacheWrite1h` restent réservés à Anthropic. Si la ventilation ne se somme pas à `cacheWrite`, les valeurs sont écrites telles que reçues, sans correction (l'usage brut journalisé le montre).
-- Même champs sur le miroir `Usage` de `pa-agent` (`crates/pa-agent/src/types.rs:149`), la frontière `pa-ai` / `pa-agent` passant par un aller-retour JSON.
+- (Remplacé : aucun champ sur `Usage`.) Même champs sur le miroir `Usage` de `pa-agent` (`crates/pa-agent/src/types.rs:149`), la frontière `pa-ai` / `pa-agent` passant par un aller-retour JSON.
 
 ## Usage brut au journal : option A (validée)
 
@@ -43,9 +54,11 @@ Vérifier et documenter dans `docs/usage.md` ce que `cacheRetention: long` envoi
 - Codex : aucun paramètre de rétention dans le corps (`crates/pa-ai/src/providers/openai_codex_responses/mod.rs`, seul `prompt_cache_key`, `:653`). Azure : aucun (`azure_openai_responses.rs:196-197`).
 - Le guide : 12 h seulement par `prompt_cache_options.ttl: "12h"` ou `prompt_cache_breakpoint.ttl` ; sans eux, 30 min. Le harness n'envoie ni l'un ni l'autre : aucune écriture à 12 h attendue.
 
-Si un TTL 12 h reste possible (ventilation `ttl_12h_tokens > 0` renvoyée malgré tout), le dire dans `docs/usage.md` et le tarifer correctement côté harness (`calculate_cost_values`, `crates/pa-ai/src/models.rs:24`, n'a qu'un tarif d'écriture, celui de 30 min au catalogue : Luna 0,125, Terra 1,25), ou le signaler explicitement. Proposé : tokens 12 h au double du tarif d'écriture du catalogue (le guide : écriture 30 min à 1,25 × l'input, 12 h à 2,5 ×), seulement quand `cache_write_12h` est renseigné.
+Si un TTL 12 h reste possible (ventilation `ttl_12h_tokens > 0` renvoyée malgré tout), le dire dans `docs/usage.md` et le tarifer correctement côté harness (`calculate_cost_values`, `crates/pa-ai/src/models.rs:24`, n'a qu'un tarif d'écriture, celui de 30 min au catalogue : Luna 0,125, Terra 1,25), ou le signaler explicitement. Proposé : tokens 12 h au double du tarif d'écriture du catalogue (le guide : écriture 30 min à 1,25 × l'input, 12 h à 2,5 ×), seulement quand `cache_write_12h` est renseigné. (Remplacé : toute écriture au tarif d'écriture du catalogue, `costWarning` au journal.)
 
 ### 2. Sérialisation rétrocompatible
+
+(Sans objet après la décision du 04/11 : `Usage` n'a pas de nouveau champ.)
 
 `cache_write_30m` et `cache_write_12h` en `#[serde(default, skip_serializing_if = "Option::is_none")]` (renommés `cacheWrite30m`, `cacheWrite12h`), sur `pa_types::ai::Usage` et sur le miroir de `pa-agent`. Test : une session écrite avant le changement se relit sans erreur, et un usage sans ventilation s'écrit avec les mêmes champs qu'avant (extension de `crates/pa-core/tests/usage_backcompat.rs`).
 
@@ -56,7 +69,7 @@ Chaque fichier upstream touché est listé dans `docs/fork-changes.md` (fichier,
 ## Tests prévus
 
 - Fixtures Responses (`crates/pa-ai/src/providers/usage_tests.rs`) : écriture avec ventilation 30 min / 12 h ; écriture sans ventilation ; aucun champ d'écriture (comportement d'aujourd'hui inchangé) ; input ordinaire = `input_tokens − cached_tokens − cache_write_tokens`.
-- Coût du harness : 30 min au tarif du catalogue, 12 h selon la condition 1.
+- Coût du harness : 30 min au tarif du catalogue, 12 h selon la condition 1 (remplacé : toute écriture au tarif du catalogue).
 - Journal (`usage_log/tests.rs`) : `providerUsage` présent et égal à l'usage brut ; `cacheWrite30m` / `cacheWrite12h` présents seulement avec la ventilation ; aucun champ nouveau sans hook appelé.
 - Relecture d'une ancienne session (condition 2).
 - Provider factice : aucun appel réel en test ni en CI (CLAUDE.md, règle 6).
