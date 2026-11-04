@@ -19,8 +19,8 @@ Ce ticket livre l'outillage et 2 tâches d'exemple. Les 8 autres tâches et la p
 ## Provider, modèles, effort (décision du 04/11/2026)
 
 - Provider : ChatGPT en « OAuth abonnement pour provider » (`openai-codex`, API `openai-codex-responses`).
-- Modèles du banc : GPT-6.1 Sol, GPT-6.1 Terra, Luna. Astra reste disponible dans le harness mais n'est pas utilisé au banc.
-- **À vérifier d'abord** : identifiants exacts. Dans `crates/pa-ai/src/models_generated.rs`, le provider `openai-codex` ne liste que `gpt-5.1` (vers la ligne 588) ; les modèles GPT-6.x n'y apparaissent que sous OpenRouter. Vérifier si le provider Codex accepte un identifiant hors liste (run contre le serveur de capture, `chemin:ligne`). Si non : s'arrêter et signaler, ne pas modifier la couche providers (un ajout de modèles viendra d'un cherry-pick upstream ou d'un ticket dédié).
+- Modèles (liste fermée, le runner refuse tout autre `MODEL`, même présent dans le catalogue : aucun 5.x, ni `gpt-6-sol`) : `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna` (runs par défaut) et `gpt-6-astra` (seulement sur demande explicite, `MODEL=gpt-6-astra`).
+- Identifiants vérifiés (04/11/2026) : le catalogue chargé est `models.bundled.json`, livré à côté du binaire et généré en CI (`crates/pa-models/src/bundled.rs:14`, `.github/workflows/ya-build-macos-arm64.yml:56-63`). Pour `openai-codex`, il liste `gpt-6.1-sol`, `gpt-6-luna` et `gpt-6-astra`, pas `gpt-6.1-terra`. Dans `crates/pa-ai/src/models_generated.rs`, `openai-codex` ne liste que `gpt-5.1` (ligne 587) et les modèles GPT-6.x n'apparaissent que sous `prime-inference`. Un id hors catalogue est accepté par repli sur la fiche du modèle par défaut (`crates/pa-core/src/models/resolver.rs:129-166`), interdit au banc : `gpt-6.1-terra` est déclaré par le runner dans `models.json` avec une fiche relevée sur la doc officielle. Sha256 de `models.bundled.json` dans l'en-tête du rapport. Un id faux fait échouer la préparation (run de chauffe), pas le run mesuré.
 - Effort de raisonnement fixé à **high** pour tous les runs du banc, noté dans le rapport.
 
 ## Format d'une tâche
