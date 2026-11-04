@@ -1,0 +1,103 @@
+# yusAgent (T07, YA-14, phase A) : validation rouge -> vert des PR candidates du smoke
+# bench (bench/smoke/tools/discovered.json), sur des runners Linux jetables plutôt que
+# sur le Mac (décision du 04/11/2026).
+#
+# - Aucun secret, `contents: read`, checkout sans identifiants persistés : le code des
+#   dépôts tiers (installation, tests) ne voit aucun jeton.
+# - Isolation : le runner jetable tient lieu de sandbox (pas de sandbox-exec). Les tests
+#   tournent réseau coupé : `mine.py --isolation netns` les lance dans un espace réseau
+#   neuf (`sudo unshare --net`, loopback seul) puis rend la main à l'utilisateur du
+#   runner (`setpriv`). Chaque shard commence par une sonde : un `curl` sortant doit
+#   échouer sous cette coupure, sinon le shard s'arrête ; le résultat est dans le log
+#   et dans le résumé.
+# - Par candidat : 1 run rouge, 3 runs verts, suite complète (durée).
+# - workflow_dispatch n'est utilisable qu'une fois le fichier sur la branche par
+#   défaut : d'ici là, déclenchement par push sur ya-07 limité à bench/smoke/tools/.
+name: ya-mine-validate
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - "ya-07"
+    paths:
+      - ".github/workflows/ya-mine-validate.yml"
+      - "bench/smoke/tools/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ya-mine-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SHARDS: 10
+
+jobs:
+  validate:
+    name: validate (${{ matrix.shard }}/10)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install uv
+        run: |
+          python3 -m pip install --user uv==0.12.17
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Validate shard
+        # Plus de nouveau candidat après 50 min ; le candidat en cours a ses propres
+        # plafonds (installation 10 min, chaque run de tests 4 min, suite 2 min).
+        timeout-minutes: 85
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          python3 -I bench/smoke/tools/mine.py --cache "$RUNNER_TEMP/mine" validate \
+            --isolation netns --shard "${{ matrix.shard }}/${SHARDS}" --workers 4 \
+            --deadline-min 50 --out "$RUNNER_TEMP/out/validated-${{ matrix.shard }}.json"
+      - name: Upload shard result
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: validated-${{ matrix.shard }}
+          path: ${{ runner.temp }}/out/validated-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  merge:
+    name: merge
+    needs: validate
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: validated-*
+          path: shards
+          merge-multiple: true
+      - name: Merge shards
+        run: |
+          mkdir -p out
+          cp shards/*.json out/
+          python3 -I bench/smoke/tools/mine.py --cache "$RUNNER_TEMP/mine" csv \
+            --validated shards/*.json --out out/candidates.csv --summary out/summary.md
+          cat out/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload candidates
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: candidates
+          path: out/
+          retention-days: 30
