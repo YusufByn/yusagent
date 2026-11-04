@@ -80,7 +80,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 
 ## Smoke bench (T06, YA-14)
 
-Outillage dans `bench/smoke/` (nouveau dossier, hors zone upstream) et scénarios ajoutés au banc de capture (`bench/tools/capture/server.py`, fichier du fork). Aucun changement du harness : ni `crates/`, ni `prime-agent-runtime/`, ni la couche providers.
+Outillage dans `bench/smoke/` (nouveau dossier, hors zone upstream) et scénarios ajoutés au banc de capture (`bench/tools/capture/server.py`, fichier du fork). T07 : option `--server-miss-at-turn` du serveur de capture (miss serveur simulé). Aucun changement du harness : ni `crates/`, ni `prime-agent-runtime/`, ni la couche providers.
 
 - Accès au modèle sous sandbox : `baseUrl` du provider `openai-codex` (surcharge de provider intégré dans `models.json`, `crates/pa-core/src/models/custom.rs:197-206`) vers un reverse proxy local à cible fixe. Le client WebSocket du harness ne passe pas par `HTTPS_PROXY` (`tokio_tungstenite::connect_async_tls_with_config`, `crates/pa-ai/src/providers/openai_codex_responses/websocket.rs:206`) ; le client HTTP oui (`crates/pa-ai/src/utils_inner/tls.rs:53`, sans `.no_proxy()`), il sert au rafraîchissement du jeton.
 - `gpt-6.1-terra`, absent de `models.bundled.json`, est déclaré dans le `models.json` du dossier agent (provider intégré, `custom.rs:207`, `:410-420`) ; vérifié contre le serveur de capture : coût du journal d'usage au tarif de la fiche, pas au repli sur la fiche de `gpt-5.5` (`crates/pa-core/src/models/resolver.rs:129-166`).

@@ -34,7 +34,9 @@ C'est un appel réel au modèle. Le proxy CONNECT accepte alors tout hôte sur l
 
 ```bash
 make smoke BINARY=<dossier>/prime-agent PROVIDER=openai-codex MODEL=<id> EFFORT=high [SETTINGS=bench/smoke/settings/<x>.json] [RUNS=1] [TASKS=id1,id2]
-python3 -I bench/smoke/compare.py <run A> <run B> --out <fichier>.md
+python3 -I bench/smoke/compare.py <run A> <run B> [--baseline bench/smoke/baseline/<modèle>.json] --out <fichier>.md
+python3 -I bench/smoke/baseline.py <run> [<run> ...]   # écrit bench/smoke/baseline/<modèle>.json
+python3 -I bench/smoke/metrics.py <run> [<run> ...]    # miss serveur et taux évitable, runs déjà faits
 ```
 
 - `MODEL` : liste fermée `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`, `gpt-6-astra`. Tout autre id est refusé, même présent au catalogue. Sans `MODEL` : un run par modèle par défaut (`gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`) ; `gpt-6-astra` seulement avec `MODEL=gpt-6-astra`.
@@ -49,7 +51,7 @@ python3 -I bench/smoke/compare.py <run A> <run B> --out <fichier>.md
 2. **Préparation** (une fois par binaire ou par version de tâche) : venv du kernel contre le serveur de capture ; pour chaque tâche, copie ou clone, patch, fichiers de `files`, `setup`, puis vérification sous sandbox que `fail_to_pass` échoue et `pass_to_pass` passe sur l'état cassé (sinon la tâche est invalide, arrêt). `setup` et `test` tournent sous `sandbox-task.sb` (voir « Code des tâches »). Source `git` : après `setup`, l'historique est remplacé par un seul commit, pour que le commit de correction et la suite de l'historique ne soient pas lisibles par l'agent.
 3. **Sonde réseau et isolation** (profil de la phase agent, serveur de capture, aucun modèle) : `curl` direct depuis `bash()` en échec, `curl https://example.com` par le proxy CONNECT refusé et journalisé, noms des variables de proxy vues par le kernel et par `bash()`, lecture d'un test caché et de la copie pristine par chemin absolu (Python et `bash()`) en échec. Les scénarios des tâches d'exemple refont ces lectures pendant la phase agent.
 4. **Run de chauffe** (sandbox, même accès que la phase agent) : le modèle doit répondre. Un id faux ou un jeton refusé fait échouer la préparation ici, pas le run mesuré. Rafraîchit le jeton si besoin.
-5. **Phase agent** (sandbox `sandbox-agent.sb` : localhost seulement, et ni lecture ni écriture de `bench/smoke/` ni du cache des tâches hors workspace, donc ni `hidden/` ni la copie pristine) : copie fraîche du projet, `prime-agent -p --mode json --provider openai-codex --model <id> --thinking <effort>`, énoncé de `prompt.md`.
+5. **Phase agent** (sandbox `sandbox-agent.sb` : localhost seulement ; contenu de `$HOME` illisible sauf liste blanche : workspace, dossier agent du banc pour le login, dossier du binaire, `HOME` et `TMPDIR` du banc, venv du kernel, Pythons gérés par uv, toolchain Node ; écriture limitée au workspace, au dossier agent, au `HOME`/`TMPDIR` du banc et au venv du kernel ; ni lecture ni écriture de `bench/smoke/` ni du cache des tâches hors workspace, donc ni `hidden/` ni la copie pristine). La sonde tente aussi de lire `~/.ssh`, `~/.cache/uv` et `~/.npm` (les vrais) : une lecture réussie est une anomalie : copie fraîche du projet, `prime-agent -p --mode json --provider openai-codex --model <id> --thinking <effort>`, énoncé de `prompt.md`.
 6. **Notation** (sandbox) : `hidden/` copié dans le workspace, `test` lancé avec la variable `SMOKE_JUNIT` (rapport JUnit). Résolue = tous les `fail_to_pass` et `pass_to_pass` passent. Statuts : `resolved`, `failed`, `timeout`, `agent_error`, `harness_error`.
 
 Variables fixées pour le binaire : `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PI_CACHE_RETENTION=short` (et `cacheRetention` dans les réglages), `PRIME_AGENT_CODING_AGENT_DIR`, `PRIME_AGENT_KERNEL_VENV`, `HTTPS_PROXY`, `NO_PROXY=127.0.0.1,localhost`, `HOME` et `TMPDIR` isolés.
@@ -66,7 +68,7 @@ Variables fixées pour le binaire : `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_V
 `runs/<horodatage UTC>-<sha court>-<modèle>/` (ignoré par git) : `report.md`, `report.json`, `tasks.csv`, et par tâche les sessions, le journal d'usage, la sortie JSON du binaire, les journaux des proxys et de la notation. En mode capture, les requêtes reçues par le serveur de capture y sont aussi (en-têtes d'authentification masqués, identifiants factices).
 
 - **En-tête** : commit, sha256 du binaire et commit de son manifeste, sha256 de `models.bundled.json`, provider, modèle, source de sa fiche et hypothèses, effort, réglages non par défaut (`masking`, `rlm`, `cacheRetention`, `transport`), version et sha256 de `prices.json`, hôtes autorisés, nombre de runs.
-- **Par tâche** : statut, tokens (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation 5 min / 1 h, `reasoning`), pic de contexte (tokens du plus gros prompt envoyé : `input + cacheRead + cacheWrite`), appels par type, tours (appels `main`), taux de cache de session et médiane par requête de continuation, invalidations et coût d'écriture associé, coût théorique, durée, TTFT médian, sorties coupées (`length`), cellules `python_repl` en erreur par type (`SyntaxError` à part), CONNECT refusés, transport de chaque requête, lectures hors workspace réussies (anomalie, mode capture).
+- **Par tâche** : statut, tokens (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation 5 min / 1 h, `reasoning`), pic de contexte (tokens du plus gros prompt envoyé : `input + cacheRead + cacheWrite`), appels par type, tours (appels `main`), taux de cache de session, médiane par requête de continuation et taux « évitable » (hors premier appel, invalidations journalisées et miss serveur), miss serveur (appel de boucle hors premier de session, `cacheRead = 0`, sans invalidation : délai depuis l'appel précédent, transport, continuation), invalidations et coût d'écriture associé, coût théorique, durée, TTFT médian, sorties coupées (`length`), cellules `python_repl` en erreur par type (`SyntaxError` à part), CONNECT refusés, transport de chaque requête, lectures hors workspace réussies (anomalie, mode capture).
 - **Transport** : WebSocket attendu pour les appels de boucle (`main`, `subagent`). Toute requête de boucle en SSE est comptée et signalée comme anomalie. Compaction, `/refine` et résumé de branche passent en SSE par construction (`compaction_exec.rs:177`, `refine.rs:664`, `branch_summarization.rs:468`, dans `crates/pa-core/src/session_engine/`).
 - **Totaux** : tâches résolues, coût total et par tâche résolue, tokens, tours médians, taux de cache, anomalies. Avec `RUNS>1` : taux de résolution, bascule et écart-type par tâche.
 - **Secrets** : recherche, dans tout le dossier de run, des valeurs factices de `bench/tools/capture/run.py`, de l'identifiant factice du mode capture et, en run réel, des valeurs de `auth.json`.
@@ -97,7 +99,15 @@ tasks/<id>/
 python3 -I bench/smoke/run.py --validate-gold [--tasks id1,id2] [--validate-runs 3]
 ```
 
-Sans binaire ni modèle : préparation de chaque tâche, puis 3 fois l'état cassé (`fail_to_pass` en échec, `pass_to_pass` en succès) et 3 fois la correction officielle (diff de `commit` à `gold` sans les tests cachés, tout en succès), tests sous sandbox réseau coupé. Rapport : `runs/<horodatage>-validate/validate.md`. Une tâche instable est remplacée.
+Sans binaire ni modèle : préparation de chaque tâche, puis 3 fois l'état cassé (`fail_to_pass` en échec, `pass_to_pass` en succès) et 3 fois la correction officielle (diff de `commit` à `gold` sans les tests cachés, tout en succès), tests sous sandbox réseau coupé. `--validate-profile agent` lance les tests sous `sandbox-agent.sb` (conditions de la phase agent) au lieu de `sandbox-task.sb`. Rapport : `runs/<horodatage>-validate-<profil>/validate.md`. Une tâche instable est remplacée.
+
+Après la remise à zéro de l'historique, la préparation vérifie la copie pristine : un seul commit atteignable (reflog compris), ni packfile, ni `ORIG_HEAD`, `FETCH_HEAD`, `packed-refs`, ni objet inaccessible, ni blob de la version corrigée d'un fichier du correctif (base d'objets ou fichier de l'arbre, `.venv` et `node_modules` compris). Une trace arrête la préparation.
+
+Interpréteur des tâches Python figé : CPython 3.12.14 géré par uv, installé depuis python-build-standalone sur GitHub (`uv python install --mirror`, sans détour par `releases.astral.sh`, hors liste blanche), puis `uv sync --python 3.12.14 --managed-python --no-python-downloads`.
+
+### Seuils de `compare.py`
+
+Alerte (le run de PR est alors relancé 2 fois) : tâche stable en baseline (résolue à tous ses runs, 3 au moins) non résolue en B ; tâche résolue en A et non en B ; écart de coût ou de tokens au-delà de max(2 × CV de la tâche en baseline, 5 %). Sans baseline, seules les régressions de résolution sont signalées. Mode capture : `--capture-server-miss-at-turn N` fait annoncer `cacheRead = 0` au tour N (miss serveur simulé).
 
 ### Code des tâches
 
@@ -109,14 +119,15 @@ Sans binaire ni modèle : préparation de chaque tâche, puis 3 fois l'état cas
 |---|---|
 | `run.py` | Runner (contrôles, préparation, sonde, chauffe, phase agent, notation, rapport) |
 | `proxies.py` | Reverse proxy à cible fixe et proxy CONNECT à liste blanche |
-| `sandbox-agent.sb` | Profil sandbox de la phase agent (réseau localhost, tests cachés et cache des tâches illisibles) |
+| `sandbox-agent.sb` | Profil sandbox de la phase agent (réseau localhost, `$HOME` illisible hors liste blanche, tests cachés et cache des tâches illisibles) |
 | `sandbox-task.sb` | Profil sandbox de `setup` et `test` des tâches (écriture et lecture de `$HOME` limitées, réseau localhost) |
 | `hosts/setup.txt` | Hôtes autorisés au proxy CONNECT de `setup` |
 | `tools/mine.py`, `tools/mine.sb`, `tools/mine-hosts.txt` | Minage et validation des candidats (T07), sandbox et hôtes de la revalidation macOS |
 | `tools/discovered.json`, `tools/candidates.csv` | PR découvertes, candidats validés (Linux, écarts macOS) |
 | `tools/make_task.py` | Construction d'une tâche depuis un candidat |
 | `metrics.py` | Mesures depuis le journal d'usage, la session et les journaux des proxys |
-| `compare.py` | Comparaison appariée de deux runs |
+| `compare.py` | Comparaison appariée de deux runs ; alertes au-delà du bruit de la baseline |
+| `baseline.py` | Baseline : bruit par tâche sur plusieurs runs de `main` (`baseline/<modèle>.json`, versionné) |
 | `prices.json` | Tarifs API (source, date) |
 | `models/openai-codex.json` | Fiches des modèles absents du catalogue (`gpt-6.1-terra`) |
 | `hosts/openai-codex.txt` | Hôtes autorisés au proxy CONNECT (établi par `--record-hosts`) |
