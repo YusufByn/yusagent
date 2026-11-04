@@ -8,7 +8,9 @@ Sources, sans rien recalculer qui existe déjà :
   - journal du reverse proxy : transport de chaque requête modèle ;
   - journal du proxy CONNECT : CONNECT refusés.
 
-Un champ absent est écrit `null`, jamais estimé.
+Un champ absent est écrit `null`, jamais estimé. Les mesures d'un run de tâche portent
+sur la session principale et ses sous-agents (`rlm.spawn`) ; `subagent_share` en donne
+la part.
 
 Miss serveur (T07) : appel de la boucle qui n'est pas le premier de sa session, sans
 invalidation journalisée, avec un prompt non vide et `cacheRead = 0`. Le harness n'a pas
@@ -160,6 +162,20 @@ def costs(prices: dict, model: str, records: list[dict], write_key: str) -> dict
                               "cost": invalidation_cost}}
 
 
+def subagent_share(sub_records: list[dict], records: list[dict], misses: list[dict],
+                   prices: dict, model: str, write_key: str) -> dict:
+    """Part des sous-agents (`rlm.spawn`) dans un run de tâche : `records` porte tous les
+    appels (session principale et sous-agents), `sub_records` ceux des sous-agents."""
+    sessions = {r.get("sessionId") for r in sub_records}
+    cost = costs(prices, model, sub_records, write_key)["total"] if sub_records else 0.0
+    total = costs(prices, model, records, write_key)["total"]
+    return {"sessions": len(sessions), "calls": len(sub_records),
+            "tokens": token_totals(sub_records), "cost": cost,
+            "cost_share": cost / total if cost is not None and total else None,
+            "cache_session_rate": cache_rates(sub_records)["session_rate"],
+            "server_misses": sum(1 for m in misses if m["session"] in sessions)}
+
+
 def calls(records: list[dict]) -> dict:
     by_kind: dict[str, int] = {}
     for r in records:
@@ -306,8 +322,9 @@ def connect_summary(entries: list[dict]) -> dict:
 
 
 def task_run_cache(run_task_dir: Path) -> dict:
-    """Miss serveur et taux de cache d'un run de tâche, relus dans ses journaux."""
-    records = read_ndjson(sorted((run_task_dir / "sessions").glob("*.usage.ndjson")))
+    """Miss serveur et taux de cache d'un run de tâche, relus dans ses journaux (session
+    principale et sous-agents, `sessions/subagents/`)."""
+    records = read_ndjson(sorted((run_task_dir / "sessions").rglob("*.usage.ndjson")))
     proxy = run_task_dir / "proxy.ndjson"
     proxy_log = read_ndjson([proxy]) if proxy.exists() else []
     misses = server_misses(records, match_transports(records, proxy_log)["per_request"])

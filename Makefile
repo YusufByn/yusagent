@@ -216,6 +216,6 @@ smoke:
 		--model "$(MODEL)" --effort "$(or $(EFFORT),high)" \
 		--settings "$(or $(SETTINGS),bench/smoke/settings/default.json)" --runs "$(or $(RUNS),1)" \
 		--tasks "$(TASKS)" $(if $(CAPTURE),--capture) \
-		$(if $(CAPTURE_FAIL),--capture-fail "$(CAPTURE_FAIL)")
+		$(if $(CAPTURE_FAIL),--capture-fail "$(CAPTURE_FAIL)") $(if $(CAPTURE_SPAWN),--capture-spawn)
 
 .PHONY: smoke

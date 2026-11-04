@@ -14,6 +14,11 @@ Baseline : `baseline/<modèle de B>.json` (écrit par `baseline.py`) si `--basel
 pas donné. Sans baseline, seules les régressions de résolution sont signalées : les
 écarts de coût et de tokens restent affichés, sans seuil.
 
+Version des tâches : une tâche dont l'empreinte (`task_version`, run.py) diffère entre B
+et A ou la baseline, ou y est inconnue (run sans empreinte : `run.py --rereport`), est
+exclue de la comparaison, sans alerte, et signalée (« version de tâche différente »).
+Les totaux restent ceux des runs complets.
+
 Avec plusieurs runs par configuration, le taux de bascule et l'écart-type entre runs sont
 publiés à côté de chaque écart ; une tâche compte comme résolue si elle l'est dans au
 moins la moitié de ses runs.
@@ -88,6 +93,39 @@ def server_misses(report: dict, task: str) -> int:
                for d in sorted((report["_dir"] / "tasks" / task).glob("run-*")))
 
 
+def task_trees(report: dict) -> dict[str, str | None]:
+    """Empreinte de chaque tâche d'un run ; `None` si inconnue ou si ses runs en ont deux."""
+    found: dict[str, set] = {}
+    for r in report["results"]:
+        found.setdefault(r["task"], set()).add((r.get("task_version") or {}).get("tree"))
+    return {t: next(iter(v)) if len(v) == 1 else None for t, v in found.items()}
+
+
+def version_exclusions(a: dict, b: dict, baseline: dict | None) -> dict[str, str]:
+    """Tâches de B dont la version diffère de A ou de la baseline (ou y est inconnue)."""
+    trees_a, trees_b = task_trees(a), task_trees(b)
+    excluded = {}
+    for task, tree_b in sorted(trees_b.items()):
+        sides = [("A", trees_a[task])] if task in trees_a else []
+        base = (baseline or {}).get("per_task", {}).get(task)
+        if base is not None:
+            sides.append(("baseline", base.get("task_tree")))
+        if not sides:
+            continue
+        if tree_b is None:
+            excluded[task] = "version inconnue en B"
+            continue
+        different = [f"{name} {tree[:12]}" for name, tree in sides
+                     if tree is not None and tree != tree_b]
+        unknown = [name for name, tree in sides if tree is None]
+        if different:
+            excluded[task] = (f"version de tâche différente ({', '.join(different)} ; "
+                              f"B {tree_b[:12]})")
+        elif unknown:
+            excluded[task] = f"version inconnue en {', '.join(unknown)}"
+    return excluded
+
+
 def noise_threshold(baseline: dict | None, task: str, measure: str) -> tuple[float, str] | None:
     """Seuil en % d'une tâche pour `cost` ou `tokens` ; None sans baseline pour la tâche."""
     entry = (baseline or {}).get("per_task", {}).get(task)
@@ -103,8 +141,11 @@ def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) 
     ha, hb = a["header"], b["header"]
     pa, pb = a["per_task"], b["per_task"]
     tasks = sorted(set(pa) | set(pb))
+    excluded = version_exclusions(a, b, baseline)
     signals = []
     for t in tasks:
+        if t in excluded:
+            continue
         base = (baseline or {}).get("per_task", {}).get(t)
         if base and base.get("stable") and pb.get(t) is not None and pb[t]["resolved_rate"] < 1:
             signals.append(f"**Tâche stable non résolue** : {t} (résolue à {base['runs']}/"
@@ -113,7 +154,7 @@ def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) 
             signals.append(f"**Régression** : {t} résolue en A, non résolue en B")
     for t in tasks:
         ta, tb = pa.get(t), pb.get(t)
-        if ta is None or tb is None:
+        if ta is None or tb is None or t in excluded:
             continue
         for measure, va, vb in (("cost", ta["cost_mean"], tb["cost_mean"]),
                                 ("tokens", task_tokens_mean(ta), task_tokens_mean(tb))):
@@ -142,7 +183,12 @@ def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) 
     if mismatches:
         lines.append(f"- Attention : en-têtes différents ({', '.join(mismatches)}), comparaison "
                      "à lire avec prudence")
+    lines += ["", "## Tâches exclues de la comparaison", "",
+              "Version de la tâche différente entre B et A ou la baseline, ou inconnue : ni "
+              "alerte ni écart.", ""]
+    lines += [f"- {t} : {reason}" for t, reason in excluded.items()] or ["- aucune"]
     lines += ["", "## Totaux", "",
+              "Runs complets, tâches exclues comprises.", "",
               f"- Résolues : {a['totals']['resolved']} / {a['totals']['task_runs']} → "
               f"{b['totals']['resolved']} / {b['totals']['task_runs']}",
               f"- Coût : {fmt(cost_a)} → {fmt(cost_b)} ({fmt(pct(cost_a, cost_b), 1)} %)",
@@ -161,6 +207,10 @@ def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) 
         ta, tb = pa.get(task), pb.get(task)
         if ta is None or tb is None:
             lines.append(f"| {task} | {resolved(ta)} | {resolved(tb)} | absente d'un des runs |")
+            continue
+        if task in excluded:
+            lines.append(f"| {task} | {fmt(ta['resolved_rate'], 2)} | "
+                         f"{fmt(tb['resolved_rate'], 2)} | exclue : {excluded[task]} |")
             continue
         ca, cb = ta["tokens_by_category_mean"], tb["tokens_by_category_mean"]
         limits = {m: noise_threshold(baseline, task, m) for m in ("cost", "tokens")}

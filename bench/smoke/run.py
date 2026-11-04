@@ -4,6 +4,7 @@
 Usage (voir README.md) :
     python3 -I bench/smoke/run.py --binary <dossier>/prime-agent [--model gpt-6.1-sol] ...
     python3 -I bench/smoke/run.py --binary ... --capture        # validation sans modèle
+    python3 -I bench/smoke/run.py --rereport <run>              # rapport recalculé
 
 Déroulé :
   1. Contrôles : modèle dans la liste fermée, présent au catalogue du binaire
@@ -16,7 +17,8 @@ Déroulé :
   4. Run de chauffe (sandbox, même accès que la phase agent) : le modèle doit répondre,
      sinon la préparation échoue (id faux, jeton expiré) ; rafraîchit le jeton OAuth.
   5. Phase agent (sandbox, localhost seulement) puis notation (`hidden/`, réseau coupé).
-  6. Rapport : `runs/<horodatage UTC>-<sha court>-<modèle>/`.
+  6. Rapport : `runs/<horodatage UTC>-<sha court>-<modèle>/`. Les sessions des
+     sous-agents (`rlm.spawn`) comptent dans les totaux ; leur part est donnée à part.
 
 Accès au modèle pendant les phases sous sandbox : `baseUrl` du provider vers le reverse
 proxy local (`proxies.py`, cible fixe chatgpt.com), WebSocket et SSE ; `HTTPS_PROXY`
@@ -37,6 +39,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import statistics
@@ -88,6 +91,9 @@ GRADE_TIMEOUT_S = 300
 PREP_TIMEOUT_S = 900
 VALIDATE_RUNS = 3  # exécutions de chaque vérification de --validate-gold (instabilité)
 HARD_MIN_TURNS = 10  # tâche `difficile` résolue en moins de tours : signalée (T07)
+# Fichiers d'une session : `<id>.jsonl` et `<id>.usage.ndjson` (id UUID du harness).
+SESSION_FILE = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+                          r"\.(?:jsonl|usage\.ndjson)$")
 
 
 def load_capture_run():
@@ -123,11 +129,37 @@ def sha256(path: Path) -> str:
 
 
 def tree_hash(root: Path) -> str:
+    """Empreinte d'un dossier de tâche (version de la tâche, clé de sa préparation)."""
+    return files_hash((p.relative_to(root), p.read_bytes()) for p in root.rglob("*")
+                      if p.is_file() and "__pycache__" not in p.parts)
+
+
+def files_hash(files) -> str:
     digest = hashlib.sha256()
-    for path in sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
-        digest.update(str(path.relative_to(root)).encode() + b"\0")
-        digest.update(path.read_bytes() + b"\0")
+    for rel, data in sorted(files, key=lambda item: item[0]):
+        digest.update(str(rel).encode() + b"\0")
+        digest.update(data + b"\0")
     return digest.hexdigest()
+
+
+def tree_hash_at(commit: str, root: Path) -> str | None:
+    """`tree_hash` d'un dossier du dépôt tel qu'il était au commit donné (fichiers suivis
+    par git) ; `None` si le commit ou le dossier est introuvable."""
+    rel = root.resolve().relative_to(REPO).as_posix()
+    listed = subprocess.run(["git", "-C", str(REPO), "ls-tree", "-r", "-z", "--name-only",
+                             commit, "--", rel], capture_output=True)
+    names = [n for n in listed.stdout.decode().split("\0") if n]
+    if listed.returncode != 0 or not names:
+        return None
+    files = []
+    for name in names:
+        path = Path(name).relative_to(rel)
+        if "__pycache__" in path.parts:
+            continue
+        shown = subprocess.run(["git", "-C", str(REPO), "show", f"{commit}:{name}"],
+                               capture_output=True, check=True)
+        files.append((path, shown.stdout))
+    return files_hash(files)
 
 
 def utc_stamp() -> str:
@@ -326,8 +358,34 @@ def session_files(agent_dir: Path) -> dict[Path, int]:
             if p.is_file() and (p.name.endswith(".usage.ndjson") or p.suffix == ".jsonl")}
 
 
+def subagent_files(agent_dir: Path, session_ids: set[str]) -> list[Path]:
+    """Sessions des sous-agents (`rlm.spawn`) des sessions données, à toute profondeur.
+
+    Le harness ne les écrit pas sous `sessions/` mais sous
+    `session-artifacts/<parent>/sub-<id>/<session>.jsonl` (et `.usage.ndjson`) ; les
+    `session-artifacts/<enfant>/` imbriqués et ceux du dossier racine sont suivis aussi.
+    """
+    found: dict[Path, None] = {}
+    pending, seen = sorted(session_ids), set()
+    while pending:
+        sid = pending.pop()
+        if sid in seen:
+            continue
+        seen.add(sid)
+        root = agent_dir / "session-artifacts" / sid
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            match = SESSION_FILE.match(path.name)
+            if path.is_file() and match and path.parent.name.startswith("sub-"):
+                found[path] = None
+                pending.append(match.group(1))
+    return list(found)
+
+
 def copy_new_sessions(agent_dir: Path, before: dict[Path, int], dest: Path) -> dict:
-    """Copie les sessions créées ou agrandies (sous-agents compris) dans le run."""
+    """Copie dans le run les sessions de `sessions/` créées ou agrandies, puis celles de
+    leurs sous-agents (`subagent_files`) dans `subagents/`."""
     dest.mkdir(parents=True, exist_ok=True)
     usage, sessions = [], []
     for path, size in sorted(session_files(agent_dir).items()):
@@ -336,7 +394,19 @@ def copy_new_sessions(agent_dir: Path, before: dict[Path, int], dest: Path) -> d
         target = dest / path.name
         shutil.copyfile(path, target)
         (usage if path.name.endswith(".usage.ndjson") else sessions).append(target)
-    return {"usage": usage, "sessions": sessions}
+    subs = copy_subagents(agent_dir, usage + sessions, dest / "subagents")
+    return {"usage": usage, "sessions": sessions, **subs}
+
+
+def copy_subagents(agent_dir: Path, main_files: list[Path], dest: Path) -> dict:
+    ids = {m.group(1) for m in (SESSION_FILE.match(p.name) for p in main_files) if m}
+    sub_usage, sub_sessions = [], []
+    for path in subagent_files(agent_dir, ids):
+        dest.mkdir(parents=True, exist_ok=True)
+        target = dest / path.name
+        shutil.copyfile(path, target)
+        (sub_usage if path.name.endswith(".usage.ndjson") else sub_sessions).append(target)
+    return {"sub_usage": sub_usage, "sub_sessions": sub_sessions}
 
 
 class Capture:
@@ -685,14 +755,20 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
                           out / "out.jsonl", out / "err.log", timeout, sandboxed=True,
                           profile=agent_profile(cache, cwd, binary, agent_dir))
     copied = copy_new_sessions(agent_dir, before, out / "sessions")
-    records = metrics.read_ndjson(copied["usage"])
-    entries = metrics.session_entries(copied["sessions"])
     connect_entries = proxies.read_log(connect.log.path)[connect_before:]
     with (out / "connect.ndjson").open("w") as handle:
         for entry in connect_entries:
             handle.write(json.dumps(entry) + "\n")
-    return {"process": process, "records": records, "entries": entries,
+    return {"process": process, **session_logs(copied),
             "proxy_log": proxies.read_log(access.log_path), "connect": connect_entries}
+
+
+def session_logs(copied: dict) -> dict:
+    """Journaux d'usage et entrées de session, session principale et sous-agents à part."""
+    return {"records": metrics.read_ndjson(copied["usage"]),
+            "entries": metrics.session_entries(copied["sessions"]),
+            "sub_records": metrics.read_ndjson(copied["sub_usage"]),
+            "sub_entries": metrics.session_entries(copied["sub_sessions"])}
 
 
 def work_dir(cache: Cache, name: str) -> Path:
@@ -776,12 +852,14 @@ def warmup(binary: Path, cache: Cache, out: Path, model: str, effort: str, sourc
 def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, model: str,
              effort: str, source: dict, settings: dict, connect: proxies.ConnectProxy,
              capture: bool, capture_fail: set[str], server_args: list[str],
-             prices: dict) -> dict:
+             prices: dict, capture_spawn: bool = False) -> dict:
     workspace = restore(task, cache)
     prompt = (task["dir"] / "prompt.md").read_text()
-    # Seules les tâches d'exemple ont un scénario de capture qui les résout.
+    # Seules les tâches d'exemple ont un scénario de capture qui les résout. Avec
+    # `--capture-spawn`, le scénario `spawn` lance un sous-agent (ramassage de ses sessions).
     solvable = "exemple" in task.get("tags", []) and task["id"] not in capture_fail
-    scenario = f"smoke-{task['id'] if solvable else 'fail'}"
+    scenario = ("spawn" if capture_spawn else
+                f"smoke-{task['id'] if solvable else 'fail'}")
     access = Access(out, capture, scenario, connect.port,
                     server_args + read_probe_args(hidden_targets(task, cache)))
     try:
@@ -791,8 +869,19 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     finally:
         access.stop()
     graded = run_tests(task, workspace, out / "grading", cache, sandboxed=True)
-    records, entries = session["records"], session["entries"]
-    process = session["process"]
+    return task_result(task, index, session["process"], session, graded, model, effort,
+                       prices, {"tree": tree_hash(task["dir"]), "source": "run"})
+
+
+def task_result(task: dict, index: int, process: dict, session: dict, graded: dict,
+                model: str, effort: str, prices: dict, version: dict) -> dict:
+    """Mesures d'un run de tâche. Totaux : session principale et sous-agents ; la part
+    des sous-agents est donnée à part (`subagents`). Statut et dernier message : session
+    principale seule. `version` : empreinte du dossier de la tâche (`tree_hash`) et sa
+    source (`run`, ou `commit <sha>` pour un run recalculé), `tree` à `None` si inconnue."""
+    entries = session["entries"]
+    records = session["records"] + session["sub_records"]
+    all_entries = entries + session["sub_entries"]
     final = metrics.final_assistant(entries)
     resolved = graded["junit"] and all(s == "passed" for s in graded["tests"].values())
     if not entries:
@@ -820,7 +909,7 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     if any(m != model for m in calls["models"]):
         anomalies.append(f"modèle journalisé {calls['models']} au lieu de {model}")
     connects = metrics.connect_summary(session["connect"])
-    markers = metrics.kernel_markers(entries)
+    markers = metrics.kernel_markers(all_entries)
     isolated = metrics.isolation(markers)
     if isolated and isolated["readable"]:
         anomalies.append(f"lecture hors workspace réussie : {isolated['readable']}")
@@ -829,15 +918,18 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
                          " à signaler, pas de remplacement sans accord")
     return {
         "task": task["id"], "run": index, "status": status, "resolved": status == "resolved",
+        "task_version": version,
         "tests": graded["tests"], "agent": process, "final": final,
         "tokens": metrics.token_totals(records), "calls": calls,
         "cache": {**metrics.cache_rates(records),
                   "avoidable_rate": metrics.avoidable_cache_rate(records, misses)},
         "server_misses": misses,
+        "subagents": metrics.subagent_share(session["sub_records"], records, misses, prices,
+                                            model, CACHE_WRITE_PRICE),
         "cost": metrics.costs(prices, model, records, CACHE_WRITE_PRICE),
-        "cells": metrics.cell_errors(entries),
+        "cells": metrics.cell_errors(all_entries),
         "transports": {k: v for k, v in transports.items() if k != "per_request"},
-        "transport_failures_in_session": metrics.session_transport_failures(entries),
+        "transport_failures_in_session": metrics.session_transport_failures(all_entries),
         "per_request": transports["per_request"],
         "context_peak": metrics.context_peak(records),
         "isolation": isolated,
@@ -927,7 +1019,28 @@ def totals(results: list[dict]) -> dict:
             "loop_on_sse": sum(r["transports"]["loop_on_sse"] for r in results),
             "server_misses": sum(len(r.get("server_misses", [])) for r in results),
             "connect_refused": sum(r["connect"]["refused"] for r in results),
-            "anomalies": sum(len(r["anomalies"]) for r in results)}
+            "anomalies": sum(len(r["anomalies"]) for r in results),
+            "subagents": subagent_totals(results, cost)}
+
+
+def subagent_totals(results: list[dict], cost: float | None) -> dict:
+    """Part des sous-agents sur tout le run (comptée aussi dans les totaux)."""
+    subs = [r.get("subagents") or {} for r in results]
+    costs = [s.get("cost") for s in subs]
+    sub_cost = sum(costs) if costs and None not in costs else None
+    tokens = [s.get("tokens") or {} for s in subs]
+    read = sum(t.get("cacheRead") or 0 for t in tokens)
+    prompt = sum(t.get(k) or 0 for t in tokens for k in ("input", "cacheRead", "cacheWrite"))
+    return {"sessions": sum(s.get("sessions", 0) for s in subs),
+            "calls": sum(s.get("calls", 0) for s in subs),
+            "calls_total": sum(r["calls"]["total"] for r in results),
+            "cost": sub_cost,
+            "cost_share": sub_cost / cost if sub_cost is not None and cost else None,
+            "cache_rate_all_calls": read / prompt if prompt else None}
+
+
+def pct(value: float | None) -> float | None:
+    return None if value is None else 100 * value
 
 
 def fmt(value, digits: int = 4) -> str:
@@ -944,7 +1057,8 @@ def write_report(run_dir: Path, report: dict) -> None:
               "reasoning", "context_peak", "turns", "calls", "cache_session_rate",
               "cache_continuation_median", "cache_avoidable_rate", "server_misses",
               "ttft_median_ms", "seconds", "websocket", "sse", "loop_on_sse", "connect_refused",
-              "cell_errors", "syntax_errors", "truncated"]
+              "cell_errors", "syntax_errors", "truncated", "subagent_sessions", "subagent_calls",
+              "subagent_cost", "task_tree"]
     with (run_dir / "tasks.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -965,14 +1079,19 @@ def write_report(run_dir: Path, report: dict) -> None:
                 "sse": r["transports"]["requests"].get("sse", 0),
                 "loop_on_sse": r["transports"]["loop_on_sse"],
                 "connect_refused": r["connect"]["refused"], "cell_errors": r["cells"]["errors"],
-                "syntax_errors": r["cells"]["syntax_errors"], "truncated": r["calls"]["truncated"]})
+                "syntax_errors": r["cells"]["syntax_errors"], "truncated": r["calls"]["truncated"],
+                "subagent_sessions": (r.get("subagents") or {}).get("sessions"),
+                "subagent_calls": (r.get("subagents") or {}).get("calls"),
+                "subagent_cost": (r.get("subagents") or {}).get("cost"),
+                "task_tree": (r.get("task_version") or {}).get("tree")})
     h, t = report["header"], report["totals"]
+    sub = t.get("subagents") or {}
     lines = [f"# Smoke bench — {h['model']} — {h['started']}", "",
              "| Champ | Valeur |", "|---|---|"]
     for key in ("mode", "commit", "commit_dirty", "binary", "binary_sha256", "binary_manifest",
                 "binary_version", "models_bundled_sha256", "provider", "model", "model_source",
                 "model_fiche_hypotheses", "effort", "settings_file", "settings_non_default", "prices_version",
-                "prices_sha256", "cache_write_price", "hosts", "runs", "tasks"):
+                "prices_sha256", "cache_write_price", "hosts", "runs", "tasks", "rereport"):
         lines.append(f"| {key} | `{json.dumps(h.get(key), ensure_ascii=False)}` |")
     p, w = report["probe"], report["warmup"]
     lines += ["", "## Sonde réseau (serveur de capture, sandbox)", "",
@@ -997,6 +1116,10 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"{fmt(t['cache_rate_all_calls'])} ; miss serveur : {t['server_misses']}",
               f"- Appels de boucle en SSE (anomalie) : **{t['loop_on_sse']}** ; CONNECT refusés :"
               f" {t['connect_refused']} ; anomalies : {t['anomalies']}",
+              f"- Dont sous-agents (comptés dans les totaux) : {sub.get('sessions')} session(s), "
+              f"{sub.get('calls')} appel(s) sur {sub.get('calls_total')}, coût "
+              f"{fmt(sub.get('cost'))} $ ({fmt(pct(sub.get('cost_share')), 1)} % du coût), taux de "
+              f"cache (tous appels) {fmt(sub.get('cache_rate_all_calls'))}",
               "", "## Tâches", "",
               "| Tâche | Run | Statut | Coût $ | input | output | cacheRead | reasoning |"
               " Pic de contexte | Tours |"
@@ -1014,6 +1137,24 @@ def write_report(run_dir: Path, report: dict) -> None:
             f"{r['agent']['seconds']} | {r['transports']['requests'].get('websocket', 0)} | "
             f"{r['transports']['requests'].get('sse', 0)} | {r['cells']['errors']} "
             f"({r['cells']['syntax_errors']}) | {r['calls']['truncated']} |")
+    lines += ["", "## Sous-agents", "",
+              "Sessions lancées par `rlm.spawn` : comptées dans les totaux et le tableau "
+              "ci-dessus, détaillées ici.", "",
+              "| Tâche | Run | Sessions | Appels | Coût $ | Part du coût % | Cache session |"
+              " Miss serveur |", "|---|---|---|---|---|---|---|---|"]
+    for r in report["results"]:
+        s = r.get("subagents") or {}
+        lines.append(f"| {r['task']} | {r['run']} | {s.get('sessions')} | {s.get('calls')} | "
+                     f"{fmt(s.get('cost'))} | {fmt(pct(s.get('cost_share')), 1)} | "
+                     f"{fmt(s.get('cache_session_rate'))} | {s.get('server_misses')} |")
+    lines += ["", "## Version des tâches", "",
+              "Empreinte du dossier de la tâche (`task.toml`, `prompt.md`, `hidden/`, fichiers) : "
+              "`baseline.py` refuse de mélanger deux versions d'une tâche.", ""]
+    versions = sorted({(r["task"], (r.get("task_version") or {}).get("tree"),
+                        (r.get("task_version") or {}).get("source")) for r in report["results"]},
+                      key=lambda v: (v[0], v[1] or ""))
+    lines += [f"- {task} : `{tree[:16] if tree else 'inconnue'}` ({source})"
+              for task, tree, source in versions]
     if report["header"]["runs"] > 1:
         lines += ["", "## Variabilité entre runs", "",
                   "| Tâche | Runs | Taux résolu | Bascule | Coût moyen | Écart-type coût |"
@@ -1027,7 +1168,7 @@ def write_report(run_dir: Path, report: dict) -> None:
     lines += ["", "## Miss serveur", "",
               "Appel de la boucle hors premier de session, `cacheRead = 0`, sans invalidation "
               "journalisée.", ""]
-    lines += [f"- {task} (run {run}) : seq {m['seq']}, prompt {m['prompt']}, depuis l'appel "
+    lines += [f"- {task} (run {run}) : {m['kind']}, seq {m['seq']}, prompt {m['prompt']}, depuis l'appel "
               f"précédent {fmt(m['since_prev_ms'])} ms, transport {m['transport']}, "
               f"continuation {m['continuation']}" for task, run, m in misses] or ["- aucun"]
     anomalies = [(r["task"], r["run"], a) for r in report["results"] for a in r["anomalies"]]
@@ -1040,6 +1181,29 @@ def write_report(run_dir: Path, report: dict) -> None:
                   f" fichiers où une valeur apparaît : {sorted(scan['files_with_hits']) or 'aucun'}"]
     lines += ["", "## Notes", "", *[f"- {n}" for n in report["notes"]], ""]
     (run_dir / "report.md").write_text("\n".join(lines))
+
+
+def report_notes(prices: dict, effort: str) -> list[str]:
+    notes = [
+        "Tokens et usage : journal d'usage du harness (`<id>.usage.ndjson`), rien n'est "
+        "recalculé. Pour l'API Responses, `cacheWrite` vaut 0 après normalisation "
+        "(docs/usage.md) : l'écriture en cache est comptée au tarif d'entrée.",
+        f"Coût théorique : tarif API Standard de prices.json (version {prices.get('version')}), "
+        f"écriture au tarif `{CACHE_WRITE_PRICE}` (le corps Codex ne porte pas de rétention), "
+        "contexte long au-delà du seuil de prices.json.",
+        "Transport : WebSocket attendu pour les appels de boucle (main, subagent) ; "
+        "compaction, /refine et résumé de branche passent en SSE par construction.",
+        "Taux de cache de session : cacheRead / (input + cacheRead + cacheWrite) sur les "
+        "appels de boucle ; continuation : appels de boucle hors premier de leur session et "
+        "hors invalidation journalisée ; évitable : mêmes appels, hors miss serveur.",
+        "Sous-agents (`rlm.spawn`) : leurs sessions (`session-artifacts/<parent>/sub-*/` du "
+        "dossier agent, copiées dans `sessions/subagents/`) comptent dans les totaux, le coût, "
+        "le transport, le cache et les miss ; leur part est donnée à part. Tours : appels "
+        "`main` de la session principale.",
+    ]
+    if effort != DEFAULT_EFFORT:
+        notes.append(f"Effort {effort} au lieu de {DEFAULT_EFFORT} (décision du 04/11).")
+    return notes
 
 
 def scan_secrets(run_dir: Path, values: list[str]) -> dict:
@@ -1073,6 +1237,88 @@ def auth_values(agent_dir: Path) -> list[str]:
     return values
 
 
+def secret_values(cache: Cache, capture: bool) -> list[str]:
+    """Valeurs factices du mode capture et, en run réel, celles de `auth.json`."""
+    values = list(FAKE_SECRETS.values()) + [FAKE_ACCESS, FAKE_REFRESH]
+    return values if capture else values + auth_values(cache.agent)
+
+
+REPORT_FILES = ("report.json", "report.md", "tasks.csv")
+
+
+def commit_version(header: dict, task: dict) -> dict:
+    """Version d'une tâche pour un run sans empreinte : `tree_hash` au commit de l'en-tête,
+    seulement si l'arbre était propre ; sinon inconnue (`baseline.py` refuse la tâche)."""
+    commit = header.get("commit")
+    if not commit or header.get("commit_dirty") is not False:
+        return {"tree": None, "source": f"inconnue (commit {commit}, "
+                                         f"commit_dirty {header.get('commit_dirty')})"}
+    return {"tree": tree_hash_at(commit, task["dir"]), "source": f"commit {commit}"}
+
+
+def rereport(run_dir: Path, cache_root: Path) -> None:
+    """Recalcule le rapport d'un run déjà fait depuis ses journaux (sans binaire ni modèle).
+
+    Résultat des tests cachés, sortie et durée du binaire restent ceux du run. Les sessions
+    de sous-agents absentes du run (runs antérieurs à YA-07b) sont copiées depuis le
+    dossier agent du banc. Pour un run sans empreinte des tâches, elle est recalculée au
+    commit de l'en-tête (`commit_version`). Le rapport précédent est gardé (`*.initial.*`).
+    """
+    old = json.loads((run_dir / "report.json").read_text())
+    header = old["header"]
+    if sha256(PRICES) != header.get("prices_sha256"):
+        fail("prices.json a changé depuis le run : recalcul refusé")
+    capture = header.get("mode") == "capture"
+    cache = Cache(cache_root, None, capture)
+    prices = json.loads(PRICES.read_text())
+    tasks = {t["id"]: t for t in load_tasks(sorted({r["task"] for r in old["results"]}),
+                                             capture)}
+    results, versions = [], {}
+    for prev in old["results"]:
+        out = run_dir / "tasks" / prev["task"] / f"run-{prev['run']}"
+        sessions = out / "sessions"
+        main_files = sorted(p for p in sessions.iterdir()
+                            if p.is_file() and SESSION_FILE.match(p.name))
+        if (sessions / "subagents").is_dir():
+            files = sorted((sessions / "subagents").iterdir())
+            subs = {"sub_usage": [p for p in files if p.name.endswith(".usage.ndjson")],
+                    "sub_sessions": [p for p in files if p.suffix == ".jsonl"]}
+        else:
+            subs = copy_subagents(cache.agent, main_files, sessions / "subagents")
+        copied = {"usage": [p for p in main_files if p.name.endswith(".usage.ndjson")],
+                  "sessions": [p for p in main_files if p.suffix == ".jsonl"], **subs}
+        session = {**session_logs(copied), "proxy_log": proxies.read_log(out / "proxy.ndjson"),
+                   "connect": proxies.read_log(out / "connect.ndjson")}
+        graded = {"tests": prev["tests"], "junit": (out / "grading" / "junit.xml").exists()}
+        version = prev.get("task_version")
+        if version is None:
+            if prev["task"] not in versions:
+                versions[prev["task"]] = commit_version(header, tasks[prev["task"]])
+            version = versions[prev["task"]]
+        results.append(task_result(tasks[prev["task"]], prev["run"], prev["agent"], session,
+                                   graded, header["model"], header["effort"], prices, version))
+        tree = results[-1]["task_version"]["tree"]
+        print(f"  {prev['task']} run {prev['run']} : {results[-1]['status']}, "
+              f"{results[-1]['subagents']['sessions']} sous-agent(s), version "
+              f"{tree[:12] if tree else 'inconnue'} ({results[-1]['task_version']['source']})")
+    for name in REPORT_FILES:
+        backup = run_dir / name.replace(".", ".initial.", 1)
+        if (run_dir / name).exists() and not backup.exists():
+            shutil.copyfile(run_dir / name, backup)
+    header = {**header, "rereport": {"at": utc_stamp(), "commit": git("rev-parse", "HEAD"),
+                                     "commit_dirty": bool(git("status", "--porcelain"))}}
+    report = {"header": header, "probe": old["probe"], "warmup": old["warmup"],
+              "results": results, "totals": totals(results), "per_task": aggregate(results),
+              "notes": report_notes(prices, header["effort"])}
+    write_report(run_dir, report)
+    report["secret_scan"] = scan_secrets(run_dir, secret_values(cache, capture))
+    write_report(run_dir, report)
+    if report["secret_scan"]["files_with_hits"]:
+        print(f"ATTENTION : valeurs secrètes trouvées dans "
+              f"{sorted(report['secret_scan']['files_with_hits'])}")
+    print(f"rapport recalculé : {run_dir / 'report.md'}")
+
+
 # --- Commande ----------------------------------------------------------------------
 
 
@@ -1096,6 +1342,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--capture-server-miss-at-turn", type=int, default=None,
                         help="mode capture : à ce tour, le serveur annonce cacheRead = 0 (miss "
                              "serveur simulé, T07)")
+    parser.add_argument("--capture-spawn", action="store_true",
+                        help="mode capture : chaque tâche joue le scénario `spawn` (un "
+                             "sous-agent), pour valider le ramassage de ses sessions")
+    parser.add_argument("--rereport", type=Path, default=None, metavar="RUN",
+                        help="sans binaire ni modèle : recalcule le rapport d'un run déjà fait "
+                             "depuis ses journaux")
     parser.add_argument("--capture-no-websocket", action="store_true",
                         help="mode capture : le serveur refuse le WebSocket (repli SSE, anomalie)")
     parser.add_argument("--validate-gold", action="store_true",
@@ -1112,6 +1364,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.rereport is not None:
+        rereport(args.rereport.resolve(), args.cache.expanduser().resolve())
+        return
     if platform.system() != "Darwin" or not Path("/usr/bin/sandbox-exec").exists():
         fail("macOS et sandbox-exec requis")
     if args.validate_gold:
@@ -1132,6 +1387,8 @@ def main() -> None:
         fail(f"provider {args.provider} non pris en charge (seul {PROVIDER})")
     if args.runs < 1:
         fail("RUNS doit valoir au moins 1")
+    if args.capture_spawn and not args.capture:
+        fail("--capture-spawn demande --capture")
     if args.record_hosts and args.capture:
         fail("--record-hosts est un run réel, incompatible avec --capture")
     models = [args.model] if args.model else list(DEFAULT_MODELS)
@@ -1198,7 +1455,8 @@ def main() -> None:
                     out = run_dir / "tasks" / task["id"] / f"run-{index}"
                     result = run_task(task, index, binary, cache, out, model, args.effort,
                                       sources[model], settings, connect, args.capture,
-                                      capture_fail, task_args, prices)
+                                      capture_fail, task_args, prices,
+                                      capture_spawn=args.capture_spawn)
                     print(f"  {task['id']} run {index} : {result['status']}")
                     results.append(result)
         finally:
@@ -1223,28 +1481,11 @@ def main() -> None:
             "tools": {"python": platform.python_version(), "node": version_of(["node", "--version"]),
                       "uv": version_of(["uv", "--version"])},
         }
-        notes = [
-            "Tokens et usage : journal d'usage du harness (`<id>.usage.ndjson`), rien n'est "
-            "recalculé. Pour l'API Responses, `cacheWrite` vaut 0 après normalisation "
-            "(docs/usage.md) : l'écriture en cache est comptée au tarif d'entrée.",
-            f"Coût théorique : tarif API Standard de prices.json (version {prices.get('version')}), "
-            f"écriture au tarif `{CACHE_WRITE_PRICE}` (le corps Codex ne porte pas de rétention), "
-            "contexte long au-delà du seuil de prices.json.",
-            "Transport : WebSocket attendu pour les appels de boucle (main, subagent) ; "
-            "compaction, /refine et résumé de branche passent en SSE par construction.",
-            "Taux de cache de session : cacheRead / (input + cacheRead + cacheWrite) sur les "
-            "appels de boucle ; continuation : appels de boucle hors premier de leur session et "
-            "hors invalidation journalisée ; évitable : mêmes appels, hors miss serveur.",
-        ]
-        if args.effort != DEFAULT_EFFORT:
-            notes.append(f"Effort {args.effort} au lieu de {DEFAULT_EFFORT} (décision du 04/11).")
+        notes = report_notes(prices, args.effort)
         report = {"header": header, "probe": probe_result, "warmup": warm, "results": results,
                   "totals": totals(results), "per_task": aggregate(results), "notes": notes}
         write_report(run_dir, report)
-        secret_values = list(FAKE_SECRETS.values()) + [FAKE_ACCESS, FAKE_REFRESH]
-        if not args.capture:
-            secret_values += auth_values(cache.agent)
-        scan = scan_secrets(run_dir, secret_values)
+        scan = scan_secrets(run_dir, secret_values(cache, args.capture))
         report["secret_scan"] = scan
         write_report(run_dir, report)
         if scan["files_with_hits"]:
