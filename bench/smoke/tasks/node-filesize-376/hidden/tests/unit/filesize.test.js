@@ -1,0 +1,1457 @@
+/**
+ * Unit tests for filesize.js
+ * Tests the main filesize function and partial function
+ */
+
+import assert from "node:assert";
+import { describe, it } from "node:test";
+import { filesize, partial } from "../../src/filesize.js";
+
+describe("filesize", () => {
+	describe("Basic functionality", () => {
+		it("should convert bytes to human readable format", () => {
+			assert.strictEqual(filesize(1000), "1 kB");
+			assert.strictEqual(filesize(1000000), "1 MB");
+			assert.strictEqual(filesize(1000000000), "1 GB");
+		});
+
+		it("should handle zero bytes", () => {
+			assert.strictEqual(filesize(0), "0 B");
+		});
+
+		it("should format zero using locale and separator options", () => {
+			assert.strictEqual(filesize(0, { locale: "de-DE", pad: true }), "0,00 B");
+			assert.strictEqual(filesize(0n, { separator: ",", pad: true }), "0,00 B");
+			assert.strictEqual(filesize(0, { separator: ",", precision: 3 }), "0,00 B");
+			assert.deepStrictEqual(
+				filesize(0, {
+					locale: "en-US",
+					localeOptions: { minimumFractionDigits: 3 },
+					output: "array",
+				}),
+				["0.000", "B"],
+			);
+			assert.strictEqual(
+				filesize(0, { locale: true, pad: true, output: "object" }).value,
+				(0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+			);
+			assert.strictEqual(filesize(0, { locale: "de-DE", output: "exponent" }), 0);
+		});
+
+		it("should retain zero precision when a locale is requested", () => {
+			assert.strictEqual(filesize(0, { locale: "de-DE", precision: 3 }), "0.00 B");
+			assert.strictEqual(filesize(0, { locale: "de-DE", precision: 3, pad: true }), "0.00 B");
+			assert.strictEqual(filesize(0, { locale: true, precision: 3 }), "0.00 B");
+			assert.strictEqual(filesize(0, { separator: ",", precision: 3, pad: true }), "0,00 B");
+		});
+
+		it("should handle small numbers", () => {
+			assert.strictEqual(filesize(1), "1 B");
+			assert.strictEqual(filesize(512), "512 B");
+		});
+
+		it("should handle negative numbers", () => {
+			assert.strictEqual(filesize(-1000), "-1 kB");
+			assert.strictEqual(filesize(-1000000), "-1 MB");
+		});
+
+		it("should throw TypeError for Infinity", () => {
+			assert.throws(() => filesize(Infinity), TypeError);
+		});
+
+		it("should throw TypeError for -Infinity", () => {
+			assert.throws(() => filesize(-Infinity), TypeError);
+		});
+	});
+
+	describe("Bits option", () => {
+		it("should convert to bits when bits option is true", () => {
+			assert.strictEqual(filesize(1000, { bits: true }), "8 kbit");
+			assert.strictEqual(filesize(1000000, { bits: true }), "8 Mbit");
+		});
+
+		it("should handle zero with bits option", () => {
+			assert.strictEqual(filesize(0, { bits: true }), "0 bit");
+		});
+
+		it("should respect forced exponent with bits", () => {
+			// Forced exponent should prevent auto-increment
+			assert.strictEqual(filesize(1024, { exponent: 0, bits: true }), "8192 bit");
+			assert.strictEqual(filesize(1024, { exponent: 1, bits: true }), "8.19 kbit");
+		});
+	});
+
+	describe("Zero value edge cases", () => {
+		it("should handle zero with exponent output", () => {
+			assert.strictEqual(filesize(0, { output: "exponent" }), 0);
+		});
+
+		it("should pad zero like any other value", () => {
+			assert.strictEqual(filesize(0, { pad: true, round: 2 }), "0.00 B");
+			assert.strictEqual(filesize(0, { pad: true, round: 3 }), "0.000 B");
+			assert.strictEqual(filesize(0, { pad: true, round: 0 }), "0 B");
+		});
+
+		it("should prefer precision over pad for zero", () => {
+			assert.strictEqual(filesize(0, { precision: 3, pad: true, round: 5 }), "0.00 B");
+		});
+
+		it("should handle zero with custom symbols", () => {
+			assert.strictEqual(filesize(0, { symbols: { B: "Bytes" } }), "0 Bytes");
+		});
+
+		it("should handle zero with fullform", () => {
+			assert.strictEqual(filesize(0, { fullform: true }), "0 byte");
+		});
+
+		it("should handle zero with fullform and bits", () => {
+			assert.strictEqual(filesize(0, { fullform: true, bits: true }), "0 bit");
+		});
+
+		it("should handle zero with array output", () => {
+			const result = filesize(0, { output: "array" });
+			assert.deepStrictEqual(result, [0, "B"]);
+		});
+
+		it("should handle zero with object output", () => {
+			const result = filesize(0, { output: "object" });
+			assert.deepStrictEqual(result, { value: 0, symbol: "B", exponent: 0, unit: "B" });
+		});
+	});
+
+	describe("Standards", () => {
+		it("should use IEC standard", () => {
+			assert.strictEqual(filesize(1024, { standard: "iec" }), "1 KiB");
+			assert.strictEqual(filesize(1048576, { standard: "iec" }), "1 MiB");
+		});
+
+		it("should use JEDEC standard", () => {
+			assert.strictEqual(filesize(1024, { standard: "jedec" }), "1 KB");
+			assert.strictEqual(filesize(1048576, { standard: "jedec" }), "1 MB");
+		});
+
+		it("should use SI standard", () => {
+			assert.strictEqual(filesize(1000, { standard: "si" }), "1 kB");
+			assert.strictEqual(filesize(1000000, { standard: "si" }), "1 MB");
+		});
+	});
+
+	describe("Output formats", () => {
+		it("should return string by default", () => {
+			const result = filesize(1000);
+			assert.strictEqual(typeof result, "string");
+			assert.strictEqual(result, "1 kB");
+		});
+
+		it('should return array when output is "array"', () => {
+			const result = filesize(1000, { output: "array" });
+			assert(Array.isArray(result));
+			assert.strictEqual(result[0], 1);
+			assert.strictEqual(result[1], "kB");
+		});
+
+		it('should return object when output is "object"', () => {
+			const result = filesize(1000, { output: "object" });
+			assert.strictEqual(typeof result, "object");
+			assert.strictEqual(result.value, 1);
+			assert.strictEqual(result.symbol, "kB");
+			assert.strictEqual(result.exponent, 1);
+			assert.strictEqual(result.unit, "kB");
+		});
+
+		it('should return exponent when output is "exponent"', () => {
+			const result = filesize(1000, { output: "exponent" });
+			assert.strictEqual(typeof result, "number");
+			assert.strictEqual(result, 1);
+		});
+
+		it("should match the object exponent when rounding overflows the unit", () => {
+			// 999999 renders as "1 MB", so the exponent is 2, not 1
+			assert.strictEqual(filesize(999999, { output: "exponent" }), 2);
+			assert.strictEqual(
+				filesize(999999, { output: "exponent" }),
+				filesize(999999, { output: "object" }).exponent,
+			);
+			// IEC: 1048575 renders as "1 MiB"
+			assert.strictEqual(filesize(1048575, { standard: "iec", output: "exponent" }), 2);
+		});
+
+		it("should match the object exponent when bits auto-increment the unit", () => {
+			// 125000 bytes = 1 Mbit, so the exponent is 2, not 1
+			assert.strictEqual(filesize(125000, { bits: true, output: "exponent" }), 2);
+			assert.strictEqual(
+				filesize(125000, { bits: true, output: "exponent" }),
+				filesize(125000, { bits: true, output: "object" }).exponent,
+			);
+		});
+	});
+
+	describe("Rounding", () => {
+		it("should round to specified decimal places", () => {
+			assert.strictEqual(filesize(1536, { round: 1 }), "1.5 kB");
+			assert.strictEqual(filesize(1536, { round: 0 }), "2 kB");
+			assert.strictEqual(filesize(1536, { round: 3 }), "1.536 kB");
+		});
+
+		it("should use different rounding methods", () => {
+			assert.strictEqual(filesize(1536, { roundingMethod: "floor" }), "1.53 kB");
+			assert.strictEqual(filesize(1536, { roundingMethod: "ceil" }), "1.54 kB");
+			assert.strictEqual(filesize(1536, { roundingMethod: "round" }), "1.54 kB");
+		});
+	});
+
+	describe("Padding", () => {
+		it("should pad decimal places when pad is true", () => {
+			assert.strictEqual(filesize(1000, { pad: true, round: 2 }), "1.00 kB");
+			assert.strictEqual(filesize(1536, { pad: true, round: 1 }), "1.5 kB");
+		});
+
+		it("should pad decimal places for negative numbers", () => {
+			assert.strictEqual(filesize(-1000, { pad: true, round: 2 }), "-1.00 kB");
+			assert.strictEqual(filesize(-1536, { pad: true, round: 2 }), "-1.54 kB");
+			assert.strictEqual(filesize(-1024, { pad: true, round: 3 }), "-1.024 kB");
+		});
+
+		it("should pad decimal places with locale formatting for negative numbers", () => {
+			assert.strictEqual(filesize(-1536, { locale: "de", pad: true, round: 2 }), "-1,54 kB");
+			assert.strictEqual(filesize(-1000, { locale: "en-US", pad: true, round: 2 }), "-1.00 kB");
+		});
+
+		it("should pad decimal places with locale formatting and grouping separators", () => {
+			// German locale: comma as decimal separator, dot as grouping separator
+			// Verify comma is correctly detected as decimal separator (not grouping separator)
+			assert.strictEqual(filesize(1234567, { locale: "de-DE", pad: true, round: 2 }), "1,23 MB");
+			// Padding with German locale (3 decimal places)
+			assert.strictEqual(filesize(1536, { locale: "de-DE", pad: true, round: 3 }), "1,536 kB");
+			// German locale with padding that adds decimal places
+			assert.strictEqual(filesize(1536, { locale: "de", pad: true, round: 4 }), "1,5360 kB");
+			// German locale with grouping separator in integer part (1.234.567,89 kB)
+			assert.strictEqual(
+				filesize(1234567890, { locale: "de", exponent: 1, pad: true, round: 2 }),
+				"1.234.567,89 kB",
+			);
+			// English locale with larger numbers
+			assert.strictEqual(filesize(1234567, { locale: "en-US", pad: true, round: 2 }), "1.23 MB");
+			assert.strictEqual(filesize(1234567890, { locale: "en-US", pad: true, round: 2 }), "1.23 GB");
+		});
+
+		it("should keep every digit group and pad when an integer value has grouping separators", () => {
+			// en: comma grouping with no decimal in the raw value. Previously the
+			// trailing grouping comma was mistaken for the decimal separator, which
+			// dropped digit groups and skipped padding.
+			assert.strictEqual(
+				filesize(1234500e24, { locale: "en", pad: true, round: 2 }),
+				"1,234,500.00 YB",
+			);
+			assert.strictEqual(filesize(1000e24, { locale: "en", pad: true, round: 2 }), "1,000.00 YB");
+		});
+	});
+
+	describe("Custom separators and spacers", () => {
+		it("should use custom decimal separator", () => {
+			assert.strictEqual(filesize(1536, { separator: "," }), "1,54 kB");
+		});
+
+		it("should use custom spacer between value and unit", () => {
+			assert.strictEqual(filesize(1000, { spacer: "_" }), "1_kB");
+			assert.strictEqual(filesize(1000, { spacer: "" }), "1kB");
+		});
+	});
+
+	describe("Custom symbols", () => {
+		it("should use custom symbols when provided", () => {
+			const customSymbols = { kB: "kilobyte" };
+			assert.strictEqual(filesize(1000, { symbols: customSymbols }), "1 kilobyte");
+		});
+	});
+
+	describe("Locale formatting", () => {
+		it("should format using system locale when locale is true", () => {
+			const result = filesize(1000, { locale: true });
+			assert(typeof result === "string");
+			assert(result.includes("kB"));
+		});
+
+		it("should format using specific locale", () => {
+			const result = filesize(1536, { locale: "en-US" });
+			assert(typeof result === "string");
+			assert(result.includes("1.5"));
+		});
+	});
+
+	describe("Full form names", () => {
+		it("should use full form names when fullform is true", () => {
+			assert.strictEqual(filesize(1000, { fullform: true }), "1 kilobyte");
+			assert.strictEqual(filesize(2000, { fullform: true }), "2 kilobytes");
+			assert.strictEqual(filesize(1, { fullform: true }), "1 byte");
+		});
+
+		it("should use custom fullforms when provided", () => {
+			const customFullforms = ["", "thousand-byte"];
+			assert.strictEqual(
+				filesize(1000, { fullform: true, fullforms: customFullforms }),
+				"1 thousand-byte",
+			);
+		});
+
+		it("should handle bits fullform singular", () => {
+			assert.strictEqual(filesize(0.125, { bits: true, fullform: true }), "1 bit");
+		});
+
+		it("should handle bits fullform plural", () => {
+			assert.strictEqual(filesize(0.25, { bits: true, fullform: true }), "2 bits");
+		});
+
+		it("should handle fullform with precision (string value path)", () => {
+			assert.strictEqual(
+				filesize(1058223158, { standard: "iec", precision: 3, fullform: true }),
+				"0.990 gibibytes",
+			);
+			assert.strictEqual(filesize(1234567890, { precision: 2, fullform: true }), "1.2 gigabytes");
+		});
+
+		it("should keep the plural fullform when a comma decimal separator is used", () => {
+			assert.strictEqual(filesize(1500000, { fullform: true, separator: "," }), "1,5 megabytes");
+			assert.strictEqual(filesize(1500000, { fullform: true, locale: "de-DE" }), "1,5 megabytes");
+		});
+	});
+
+	describe("Base and exponent options", () => {
+		it("should use base 2 calculations", () => {
+			assert.strictEqual(filesize(1024, { base: 2 }), "1 KiB");
+		});
+
+		it("should use base 10 calculations", () => {
+			assert.strictEqual(filesize(1000, { base: 10 }), "1 kB");
+		});
+
+		it("should use forced exponent", () => {
+			assert.strictEqual(filesize(1024, { exponent: 0 }), "1024 B");
+			assert.strictEqual(filesize(1024, { exponent: 2 }), "0 MB");
+		});
+	});
+
+	describe("Precision option", () => {
+		it("should use specified precision", () => {
+			assert.strictEqual(filesize(1536, { precision: 3 }), "1.54 kB");
+			assert.strictEqual(filesize(1536000, { precision: 2 }), "1.5 MB");
+		});
+
+		it("should apply locale formatting when precision is set", () => {
+			// A string value from toPrecision ignores toLocaleString, so the
+			// locale's decimal separator was previously dropped (1.2, not 1,2).
+			assert.strictEqual(filesize(1234, { locale: "sv", precision: 2 }), "1,2 kB");
+			assert.strictEqual(filesize(1234, { locale: "de-DE", precision: 2 }), "1,2 kB");
+			assert.strictEqual(filesize(1234, { locale: "en-US", precision: 2 }), "1.2 kB");
+			assert.strictEqual(filesize(1234, { locale: "sv", precision: 3 }), "1,23 kB");
+			assert.strictEqual(filesize(-1234, { locale: "sv", precision: 2 }), "−1,2 kB");
+		});
+
+		it("should remove scientific notation from precision results", () => {
+			// Test cases where toPrecision would normally produce scientific notation
+			// but our implementation removes it by splitting on "e"
+
+			// Very large numbers that would produce scientific notation
+			assert.strictEqual(filesize(1234567890123, { precision: 2 }), "1.2 TB");
+			assert.strictEqual(filesize(9876543210987, { precision: 3 }), "9.88 TB");
+
+			// Test with different precision values on large numbers
+			assert.strictEqual(filesize(1e15, { precision: 1 }), "1 PB");
+			assert.strictEqual(filesize(1e15, { precision: 2 }), "1.0 PB");
+			assert.strictEqual(filesize(1e15, { precision: 3 }), "1.00 PB");
+		});
+
+		it("should handle precision with very small numbers", () => {
+			// Very small numbers (less than 1 byte)
+			assert.strictEqual(filesize(0.001, { precision: 1 }), "0 B");
+			assert.strictEqual(filesize(0.1, { precision: 2 }), "0.0 B");
+			assert.strictEqual(filesize(0.5, { precision: 1 }), "1 B");
+		});
+
+		it("should handle precision with numbers that would produce e+ notation", () => {
+			// Numbers that produce e+ notation with toPrecision
+			const largeNum = 1234567890;
+			assert.strictEqual(filesize(largeNum, { precision: 2 }), "1.2 GB");
+			assert.strictEqual(filesize(largeNum, { precision: 3 }), "1.23 GB");
+			assert.strictEqual(filesize(largeNum, { precision: 1 }), "1 GB");
+		});
+
+		it("should handle precision with numbers that would produce e- notation", () => {
+			// Very small decimal numbers that would produce e- notation
+			assert.strictEqual(filesize(0.0001, { precision: 1 }), "0 B");
+			assert.strictEqual(filesize(0.00001, { precision: 2 }), "0.0 B");
+		});
+
+		it("should work with precision and different standards", () => {
+			const largeNum = 1234567890;
+			assert.strictEqual(filesize(largeNum, { precision: 2, standard: "iec" }), "1.1 GiB");
+			assert.strictEqual(filesize(largeNum, { precision: 2, standard: "jedec" }), "1.1 GB");
+			assert.strictEqual(filesize(largeNum, { precision: 2, standard: "si" }), "1.2 GB");
+		});
+
+		it("should work with precision and bits option", () => {
+			const largeNum = 1234567890;
+			assert.strictEqual(filesize(largeNum, { precision: 2, bits: true }), "9.9 Gbit");
+			assert.strictEqual(filesize(largeNum, { precision: 3, bits: true }), "9.88 Gbit");
+		});
+
+		it("should work with precision and array output", () => {
+			const result = filesize(1234567890, { precision: 2, output: "array" });
+			assert(Array.isArray(result));
+			assert.strictEqual(result[0], "1.2");
+			assert.strictEqual(result[1], "GB");
+		});
+
+		it("should work with precision and object output", () => {
+			const result = filesize(1234567890, { precision: 2, output: "object" });
+			assert.strictEqual(typeof result, "object");
+			assert.strictEqual(result.value, "1.2");
+			assert.strictEqual(result.symbol, "GB");
+		});
+
+		it("should handle precision with extremely large numbers", () => {
+			// Test with numbers that exceed normal exponent range
+			const extremeNumber = Math.pow(1024, 15);
+			const result = filesize(extremeNumber, { precision: 2 });
+			assert(typeof result === "string");
+			// Note: For extremely large numbers that exceed JavaScript's normal number range,
+			// the number itself may be in scientific notation, which is expected behavior
+			assert(result.includes("YB") || result.includes("YiB"));
+		});
+
+		it("should handle precision edge cases", () => {
+			// Test precision with zero
+			assert.strictEqual(filesize(0, { precision: 3 }), "0.00 B");
+
+			// Test precision with exactly 1 byte
+			assert.strictEqual(filesize(1, { precision: 2 }), "1.0 B");
+
+			// Test precision with negative numbers
+			assert.strictEqual(filesize(-1234567890, { precision: 2 }), "-1.2 GB");
+		});
+
+		it("should keep precision trailing zeros for negative values", () => {
+			// A negative value must carry the same significant digits as its positive counterpart
+			assert.strictEqual(filesize(1500, { precision: 3 }), "1.50 kB");
+			assert.strictEqual(filesize(-1500, { precision: 3 }), "-1.50 kB");
+			assert.strictEqual(filesize(-1000, { precision: 3 }), "-1.00 kB");
+			assert.strictEqual(filesize(-1, { precision: 3 }), "-1.00 B");
+			assert.deepStrictEqual(filesize(-1500, { precision: 3, output: "array" }), ["-1.50", "kB"]);
+			assert.strictEqual(filesize(-1500, { precision: 3, output: "object" }).value, "-1.50");
+		});
+
+		it("should ensure no scientific notation in any precision result", () => {
+			// Test a range of numbers that would normally produce scientific notation from toPrecision
+			// but should have it removed by our implementation
+			const testNumbers = [1e3, 1e6, 1e9, 1e12, 1234567890123456, Math.pow(10, 10)];
+
+			testNumbers.forEach((num) => {
+				[1, 2, 3, 4].forEach((precision) => {
+					const result = filesize(num, { precision });
+					// Result should not contain scientific notation markers when using toPrecision
+					// Note: We exclude extremely large numbers that naturally contain 'e' in JavaScript
+					if (!num.toString().includes("e")) {
+						assert(
+							!result.includes("e"),
+							`Result "${result}" contains 'e' for number ${num} with precision ${precision}`,
+						);
+						assert(
+							!result.includes("E"),
+							`Result "${result}" contains 'E' for number ${num} with precision ${precision}`,
+						);
+					}
+				});
+			});
+		});
+
+		it("should handle precision with base 2 when scientific notation is produced (regular number)", () => {
+			// Test case that triggers base === 2 path in line 168 precision handling
+			// We need a number that will produce scientific notation with toPrecision
+			// and uses base 2 (IEC standard)
+			const testNumber = 999999999999999; // Large number that triggers scientific notation
+			const result = filesize(testNumber, { precision: 1, standard: "iec" });
+			assert(typeof result === "string");
+			assert(!result.includes("e"));
+			assert(!result.includes("E"));
+			// Should use IEC units (base 2)
+			assert(result.includes("TiB") || result.includes("PiB"));
+		});
+
+		it("should handle precision with base 2 when scientific notation is produced (BigInt)", () => {
+			// Test case that triggers base === 2 path in line 168 precision handling using BigInt
+			// This ensures both number types are tested for base 2 path
+			const testNumber = BigInt("999999999999999"); // Large BigInt that triggers scientific notation
+			const result = filesize(testNumber, { precision: 1, standard: "iec" });
+			assert(typeof result === "string");
+			assert(!result.includes("e"));
+			assert(!result.includes("E"));
+			// Should use IEC units (base 2)
+			assert(result.includes("TiB") || result.includes("PiB"));
+		});
+
+		it("should handle precision with base 10 when scientific notation is produced (regular number)", () => {
+			// Test case that triggers base === 10 path in line 168 precision handling
+			// We need a number that will produce scientific notation with toPrecision
+			// and uses base 10 (SI/JEDEC standard)
+			const testNumber = 999999999999999; // Large number that triggers scientific notation
+			const result = filesize(testNumber, { precision: 1, standard: "jedec" });
+			assert(typeof result === "string");
+			assert(!result.includes("e"));
+			assert(!result.includes("E"));
+			// Should use JEDEC units (base 10 logic)
+			assert(result.includes("TB") || result.includes("PB"));
+		});
+
+		it("should handle precision with base 10 when scientific notation is produced (BigInt)", () => {
+			// Test case that triggers base === 10 path in line 168 precision handling using BigInt
+			// This ensures both number types are tested for base 10 path
+			const testNumber = BigInt("999999999999999"); // Large BigInt that triggers scientific notation
+			const result = filesize(testNumber, { precision: 1, standard: "jedec" });
+			assert(typeof result === "string");
+			assert(!result.includes("e"));
+			assert(!result.includes("E"));
+			// Should use JEDEC units (base 10 logic)
+			assert(result.includes("TB") || result.includes("PB"));
+		});
+
+		it("should handle precision with YiB-level numbers where e >= 8 (regular number)", () => {
+			// Test case that covers line 166 when e >= 8 (YiB level) using regular number
+			// This triggers result[0].includes(E) but e < 8 is false, so increment logic is skipped
+			const yibNumber = Math.pow(1024, 8); // 1 YiB in bytes using regular number
+			const result = filesize(yibNumber, { precision: 1, standard: "iec" });
+			assert(typeof result === "string");
+			// For extremely large regular numbers, some scientific notation may be expected
+			assert(result.includes("YiB"));
+		});
+
+		it("should handle precision with YiB-level numbers where e >= 8 (BigInt)", () => {
+			// Test case that covers line 166 when e >= 8 (YiB level) using BigInt
+			// This triggers result[0].includes(E) but e < 8 is false, so increment logic is skipped
+			// YiB is at exponent 8, so we need a number large enough to reach this level
+			const yibNumber = BigInt(1024) ** BigInt(8); // 1 YiB in bytes using BigInt
+			const result = filesize(yibNumber, { precision: 1, standard: "iec" });
+			assert(typeof result === "string");
+			assert(!result.includes("e"));
+			assert(!result.includes("E"));
+			assert(result.includes("YiB"));
+		});
+
+		it("should handle precision with extremely large numbers that exceed YiB (regular number)", () => {
+			// Test case for numbers that are larger than YiB using regular number
+			// This ensures we test the e >= 8 condition thoroughly with regular numbers
+			const extremeNumber = Math.pow(1024, 8) * 1000; // 1000 YiB using regular number
+			const result = filesize(extremeNumber, { precision: 2, standard: "iec" });
+			assert(typeof result === "string");
+			// For extremely large regular numbers, some scientific notation may be expected
+			assert(result.includes("YiB"));
+		});
+
+		it("should handle precision with extremely large numbers that exceed YiB (BigInt)", () => {
+			// Test case for numbers that are larger than YiB using BigInt
+			// This ensures we test the e >= 8 condition thoroughly with BigInt
+			const extremeNumber = BigInt(1024) ** BigInt(8) * BigInt(1000); // 1000 YiB using BigInt
+			const result = filesize(extremeNumber, { precision: 2, standard: "iec" });
+			assert(typeof result === "string");
+			// For extremely large BigInt numbers, the result should still use YiB units
+			// Some scientific notation in the final result may be acceptable for such large numbers
+			assert(result.includes("YiB"));
+		});
+
+		it("should handle precision with specific test case for GiB values", () => {
+			// Test specific precision case: filesize(1058223158, {base: 2, standard: 'iec', precision: 3})
+			// This should output '0.990 GiB'
+			assert.strictEqual(
+				filesize(1058223158, { base: 2, standard: "iec", precision: 3 }),
+				"0.990 GiB",
+			);
+		});
+
+		it("should return string value in object output when precision > 0", () => {
+			const result = filesize(1234567890, { precision: 2, output: "object" });
+			assert.strictEqual(typeof result.value, "string");
+			assert.strictEqual(result.value, "1.2");
+		});
+
+		it("should skip padding when round is 0", () => {
+			assert.strictEqual(filesize(1000, { pad: true, round: 0 }), "1 kB");
+		});
+
+		it("should fall back to JEDEC default for unknown standard", () => {
+			assert.strictEqual(filesize(1024, { standard: "foobar" }), "1.02 kB");
+		});
+	});
+
+	describe("Edge cases", () => {
+		it("should handle very large numbers", () => {
+			const largeNumber = Math.pow(1024, 8);
+			const result = filesize(largeNumber);
+			assert(typeof result === "string");
+			assert(result.includes("YB") || result.includes("YiB"));
+		});
+
+		it("should handle BigInt input", () => {
+			const result = filesize(BigInt(1024), { standard: "jedec" });
+			assert.strictEqual(result, "1 KB");
+		});
+
+		it("should handle numbers exceeding maximum exponent", () => {
+			const hugeNumber = Math.pow(1024, 10);
+			const result = filesize(hugeNumber);
+			assert(typeof result === "string");
+		});
+
+		it("should handle numbers exceeding lookup table size (decimal)", () => {
+			// Test number requiring Math.pow fallback for decimal powers
+			const hugeNumber = Math.pow(1000, 15); // Exceeds DECIMAL_POWERS array
+			const result = filesize(hugeNumber, { base: 10 });
+			assert.ok(result.includes("YB"));
+		});
+
+		it("should handle numbers exceeding lookup table size (binary)", () => {
+			// Test number requiring Math.pow fallback for binary powers
+			const hugeNumber = Math.pow(2, 100); // Exceeds BINARY_POWERS array
+			const result = filesize(hugeNumber, { base: 2 });
+			assert.ok(result.includes("YiB"));
+		});
+
+		it("should handle precision with numbers exceeding lookup table", () => {
+			const hugeNumber = Math.pow(1000, 12);
+			const result = filesize(hugeNumber, { precision: 2, base: 10 });
+			assert.ok(result.includes("YB"));
+		});
+
+		it("should handle precision with round=0 and scientific notation", () => {
+			// Test case where p === 1 in the precision recalculation branch
+			const result = filesize(1000000000000000000, { precision: 1, round: 0 });
+			assert.ok(typeof result === "string");
+		});
+
+		it("should cover p===1 branch in precision recalculation", () => {
+			// Try to force the p===1 branch in the precision recalculation
+			// This needs a very specific edge case where scientific notation is produced
+			// and after increment e=0 or round=0 makes p=1
+			const result = filesize(0.0001, { precision: 20, round: 0 });
+			assert.ok(typeof result === "string");
+		});
+
+		it("should trigger precision recalculation with bytes and round=0", () => {
+			// Another attempt: very small number that might produce scientific notation in bytes
+			const result = filesize(0.000000000000001, { precision: 30, round: 0 });
+			assert.ok(typeof result === "string");
+		});
+
+		it("should cover p===1 branch with input=1 and extreme precision", () => {
+			// When input=1, e=0, so p=1. High precision might trigger scientific notation
+			// and the recalculation with p===1 branch
+			const result = filesize(1, { precision: 50 });
+			assert.ok(typeof result === "string");
+		});
+
+		it("should attempt to trigger the elusive p===1 branch in recalculation", () => {
+			// Numbers that would produce scientific notation with precision=1
+			// When e=0 (bytes), p=1, and toPrecision(1) might produce "1e+1" etc.
+			const result = filesize(10, { precision: 1, round: 0 });
+			assert.ok(typeof result === "string");
+		});
+
+		it("should handle extremely large numbers with precision adjustment", () => {
+			const extremeNumber = Math.pow(1024, 15); // Much larger than supported exponent
+			const result = filesize(extremeNumber, { precision: 3 });
+			assert(typeof result === "string");
+			assert(result.includes("YB") || result.includes("YiB"));
+		});
+
+		it("should handle bit conversion auto-increment near boundary", () => {
+			// Test edge case where bits conversion causes auto-increment to next unit
+			const result = filesize(127.5, { bits: true }); // Should auto-increment
+			assert(typeof result === "string");
+		});
+
+		it("should handle result equal to ceil boundary for auto-increment", () => {
+			// Test case where result equals ceil and triggers increment
+			const result = filesize(999.5, { round: 0 }); // Should round to 1000 and increment
+			assert(typeof result === "string");
+		});
+
+		it("should handle padding with custom separator edge cases", () => {
+			// Test padding when separator is found via regex
+			const result = filesize(1536, { pad: true, round: 2, locale: "de-DE" });
+			assert(typeof result === "string");
+		});
+
+		it("should handle NaN exponent edge case", () => {
+			const result = filesize(1000, { exponent: NaN });
+			assert.strictEqual(result, "1 kB");
+		});
+
+		it("should handle NaN exponent with precision", () => {
+			// NaN exponent should behave like auto (-1) and allow scientific notation normalization
+			const result = filesize(1e15, { exponent: NaN, precision: 2 });
+			assert(typeof result === "string");
+			assert(!result.includes("e"), "Should not contain scientific notation");
+		});
+
+		it("should handle NaN exponent with auto-increment", () => {
+			// NaN exponent should allow auto-increment when result equals ceil (1024)
+			const result = filesize(1024, { exponent: NaN, standard: "iec" });
+			assert.strictEqual(result, "1 KiB");
+		});
+
+		it("should clamp an out-of-range negative exponent to 0 instead of returning NaN", () => {
+			// Only -1 is the documented "auto" sentinel. Any other negative exponent
+			// indexed the power lookup tables out of bounds and produced "NaN undefined".
+			assert.strictEqual(filesize(1024, { exponent: -2 }), "1024 B");
+			assert.strictEqual(filesize(1024, { exponent: -100 }), "1024 B");
+		});
+
+		it("should clamp a negative exponent to 0 for object output", () => {
+			const result = filesize(1024, { exponent: -3, output: "object" });
+			assert.deepStrictEqual(result, { value: 1024, symbol: "B", exponent: 0, unit: "B" });
+		});
+
+		it("should clamp a negative exponent to 0 for array output", () => {
+			const result = filesize(1024, { exponent: -3, output: "array" });
+			assert.deepStrictEqual(result, [1024, "B"]);
+		});
+	});
+
+	describe("Error handling", () => {
+		it("should throw TypeError for invalid number input", () => {
+			assert.throws(() => filesize("invalid"), TypeError);
+			assert.throws(() => filesize(NaN), TypeError);
+			assert.throws(() => filesize({}), TypeError);
+		});
+
+		it("should throw TypeError for invalid rounding method", () => {
+			assert.throws(() => filesize(1024, { roundingMethod: "invalid" }), TypeError);
+			assert.throws(() => filesize(1024, { roundingMethod: "nonexistent" }), TypeError);
+		});
+	});
+
+	describe("Edge case hardening (issue #343)", () => {
+		describe("Input validation", () => {
+			it("should throw TypeError for overflowing BigInt", () => {
+				assert.throws(() => filesize(BigInt("1" + "0".repeat(400))), TypeError);
+			});
+
+			it("should clamp a non-integer positive exponent", () => {
+				assert.strictEqual(filesize(1000, { exponent: 1.5 }), "1 kB");
+				assert.strictEqual(filesize(1000000, { exponent: 2.9 }), "1 MB");
+			});
+
+			it("should coerce a string exponent to match the number path", () => {
+				assert.strictEqual(filesize(1000, { exponent: "1" }), "1 kB");
+				assert.strictEqual(filesize(1000000, { exponent: "2" }), "1 MB");
+				assert.strictEqual(filesize(1000, { exponent: "0" }), "1000 B");
+			});
+
+			it("should throw TypeError for out-of-range precision", () => {
+				assert.throws(() => filesize(1000, { precision: 101 }), TypeError);
+			});
+
+			it("should throw TypeError for invalid output format", () => {
+				assert.throws(() => filesize(1000, { output: "foo" }), TypeError);
+			});
+
+			it("should throw TypeError for invalid numeric strings", () => {
+				assert.throws(() => filesize("1_000"), TypeError);
+				assert.throws(() => filesize("1000n"), TypeError);
+				assert.throws(() => filesize(undefined), TypeError);
+			});
+		});
+
+		describe("Number coercion", () => {
+			it("should coerce null to zero", () => {
+				assert.strictEqual(filesize(null), "0 B");
+			});
+
+			it("should coerce booleans to their numeric value", () => {
+				assert.strictEqual(filesize(true), "1 B");
+				assert.strictEqual(filesize(false), "0 B");
+			});
+
+			it("should coerce empty and whitespace strings to zero", () => {
+				assert.strictEqual(filesize(""), "0 B");
+				assert.strictEqual(filesize(" "), "0 B");
+			});
+
+			it("should coerce single-element arrays", () => {
+				assert.strictEqual(filesize([1000]), "1 kB");
+			});
+
+			it("should parse hex, binary, and octal literals", () => {
+				assert.strictEqual(filesize("0x1F"), "31 B");
+				assert.strictEqual(filesize("0b101"), "5 B");
+				assert.strictEqual(filesize("0o17"), "15 B");
+			});
+		});
+
+		describe("Sign handling", () => {
+			it("should preserve sign when a negative value rounds to zero", () => {
+				assert.strictEqual(filesize(-0.4), "-0 B");
+				assert.strictEqual(filesize(-0.4, { pad: true, round: 2 }), "-0.00 B");
+				assert.deepStrictEqual(filesize(-0.4, { output: "array" }), ["-0", "B"]);
+			});
+
+			it("should use singular fullform for negative one", () => {
+				assert.strictEqual(filesize(-1, { fullform: true }), "-1 byte");
+				assert.strictEqual(filesize(-1, { fullform: true, precision: 3 }), "-1.00 byte");
+			});
+
+			it("should use plural fullform for negative values other than one", () => {
+				assert.strictEqual(filesize(-2, { fullform: true }), "-2 bytes");
+			});
+
+			it("should not leak scientific notation for extreme values", () => {
+				const result = filesize(Number.MAX_VALUE);
+				assert(!result.includes("e+"), `Result "${result}" contains scientific notation`);
+				assert(!result.includes("e-"), `Result "${result}" contains scientific notation`);
+			});
+
+			it("should not truncate small values when expanding scientific notation", () => {
+				// 1 B in GB rounded to 10 places is 1e-9, which used to collapse to "0".
+				assert.strictEqual(filesize(1, { exponent: 3, round: 10 }), "0.000000001 GB");
+				assert.strictEqual(filesize(5, { exponent: 3, round: 9 }), "0.000000005 GB");
+				assert.strictEqual(filesize(-1, { exponent: 3, round: 10 }), "-0.000000001 GB");
+				assert.strictEqual(filesize(1, { exponent: 3, round: 10, pad: true }), "0.0000000010 GB");
+				assert.deepStrictEqual(filesize(150, { exponent: 3, round: 10, output: "array" }), [
+					"0.00000015",
+					"GB",
+				]);
+			});
+
+			it("should not leak scientific notation with a custom separator", () => {
+				assert.strictEqual(
+					filesize(1, { exponent: 3, round: 10, separator: "," }),
+					"0,000000001 GB",
+				);
+				assert.strictEqual(
+					filesize(1e22, { exponent: 0, separator: "," }),
+					"10000000000000000000000 B",
+				);
+				assert.strictEqual(
+					filesize(1e22, { exponent: 0, separator: ",", pad: true }),
+					"10000000000000000000000,00 B",
+				);
+				const result = filesize(Number.MAX_VALUE, { separator: "," });
+				assert(!result.includes("e+"), `Result "${result}" contains scientific notation`);
+			});
+		});
+
+		describe("Option precedence", () => {
+			it("should let standard win over base", () => {
+				assert.strictEqual(filesize(1024, { standard: "iec", base: 10 }), "1 KiB");
+				assert.strictEqual(filesize(1024, { standard: "si", base: 2 }), "1.02 kB");
+			});
+
+			it("should let fullform win over symbols", () => {
+				assert.strictEqual(
+					filesize(1000, { symbols: { kB: "kilobyte" }, fullform: true }),
+					"1 kilobyte",
+				);
+			});
+
+			it("should let locale win over separator", () => {
+				assert.strictEqual(filesize(1536, { locale: "de-DE", separator: "_" }), "1,54 kB");
+			});
+
+			it("should fall back to default fullform when fullforms[e] is missing", () => {
+				assert.strictEqual(
+					filesize(1000000, { fullform: true, fullforms: ["custom"] }),
+					"1 megabyte",
+				);
+			});
+		});
+
+		describe("Rounding and precision edge cases", () => {
+			it("should treat negative round as zero", () => {
+				assert.strictEqual(filesize(1536, { round: -1 }), "2 kB");
+				assert.strictEqual(filesize(1536, { round: -1, pad: true }), "2 kB");
+			});
+
+			it("should auto-increment when rounding reaches the ceiling", () => {
+				assert.strictEqual(filesize(999.5, { round: 0 }), "1 kB");
+				assert.strictEqual(filesize(999.999, { round: 2 }), "1 kB");
+			});
+
+			it("should floor non-integer precision", () => {
+				assert.strictEqual(filesize(1000, { precision: 2.5 }), "1.0 kB");
+			});
+
+			it("should round sub-byte values", () => {
+				assert.strictEqual(filesize(0.4), "0 B");
+				assert.strictEqual(filesize(0.5), "1 B");
+				assert.strictEqual(filesize(1.4), "1 B");
+				assert.strictEqual(filesize(1.5), "2 B");
+			});
+		});
+
+		describe("Bits auto-increment boundary", () => {
+			it("should auto-increment at the bits boundary", () => {
+				assert.strictEqual(filesize(125, { bits: true }), "1 kbit");
+				assert.strictEqual(filesize(124, { bits: true }), "992 bit");
+			});
+
+			it("should not auto-increment when exponent is forced", () => {
+				assert.strictEqual(filesize(125, { bits: true, exponent: 0 }), "1000 bit");
+				assert.strictEqual(filesize(124, { bits: true, exponent: 0 }), "992 bit");
+			});
+		});
+
+		describe("Precision value type in output", () => {
+			it("should return string value in array output with precision", () => {
+				const result = filesize(1234567890, { precision: 2, output: "array" });
+				assert.deepStrictEqual(result, ["1.2", "GB"]);
+			});
+
+			it("should return string value in object output with precision", () => {
+				const result = filesize(1234567890, { precision: 2, output: "object" });
+				assert.strictEqual(result.value, "1.2");
+				assert.strictEqual(result.symbol, "GB");
+			});
+		});
+
+		describe("Custom fullforms with bits", () => {
+			it("should use default when fullforms[0] is empty", () => {
+				assert.strictEqual(
+					filesize(0.125, { bits: true, fullform: true, fullforms: ["", "custom-bit"] }),
+					"1 bit",
+				);
+			});
+
+			it("should apply custom fullform for bits", () => {
+				assert.strictEqual(
+					filesize(1024, { bits: true, fullform: true, fullforms: ["", "customkbit"] }),
+					"8.19 customkbit",
+				);
+			});
+		});
+
+		describe("Negative values with bits and fullform", () => {
+			it("should handle negative bits", () => {
+				assert.strictEqual(filesize(-1000, { bits: true }), "-8 kbit");
+			});
+
+			it("should handle negative fullform bits", () => {
+				assert.strictEqual(filesize(-1000, { fullform: true, bits: true }), "-8 kilobits");
+			});
+		});
+
+		describe("Locale and localeOptions", () => {
+			it("should ignore localeOptions when locale is true", () => {
+				assert.strictEqual(
+					filesize(1536, { locale: true, localeOptions: { maximumFractionDigits: 1 } }),
+					"1.54 kB",
+				);
+			});
+
+			it("should merge localeOptions with locale", () => {
+				assert.strictEqual(
+					filesize(1536, {
+						locale: "de-DE",
+						localeOptions: { useGrouping: false },
+						pad: true,
+						round: 2,
+					}),
+					"1,54 kB",
+				);
+			});
+		});
+
+		describe("Symbol resolution", () => {
+			it("should handle empty symbols object", () => {
+				assert.strictEqual(filesize(1000, { symbols: {} }), "1 kB");
+			});
+
+			it("should ignore non-matching symbol keys", () => {
+				assert.strictEqual(filesize(1000, { symbols: { MB: "megabyte" } }), "1 kB");
+			});
+		});
+
+		describe("Spacer edge cases", () => {
+			it("should support multi-character spacers", () => {
+				assert.strictEqual(filesize(1000, { spacer: " - " }), "1 - kB");
+			});
+
+			it("should ignore spacer for array output", () => {
+				assert.deepStrictEqual(filesize(1000, { spacer: "", output: "array" }), [1, "kB"]);
+			});
+		});
+	});
+
+	describe("Input type handling", () => {
+		describe("Number input", () => {
+			describe("filesize() with number input", () => {
+				it("should handle integer numbers", () => {
+					assert.strictEqual(filesize(1024), "1.02 kB");
+					assert.strictEqual(filesize(0), "0 B");
+					assert.strictEqual(filesize(-1024), "-1.02 kB");
+				});
+
+				it("should handle floating point numbers", () => {
+					assert.strictEqual(filesize(1536.5), "1.54 kB");
+					assert.strictEqual(filesize(0.5), "1 B");
+				});
+
+				it("should handle very large numbers", () => {
+					const largeNumber = Number.MAX_SAFE_INTEGER;
+					const result = filesize(largeNumber);
+					assert(typeof result === "string");
+				});
+			});
+
+			describe("partial() with number input", () => {
+				it("should handle integer numbers", () => {
+					const formatIEC = partial({ standard: "iec" });
+					assert.strictEqual(formatIEC(1024), "1 KiB");
+					assert.strictEqual(formatIEC(0), "0 B");
+					assert.strictEqual(formatIEC(-1024), "-1 KiB");
+				});
+
+				it("should handle floating point numbers", () => {
+					const formatRounded = partial({ round: 1 });
+					assert.strictEqual(formatRounded(1536.7), "1.5 kB");
+					assert.strictEqual(formatRounded(0.5), "1 B");
+				});
+
+				it("should handle very large numbers", () => {
+					const formatBits = partial({ bits: true });
+					const largeNumber = Number.MAX_SAFE_INTEGER;
+					const result = formatBits(largeNumber);
+					assert(typeof result === "string");
+				});
+			});
+		});
+
+		describe("String input", () => {
+			describe("filesize() with string input", () => {
+				it("should handle valid integer string", () => {
+					assert.strictEqual(filesize("1024"), "1.02 kB");
+					assert.strictEqual(filesize("0"), "0 B");
+					assert.strictEqual(filesize("-1024"), "-1.02 kB");
+				});
+
+				it("should handle valid float string", () => {
+					assert.strictEqual(filesize("1536.5"), "1.54 kB");
+					assert.strictEqual(filesize("0.5"), "1 B");
+				});
+
+				it("should handle scientific notation string", () => {
+					assert.strictEqual(filesize("1e3"), "1 kB");
+					assert.strictEqual(filesize("1.024e3"), "1.02 kB");
+				});
+
+				it("should handle string with leading/trailing whitespace", () => {
+					assert.strictEqual(filesize(" 1024 "), "1.02 kB");
+					assert.strictEqual(filesize("\t1024\n"), "1.02 kB");
+				});
+
+				it("should work with string input and different options", () => {
+					assert.strictEqual(filesize("1024", { standard: "iec" }), "1 KiB");
+					assert.strictEqual(filesize("1000", { bits: true }), "8 kbit");
+					assert.strictEqual(filesize("1024", { output: "array" })[0], 1.02);
+				});
+			});
+
+			describe("partial() with string input", () => {
+				it("should handle valid integer string", () => {
+					const formatJEDEC = partial({ standard: "jedec" });
+					assert.strictEqual(formatJEDEC("1024"), "1 KB");
+					assert.strictEqual(formatJEDEC("0"), "0 B");
+					assert.strictEqual(formatJEDEC("-1024"), "-1 KB");
+				});
+
+				it("should handle valid float string", () => {
+					const formatPadded = partial({ pad: true, round: 2 });
+					assert.strictEqual(formatPadded("1536.5"), "1.54 kB");
+					assert.strictEqual(formatPadded("0.5"), "1.00 B");
+				});
+
+				it("should handle scientific notation string", () => {
+					const formatBits = partial({ bits: true });
+					assert.strictEqual(formatBits("1e3"), "8 kbit");
+					assert.strictEqual(formatBits("1.024e3"), "8.19 kbit");
+				});
+
+				it("should handle string with leading/trailing whitespace", () => {
+					const formatFullForm = partial({ fullform: true, standard: "iec" });
+					assert.strictEqual(formatFullForm(" 1024 "), "1 kibibyte");
+					assert.strictEqual(formatFullForm("\t2048\n"), "2 kibibytes");
+				});
+
+				it("should work with string input and complex options", () => {
+					const formatComplex = partial({
+						standard: "si",
+						round: 1,
+						spacer: "_",
+						output: "array",
+					});
+					const result = formatComplex("1000");
+					assert(Array.isArray(result));
+					assert.strictEqual(result[0], 1);
+					assert.strictEqual(result[1], "kB");
+				});
+			});
+		});
+
+		describe("BigInt input", () => {
+			describe("filesize() with BigInt input", () => {
+				it("should handle regular BigInt values", () => {
+					assert.strictEqual(filesize(BigInt(1024)), "1.02 kB");
+					assert.strictEqual(filesize(BigInt(0)), "0 B");
+					assert.strictEqual(filesize(BigInt(-1024)), "-1.02 kB");
+				});
+
+				it("should handle large BigInt values", () => {
+					const largeBigInt = BigInt("9007199254740992"); // 2^53
+					const result = filesize(largeBigInt);
+					assert(typeof result === "string");
+					assert(result.includes("PB") || result.includes("PiB"));
+				});
+
+				it("should handle very large BigInt values", () => {
+					const veryLargeBigInt = BigInt("1208925819614629174706176"); // 1024^8
+					const result = filesize(veryLargeBigInt);
+					assert(typeof result === "string");
+					assert(result.includes("YB") || result.includes("YiB"));
+				});
+
+				it("should work with BigInt input and different options", () => {
+					assert.strictEqual(filesize(BigInt(1024), { standard: "jedec" }), "1 KB");
+					assert.strictEqual(filesize(BigInt(1000), { bits: true }), "8 kbit");
+
+					const objectResult = filesize(BigInt(1024), { output: "object" });
+					assert.strictEqual(objectResult.value, 1.02);
+					assert.strictEqual(objectResult.symbol, "kB");
+				});
+			});
+
+			describe("partial() with BigInt input", () => {
+				it("should handle regular BigInt values", () => {
+					const formatCustomSymbols = partial({ symbols: { KiB: "kibibyte" }, standard: "iec" });
+					assert.strictEqual(formatCustomSymbols(BigInt(1024)), "1 kibibyte");
+					assert.strictEqual(formatCustomSymbols(BigInt(0)), "0 B");
+					assert.strictEqual(formatCustomSymbols(BigInt(-1024)), "-1 kibibyte");
+				});
+
+				it("should handle large BigInt values", () => {
+					const formatPrecision = partial({ precision: 3 });
+					const largeBigInt = BigInt("9007199254740992"); // 2^53
+					const result = formatPrecision(largeBigInt);
+					assert(typeof result === "string");
+					assert(result.includes("PB") || result.includes("PiB"));
+				});
+
+				it("should handle very large BigInt values", () => {
+					const formatExponent = partial({ exponent: -1 }); // Auto-select exponent
+					const veryLargeBigInt = BigInt("1208925819614629174706176"); // 1024^8
+					const result = formatExponent(veryLargeBigInt);
+					assert(typeof result === "string");
+					assert(result.includes("YB") || result.includes("YiB"));
+				});
+
+				it("should work with BigInt input and different output formats", () => {
+					const formatObject = partial({ output: "object", standard: "iec" });
+					const objectResult = formatObject(BigInt(1024));
+					assert.strictEqual(typeof objectResult, "object");
+					assert.strictEqual(objectResult.value, 1);
+					assert.strictEqual(objectResult.symbol, "KiB");
+
+					const formatExponentOnly = partial({ output: "exponent" });
+					const exponentResult = formatExponentOnly(BigInt(1024));
+					assert.strictEqual(typeof exponentResult, "number");
+					assert.strictEqual(exponentResult, 1);
+				});
+
+				it("should work with BigInt input and bits option", () => {
+					const formatBits = partial({ bits: true, round: 1 });
+					assert.strictEqual(formatBits(BigInt(1024)), "8.2 kbit");
+					assert.strictEqual(formatBits(BigInt(1000)), "8 kbit");
+				});
+
+				it("should work with BigInt input and locale formatting", () => {
+					const formatLocale = partial({ locale: "en-US", round: 2 });
+					const result = formatLocale(BigInt(1536));
+					assert(typeof result === "string");
+					assert(result.includes("1.5") || result.includes("1.54"));
+				});
+			});
+		});
+	});
+
+	describe("BigInt precision (issue #354)", () => {
+		it("should preserve precision above Number.MAX_SAFE_INTEGER", () => {
+			const base = filesize(2n ** 53n, { round: 15 });
+			const incremented = filesize(2n ** 53n + 1n, { round: 15 });
+			assert.notStrictEqual(base, incremented);
+		});
+
+		it("should produce distinct values for 2^53 and 2^53+1", () => {
+			const base = filesize(2n ** 53n, { round: 15, output: "object" });
+			const incremented = filesize(2n ** 53n + 1n, { round: 15, output: "object" });
+			assert.notStrictEqual(base.value, incremented.value);
+		});
+
+		it("should detect SI unit boundaries accurately", () => {
+			const result = filesize(10n ** 24n - 10n ** 21n, { output: "object" });
+			assert.strictEqual(result.exponent, 7);
+			assert.strictEqual(result.symbol, "ZB");
+		});
+
+		it("should detect IEC unit boundaries accurately", () => {
+			const result = filesize(1024n ** 8n - 1024n ** 7n, { standard: "iec", output: "object" });
+			assert.strictEqual(result.exponent, 7);
+			assert.strictEqual(result.symbol, "ZiB");
+		});
+
+		it("should clamp values above the unit ceiling to exponent 8", () => {
+			const result = filesize(10n ** 30n, { output: "object" });
+			assert.strictEqual(result.exponent, 8);
+			assert.strictEqual(result.symbol, "YB");
+		});
+
+		it("should handle BigInt with bits option", () => {
+			const result = filesize(1024n, { bits: true, round: 2 });
+			assert.strictEqual(result, "8.19 kbit");
+		});
+
+		it("should clamp a forced exponent below -1 to 0 for BigInt", () => {
+			const result = filesize(1024n, { exponent: -2, output: "object" });
+			assert.strictEqual(result.exponent, 0);
+			assert.strictEqual(result.symbol, "B");
+		});
+
+		it("should clamp a forced exponent above 8 to 8 for BigInt", () => {
+			const result = filesize(1024n, { exponent: 10, output: "object" });
+			assert.strictEqual(result.exponent, 8);
+			assert.strictEqual(result.symbol, "YB");
+		});
+
+		it("should auto-increment the exponent for BigInt bits", () => {
+			const result = filesize(125000n, { bits: true, output: "object" });
+			assert.strictEqual(result.exponent, 2);
+			assert.strictEqual(result.symbol, "Mbit");
+		});
+
+		it("should coerce a string exponent for BigInt", () => {
+			const result = filesize(1024n, { exponent: "1" });
+			assert.strictEqual(result, "1.02 kB");
+		});
+
+		it("should adjust precision when clamping a forced exponent above 8 for BigInt", () => {
+			const result = filesize(1024n, { exponent: 10, precision: 3, output: "object" });
+			assert.strictEqual(result.exponent, 8);
+			assert.strictEqual(result.symbol, "YB");
+		});
+
+		it("should not auto-increment BigInt bits when exponent is already 8", () => {
+			const result = filesize(10n ** 30n, { bits: true, output: "object" });
+			assert.strictEqual(result.exponent, 8);
+			assert.strictEqual(result.symbol, "Ybit");
+		});
+	});
+});
+
+describe("partial", () => {
+	describe("Basic functionality", () => {
+		it("should create a function with preset options", () => {
+			const formatKiB = partial({ standard: "iec" });
+			assert.strictEqual(typeof formatKiB, "function");
+			assert.strictEqual(formatKiB(1024), "1 KiB");
+		});
+
+		it("should preserve all options in partial application", () => {
+			const formatWithOptions = partial({
+				round: 1,
+				standard: "iec",
+				spacer: "_",
+			});
+			assert.strictEqual(formatWithOptions(1536), "1.5_KiB");
+		});
+	});
+
+	describe("Options inheritance", () => {
+		it("should apply bits option from partial", () => {
+			const formatBits = partial({ bits: true });
+			assert.strictEqual(formatBits(1000), "8 kbit");
+		});
+
+		it("should apply pad option from partial", () => {
+			const formatPadded = partial({ pad: true, round: 2 });
+			assert.strictEqual(formatPadded(1000), "1.00 kB");
+		});
+
+		it("should apply output format from partial", () => {
+			const formatArray = partial({ output: "array" });
+			const result = formatArray(1000);
+			assert(Array.isArray(result));
+			assert.strictEqual(result[0], 1);
+			assert.strictEqual(result[1], "kB");
+		});
+
+		it("should apply custom symbols from partial", () => {
+			const formatCustom = partial({ symbols: { kB: "kilobyte" } });
+			assert.strictEqual(formatCustom(1000), "1 kilobyte");
+		});
+	});
+
+	describe("Multiple partial functions", () => {
+		it("should create independent partial functions", () => {
+			const formatIEC = partial({ standard: "iec" });
+			const formatJEDEC = partial({ standard: "jedec" });
+
+			assert.strictEqual(formatIEC(1024), "1 KiB");
+			assert.strictEqual(formatJEDEC(1024), "1 KB");
+		});
+
+		it("should handle complex option combinations", () => {
+			const formatComplex = partial({
+				bits: true,
+				standard: "iec",
+				round: 1,
+				fullform: true,
+			});
+			assert.strictEqual(formatComplex(1024), "8 kibibits");
+		});
+	});
+
+	describe("Precision with partial", () => {
+		it("should apply precision option from partial", () => {
+			const formatPrecision = partial({ precision: 2 });
+			assert.strictEqual(formatPrecision(1234567890), "1.2 GB");
+			assert.strictEqual(formatPrecision(9876543210), "9.9 GB");
+		});
+
+		it("should remove scientific notation in partial functions", () => {
+			const formatWithPrecision = partial({ precision: 3 });
+			const largeNum = 1234567890123;
+			const result = formatWithPrecision(largeNum);
+			assert(!result.includes("e"));
+			assert(!result.includes("E"));
+			assert.strictEqual(result, "1.23 TB");
+		});
+
+		it("should work with precision and other options combined", () => {
+			const formatComplex = partial({
+				precision: 2,
+				standard: "iec",
+				bits: true,
+			});
+			const result = formatComplex(1234567890);
+			assert(!result.includes("e"));
+			assert(!result.includes("E"));
+			assert.strictEqual(result, "9.2 Gibit");
+		});
+	});
+
+	describe("Default behavior", () => {
+		it("should work with no options provided", () => {
+			const defaultFormat = partial();
+			assert.strictEqual(typeof defaultFormat, "function");
+			assert.strictEqual(defaultFormat(1000), "1 kB");
+		});
+
+		it("should work with empty options object", () => {
+			const emptyOptions = partial({});
+			assert.strictEqual(emptyOptions(1000), "1 kB");
+		});
+	});
+
+	describe("Immutability", () => {
+		it("should not be affected by mutations to top-level primitive options", () => {
+			const opts = { standard: "iec", round: 1 };
+			const format = partial(opts);
+
+			// First call should work normally
+			assert.strictEqual(format(1536), "1.5 KiB");
+
+			// Mutate the original options object
+			opts.standard = "jedec";
+			opts.round = 0;
+
+			// The partial function should still use the destructured primitive values
+			assert.strictEqual(format(1536), "1.5 KiB");
+		});
+
+		it("should not affect other partial functions when modifying one", () => {
+			const format1 = partial({ symbols: { kB: "first_kB" } });
+			const format2 = partial({ symbols: { kB: "second_kB" } });
+
+			// Both should work independently
+			assert.strictEqual(format1(1000), "1 first_kB");
+			assert.strictEqual(format2(1000), "1 second_kB");
+		});
+
+		it("should not be affected by mutations to localeOptions reference", () => {
+			const opts = { localeOptions: { useGrouping: true } };
+			const format = partial(opts);
+
+			assert.strictEqual(typeof format(1234567), "string");
+
+			opts.localeOptions.useGrouping = false;
+			assert.strictEqual(typeof format(1234567), "string");
+		});
+
+		it("should not be affected by mutations to symbols reference", () => {
+			const opts = { symbols: { kB: "original_kB" } };
+			const format = partial(opts);
+
+			assert.strictEqual(format(1000), "1 original_kB");
+
+			opts.symbols.kB = "mutated_kB";
+			assert.strictEqual(format(1000), "1 original_kB");
+		});
+
+		it("should not be affected by mutations to fullforms reference", () => {
+			const opts = { fullforms: ["custom"], fullform: true };
+			const format = partial(opts);
+
+			assert.strictEqual(format(1), "1 custom");
+
+			opts.fullforms[0] = "mutated";
+			assert.strictEqual(format(1), "1 custom");
+		});
+	});
+});
+
+describe("partial structuredClone", () => {
+	it("should use structuredClone when available for localeOptions", () => {
+		const opts = { localeOptions: { minimumFractionDigits: 2 } };
+		const format = partial(opts);
+		const result = format(1234.5);
+		assert(typeof result === "string");
+		// Mutate original - should not affect partial
+		opts.localeOptions.minimumFractionDigits = 5;
+		const result2 = format(1234.5);
+		assert(typeof result2 === "string");
+	});
+
+	it("should use structuredClone when available for symbols", () => {
+		const opts = { symbols: { kB: "custom_kB" } };
+		const format = partial(opts);
+		assert.strictEqual(format(1000), "1 custom_kB");
+		opts.symbols.kB = "mutated_kB";
+		assert.strictEqual(format(1000), "1 custom_kB");
+	});
+
+	it("should use structuredClone when available for fullforms", () => {
+		const opts = { fullforms: ["my_byte"], fullform: true };
+		const format = partial(opts);
+		assert.strictEqual(format(1), "1 my_byte");
+		opts.fullforms[0] = "mutated";
+		assert.strictEqual(format(1), "1 my_byte");
+	});
+
+	it("should maintain deep independence between partial instances", () => {
+		const opts1 = { symbols: { kB: "first" } };
+		const opts2 = { symbols: { kB: "second" } };
+		const format1 = partial(opts1);
+		const format2 = partial(opts2);
+		assert.strictEqual(format1(1000), "1 first");
+		assert.strictEqual(format2(1000), "1 second");
+		opts1.symbols.kB = "mutated_first";
+		opts2.symbols.kB = "mutated_second";
+		assert.strictEqual(format1(1000), "1 first");
+		assert.strictEqual(format2(1000), "1 second");
+	});
+});

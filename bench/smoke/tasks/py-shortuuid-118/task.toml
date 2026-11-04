@@ -1,0 +1,37 @@
+id = "py-shortuuid-118"
+lang = "python"
+license = "BSD-3-Clause"
+source = { git = "https://github.com/skorokithakis/shortuuid.git", commit = "d937de837e79dbb4d154e7bdc5cb496cc0160bbb", gold = "75a7803c3633d36eb2486e2168bb3df237a6cd43" }
+upstream = { repo = "skorokithakis/shortuuid", pr = "https://github.com/skorokithakis/shortuuid/pull/118", issue = "" }
+files = ["uv.lock"]
+setup = "UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12 && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.2.0)"
+test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" shortuuid/test_shortuuid.py"
+fail_to_pass = [
+  "shortuuid/test_shortuuid.py::test_encoded_length_power_of_two_alphabets",
+]
+pass_to_pass = [
+  "shortuuid.test_shortuuid.ClassShortUUIDTest::test_alphabet",
+  "shortuuid.test_shortuuid.ClassShortUUIDTest::test_decoding",
+  "shortuuid.test_shortuuid.ClassShortUUIDTest::test_encoding",
+  "shortuuid.test_shortuuid.ClassShortUUIDTest::test_generation",
+  "shortuuid.test_shortuuid.ClassShortUUIDTest::test_random",
+  "shortuuid.test_shortuuid.DecodingEdgeCasesTest::test_decode_dict",
+  "shortuuid.test_shortuuid.EncodingEdgeCasesTest::test_decode_dict",
+  "shortuuid.test_shortuuid.LegacyShortUUIDTest::test_alphabet",
+  "shortuuid.test_shortuuid.LegacyShortUUIDTest::test_decoding",
+  "shortuuid.test_shortuuid.LegacyShortUUIDTest::test_encoding",
+  "shortuuid.test_shortuuid.LegacyShortUUIDTest::test_generation",
+  "shortuuid.test_shortuuid.LegacyShortUUIDTest::test_random",
+  "shortuuid.test_shortuuid.ShortUUIDPaddingTest::test_decoding",
+  "shortuuid/test_shortuuid.py::test_consistency",
+  "shortuuid/test_shortuuid.py::test_decode_command",
+  "shortuuid/test_shortuuid.py::test_decode_invalid_characters",
+  "shortuuid/test_shortuuid.py::test_encode_command",
+  "shortuuid/test_shortuuid.py::test_encoded_length",
+  "shortuuid/test_shortuuid.py::test_padding",
+  "shortuuid/test_shortuuid.py::test_shortuuid_command_produces_uuid",
+  "shortuuid/test_shortuuid.py::test_string_to_int_ignores_alphabet_when_index_given",
+  "shortuuid/test_shortuuid.py::test_unsorted_alphabet",
+]
+timeout_s = 1800
+tags = ["python"]

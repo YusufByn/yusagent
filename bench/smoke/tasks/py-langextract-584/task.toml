@@ -1,0 +1,39 @@
+id = "py-langextract-584"
+lang = "python"
+license = "Apache-2.0"
+source = { git = "https://github.com/google/langextract.git", commit = "cebb3234f22a67115085187c7872431c7101e828", gold = "5a8490b16d16033319e3acf5514f2eefc99514ad" }
+upstream = { repo = "google/langextract", pr = "https://github.com/google/langextract/pull/584", issue = "https://github.com/google/langextract/issues/574" }
+files = ["uv.lock"]
+setup = "UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12 && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.2.0)"
+test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" tests/data_lib_test.py"
+fail_to_pass = [
+  "tests/data_lib_test.py::test_extractions_survive_dict_round_trip_none",
+  "tests/data_lib_test.py::test_none_extractions_survive_jsonl_round_trip",
+]
+pass_to_pass = [
+  "tests/data_lib_test.py::test_accepts_none_context",
+  "tests/data_lib_test.py::test_annotated_document_to_dict_extraction_with_attributes_and_token_interval",
+  "tests/data_lib_test.py::test_annotated_document_to_dict_multiple_extractions_with_token_interval",
+  "tests/data_lib_test.py::test_annotated_document_to_dict_single_extraction_no_token_interval",
+  "tests/data_lib_test.py::test_annotated_document_to_dict_with_int64",
+  "tests/data_lib_test.py::test_does_not_mutate_input",
+  "tests/data_lib_test.py::test_does_not_mutate_original_context_or_tokenization",
+  "tests/data_lib_test.py::test_extractions_survive_dict_round_trip_empty_list",
+  "tests/data_lib_test.py::test_extractions_survive_dict_round_trip_one_extraction",
+  "tests/data_lib_test.py::test_generates_shared_document_id_when_unset",
+  "tests/data_lib_test.py::test_invalid_urls_no_scheme",
+  "tests/data_lib_test.py::test_invalid_urls_with_text",
+  "tests/data_lib_test.py::test_missing_extractions_key_loads_as_empty_list",
+  "tests/data_lib_test.py::test_preserves_both_explicit_id_and_cached_tokenization",
+  "tests/data_lib_test.py::test_preserves_cached_tokenization",
+  "tests/data_lib_test.py::test_preserves_explicit_document_id",
+  "tests/data_lib_test.py::test_repeated_call_restores_field_alignment_status",
+  "tests/data_lib_test.py::test_repeated_call_restores_field_attributes",
+  "tests/data_lib_test.py::test_repeated_call_restores_field_char_interval",
+  "tests/data_lib_test.py::test_repeated_call_restores_field_token_interval",
+  "tests/data_lib_test.py::test_result_does_not_share_attributes_with_input",
+  "tests/data_lib_test.py::test_returns_new_document_with_overridden_context",
+  "tests/data_lib_test.py::test_valid_urls",
+]
+timeout_s = 1800
+tags = ["python"]

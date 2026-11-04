@@ -1,0 +1,13 @@
+Plusieurs défauts indépendants, chacun observable isolément. Les fonctions nommées ci-dessous doivent être exportées par le module de l'extension ou du script concerné, car d'autres modules et des tests les importent.
+
+1. **Sous-agents qui ne s'arrêtent pas.** Un sous-agent qui ignore `SIGTERM` n'est jamais tué de force : le délai de garde envoie `SIGTERM`, puis l'escalade vers `SIGKILL` n'a jamais lieu, et le processus reste orphelin. Attendu : l'extension `subagent` exporte `scheduleForceKill(proc, hasExited, delayMs)`, qui envoie `SIGKILL` à `proc` après `delayMs` si `hasExited()` renvoie encore `false`, et ne fait rien si le processus est déjà sorti. La garde des sous-agents l'utilise.
+
+2. **Sauvegarde avant édition inactive.** L'extension `checkpoint` ne sauvegarde rien dans `~/.little-coder/checkpoints/` quand l'outil d'écriture ou d'édition passe le fichier dans la clé `path`, la forme utilisée aujourd'hui ; seule la clé historique `file_path` déclenche la sauvegarde. Attendu : l'extension exporte `checkpointPath(input)`, qui renvoie `input.path` s'il s'agit d'une chaîne, sinon `input.file_path` s'il s'agit d'une chaîne, sinon `undefined`, et la sauvegarde se déclenche pour les deux clés.
+
+3. **Appel d'outil perdu.** Quand un appel d'outil JSON imbriqué (`{"name": ..., "input": {...}}`) est suivi de texte contenant une accolade, la réparation du JSON renvoie le fragment intérieur `input` (sans `name`) et l'appel est ignoré. Une accolade à l'intérieur d'une chaîne pose le même problème. Attendu : l'extension `output-parser` exporte `firstBalancedObject(text)`, qui renvoie le premier objet JSON complet et équilibré (l'objet extérieur, accolades des chaînes ignorées) ou `null` s'il n'y en a pas, et la réparation garde l'appel complet.
+
+4. **Version de mise à jour non validée.** Le script de vérification de mise à jour accepte n'importe quelle chaîne comme dernière version publiée. Attendu : il exporte `isSemver(value)`, vrai seulement pour une version `X.Y.Z` avec prérelease facultative (`1.14.0`, `2.3.4-rc.1`, `2.3.4-rc-1`), faux pour `1.0`, `latest`, une chaîne contenant des caractères de shell ou un saut de ligne, et une valeur qui n'est pas une chaîne ; une version invalide est refusée.
+
+5. **Comparaison de prérelease tronquée.** `compareSemver("1.0.0-rc-2", "1.0.0-rc-1")` renvoie 0 : la partie de prérelease est coupée au deuxième tiret. Attendu : 1 (et -1 dans l'autre sens), sans changer les autres comparaisons.
+
+6. **Score de connaissance non testable.** Le test de l'extension `knowledge-inject` vérifie une copie de la fonction de score, pas la vraie. Attendu : l'extension exporte `scoreEntry` et `MIN_SCORE_THRESHOLD`, utilisés par l'extension elle-même.

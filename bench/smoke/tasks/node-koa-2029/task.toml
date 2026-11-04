@@ -1,0 +1,21 @@
+id = "node-koa-2029"
+lang = "node"
+license = "MIT"
+source = { git = "https://github.com/koajs/koa.git", commit = "f2ec5f1607cda5dc87d0df6c435b386180b1b45e", gold = "e812c8da176f4b405c4c3eb40f6b6394919155e7" }
+upstream = { repo = "koajs/koa", pr = "https://github.com/koajs/koa/pull/2029", issue = "https://github.com/koajs/koa/issues/2028" }
+files = []
+setup = "npm ci --ignore-scripts --no-audit --no-fund --loglevel=error"
+test = "node --test --test-reporter=junit --test-reporter-destination=\"$SMOKE_JUNIT\" __tests__/request/protocol.test.js"
+fail_to_pass = [
+  "__tests__/request/protocol.test.js::should lowercase \"HTTPS, http\"",
+  "__tests__/request/protocol.test.js::should lowercase \"Https, http\"",
+]
+pass_to_pass = [
+  "__tests__/request/protocol.test.js::should be used",
+  "__tests__/request/protocol.test.js::should not be used",
+  "__tests__/request/protocol.test.js::should return \"https\"",
+  "req.protocol.when X-Forwarded-Proto is set.and proxy is trusted.and X-Forwarded-Proto is empty::should return \"http\"",
+  "req.protocol.when unencrypted::should return \"http\"",
+]
+timeout_s = 1800
+tags = ["node"]

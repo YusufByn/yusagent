@@ -1,0 +1,77 @@
+id = "node-testsprite-356"
+lang = "node"
+license = "Apache-2.0"
+source = { git = "https://github.com/TestSprite/testsprite-cli.git", commit = "d95105a76f05a96e841c16f31afbd86b3caf5193", gold = "988c0355bb05631e9c6c1785e443937ff2a88c0e" }
+upstream = { repo = "TestSprite/testsprite-cli", pr = "https://github.com/TestSprite/testsprite-cli/pull/356", issue = "https://github.com/TestSprite/testsprite-cli/issues/304" }
+files = []
+setup = "npm ci --ignore-scripts --no-audit --no-fund --loglevel=error"
+test = "./node_modules/.bin/vitest run --reporter=junit --outputFile=\"$SMOKE_JUNIT\" src/commands/doctor.test.ts src/lib/credentials.test.ts"
+fail_to_pass = [
+  "src/commands/doctor.test.ts::runDoctor — failing checks exit non-zero > a real unreadable file does not leak EACCES into the Connectivity or Local tunnel checks",
+  "src/commands/doctor.test.ts::runDoctor — failing checks exit non-zero > unreadable credentials file (EPERM) reports the repair path and fails",
+  "src/commands/doctor.test.ts::runDoctor — failing checks exit non-zero > unreadable credentials file with TESTSPRITE_API_KEY set degrades to a warning",
+  "src/lib/credentials.test.ts::ensureRestrictiveMode > tightens the Windows ACL with icacls using /reset then /inheritance:r /grant:r *S-1-3-4:F",
+  "src/lib/credentials.test.ts::ensureRestrictiveMode > warns on Windows when /reset succeeds but /grant:r exits non-zero",
+  "src/lib/credentials.test.ts::ensureRestrictiveMode > warns on Windows when /reset succeeds but /grant:r fails with an error",
+  "src/lib/credentials.test.ts::ensureRestrictiveMode > warns on Windows when icacls /reset exits non-zero",
+  "src/lib/credentials.test.ts::ensureRestrictiveMode > warns on Windows when icacls /reset fails with an error",
+  "src/lib/credentials.test.ts::ensureRestrictiveMode > writes the ACL warning to stderr by default, without an injected warn sink",
+]
+pass_to_pass = [
+  "src/commands/doctor.test.ts::createDoctorCommand wiring > --help describes the diagnostic",
+  "src/commands/doctor.test.ts::createDoctorCommand wiring > accepts valid --output modes through command wiring",
+  "src/commands/doctor.test.ts::createDoctorCommand wiring > exposes the doctor command name",
+  "src/commands/doctor.test.ts::createDoctorCommand wiring > rejects invalid --output with the shared VALIDATION_ERROR",
+  "src/commands/doctor.test.ts::runDoctor — failing checks exit non-zero > a non-auth /me error is reported as a Connectivity failure with its code",
+  "src/commands/doctor.test.ts::runDoctor — failing checks exit non-zero > an excluded in-range Node runtime fails the Node.js check",
+  "src/commands/doctor.test.ts::runDoctor — failing checks exit non-zero > invalid endpoint URL fails the API endpoint check",
+  "src/commands/doctor.test.ts::runDoctor — failing checks exit non-zero > missing API key fails Credentials and throws CLIError (exit 1)",
+  "src/commands/doctor.test.ts::runDoctor — failing checks exit non-zero > rejected API key surfaces as a Connectivity failure",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > adds Organizations and Org binding checks when /me reports them",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > adds a Routing check (v3) and the gap advisory when /me reports v3Enabled",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > emits a machine-readable report under --output json without leaking the API key",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > never prints the API key anywhere in the report",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > omits Organizations and Org binding checks when /me does not report them (older backend)",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > omits the Routing check when /me does not report v3Enabled",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > returns an all-passing report and does not throw",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > sends no X-CLI-Command header on either of its checks",
+  "src/commands/doctor.test.ts::runDoctor — healthy environment > shows Routing v2 and no advisory when v3Enabled is false",
+  "src/commands/doctor.test.ts::runDoctor — warnings do not fail > --dry-run skips connectivity and never calls fetch, missing key is a warning",
+  "src/commands/doctor.test.ts::runDoctor — warnings do not fail > missing verify skill is a warning, not a failure",
+  "src/lib/credentials.test.ts::assertValidProfileName / profile-name guard > accepts conventional profile names",
+  "src/lib/credentials.test.ts::assertValidProfileName / profile-name guard > readProfile and deleteProfile reject a malformed name",
+  "src/lib/credentials.test.ts::assertValidProfileName / profile-name guard > rejects names that would corrupt the INI file, with a VALIDATION_ERROR (exit 5)",
+  "src/lib/credentials.test.ts::assertValidProfileName / profile-name guard > writeProfile rejects a malformed name and does NOT create the file",
+  "src/lib/credentials.test.ts::defaultCredentialsPath > points at ~/.testsprite/credentials",
+  "src/lib/credentials.test.ts::deleteProfile > leaves an empty file when the last profile is removed",
+  "src/lib/credentials.test.ts::deleteProfile > removes the named profile and leaves others intact",
+  "src/lib/credentials.test.ts::deleteProfile > returns false when the profile is missing",
+  "src/lib/credentials.test.ts::ensureRestrictiveMode > downgrades over-permissive modes",
+  "src/lib/credentials.test.ts::ensureRestrictiveMode > is a no-op when the file is missing",
+  "src/lib/credentials.test.ts::parseCredentials > ignores unknown keys and key-value lines outside any section",
+  "src/lib/credentials.test.ts::parseCredentials > parses a single profile",
+  "src/lib/credentials.test.ts::parseCredentials > parses multiple profiles and ignores comments and blanks",
+  "src/lib/credentials.test.ts::parseCredentials > returns empty for empty input",
+  "src/lib/credentials.test.ts::readCredentialsFile / readProfile > reads an existing file",
+  "src/lib/credentials.test.ts::readCredentialsFile / readProfile > returns empty when file is missing",
+  "src/lib/credentials.test.ts::serializeCredentials > omits empty fields",
+  "src/lib/credentials.test.ts::serializeCredentials > round-trips with default profile first",
+  "src/lib/credentials.test.ts::serializeCredentials > strips \\r\\n (CRLF) injection from values",
+  "src/lib/credentials.test.ts::serializeCredentials > strips newline characters from values to prevent INI injection",
+  "src/lib/credentials.test.ts::writeProfile > creates the file with mode 0600 and writes the profile",
+  "src/lib/credentials.test.ts::writeProfile > does NOT reclaim a fresh lock just because its body is corrupt/unreadable",
+  "src/lib/credentials.test.ts::writeProfile > does not leak the api key into the on-disk file format aside from the value itself",
+  "src/lib/credentials.test.ts::writeProfile > preserves other profiles when updating one",
+  "src/lib/credentials.test.ts::writeProfile > reclaims a stale lock via filesystem mtime when the lock body is corrupt/unreadable",
+  "src/lib/credentials.test.ts::writeProfile > reclaims stale mutation locks and removes the lock after writing",
+  "src/lib/credentials.test.ts::writeProfile > retries a transient EACCES while creating the lock on Windows",
+  "src/lib/credentials.test.ts::writeProfile > retries a transient EBUSY while creating the lock on Windows",
+  "src/lib/credentials.test.ts::writeProfile > retries a transient EPERM while creating the lock on Windows",
+  "src/lib/credentials.test.ts::writeProfile > retries a transient Windows lock-release error without losing the saved profile",
+  "src/lib/credentials.test.ts::writeProfile > retries a transient Windows stale-lock removal error",
+  "src/lib/credentials.test.ts::writeProfile > surfaces a persistent Windows lock-create EPERM instead of timing out as contention",
+  "src/lib/credentials.test.ts::writeProfile > surfaces a persistent Windows stale-lock removal error",
+  "src/lib/credentials.test.ts::writeProfile > surfaces lock-create EPERM on non-Windows hosts",
+]
+timeout_s = 1800
+tags = ["node", "multi-fichiers", "difficile"]
