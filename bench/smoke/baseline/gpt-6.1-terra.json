@@ -1,5 +1,5 @@
 {
-  "written": "2026-11-04T18:37:14+00:00",
+  "written": "2026-11-04T19:00:43+00:00",
   "command": "python3 -I bench/smoke/baseline.py bench/smoke/runs/20261104T144609Z-6d9561e-gpt-6.1-terra bench/smoke/runs/20261104T174431Z-6d9561e-gpt-6.1-terra bench/smoke/runs/20261104T180604Z-6d9561e-gpt-6.1-terra --exclude 20261104T144609Z-6d9561e-gpt-6.1-terra:node-little-coder-102,node-testsprite-356,node-tough-cookie-630",
   "excluded": {
     "20261104T144609Z-6d9561e-gpt-6.1-terra": [
@@ -390,5 +390,26 @@
       "server_misses": 6,
       "cache_avoidable_rate_mean": 0.9234355352156222
     }
+  },
+  "aggregate": {
+    "tasks": [
+      "node-koa-2029",
+      "node-testsprite-356",
+      "node-tough-cookie-630",
+      "py-graphiti-2030",
+      "py-langextract-584",
+      "py-shortuuid-118",
+      "py-tldextract-368",
+      "py-tldextract-383"
+    ],
+    "cost_mean": 1.0654488,
+    "cv_independent": 0.08651303111528039,
+    "cv_passes": 0.16686918617036006,
+    "passes": [
+      1.2587756,
+      0.9089686,
+      1.0286022000000001
+    ],
+    "cv": 0.16686918617036006
   }
 }
