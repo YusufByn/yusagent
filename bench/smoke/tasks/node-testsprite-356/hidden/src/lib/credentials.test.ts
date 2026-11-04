@@ -1,0 +1,609 @@
+import {
+  mkdtempSync,
+  statSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  utimesSync,
+  unlinkSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type * as NodeFs from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  DEFAULT_PROFILE,
+  assertValidProfileName,
+  defaultCredentialsPath,
+  deleteProfile,
+  ensureRestrictiveMode,
+  parseCredentials,
+  readCredentialsFile,
+  readProfile,
+  serializeCredentials,
+  writeProfile,
+} from './credentials.js';
+import { ApiError } from './errors.js';
+
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof NodeFs>();
+  return {
+    ...actual,
+    writeFileSync: vi.fn(actual.writeFileSync),
+    unlinkSync: vi.fn(actual.unlinkSync),
+  };
+});
+
+let tmpRoot: string;
+let credentialsPath: string;
+
+beforeEach(() => {
+  tmpRoot = mkdtempSync(join(tmpdir(), 'testsprite-creds-'));
+  credentialsPath = join(tmpRoot, 'credentials');
+});
+
+afterEach(() => {
+  // mkdtempSync directory is small and short-lived; OS cleans it up.
+  // Tests intentionally do not rely on cleanup ordering.
+});
+
+describe('parseCredentials', () => {
+  it('returns empty for empty input', () => {
+    expect(parseCredentials('')).toEqual({});
+  });
+
+  it('parses a single profile', () => {
+    const file = parseCredentials(`[default]\napi_key = sk-test\napi_url = https://example.com\n`);
+    expect(file).toEqual({
+      default: { apiKey: 'sk-test', apiUrl: 'https://example.com' },
+    });
+  });
+
+  it('parses multiple profiles and ignores comments and blanks', () => {
+    const content = `
+# top-level comment
+[default]
+api_key = sk-default
+
+; semicolon comment
+[dev]
+api_key = sk-dev
+api_url = https://api.example.com:8443
+`;
+    expect(parseCredentials(content)).toEqual({
+      default: { apiKey: 'sk-default' },
+      dev: { apiKey: 'sk-dev', apiUrl: 'https://api.example.com:8443' },
+    });
+  });
+
+  it('ignores unknown keys and key-value lines outside any section', () => {
+    const content = `
+api_key = orphan
+[default]
+api_key = sk-real
+unknown_key = ignored
+`;
+    expect(parseCredentials(content)).toEqual({ default: { apiKey: 'sk-real' } });
+  });
+});
+
+describe('serializeCredentials', () => {
+  it('round-trips with default profile first', () => {
+    const file = {
+      zeta: { apiKey: 'sk-z' },
+      default: { apiKey: 'sk-d', apiUrl: 'https://example.com' },
+      alpha: { apiKey: 'sk-a' },
+    };
+    const text = serializeCredentials(file);
+    expect(text.startsWith('[default]')).toBe(true);
+    expect(text).toContain('[alpha]');
+    expect(text).toContain('[zeta]');
+    expect(parseCredentials(text)).toEqual(file);
+  });
+
+  it('omits empty fields', () => {
+    const text = serializeCredentials({ default: { apiKey: 'sk', apiUrl: '' } });
+    expect(text).toContain('api_key = sk');
+    expect(text).not.toContain('api_url');
+  });
+
+  it('strips newline characters from values to prevent INI injection', () => {
+    // A malicious apiUrl with embedded newlines could inject new key-value
+    // pairs or section headers into the credentials file. The serializer
+    // must strip \n and \r so the written file has exactly one value per
+    // field and no injected content parsed as separate keys/sections.
+    const malicious = 'https://evil.com\napi_key = sk-HIJACKED\n[admin]\napi_key = sk-admin';
+    const text = serializeCredentials({ default: { apiKey: 'sk-real', apiUrl: malicious } });
+    // The output must NOT contain a standalone [admin] section header
+    // (it would be on its own line if injection succeeded)
+    const lines = text.split('\n');
+    // Only one section header exists: [default]
+    const sectionHeaders = lines.filter(l => /^\[.+\]$/.test(l.trim()));
+    expect(sectionHeaders).toEqual(['[default]']);
+    // Only one api_key line exists (the real one, not an injected duplicate)
+    const apiKeyLines = lines.filter(l => l.trim().startsWith('api_key'));
+    expect(apiKeyLines).toHaveLength(1);
+    expect(apiKeyLines[0]).toContain('sk-real');
+    // Round-trip: reading back must return only the real key, not the injected one
+    const parsed = parseCredentials(text);
+    expect(parsed['default']?.apiKey).toBe('sk-real');
+    expect(parsed['admin']).toBeUndefined();
+  });
+
+  it('strips \\r\\n (CRLF) injection from values', () => {
+    const text = serializeCredentials({ default: { apiUrl: 'https://x.com\r\napi_key = pwned' } });
+    const parsed = parseCredentials(text);
+    // The injected api_key must NOT be parsed as a real key
+    expect(parsed['default']?.apiKey).toBeUndefined();
+    // The api_url value is on one line (newlines stripped)
+    expect(parsed['default']?.apiUrl).toContain('https://x.com');
+  });
+});
+
+describe('readCredentialsFile / readProfile', () => {
+  it('returns empty when file is missing', () => {
+    expect(readCredentialsFile({ path: credentialsPath })).toEqual({});
+    expect(readProfile('default', { path: credentialsPath })).toBeUndefined();
+  });
+
+  it('reads an existing file', () => {
+    mkdirSync(tmpRoot, { recursive: true });
+    writeFileSync(credentialsPath, '[default]\napi_key = sk-x\n');
+    expect(readProfile('default', { path: credentialsPath })).toEqual({ apiKey: 'sk-x' });
+  });
+});
+
+describe('writeProfile', () => {
+  it.each(['EPERM', 'EBUSY', 'EACCES'] as const)(
+    'retries a transient %s while creating the lock on Windows',
+    code => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+      const actualWrite = vi.mocked(writeFileSync).getMockImplementation()!;
+      const lockPath = `${credentialsPath}.lock`;
+      const transient = Object.assign(new Error('lock temporarily inaccessible'), { code });
+      vi.mocked(writeFileSync).mockImplementationOnce((...args) => {
+        expect(args[0]).toBe(lockPath);
+        throw transient;
+      });
+      Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
+      try {
+        writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath });
+        expect(readProfile('default', { path: credentialsPath })).toEqual({ apiKey: 'sk-new' });
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- `lockPath`/`credentialsPath` live in this suite's `mkdtempSync` temp dir, never user input; asserting on them is the point of the test
+        expect(existsSync(lockPath)).toBe(false);
+        expect(
+          vi.mocked(writeFileSync).mock.calls.filter(call => call[0] === lockPath),
+        ).toHaveLength(2);
+      } finally {
+        Object.defineProperty(process, 'platform', originalPlatform);
+        vi.mocked(writeFileSync).mockImplementation(actualWrite);
+      }
+    },
+  );
+
+  it('surfaces lock-create EPERM on non-Windows hosts', () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const actualWrite = vi.mocked(writeFileSync).getMockImplementation()!;
+    const error = Object.assign(new Error('lock permission denied'), { code: 'EPERM' });
+    vi.mocked(writeFileSync).mockImplementationOnce(() => {
+      throw error;
+    });
+    Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'linux' });
+    try {
+      expect(() =>
+        writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath }),
+      ).toThrow(error);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- `lockPath`/`credentialsPath` live in this suite's `mkdtempSync` temp dir, never user input; asserting on them is the point of the test
+      expect(existsSync(credentialsPath)).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatform);
+      vi.mocked(writeFileSync).mockImplementation(actualWrite);
+    }
+  });
+
+  it('retries a transient Windows lock-release error without losing the saved profile', () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const actualUnlink = vi.mocked(unlinkSync).getMockImplementation()!;
+    const lockPath = `${credentialsPath}.lock`;
+    vi.mocked(unlinkSync).mockImplementationOnce(path => {
+      expect(path).toBe(lockPath);
+      throw Object.assign(new Error('lock delete pending'), { code: 'EPERM' });
+    });
+    Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
+    try {
+      writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath });
+      expect(readProfile('default', { path: credentialsPath })).toEqual({ apiKey: 'sk-new' });
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- `lockPath`/`credentialsPath` live in this suite's `mkdtempSync` temp dir, never user input; asserting on them is the point of the test
+      expect(existsSync(lockPath)).toBe(false);
+      expect(vi.mocked(unlinkSync).mock.calls.filter(call => call[0] === lockPath)).toHaveLength(2);
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatform);
+      vi.mocked(unlinkSync).mockImplementation(actualUnlink);
+    }
+  });
+
+  it('retries a transient Windows stale-lock removal error', () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const actualUnlink = vi.mocked(unlinkSync).getMockImplementation()!;
+    const lockPath = `${credentialsPath}.lock`;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same suite temp dir; planting a lock body is how this test sets up contention
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: process.pid, createdAt: Date.now() - 60_000, token: 'stale' })}\n`,
+    );
+    vi.mocked(unlinkSync).mockImplementationOnce(path => {
+      expect(path).toBe(lockPath);
+      throw Object.assign(new Error('lock delete pending'), { code: 'EACCES' });
+    });
+    Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
+    try {
+      writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath });
+      expect(readProfile('default', { path: credentialsPath })).toEqual({ apiKey: 'sk-new' });
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- `lockPath`/`credentialsPath` live in this suite's `mkdtempSync` temp dir, never user input; asserting on them is the point of the test
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatform);
+      vi.mocked(unlinkSync).mockImplementation(actualUnlink);
+    }
+  });
+
+  it('surfaces a persistent Windows lock-create EPERM instead of timing out as contention', () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const actualWrite = vi.mocked(writeFileSync).getMockImplementation()!;
+    const lockPath = `${credentialsPath}.lock`;
+    const denied = Object.assign(new Error('lock permission denied'), { code: 'EPERM' });
+    vi.mocked(writeFileSync).mockImplementation((...args) => {
+      if (args[0] === lockPath) throw denied;
+      return actualWrite(...args);
+    });
+    Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
+    const started = Date.now();
+    try {
+      expect(() =>
+        writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath }),
+      ).toThrow(denied);
+      // Retried for the transient window only, not the full 5 s lock wait.
+      expect(Date.now() - started).toBeLessThan(4_000);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- `credentialsPath` lives in this suite's `mkdtempSync` temp dir, never user input
+      expect(existsSync(credentialsPath)).toBe(false);
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatform);
+      vi.mocked(writeFileSync).mockImplementation(actualWrite);
+    }
+  });
+
+  it('surfaces a persistent Windows stale-lock removal error', () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const actualUnlink = vi.mocked(unlinkSync).getMockImplementation()!;
+    const lockPath = `${credentialsPath}.lock`;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same suite temp dir; planting a stale lock is how this test sets up the removal
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: process.pid, createdAt: Date.now() - 60_000, token: 'stale' })}\n`,
+    );
+    const denied = Object.assign(new Error('stale lock cannot be removed'), { code: 'EPERM' });
+    vi.mocked(unlinkSync).mockImplementation(path => {
+      if (path === lockPath) throw denied;
+      return actualUnlink(path);
+    });
+    Object.defineProperty(process, 'platform', { ...originalPlatform, value: 'win32' });
+    try {
+      expect(() =>
+        writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath }),
+      ).toThrow(denied);
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatform);
+      vi.mocked(unlinkSync).mockImplementation(actualUnlink);
+    }
+  });
+
+  it('creates the file with mode 0600 and writes the profile', () => {
+    writeProfile(DEFAULT_PROFILE, { apiKey: 'sk-new' }, { path: credentialsPath });
+    expect(existsSync(credentialsPath)).toBe(true);
+    // POSIX file modes don't exist on Windows (stat reports 0666).
+    if (process.platform !== 'win32') {
+      const mode = statSync(credentialsPath).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
+    expect(readProfile(DEFAULT_PROFILE, { path: credentialsPath })).toEqual({ apiKey: 'sk-new' });
+  });
+
+  it('preserves other profiles when updating one', () => {
+    writeProfile('default', { apiKey: 'sk-d' }, { path: credentialsPath });
+    writeProfile('dev', { apiKey: 'sk-dev', apiUrl: 'https://dev' }, { path: credentialsPath });
+    writeProfile('default', { apiUrl: 'https://prod' }, { path: credentialsPath });
+
+    const file = readCredentialsFile({ path: credentialsPath });
+    expect(file.default).toEqual({ apiKey: 'sk-d', apiUrl: 'https://prod' });
+    expect(file.dev).toEqual({ apiKey: 'sk-dev', apiUrl: 'https://dev' });
+  });
+
+  it('reclaims stale mutation locks and removes the lock after writing', () => {
+    const lockPath = `${credentialsPath}.lock`;
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({ pid: process.pid, createdAt: Date.now() - 60_000, token: 'stale' })}\n`,
+    );
+
+    writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath });
+
+    expect(readProfile('default', { path: credentialsPath })).toEqual({ apiKey: 'sk-new' });
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('reclaims a stale lock via filesystem mtime when the lock body is corrupt/unreadable', () => {
+    // A lock whose body cannot be parsed (e.g. a crash mid-write, or disk
+    // corruption) must still be reclaimable once it is genuinely old -- the
+    // mtime fallback (used only when `createdAt` cannot be read) is what
+    // makes that possible without trusting the unreadable content itself.
+    const lockPath = `${credentialsPath}.lock`;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `lockPath` is derived from this suite's `mkdtempSync` temp dir, never user input; writing a deliberately corrupt lock body is the point of the test
+    writeFileSync(lockPath, 'not valid json{{{');
+    const old = new Date(Date.now() - 60_000);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same temp path; ageing the lock's mtime is how this test makes it genuinely stale without trusting the unreadable body
+    utimesSync(lockPath, old, old);
+
+    writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath });
+
+    expect(readProfile('default', { path: credentialsPath })).toEqual({ apiKey: 'sk-new' });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same temp path; asserting the stale lock was reclaimed
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('does NOT reclaim a fresh lock just because its body is corrupt/unreadable', () => {
+    // Regression guard: an earlier implementation treated an unreadable body
+    // as `Number.POSITIVE_INFINITY` age -- indistinguishable from "genuinely
+    // abandoned" -- regardless of how young the lock file actually was. That
+    // let a benign, transient read failure (racing the real holder's own
+    // create/release of the very same file) delete an active lock that was
+    // milliseconds old, stealing it out from under its legitimate owner. A
+    // freshly-written (mtime ~= now) but unparseable lock must be left alone;
+    // `writeProfile` should time out waiting for it rather than silently
+    // reclaiming it.
+    const lockPath = `${credentialsPath}.lock`;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same temp path; a freshly-written corrupt lock is exactly the regression case being guarded
+    writeFileSync(lockPath, 'not valid json{{{');
+
+    expect(() => writeProfile('default', { apiKey: 'sk-new' }, { path: credentialsPath })).toThrow(
+      ApiError,
+    );
+    // The lock must still be there -- it was never reclaimed.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same temp path; asserting the fresh lock was NOT reclaimed
+    expect(existsSync(lockPath)).toBe(true);
+  }, 8_000);
+
+  it('does not leak the api key into the on-disk file format aside from the value itself', () => {
+    writeProfile('default', { apiKey: 'sk-secret-12345' }, { path: credentialsPath });
+    const onDisk = readFileSync(credentialsPath, 'utf-8');
+    expect(onDisk).toContain('api_key = sk-secret-12345');
+    expect(onDisk.split('\n').filter(line => line.includes('sk-secret-12345'))).toHaveLength(1);
+  });
+});
+
+describe('deleteProfile', () => {
+  it('returns false when the profile is missing', () => {
+    expect(deleteProfile('nope', { path: credentialsPath })).toBe(false);
+    expect(existsSync(credentialsPath)).toBe(false);
+  });
+
+  it('removes the named profile and leaves others intact', () => {
+    writeProfile('default', { apiKey: 'sk-d' }, { path: credentialsPath });
+    writeProfile('dev', { apiKey: 'sk-dev' }, { path: credentialsPath });
+    expect(deleteProfile('dev', { path: credentialsPath })).toBe(true);
+    expect(readProfile('dev', { path: credentialsPath })).toBeUndefined();
+    expect(readProfile('default', { path: credentialsPath })).toEqual({ apiKey: 'sk-d' });
+  });
+
+  it('leaves an empty file when the last profile is removed', () => {
+    writeProfile('default', { apiKey: 'sk-d' }, { path: credentialsPath });
+    expect(deleteProfile('default', { path: credentialsPath })).toBe(true);
+    expect(readCredentialsFile({ path: credentialsPath })).toEqual({});
+    expect(existsSync(credentialsPath)).toBe(true);
+  });
+});
+
+describe('ensureRestrictiveMode', () => {
+  it('is a no-op when the file is missing', () => {
+    expect(() => ensureRestrictiveMode(credentialsPath)).not.toThrow();
+  });
+
+  it('tightens the Windows ACL with icacls using /reset then /inheritance:r /grant:r *S-1-3-4:F', () => {
+    mkdirSync(tmpRoot, { recursive: true });
+    writeFileSync(credentialsPath, 'data', { mode: 0o666 });
+    const spawn = vi.fn(() => ({ status: 0, signal: null, output: [], pid: 123 })) as never;
+
+    ensureRestrictiveMode(credentialsPath, {
+      platform: 'win32',
+      spawnSync: spawn,
+    });
+
+    // Step 1: /reset clears broken inheritance state.
+    expect(spawn).toHaveBeenNthCalledWith(1, 'icacls', [credentialsPath, '/reset'], {
+      shell: false,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    // Step 2: /inheritance:r removes inherited ACEs and /grant:r grants Full Control
+    // to the OWNER RIGHTS SID (*S-1-3-4), avoiding dependency on USERNAME resolution.
+    expect(spawn).toHaveBeenNthCalledWith(
+      2,
+      'icacls',
+      [credentialsPath, '/inheritance:r', '/grant:r', '*S-1-3-4:F'],
+      {
+        shell: false,
+        stdio: 'ignore',
+        windowsHide: true,
+      },
+    );
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('warns on Windows when icacls /reset fails with an error', () => {
+    mkdirSync(tmpRoot, { recursive: true });
+    writeFileSync(credentialsPath, 'data');
+    const warnings: string[] = [];
+    const spawn = vi.fn(() => ({
+      error: new Error('spawnSync icacls ENOENT'),
+      status: null,
+      signal: null,
+      output: [],
+      pid: 123,
+    })) as never;
+
+    ensureRestrictiveMode(credentialsPath, {
+      platform: 'win32',
+      spawnSync: spawn,
+      warn: line => warnings.push(line),
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(warnings.join('\n')).toContain(
+      'icacls failed while resetting credentials file permissions',
+    );
+  });
+
+  it('warns on Windows when icacls /reset exits non-zero', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `tmpRoot` is this suite's own mkdtempSync temp dir, never user input
+    mkdirSync(tmpRoot, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `credentialsPath` is inside this suite's mkdtempSync temp dir, never user input
+    writeFileSync(credentialsPath, 'data');
+    const warnings: string[] = [];
+    const spawn = vi.fn(() => ({ status: 1, signal: null, output: [], pid: 123 })) as never;
+
+    ensureRestrictiveMode(credentialsPath, {
+      platform: 'win32',
+      spawnSync: spawn,
+      warn: line => warnings.push(line),
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(warnings.join('\n')).toContain('icacls /reset exited with status 1');
+  });
+
+  it('warns on Windows when /reset succeeds but /grant:r fails with an error', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `tmpRoot` is this suite's own mkdtempSync temp dir, never user input
+    mkdirSync(tmpRoot, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `credentialsPath` is inside this suite's mkdtempSync temp dir, never user input
+    writeFileSync(credentialsPath, 'data');
+    const warnings: string[] = [];
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce({ status: 0, signal: null, output: [], pid: 123 })
+      .mockReturnValueOnce({
+        error: new Error('permission denied'),
+        status: null,
+        signal: null,
+        output: [],
+        pid: 123,
+      }) as never;
+
+    ensureRestrictiveMode(credentialsPath, {
+      platform: 'win32',
+      spawnSync: spawn,
+      warn: line => warnings.push(line),
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(warnings.join('\n')).toContain(
+      'icacls failed while tightening credentials file permissions',
+    );
+  });
+
+  it('warns on Windows when /reset succeeds but /grant:r exits non-zero', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `tmpRoot` is this suite's own mkdtempSync temp dir, never user input
+    mkdirSync(tmpRoot, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `credentialsPath` is inside this suite's mkdtempSync temp dir, never user input
+    writeFileSync(credentialsPath, 'data');
+    const warnings: string[] = [];
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce({ status: 0, signal: null, output: [], pid: 123 })
+      .mockReturnValueOnce({ status: 5, signal: null, output: [], pid: 123 }) as never;
+
+    ensureRestrictiveMode(credentialsPath, {
+      platform: 'win32',
+      spawnSync: spawn,
+      warn: line => warnings.push(line),
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(warnings.join('\n')).toContain('icacls exited with status 5');
+  });
+
+  it('writes the ACL warning to stderr by default, without an injected warn sink', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `tmpRoot` is this suite's own mkdtempSync temp dir, never user input
+    mkdirSync(tmpRoot, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- `credentialsPath` is inside this suite's mkdtempSync temp dir, never user input
+    writeFileSync(credentialsPath, 'data');
+    const stderrWrites: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: unknown) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write);
+    try {
+      ensureRestrictiveMode(credentialsPath, {
+        platform: 'win32',
+        spawnSync: vi.fn(() => ({ status: 1, signal: null, output: [], pid: 123 })) as never,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(stderrWrites.join('')).toContain('[warning]');
+    expect(stderrWrites.join('')).toContain('icacls /reset exited with status 1');
+  });
+
+  // POSIX-only premise: Windows has no 0644/0600 distinction to downgrade.
+  it.skipIf(process.platform === 'win32')('downgrades over-permissive modes', () => {
+    mkdirSync(tmpRoot, { recursive: true });
+    writeFileSync(credentialsPath, 'data', { mode: 0o644 });
+    ensureRestrictiveMode(credentialsPath);
+    const mode = statSync(credentialsPath).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+});
+
+describe('defaultCredentialsPath', () => {
+  it('points at ~/.testsprite/credentials', () => {
+    expect(defaultCredentialsPath()).toBe(join(homedir(), '.testsprite', 'credentials'));
+  });
+});
+
+describe('assertValidProfileName / profile-name guard', () => {
+  it('accepts conventional profile names', () => {
+    for (const name of ['default', 'dev', 'prod', 'ci-staging', 'team.qa', 'a_b', 'P1']) {
+      expect(() => assertValidProfileName(name)).not.toThrow();
+    }
+  });
+
+  it('rejects names that would corrupt the INI file, with a VALIDATION_ERROR (exit 5)', () => {
+    // `prod]` -> `[prod]]` (unreadable); newline splits the header; padded
+    // names do not round-trip (the parser trims section names); empty is not a
+    // valid section.
+    for (const name of ['prod]', '[weird', 'a\nb', '  spaced  ', 'has space', '', 'a/b']) {
+      let caught: unknown;
+      try {
+        assertValidProfileName(name);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ApiError);
+      const apiErr = caught as ApiError;
+      expect(apiErr.code).toBe('VALIDATION_ERROR');
+      expect(apiErr.exitCode).toBe(5);
+      expect(apiErr.nextAction).toContain('profile');
+    }
+  });
+
+  it('writeProfile rejects a malformed name and does NOT create the file', () => {
+    expect(() => writeProfile('prod]', { apiKey: 'sk-1' }, { path: credentialsPath })).toThrow(
+      ApiError,
+    );
+    expect(existsSync(credentialsPath)).toBe(false);
+  });
+
+  it('readProfile and deleteProfile reject a malformed name', () => {
+    expect(() => readProfile('a\nb', { path: credentialsPath })).toThrow(ApiError);
+    expect(() => deleteProfile('a\nb', { path: credentialsPath })).toThrow(ApiError);
+  });
+});

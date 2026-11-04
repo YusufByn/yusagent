@@ -29,6 +29,8 @@ Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Versio
 | 04/11/2026 | Retrait des secrets de l'environnement du harness abandonné : inefficace (mesuré le 03/11 : ps eww sur macOS, /proc sous Linux lisent l'environnement de départ). Le filtrage de l'environnement du kernel reste la règle ; protection complète par le sandbox (YA-11) | Validé | YA-03, YA-11 |
 | 04/11/2026 | Smoke bench (YA-14) : provider ChatGPT en « OAuth abonnement pour provider », modèles `gpt-6.1-sol`, `gpt-6.1-terra` et `gpt-6-luna` (aucun modèle antérieur, ni 5.x ni `gpt-6-sol`). `gpt-6-astra` est autorisé par le runner mais hors des runs par défaut (consommation trop élevée sur l'abonnement). Effort de raisonnement fixé à high au banc | Validé | YA-12, YA-14 |
 | 04/11/2026 | Mention « clé API uniquement » propre à un provider retirée du CDC ; le mode d'auth reste celui que chaque provider permet | Validé | YA-02 |
+| 04/11/2026 | Tâches du smoke bench : 10 vrais bugs corrigés après le 01/08/2026 dans des dépôts publics Python et TS/JS sous licence MIT, Apache-2.0, BSD ou ISC, rejoués depuis le commit parent (minage `bench/smoke/tools/mine.py`, validation rouge -> vert sur runners Linux jetables puis revalidation macOS sous sandbox, `UV_NO_BUILD=1`). Choix de Yusuf : 7 tâches courtes, 3 difficiles multi-fichiers. Les projets de Yusuf s'ajouteront au banc complet (held-out) | Validé | YA-14 |
+| 04/11/2026 | Runs du smoke bench : baseline de 3 runs sur `main` pour mesurer le bruit, puis 1 run par PR, 2 runs de plus seulement si `compare.py` lève une alerte. Modèle du smoke de PR : `gpt-6.1-terra` ; `gpt-6-luna` en option, pas par défaut | Validé | YA-14 |
 
 ## Résumé
 

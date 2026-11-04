@@ -1,0 +1,53 @@
+id = "py-tldextract-368"
+lang = "python"
+license = "BSD-3-Clause"
+source = { git = "https://github.com/john-kurkowski/tldextract.git", commit = "c4a17b6f2fe86c58ce84bba8fade02d9cf041b57", gold = "35b88ebeaa9d771c83e3df24b40e73a5bd924962" }
+upstream = { repo = "john-kurkowski/tldextract", pr = "https://github.com/john-kurkowski/tldextract/pull/368", issue = "https://github.com/john-kurkowski/tldextract/issues/370" }
+files = []
+setup = "uv python install -q --mirror https://github.com/astral-sh/python-build-standalone/releases/download 3.12.14 && UV_NO_BUILD=1 uv sync -q --frozen --all-extras --all-groups --python 3.12.14 --managed-python --no-python-downloads && (.venv/bin/python -c 'import pytest' 2>/dev/null || UV_NO_BUILD=1 uv pip install -q --python .venv/bin/python pytest==9.1.1)"
+test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" tests/main_test.py"
+fail_to_pass = [
+  "tests/main_test.py::test_reverse_domain_name_notation_no_suffix",
+]
+pass_to_pass = [
+  "tests/main_test.py::test_american",
+  "tests/main_test.py::test_bad_kwargs_no_way_to_fetch",
+  "tests/main_test.py::test_british",
+  "tests/main_test.py::test_cache_permission",
+  "tests/main_test.py::test_cache_timeouts",
+  "tests/main_test.py::test_dns_root_label",
+  "tests/main_test.py::test_empty",
+  "tests/main_test.py::test_find_first_response_with_session",
+  "tests/main_test.py::test_find_first_response_without_session",
+  "tests/main_test.py::test_global_extract",
+  "tests/main_test.py::test_idna_2008",
+  "tests/main_test.py::test_include_psl_private_domain_attr",
+  "tests/main_test.py::test_invalid_puny_with_nonpuny",
+  "tests/main_test.py::test_invalid_puny_with_puny",
+  "tests/main_test.py::test_ipv4",
+  "tests/main_test.py::test_ipv4_lookalike",
+  "tests/main_test.py::test_lenient_netloc",
+  "tests/main_test.py::test_local_host",
+  "tests/main_test.py::test_looks_like_ip",
+  "tests/main_test.py::test_looks_like_ipv6",
+  "tests/main_test.py::test_nested_subdomain",
+  "tests/main_test.py::test_no_1st_level_tld",
+  "tests/main_test.py::test_no_subdomain",
+  "tests/main_test.py::test_odd_but_possible",
+  "tests/main_test.py::test_order",
+  "tests/main_test.py::test_port",
+  "tests/main_test.py::test_private_domains_depth",
+  "tests/main_test.py::test_puny_with_non_puny",
+  "tests/main_test.py::test_punycode",
+  "tests/main_test.py::test_query_fragment",
+  "tests/main_test.py::test_reverse_domain_name_notation",
+  "tests/main_test.py::test_scheme",
+  "tests/main_test.py::test_similar_to_ip",
+  "tests/main_test.py::test_suffix",
+  "tests/main_test.py::test_tlds_property",
+  "tests/main_test.py::test_top_domain_under_public_suffix",
+  "tests/main_test.py::test_top_domain_under_registry_suffix",
+  "tests/main_test.py::test_username",
+]
+timeout_s = 1800
+tags = ["python"]

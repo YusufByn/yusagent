@@ -1,0 +1,38 @@
+;; Profil sandbox-exec du code des dépôts de tâche (T07, YA-14) : `setup` et `test` de
+;; chaque tâche, en préparation, en validation (--validate-gold) et à la notation.
+;; Mêmes règles que bench/smoke/tools/mine.sb (revalidation des candidats) :
+;; - écriture limitée au dossier de la tâche dans le cache (workspace, copie pristine,
+;;   journaux), aux caches uv et npm, aux Pythons gérés par uv, au HOME et au TMPDIR du
+;;   banc, et aux dossiers temporaires du système ;
+;; - lecture du contenu de $HOME refusée, sauf ces mêmes dossiers et la toolchain Node
+;;   (NODE_HOME) ; le login du banc (dossier agent) et bench/smoke/ restent illisibles ;
+;; - réseau sortant limité à localhost, DNS refusé : `setup` passe par le proxy CONNECT à
+;;   liste blanche (hosts/setup.txt), lancé hors sandbox ; `test` n'a pas de proxy.
+;; Paramètres : HOME_DIR, TASK_CACHE, UV_CACHE, UV_PYTHON, NPM_CACHE, SMOKE_HOME,
+;; SMOKE_TMP, NODE_HOME.
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write*
+  (subpath (param "TASK_CACHE"))
+  (subpath (param "UV_CACHE"))
+  (subpath (param "UV_PYTHON"))
+  (subpath (param "NPM_CACHE"))
+  (subpath (param "SMOKE_HOME"))
+  (subpath (param "SMOKE_TMP"))
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  (subpath "/dev"))
+(deny file-read-data (subpath (param "HOME_DIR")))
+(allow file-read-data
+  (subpath (param "TASK_CACHE"))
+  (subpath (param "UV_CACHE"))
+  (subpath (param "UV_PYTHON"))
+  (subpath (param "NPM_CACHE"))
+  (subpath (param "SMOKE_HOME"))
+  (subpath (param "SMOKE_TMP"))
+  (subpath (param "NODE_HOME")))
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote unix-socket))
+(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))

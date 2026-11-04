@@ -1,0 +1,25 @@
+;; Profil sandbox-exec du minage (T07, YA-14) : installation, build et tests de dépôts
+;; tiers sur macOS.
+;; - Écriture limitée au cache du minage et aux dossiers temporaires.
+;; - Lecture du contenu de $HOME refusée, sauf le cache du minage (dépôts, venvs, caches
+;;   uv et npm, Pythons gérés par uv, HOME factice) et la toolchain Node (NODE_HOME).
+;;   Les métadonnées (stat, realpath) restent lisibles.
+;; - Réseau sortant limité à localhost, DNS refusé : l'installation passe par le proxy
+;;   CONNECT à liste blanche (bench/smoke/proxies.py, mine-hosts.txt), lancé hors sandbox.
+;; Paramètres : CACHE, HOME_DIR, NODE_HOME.
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write*
+  (subpath (param "CACHE"))
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  (subpath "/dev"))
+(deny file-read-data (subpath (param "HOME_DIR")))
+(allow file-read-data
+  (subpath (param "CACHE"))
+  (subpath (param "NODE_HOME")))
+(deny network-outbound)
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote unix-socket))
+(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))

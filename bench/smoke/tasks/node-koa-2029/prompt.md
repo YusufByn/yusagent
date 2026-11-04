@@ -1,0 +1,3 @@
+Avec `app.proxy = true`, la casse de l'en-tête `X-Forwarded-Proto` change le résultat : `X-Forwarded-Proto: https` donne `ctx.protocol === 'https'` et `ctx.secure === true`, mais `HTTPS` ou `Https` donnent `ctx.protocol` égal à la valeur reçue et `ctx.secure === false`. L'écriture d'un cookie `secure` échoue alors avec `Cannot send secure cookie over unencrypted connection`.
+
+Attendu : le nom de schéma est insensible à la casse. Quand l'en-tête est pris en compte, `ctx.protocol` vaut `'https'` pour `HTTPS` ou `Https` (y compris dans une liste comme `HTTPS, http`, dont seule la première valeur compte) et `ctx.secure` vaut `true`.
