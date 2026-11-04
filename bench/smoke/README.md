@@ -37,13 +37,15 @@ make smoke BINARY=<dossier>/prime-agent PROVIDER=openai-codex MODEL=<id> EFFORT=
 python3 -I bench/smoke/compare.py <run A> <run B> [--baseline bench/smoke/baseline/<modèle>.json] --out <fichier>.md
 python3 -I bench/smoke/baseline.py <run> [<run> ...]   # écrit bench/smoke/baseline/<modèle>.json
 python3 -I bench/smoke/metrics.py <run> [<run> ...]    # miss serveur et taux évitable, runs déjà faits
+python3 -I bench/smoke/run.py --rereport <run>         # rapport recalculé depuis les journaux du run
 ```
 
 - `MODEL` : liste fermée `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`, `gpt-6-astra`. Tout autre id est refusé, même présent au catalogue. Sans `MODEL` : un run par modèle par défaut (`gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`) ; `gpt-6-astra` seulement avec `MODEL=gpt-6-astra`.
 - `gpt-6.1-terra` est absent de `models.bundled.json` : sa fiche (`models/openai-codex.json`, relevée sur la doc officielle) est déclarée dans le `models.json` du dossier agent. Un modèle absent du catalogue et sans fiche complète est refusé ; le repli du harness sur la fiche du modèle par défaut n'est jamais utilisé. `contextWindow` de Terra : 272 000, provisoire (valeur du catalogue pour les modèles Codex voisins), hypothèse notée dans la fiche et dans l'en-tête du rapport.
 - `EFFORT` : `high` au banc (décision du 04/11/2026), noté dans le rapport.
 - Variantes : fichiers de réglages (`settings/default.json`, `settings/masking-on.json`), jamais des branches.
-- Validation sans modèle : `make smoke BINARY=... CAPTURE=1 [CAPTURE_FAIL=node-example-001]`. Options du runner en plus : `--capture-reject-model <id>` (le serveur refuse l'id au run de chauffe), `--capture-no-websocket` (le serveur refuse le WebSocket : repli SSE).
+- Validation sans modèle : `make smoke BINARY=... CAPTURE=1 [CAPTURE_FAIL=node-example-001] [CAPTURE_SPAWN=1]`. `CAPTURE_SPAWN=1` (`--capture-spawn`) : chaque tâche joue le scénario `spawn` du serveur de capture (un sous-agent), pour vérifier que ses sessions sont ramassées. Options du runner en plus : `--capture-reject-model <id>` (le serveur refuse l'id au run de chauffe), `--capture-no-websocket` (le serveur refuse le WebSocket : repli SSE).
+- Recalcul : `--rereport <run>` relit les journaux d'un run déjà fait (sans binaire ni modèle) et réécrit son rapport ; tests cachés, sortie et durée du binaire restent ceux du run. L'ancien rapport est gardé (`report.initial.*`, `tasks.initial.csv`). Pour un run antérieur à YA-07b, les sessions de sous-agents sont copiées depuis le dossier agent du banc. `prices.json` doit être celui du run (sha256 de l'en-tête).
 
 ## Déroulé
 
@@ -65,7 +67,9 @@ Variables fixées pour le binaire : `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_V
 
 ## Rapport
 
-`runs/<horodatage UTC>-<sha court>-<modèle>/` (ignoré par git) : `report.md`, `report.json`, `tasks.csv`, et par tâche les sessions, le journal d'usage, la sortie JSON du binaire, les journaux des proxys et de la notation. En mode capture, les requêtes reçues par le serveur de capture y sont aussi (en-têtes d'authentification masqués, identifiants factices).
+`runs/<horodatage UTC>-<sha court>-<modèle>/` (ignoré par git) : `report.md`, `report.json`, `tasks.csv`, et par tâche les sessions, le journal d'usage, la sortie JSON du binaire, les journaux des proxys et de la notation.
+
+- **Sous-agents** : le harness écrit les sessions lancées par `rlm.spawn` sous `session-artifacts/<parent>/sub-<id>/` du dossier agent, pas sous `sessions/`. Le runner les copie dans `sessions/subagents/` (imbrications comprises). Tokens, coût, transport, cache, miss serveur, cellules en erreur et sondes d'isolation portent sur la session principale et ses sous-agents ; statut et tours (appels `main`) sur la session principale. Une section « Sous-agents » donne leur part par tâche (sessions, appels, coût, part du coût, taux de cache, miss serveur), et les totaux la reprennent. En mode capture, les requêtes reçues par le serveur de capture y sont aussi (en-têtes d'authentification masqués, identifiants factices).
 
 - **En-tête** : commit, sha256 du binaire et commit de son manifeste, sha256 de `models.bundled.json`, provider, modèle, source de sa fiche et hypothèses, effort, réglages non par défaut (`masking`, `rlm`, `cacheRetention`, `transport`), version et sha256 de `prices.json`, hôtes autorisés, nombre de runs.
 - **Par tâche** : statut, tokens (`input`, `output`, `cacheRead`, `cacheWrite`, ventilation 5 min / 1 h, `reasoning`), pic de contexte (tokens du plus gros prompt envoyé : `input + cacheRead + cacheWrite`), appels par type, tours (appels `main`), taux de cache de session, médiane par requête de continuation et taux « évitable » (hors premier appel, invalidations journalisées et miss serveur), miss serveur (appel de boucle hors premier de session, `cacheRead = 0`, sans invalidation : délai depuis l'appel précédent, transport, continuation), invalidations et coût d'écriture associé, coût théorique, durée, TTFT médian, sorties coupées (`length`), cellules `python_repl` en erreur par type (`SyntaxError` à part), CONNECT refusés, transport de chaque requête, lectures hors workspace réussies (anomalie, mode capture).

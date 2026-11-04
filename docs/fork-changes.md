@@ -75,7 +75,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `bench/tools/capture/server.py`, `run.py`, `masking_check.py`, `README.md` | modif. / ajout | Scénario `mask`, cache simulé sur le préfixe réel (`--prefix-cache`), cas `mask-off-anthropic` et `mask-on-anthropic`, rapport `masking-report.md`. | T05 (YA-05) |
 | `docs/usage.md` | modif. | Champ `invalidation` du journal. | T05 (YA-05) |
 | `.changes/ya-05.md` | ajout | Fragment de changelog. | T05 (YA-05) |
-| `Makefile` | modif. (11 lignes, en fin de fichier) | Cible `smoke` : appelle `bench/smoke/run.py` avec `BINARY`, `PROVIDER`, `MODEL`, `EFFORT`, `SETTINGS`, `RUNS`, `TASKS`, `CAPTURE`, `CAPTURE_FAIL`. Aucune cible upstream touchée. Voir « Smoke bench (T06) » ci-dessous. | T06 (YA-14) |
+| `Makefile` | modif. (11 lignes, en fin de fichier) | Cible `smoke` : appelle `bench/smoke/run.py` avec `BINARY`, `PROVIDER`, `MODEL`, `EFFORT`, `SETTINGS`, `RUNS`, `TASKS`, `CAPTURE`, `CAPTURE_FAIL`, `CAPTURE_SPAWN` (T07b). Aucune cible upstream touchée. Voir « Smoke bench (T06) » ci-dessous. | T06 (YA-14) |
 | `.github/pull_request_template.md` | modif. (2 lignes) | Case « Smoke bench lancé sur ce commit (lien ou chemin du rapport) » sous « Test/e2e evidence ». | T06 (YA-14) |
 
 ## Smoke bench (T06, YA-14)
