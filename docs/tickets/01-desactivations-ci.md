@@ -53,7 +53,7 @@ Ajouter cette section après « Règles » :
 
 - Session lancée sans `settings.json` ni variable d'environnement : ni télémétrie, ni vérification de version, ni `/refine` automatique (compaction comprise), ni skills `agent-message` / `rlm-heartbeat` dans le prompt.
 - Chaque fonction se réactive par un réglage, testé.
-- `ci.yml` vert sur la PR, 20 jobs sur 20.
+- `ci.yml` vert sur la PR, 19 jobs sur 19.
 - `docs/fork-changes.md` à jour.
 
 ## Impact préfixe
