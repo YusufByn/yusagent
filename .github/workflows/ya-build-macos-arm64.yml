@@ -34,7 +34,9 @@ env:
 jobs:
   build:
     name: build-aarch64-apple-darwin
-    runs-on: macos-14
+    # macOS 14 retiré de GitHub Actions le 02/11/2026 (actions/runner-images#15226) :
+    # macos-15, arm64, l'image du job x86_64 de continuous.yml.
+    runs-on: macos-15
     permissions:
       contents: read
     timeout-minutes: 90
