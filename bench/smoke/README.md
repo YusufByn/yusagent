@@ -138,6 +138,8 @@ Alerte (le run de PR est alors relancé 2 fois) : tâche stable en baseline (ré
 | `tools/mine.py`, `tools/mine.sb`, `tools/mine-hosts.txt` | Minage et validation des candidats (T07), sandbox et hôtes de la revalidation macOS |
 | `tools/discovered.json`, `tools/candidates.csv` | PR découvertes, candidats validés (Linux, écarts macOS) |
 | `tools/make_task.py` | Construction d'une tâche depuis un candidat |
+| `tools/install-bin.sh` | Installation du binaire d'un run CI dans `~/.cache/yusagent-bin/<sha>/`, sommes et version vérifiées |
+| `tools/ab-masking.sh` | A/B masquage (T05) : contrôles, puis 3 alternances défaut / masquage ; journal dans `runs/` |
 | `metrics.py` | Mesures depuis le journal d'usage, la session et les journaux des proxys |
 | `compare.py` | Comparaison appariée de deux runs ; alertes au-delà du bruit de la baseline |
 | `baseline.py` | Baseline : bruit par tâche sur plusieurs runs de `main` (`baseline/<modèle>.json`, versionné) |
