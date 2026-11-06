@@ -87,6 +87,14 @@ Un champ absent est écrit `null`, jamais estimé.
 - l'API Responses donne `cacheWrite` = `cache_write_tokens` depuis T08 (`docs/usage.md`), 0 quand le provider ne le renvoie pas : l'écriture est alors comptée au tarif d'entrée ;
 - avec la ventilation du provider (`cacheWrite30m`, `cacheWrite12h`), chaque part est au tarif de son TTL (`cache_write_30m`, `cache_write_12h` de `prices.json`) ; sans ventilation, le corps Codex ne portant pas de rétention de cache, le tarif d'écriture 30 min est retenu.
 
+### Coût pessimiste (T08b)
+
+Affiché à côté du coût rapporté : même calcul, mais `input` (non caché) au tarif `cache_write_30m` au lieu du tarif d'entrée, comme si tout ce qui n'a pas été lu en cache y avait été écrit. C'est un plafond pour un provider qui n'annonce pas ses écritures (Codex : `cache_write_tokens` toujours à 0 au run réel du 04/11, `docs/usage.md`), trop haut pour un provider qui les annonce. 30 min et non 12 h : le harness ne demande jamais 12 h.
+
+- Rapport : totaux et par tâche résolue (« rapporté ; pessimiste »), colonne « Coût pess. $ » du tableau des tâches (avec une colonne `cacheWrite`), `cost_pessimistic` dans `tasks.csv`, `cost.pessimistic_total` par résultat, `totals.cost_pessimistic` et `per_task.<tâche>.cost_pessimistic_mean` dans `report.json`.
+- `compare.py` : dans la section du coût agrégé, le coût pessimiste des mêmes tâches, A → B, en %, avec le seuil du coût rapporté (au-delà ou en deçà), sans alerte ; ligne « Coût pessimiste » dans les totaux. Les alertes et `baseline.py` restent sur le coût rapporté.
+- Un run antérieur n'a pas de coût pessimiste : `run.py --rereport <run>` le recalcule depuis les journaux, le coût rapporté ne change pas.
+
 ## Tâches
 
 ```
