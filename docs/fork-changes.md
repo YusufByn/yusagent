@@ -170,6 +170,19 @@ Symptôme : `connect supervisor: Failed to connect to the Prime Agent daemon` av
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
+## Instabilité probable : `daemon_discovery_e2e` (YA-00)
+
+`crates/pa-cli/tests/daemon_discovery_e2e.rs`, test `a_daemon_launched_with_an_inherited_worker_env_comes_up_as_a_supervisor` (`:974`), shard 7/8 de `ci.yml`. Fichier identique à `upstream/main` (`git diff --stat upstream/main -- crates/pa-cli/tests/daemon_discovery_e2e.rs` vide au 11/11/2026).
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 42290071142 | `7257c4b47` (`main`, merge de #17) | 1 | échec du shard 7/8 (7 réussis, 1 échec) |
+| 42287699470 | `5e6439cbe` (`ya-ci-runner`, même arbre que `7257c4b47`) | 1 | réussi |
+
+Symptôme : `connect the supervisor` avec `ConnectionRefused` (os error 111) à `daemon_discovery_e2e.rs:1043`. Comme pour `interactive_daemon_e2e` : le test attend que le fichier du socket existe (`:1033-1035`) puis se connecte, et le superviseur n'écoute pas encore. Hypothèse : même course au démarrage du superviseur.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
 ## Désactivations par défaut (YA-01)
 
 Session lancée sans `settings.json` ni variable d'environnement. Chaque ligne se réactive dans `settings.json` (global, `~/.prime/agent/settings.json`).
