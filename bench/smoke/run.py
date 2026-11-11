@@ -992,6 +992,11 @@ def aggregate(results: list[dict]) -> dict:
                 statistics.mean(r["cost"]["pessimistic_total"] for r in runs)
                 if runs and all(r["cost"].get("pessimistic_total") is not None for r in runs)
                 else None),
+            # YA-14 : coût à cache théorique, `None` si un run n'en a pas (rapport antérieur).
+            "cost_theoretical_mean": (
+                statistics.mean(r["cost"]["theoretical_total"] for r in runs)
+                if runs and all(r["cost"].get("theoretical_total") is not None for r in runs)
+                else None),
             "tokens_mean": statistics.mean(tokens),
             "tokens_stdev": statistics.stdev(tokens) if len(tokens) > 1 else None,
             "turns_mean": statistics.mean(r["calls"]["turns"] for r in runs),
@@ -1012,6 +1017,8 @@ def totals(results: list[dict]) -> dict:
     cost = sum(costs) if costs and None not in costs else None
     pessimistic = [r["cost"].get("pessimistic_total") for r in results]
     cost_pessimistic = sum(pessimistic) if pessimistic and None not in pessimistic else None
+    theoretical = [r["cost"].get("theoretical_total") for r in results]
+    cost_theoretical = sum(theoretical) if theoretical and None not in theoretical else None
     read = sum(r["tokens"]["cacheRead"] or 0 for r in results)
     tokens = {k: (sum(r["tokens"][k] for r in results)
                   if results and all(r["tokens"][k] is not None for r in results) else None)
@@ -1024,6 +1031,13 @@ def totals(results: list[dict]) -> dict:
             "cost_pessimistic_per_resolved": (cost_pessimistic / resolved
                                               if cost_pessimistic is not None and resolved
                                               else None),
+            "cost_theoretical": cost_theoretical,
+            "cost_theoretical_per_resolved": (cost_theoretical / resolved
+                                              if cost_theoretical is not None and resolved
+                                              else None),
+            "cache_theory_check": metrics.theory_check(
+                [g for r in results
+                 for g in ((r["cost"].get("theoretical") or {}).get("check_gaps") or [])]),
             "tokens": tokens,
             "turns_median": metrics.median([r["calls"]["turns"] for r in results]),
             "cache_rate_all_calls": read / prompt if prompt else None,
@@ -1069,7 +1083,7 @@ def fmt(value, digits: int = 4) -> str:
 
 def write_report(run_dir: Path, report: dict) -> None:
     (run_dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
-    fields = ["task", "run", "status", "cost", "cost_pessimistic", "input", "output", "cacheRead",
+    fields = ["task", "run", "status", "cost", "cost_pessimistic", "cost_theoretical", "input", "output", "cacheRead",
               "cacheWrite", "reasoning", "context_peak", "turns", "calls", "cache_session_rate",
               "cache_continuation_median", "cache_avoidable_rate", "server_misses",
               "ttft_median_ms", "seconds", "websocket", "sse", "loop_on_sse", "connect_refused",
@@ -1083,6 +1097,7 @@ def write_report(run_dir: Path, report: dict) -> None:
                 "task": r["task"], "run": r["run"], "status": r["status"],
                 "cost": r["cost"]["total"],
                 "cost_pessimistic": r["cost"].get("pessimistic_total"),
+                "cost_theoretical": r["cost"].get("theoretical_total"),
                 **{k: r["tokens"][k] for k in
                                                ("input", "output", "cacheRead", "cacheWrite",
                                                 "reasoning")},
@@ -1132,6 +1147,9 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"({fmt(pct_change(t['cost'], t.get('cost_pessimistic')), 1)} %)",
               f"- Par tâche résolue : {fmt(t['cost_per_resolved'])} $ (rapporté) ; pessimiste : "
               f"{fmt(t.get('cost_pessimistic_per_resolved'))} $",
+              f"- Coût à cache théorique : {fmt(t.get('cost_theoretical'))} $ "
+              f"({fmt(pct_change(t['cost'], t.get('cost_theoretical')), 1)} % du rapporté) ; par "
+              f"tâche résolue : {fmt(t.get('cost_theoretical_per_resolved'))} $",
               f"- Tokens : {json.dumps(t['tokens'])}",
               f"- Tours médians : {fmt(t['turns_median'], 1)} ; taux de cache (tous appels) : "
               f"{fmt(t['cache_rate_all_calls'])} ; miss serveur : {t['server_misses']}",
@@ -1142,17 +1160,19 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"{fmt(sub.get('cost'))} $ ({fmt(pct(sub.get('cost_share')), 1)} % du coût), taux de "
               f"cache (tous appels) {fmt(sub.get('cache_rate_all_calls'))}",
               "", "## Tâches", "",
-              "| Tâche | Run | Statut | Coût $ | Coût pess. $ | input | output | cacheRead |"
+              "| Tâche | Run | Statut | Coût $ | Coût pess. $ | Coût th. $ | input | output |"
+              " cacheRead |"
               " cacheWrite | reasoning |"
               " Pic de contexte | Tours |"
               " Cache session | Cache contin. (méd.) | Cache évitable | Miss serveur |"
               " TTFT méd. ms | Durée s | WS | SSE | Cellules en erreur (Syntax) | Coupées |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
-              "---|---|"]
+              "---|---|---|"]
     for r in report["results"]:
         lines.append(
             f"| {r['task']} | {r['run']} | {r['status']} | {fmt(r['cost']['total'])} | "
             f"{fmt(r['cost'].get('pessimistic_total'))} | "
+            f"{fmt(r['cost'].get('theoretical_total'))} | "
             f"{fmt(r['tokens']['input'])} | {fmt(r['tokens']['output'])} | "
             f"{fmt(r['tokens']['cacheRead'])} | {fmt(r['tokens']['cacheWrite'])} | "
             f"{fmt(r['tokens']['reasoning'])} | "
@@ -1188,6 +1208,7 @@ def write_report(run_dir: Path, report: dict) -> None:
             lines.append(f"| {task} | {a['runs']} | {fmt(a['resolved_rate'], 2)} | {a['flip']} | "
                          f"{fmt(a['cost_mean'])} | {fmt(a['cost_stdev'])} | "
                          f"{fmt(a['tokens_mean'], 1)} | {fmt(a['tokens_stdev'], 1)} |")
+    lines += theory_section(report)
     misses = [(r["task"], r["run"], m) for r in report["results"]
               for m in r.get("server_misses", [])]
     lines += ["", "## Miss serveur", "",
@@ -1208,6 +1229,35 @@ def write_report(run_dir: Path, report: dict) -> None:
     (run_dir / "report.md").write_text("\n".join(lines))
 
 
+def theory_section(report: dict) -> list[str]:
+    """Coût à cache théorique : appels par base et validation de la méthode (YA-14)."""
+    check = report["totals"].get("cache_theory_check") or metrics.theory_check([])
+    bases = {b: 0 for b in metrics.THEORY_BASES}
+    for r in report["results"]:
+        for b, n in ((r["cost"].get("theoretical") or {}).get("calls") or {}).items():
+            bases[b] = bases.get(b, 0) + n
+    lines = ["", "## Coût à cache théorique", "",
+             "Cache qu'un serveur qui ne rate jamais aurait lu : préfixe commun avec la requête "
+             "précédente de la même session (méthode dans les notes). Appels par base : "
+             + ", ".join(f"{b} {n}" for b, n in bases.items()) + ".", ""]
+    if not check["n"]:
+        return lines + ["- Validation : aucun appel de continuation sans miss serveur"]
+    q = check["quantiles"]
+    lines += [f"- Validation (appels de continuation sans miss serveur, {check['n']}) : rapporté "
+              f"> théorique {fmt(pct(check['above_share']), 2)} % (critère ≤ "
+              f"{metrics.THEORY_MAX_ABOVE_SHARE * 100:g} %), écart médian (théorique − rapporté) "
+              f"{fmt(pct(check['median_gap']), 2)} % du prompt (critère ≤ "
+              f"{metrics.THEORY_MAX_MEDIAN_GAP * 100:g} %) : **{metrics.theory_verdict(check)}**",
+              "- Distribution de l'écart, % du prompt : "
+              + ", ".join(f"{k} {fmt(pct(v), 2)}" for k, v in q.items())
+              + f" ; au-delà de {metrics.THEORY_PARTIAL_GAP * 100:g} % (miss partiels du serveur)"
+              f" : {fmt(pct(check['partial_share']), 1)} %"]
+    if report["header"].get("mode") == "capture":
+        lines.append("- Mode capture : usage simulé par le serveur de capture (lecture de 90 % "
+                     "du prompt précédent), la validation n'a pas de sens ici")
+    return lines
+
+
 def report_notes(prices: dict, effort: str) -> list[str]:
     notes = [
         "Tokens et usage : journal d'usage du harness (`<id>.usage.ndjson`), rien n'est "
@@ -1223,6 +1273,16 @@ def report_notes(prices: dict, effort: str) -> list[str]:
         "n'a pas été lu en cache y avait été écrit. Plafond pour un provider qui n'annonce pas "
         "ses écritures (Codex : `cache_write_tokens` toujours à 0, docs/usage.md) ; trop haut "
         "pour un provider qui les annonce.",
+        "Coût à cache théorique (YA-14) : décision du banc. Par appel, `cacheRead` = "
+        "préfixe commun avec la requête précédente de la même session (chaque sous-agent dans "
+        "la sienne), le reste du prompt au tarif d'entrée, sortie et raisonnement inchangés. "
+        "Le corps WebSocket (`previous_response_id`) ne porte pas tout le contexte : préfixe "
+        "approché depuis l'usage, min(prompt, prompt précédent + output précédent) sur une "
+        "continuation append-only ; `cacheRead` rapporté gardé sur une invalidation "
+        "journalisée, après un appel annexe ou si le prompt raccourcit (ruptures du harness) ; "
+        "0 au premier appel de boucle d'une session. Les miss serveur disparaissent, les "
+        "ruptures causées par le harness restent comptées. Validation : section « Coût à "
+        "cache théorique ».",
         "Transport : WebSocket attendu pour les appels de boucle (main, subagent) ; "
         "compaction, /refine et résumé de branche passent en SSE par construction.",
         "Taux de cache de session : cacheRead / (input + cacheRead + cacheWrite) sur les "

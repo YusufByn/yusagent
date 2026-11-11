@@ -14,8 +14,9 @@ en tête (un run de PR en alerte est relancé 2 fois, décision du 04/11/2026) :
     présentes dans A et B et de même version) au-delà de max(2 × CV du total, 5 %), CV
     du total = `aggregate.cv` de la baseline (le plus grand de ses deux estimations).
 La section du coût agrégé donne aussi le coût pessimiste des mêmes tâches (T08b : `input`
-non caché au tarif d'écriture 30 min), avec le même seuil, à titre d'information : il ne
-déclenche pas d'alerte.
+non caché au tarif d'écriture 30 min) et le coût à cache théorique (YA-14 : miss serveur
+retirés, ruptures du harness comptées ; métrique de décision des A/B), avec le même seuil,
+à titre d'information : ils ne déclenchent pas d'alerte.
 Baseline : `baseline/<modèle de B>.json` (écrit par `baseline.py`) si `--baseline` n'est
 pas donné. Sans baseline, seules les régressions de résolution sont signalées : les
 écarts de coût et de tokens restent affichés, sans seuil.
@@ -163,12 +164,21 @@ def aggregate_check(pa: dict, pb: dict, baseline: dict | None,
     known = all(a is not None and b is not None for a, b in pessimistic)
     pess_a = sum(a for a, _ in pessimistic) if known else None
     pess_b = sum(b for _, b in pessimistic) if known else None
+    # YA-14 : coût à cache théorique des mêmes tâches, même seuil, sans alerte.
+    theoretical = [(pa[t].get("cost_theoretical_mean"), pb[t].get("cost_theoretical_mean"))
+                   for t in tasks]
+    known_th = all(a is not None and b is not None for a, b in theoretical)
+    th_a = sum(a for a, _ in theoretical) if known_th else None
+    th_b = sum(b for _, b in theoretical) if known_th else None
     return {"tasks": tasks, "missing": [t for t in agg["tasks"] if t not in tasks],
             "cost_a": cost_a, "cost_b": cost_b, "change": pct(cost_a, cost_b), "limit": limit,
             "cv_independent": agg.get("cv_independent"), "cv_passes": agg.get("cv_passes"),
             "cv": agg["cv"], "pessimistic_a": pess_a, "pessimistic_b": pess_b,
             "pessimistic_change": pct(pess_a, pess_b),
             "pessimistic_missing": [t for t, (a, b) in zip(tasks, pessimistic)
+                                    if a is None or b is None],
+            "theoretical_a": th_a, "theoretical_b": th_b, "theoretical_change": pct(th_a, th_b),
+            "theoretical_missing": [t for t, (a, b) in zip(tasks, theoretical)
                                     if a is None or b is None]}
 
 
@@ -184,6 +194,20 @@ def pessimistic_line(agg: dict) -> str:
             f"{fmt(agg['pessimistic_a'])} → {fmt(agg['pessimistic_b'])} "
             f"({fmt(agg['pessimistic_change'], 1)} %), seuil {agg['limit']:.1f} % "
             f"(celui du coût rapporté) : {'au-delà' if beyond else 'en deçà'}, sans alerte")
+
+
+def theoretical_line(agg: dict) -> str:
+    """Coût à cache théorique agrégé (YA-14), mêmes tâches et même seuil que le coût
+    rapporté ; information seule, sans alerte (la décision d'un A/B est dans ab_stats.py)."""
+    if agg["theoretical_change"] is None and agg["theoretical_missing"]:
+        return ("- Coût à cache théorique : non calculé (sans coût théorique : "
+                f"{', '.join(agg['theoretical_missing'])} ; `run.py --rereport <run>`)")
+    beyond = (agg["theoretical_change"] is not None
+              and abs(agg["theoretical_change"]) > agg["limit"])
+    return (f"- Coût à cache théorique (miss serveur retirés) : {fmt(agg['theoretical_a'])} → "
+            f"{fmt(agg['theoretical_b'])} ({fmt(agg['theoretical_change'], 1)} %), seuil "
+            f"{agg['limit']:.1f} % (celui du coût rapporté) : "
+            f"{'au-delà' if beyond else 'en deçà'}, sans alerte")
 
 
 def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) -> str:
@@ -246,6 +270,7 @@ def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) 
                   f"- Coût : {fmt(agg['cost_a'])} → {fmt(agg['cost_b'])} "
                   f"({fmt(agg['change'], 1)} %), seuil {agg['limit']:.1f} %",
                   pessimistic_line(agg),
+                  theoretical_line(agg),
                   f"- CV du total en baseline : indépendance {fmt(agg['cv_independent'], 3)}, "
                   f"passes {fmt(agg['cv_passes'], 3)}, retenu {fmt(agg['cv'], 3)} (le plus grand)"]
         if agg["missing"]:
@@ -263,6 +288,9 @@ def compare(a: dict, b: dict, baseline: dict | None, baseline_name: str | None) 
               f"- Coût pessimiste : {fmt(a['totals'].get('cost_pessimistic'))} → "
               f"{fmt(b['totals'].get('cost_pessimistic'))} "
               f"({fmt(pct(a['totals'].get('cost_pessimistic'), b['totals'].get('cost_pessimistic')), 1)} %)",
+              f"- Coût à cache théorique : {fmt(a['totals'].get('cost_theoretical'))} → "
+              f"{fmt(b['totals'].get('cost_theoretical'))} "
+              f"({fmt(pct(a['totals'].get('cost_theoretical'), b['totals'].get('cost_theoretical')), 1)} %)",
               f"- Tokens : {tok_a} → {tok_b} ({fmt(pct(tok_a, tok_b), 1)} %)",
               f"- Tours médians : {fmt(a['totals']['turns_median'], 1)} → "
               f"{fmt(b['totals']['turns_median'], 1)}",
