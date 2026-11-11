@@ -149,7 +149,7 @@ def launch(args, binary: Path, settings: Path, task: str, out: Path, note: dict,
     """Un bras : un appel à run.py ; durée, code, dossier de run, surcoût."""
     cmd = [sys.executable, "-I", str(RUN_PY), "--binary", str(binary), "--provider",
            "openai-codex", "--model", args.model, "--effort", args.effort, "--settings",
-           str(settings), "--runs", "1", "--tasks", task, "--out", str(out),
+           str(settings.resolve()), "--runs", "1", "--tasks", task, "--out", str(out),
            "--idle-timeout", str(args.idle_timeout), "--ab", json.dumps(note, ensure_ascii=False)]
     if args.capture:
         cmd.append("--capture")
