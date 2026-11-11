@@ -1,6 +1,6 @@
 # Cahier des charges yusAgent
 
-Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Version 4.2 (08/11/2026) : builds publiés avec « OAuth abonnement pour provider » à côté des clés API, aucun build donné à des testeurs avant le sandbox du kernel, CLI renommé yusAgent. Version 4.1 (03/11/2026) : constats de l'audit d'entrée du fork (cœur Rust, un seul tool `python_repl`). Version 4 (31/10/2026) : base = fork de Prime Agent (MIT), plus de contrainte de langage pour le cœur. Version 3 (28/10/2026) : kernel Python comme outil d'exécution unique, bash appelé en async depuis le kernel. Version 2 (24/10/2026) : priorité à la capacité maximale du modèle.
+Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Version 4.3 (11/11/2026) : ordre de travail après la PR #18, variante bash natif en réglage, YA-11 découpé. Version 4.2 (08/11/2026) : builds publiés avec « OAuth abonnement pour provider » à côté des clés API, aucun build donné à des testeurs avant le sandbox du kernel, CLI renommé yusAgent. Version 4.1 (03/11/2026) : constats de l'audit d'entrée du fork (cœur Rust, un seul tool `python_repl`). Version 4 (31/10/2026) : base = fork de Prime Agent (MIT), plus de contrainte de langage pour le cœur. Version 3 (28/10/2026) : kernel Python comme outil d'exécution unique, bash appelé en async depuis le kernel. Version 2 (24/10/2026) : priorité à la capacité maximale du modèle.
 
 ## Journal des décisions
 
@@ -35,6 +35,11 @@ Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Versio
 | 08/11/2026 | Auth des builds publiés : les builds publiés v2 gardent « OAuth abonnement pour provider » à côté des clés API, OAuth non désactivé par défaut. Remplace « builds publiés en v2 : clés API uniquement » du 28/10 | Validé | YA-02, YA-16 |
 | 08/11/2026 | Testeurs : aucun build donné à des testeurs avant que le sandbox du kernel (YA-11) soit fonctionnel. Le gate de publication s'applique dès la première distribution à des testeurs, pas seulement à la publication publique | Validé | YA-11, YA-16 |
 | 08/11/2026 | CLI : avant les testeurs, CLI renommé yusAgent (binaire `yusagent`, dossier `~/.yusagent`, version et aide, plus de mention de Prime Agent dans l'interface). Refonte de l'affichage du CLI après l'extension (YA-10), sur le modèle de ce que l'extension affiche, sans casser le mode non interactif (`-p`) ni les options utilisées par `bench/smoke/run.py`. Remplace « pas de refonte du CLI interactif » du 04/11 (décision non portée au journal du CDC) | Validé | YA-10, YA-14, YA-16 |
+| 11/11/2026 | Ordre de travail après la PR #18 : d'abord le banc (métrique « coût à cache théorique » calculée sur le préfixe commun entre requêtes consécutives, A/B entrelacés par tâche avec ordre tiré au sort, bootstrap sur les tâches), puis A/B `rlm.spawn` on/off et nouvelle baseline sur la config retenue, puis la suite du plan | Validé | YA-06, YA-14 |
+| 11/11/2026 | Variante « bash natif » livrée en réglage dans le même ticket que `edit` en tool natif (YA-03), A/B smoke avant la réduction du prompt (YA-09) | Validé | YA-03, YA-09, YA-14 |
+| 11/11/2026 | YA-11 découpé : modèle de permissions et `session/request_permission` dans le cœur avant YA-10 ; sandbox du kernel ensuite | Validé | YA-10, YA-11 |
+| 11/11/2026 | Outillage de coût du backend d'abonnement gelé : plus de raffinement tant qu'il n'y a pas de clés API | Validé | YA-13 |
+| 11/11/2026 | PR vers upstream (correctifs génériques) : après les testeurs, depuis un fork GitHub séparé `YusufByn/prime-agent`, branches créées depuis `upstream/main`, relecture par Yusuf avant ouverture | Validé | YA-16 |
 
 ## Résumé
 
