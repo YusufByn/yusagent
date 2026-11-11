@@ -1160,7 +1160,7 @@ def write_report(run_dir: Path, report: dict) -> None:
                 "binary_version", "models_bundled_sha256", "provider", "model", "model_source",
                 "model_fiche_hypotheses", "effort", "settings_file", "settings_non_default", "prices_version",
                 "prices_sha256", "cache_write_price", "idle_timeout_s", "hosts", "runs", "tasks",
-                "rereport"):
+                "timing_s", "ab", "rereport"):
         lines.append(f"| {key} | `{json.dumps(h.get(key), ensure_ascii=False)}` |")
     p, w = report["probe"], report["warmup"]
     lines += ["", "## Sonde réseau (serveur de capture, sandbox)", "",
@@ -1490,6 +1490,9 @@ def parse_args() -> argparse.Namespace:
                         help="arrête une tâche dont aucun octet ne passe par le reverse proxy "
                              f"pendant S secondes (statut stalled ; défaut {IDLE_TIMEOUT_S}, "
                              "0 : désactivé)")
+    parser.add_argument("--ab", default=None, metavar="JSON",
+                        help="A/B (tools/ab.py) : objet JSON noté dans l'en-tête du rapport "
+                             "(bras, passe, graine, écart de réglages)")
     parser.add_argument("--record-hosts", action="store_true",
                         help="run de chauffe réel, proxy CONNECT en enregistrement : écrit "
                              f"{HOSTS.relative_to(REPO)}")
@@ -1523,7 +1526,8 @@ def main() -> None:
         fail("RUNS doit valoir au moins 1")
     if args.idle_timeout < 0:
         fail("--idle-timeout doit valoir 0 ou plus")
-
+    ab_note = json.loads(args.ab) if args.ab else None
+    started = time.monotonic()
     if args.capture_spawn and not args.capture:
         fail("--capture-spawn demande --capture")
     if args.record_hosts and args.capture:
@@ -1554,6 +1558,7 @@ def main() -> None:
     prepare_kernel(binary, cache)
     for task in tasks:
         prepare_task(task, cache)
+    prepare_s = round(time.monotonic() - started, 2)
 
     manifest = binary_manifest(binary)
     short = (manifest or {}).get("commit") or git("rev-parse", "HEAD") or "nocommit"
@@ -1564,10 +1569,14 @@ def main() -> None:
         connect = proxies.ConnectProxy(run_dir / "connect.ndjson", hosts,
                                        record=args.record_hosts)
         proxies.serve(connect)
+        timing = {"prepare": prepare_s}
         try:
             # En enregistrement, le proxy CONNECT accepte tout hôte : pas de sonde.
+            mark = time.monotonic()
             probe_result = None if args.record_hosts else probe(binary, cache,
                                                                 run_dir / "probe", connect, tasks)
+            timing["probe"] = round(time.monotonic() - mark, 2)
+            mark = time.monotonic()
             warm = warmup(binary, cache, run_dir / "warmup", model, args.effort, sources[model],
                           settings, connect, args.capture, warmup_args)
             if args.record_hosts:
@@ -1586,6 +1595,8 @@ def main() -> None:
                 fail(f"préparation en échec : le run de chauffe de {model} n'a pas abouti "
                      f"(arrêt {warm['stop_reason']}, erreur {warm['error']!r}), voir "
                      f"{run_dir}/warmup")
+            timing["warmup"] = round(time.monotonic() - mark, 2)
+            mark = time.monotonic()
             results = []
             for task in tasks:
                 for index in range(1, args.runs + 1):
@@ -1597,6 +1608,7 @@ def main() -> None:
                                       idle_timeout=args.idle_timeout)
                     print(f"  {task['id']} run {index} : {result['status']}")
                     results.append(result)
+            timing["tasks"] = round(time.monotonic() - mark, 2)
         finally:
             connect.shutdown()
             connect.server_close()
@@ -1615,7 +1627,7 @@ def main() -> None:
             "settings": settings, "settings_non_default": known_settings(settings),
             "prices_version": prices.get("version"), "prices_sha256": sha256(PRICES),
             "cache_write_price": CACHE_WRITE_PRICE, "idle_timeout_s": args.idle_timeout,
-            "hosts": sorted(hosts),
+            "timing_s": timing, "ab": ab_note, "hosts": sorted(hosts),
             "runs": args.runs, "tasks": [t["id"] for t in tasks],
             "tools": {"python": platform.python_version(), "node": version_of(["node", "--version"]),
                       "uv": version_of(["uv", "--version"])},
