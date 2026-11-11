@@ -1,24 +1,43 @@
 #!/usr/bin/env python3
-"""Statistiques d'un A/B apparié du smoke bench : paires de runs (A = référence, B = variante).
+"""Statistiques d'un A/B apparié du smoke bench (A = référence, B = variante).
 
 Usage :
-    python3 -I bench/smoke/tools/ab_stats.py --baseline <fichier> <A1> <B1> [<A2> <B2> ...]
+    python3 -I bench/smoke/tools/ab_stats.py --plan <runs/ab-…/ab.json> [--baseline <fichier>]
+    python3 -I bench/smoke/tools/ab_stats.py [--baseline <fichier>] <A1> <B1> [<A2> <B2> ...]
 
-Lit les `report.json` (run.py) et la liste des tâches stables de la baseline (`aggregate.tasks`).
+Deux formes d'A/B :
+  - entrelacé par tâche (`tools/ab.py`, `--plan`) : un run par bras, par tâche et par passe ;
+    une unité = (passe, tâche), ses deux bras lancés dos à dos ;
+  - par passes complètes (forme du 06/11, runs donnés par paires A B) : une unité = (paire,
+    tâche), chaque run porte toutes les tâches.
+
+Métrique de décision : coût à cache théorique (`cost.theoretical_total` de run.py : miss
+serveur retirés, ruptures de préfixe du harness comptées). Coût rapporté et pessimiste,
+résolution et tours sont publiés à côté.
+
+Règle d'écart sur erreur provider (README, « A/B : erreurs provider », validée le
+11/11/2026), appliquée automatiquement : en A/B entrelacé, une erreur provider sur un bras
+écarte l'unité (la tâche de cette passe, ses deux bras) ; par passes complètes, elle écarte
+la paire entière. Erreurs provider : statut `stalled` (garde-fou d'inactivité), `timeout`
+sans activité des journaux (`proxy.ndjson`, `.usage.ndjson`) pendant au moins
+`--stall-gap` secondes avant l'arrêt (flux bloqué), réponse en `stopReason` `error` (session
+principale ou sous-agent), requête proxy à statut autre que 101 ou 200 (429…), lancement de
+`run.py` en échec (A/B entrelacé). Les autres incidents (`timeout` d'une tâche longue,
+`agent_error` ou `harness_error` sans erreur provider) sont listés sans écarter l'unité.
+
 Publie, en Markdown sur la sortie standard :
-  - par paire : coût rapporté et pessimiste, somme des tâches stables et des tâches communes,
-    écart relatif B vs A ; moyenne des écarts et IC 95 % par bootstrap sur les paires ;
-  - par tâche : coût moyen de chaque bras sur les passes, écart relatif ; IC 95 % de l'écart
-    agrégé (rapport des sommes) par bootstrap sur les tâches ;
-  - par bras : résolution, tours de la session principale, tokens envoyés (input + cacheRead
-    + cacheWrite), cache lu et écrit, miss serveur, part du coût des sous-agents ;
-  - par run : invalidations du journal d'usage par cause, sessions touchées par le masquage ;
-  - incidents par run : tâches hors `resolved`/`failed`, réponses du provider en erreur
-    (`stopReason` `error`, message), requêtes proxy à statut autre que 101 ou 200.
+  - unités retenues et écartées (avec la cause) ;
+  - par tâche : moyenne de chaque bras sur ses unités retenues, écart apparié B − A ;
+  - écart agrégé (somme B / somme A − 1) et moyenne des écarts appariés en $, IC 95 % par
+    bootstrap sur les tâches, pour le coût théorique, rapporté et pessimiste, sur les tâches
+    stables de la baseline (si donnée) et sur toutes ;
+  - par passe : sommes des unités retenues, écart ;
+  - par bras : résolution, tours, tokens, cache lu rapporté et théorique, miss serveur ;
+  - invalidations journalisées par cause ; incidents ; surcoût par lancement (A/B entrelacé).
 
-Bootstrap : percentiles 2,5 et 97,5, 10 000 tirages, graine fixe (résultat reproductible).
-Avec peu de paires, l'IC sur les paires ne prend que quelques valeurs distinctes : il est
-publié pour mémoire. Bibliothèque standard uniquement.
+Bootstrap : percentiles 2,5 et 97,5, `--draws` tirages (10 000), graine `--seed` (0) :
+sortie reproductible. `--no-exclusion` (sensibilité) garde les unités écartées.
+Bibliothèque standard uniquement.
 """
 
 from __future__ import annotations
@@ -29,18 +48,22 @@ import random
 import statistics
 from pathlib import Path
 
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[2]
 DRAWS = 10_000
 SEED = 0
+STALL_GAP_S = 300  # timeout « flux bloqué » : aucune activité des journaux pendant ce délai
+MEASURES = {"théorique": "theoretical_total", "rapporté": "total",
+            "pessimiste": "pessimistic_total"}
+DECISION = "théorique"
 
 
-def load(run: Path) -> dict:
-    report = json.loads((run / "report.json").read_text())
-    report["_name"] = run.name
-    return report
+def pct(a: float, b: float) -> float | None:
+    return (b - a) / a * 100 if a else None
 
 
-def pct(a: float, b: float) -> float:
-    return (b - a) / a * 100
+def fmt_pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:+.1f}"
 
 
 def ci(values: list[float]) -> tuple[float, float]:
@@ -48,156 +71,389 @@ def ci(values: list[float]) -> tuple[float, float]:
     return values[int(0.025 * len(values))], values[int(0.975 * len(values)) - 1]
 
 
-def bootstrap(items: list, stat) -> tuple[float, float]:
-    rng = random.Random(SEED)
-    return ci([stat([rng.choice(items) for _ in items]) for _ in range(DRAWS)])
+def bootstrap(items: list, stat, draws: int, seed: int) -> tuple[float, float]:
+    rng = random.Random(seed)
+    samples = []
+    for _ in range(draws):
+        value = stat([rng.choice(items) for _ in items])
+        if value is not None:
+            samples.append(value)
+    return ci(samples) if samples else (float("nan"), float("nan"))
 
 
-def cost(report: dict, tasks: list[str], key: str) -> float:
-    return sum(report["per_task"][t][key] for t in tasks)
+def read_ndjson(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def arm(reports: list[dict], tasks: list[str]) -> dict:
-    """Mesures d'un bras, sommées sur les tâches puis moyennées sur les passes."""
-    def per_pass(f):
-        return statistics.mean(sum(f(r["per_task"][t]) for t in tasks) for r in reports)
-
-    def tok(cat):
-        return lambda t: t["tokens_by_category_mean"][cat] or 0
-
-    return {
-        "resolved": [sum(r["per_task"][t]["resolved_rate"] >= 0.5 for t in tasks) for r in reports],
-        "turns": per_pass(lambda t: t["turns_mean"]),
-        "sent": per_pass(lambda t: tok("input")(t) + tok("cacheRead")(t) + tok("cacheWrite")(t)),
-        "input": per_pass(tok("input")),
-        "cacheRead": per_pass(tok("cacheRead")),
-        "cacheWrite": per_pass(tok("cacheWrite")),
-        "misses": per_pass(lambda t: t["server_misses"]),
-        "sub_share": statistics.mean(r["totals"]["subagents"]["cost_share"] for r in reports),
-    }
+def load_report(run: Path) -> dict:
+    report = json.loads((run / "report.json").read_text())
+    report["_dir"] = run
+    return report
 
 
-def incidents(run: Path, report: dict) -> list[str]:
-    """Tâches hors `resolved`/`failed`, erreurs du provider, statuts proxy inattendus."""
-    found = [f"{r['task']} : statut `{r['status']}`" for r in report["results"]
-             if r["status"] not in ("resolved", "failed")]
-    for path in sorted(run.glob("tasks/*/run-*/sessions/**/*.jsonl")):
-        for line in path.read_text().splitlines():
-            message = json.loads(line).get("message")
+def require_theoretical(report: dict) -> None:
+    missing = [r["task"] for r in report["results"]
+               if r["cost"].get("theoretical_total") is None and r["calls"]["total"]]
+    if missing:
+        raise SystemExit(f"{report['_dir'].name} : pas de coût à cache théorique ({missing}) : "
+                         f"python3 -I bench/smoke/run.py --rereport {report['_dir']}")
+
+
+# --- Incidents -------------------------------------------------------------------------
+
+
+def task_dir(run: Path, result: dict) -> Path:
+    return run / "tasks" / result["task"] / f"run-{result['run']}"
+
+
+def last_activity(out: Path) -> tuple[float | None, float | None]:
+    """(dernière activité, fin) d'un run de tâche en ms : dernière requête proxy ou fin
+    d'appel du journal d'usage ; fin = dernier événement du journal du proxy."""
+    proxy = read_ndjson(out / "proxy.ndjson") if (out / "proxy.ndjson").exists() else []
+    usage = [r for p in sorted((out / "sessions").rglob("*.usage.ndjson")) for r in read_ndjson(p)]
+    marks = [e["ts"] for e in proxy if e.get("event") == "request"]
+    marks += [r["startMs"] + (r.get("durationMs") or 0) for r in usage if r.get("startMs")]
+    end = max((e["ts"] for e in proxy), default=None)
+    return (max(marks) if marks else None), end
+
+
+def incidents(run: Path, result: dict, stall_gap: float) -> list[tuple[str, bool]]:
+    """Incidents d'un run de tâche : (cause, erreur provider ?)."""
+    out = task_dir(run, result)
+    found: list[tuple[str, bool]] = []
+    status = result["status"]
+    if status == "stalled":
+        found.append(("flux bloqué (garde-fou d'inactivité, statut `stalled`)", True))
+    elif status == "timeout":
+        last, end = last_activity(out)
+        gap = (end - last) / 1000 if last is not None and end is not None else None
+        if gap is not None and gap >= stall_gap:
+            found.append((f"flux bloqué (timeout, aucune activité des journaux pendant "
+                          f"{gap:.0f} s avant l'arrêt)", True))
+        else:
+            found.append((f"timeout, tâche longue (dernière activité {gap if gap is None else round(gap)}"
+                          " s avant l'arrêt)", False))
+    for path in sorted((out / "sessions").rglob("*.jsonl")):
+        for entry in read_ndjson(path):
+            message = entry.get("message")
             if isinstance(message, dict) and message.get("stopReason") == "error":
                 kind = "sous-agent" if "subagents" in path.parts else "principale"
-                found.append(f"{path.parts[-5 if kind == 'sous-agent' else -4]} : session {kind} "
-                             f"`{path.stem[:13]}`, erreur provider « {message.get('errorMessage')} »")
-    for path in sorted(run.glob("tasks/*/run-*/proxy.ndjson")):
-        for line in path.read_text().splitlines():
-            r = json.loads(line)
-            if r["event"] == "request" and r.get("status") not in ("101", "200"):
-                found.append(f"{path.parts[-3]} : requête proxy statut {r.get('status')}")
+                found.append((f"session {kind} `{path.stem[:13]}`, erreur provider "
+                              f"« {message.get('errorMessage')} »", True))
+    if (out / "proxy.ndjson").exists():
+        for entry in read_ndjson(out / "proxy.ndjson"):
+            if entry.get("event") == "request" and entry.get("status") not in ("101", "200"):
+                found.append((f"requête proxy statut {entry.get('status')}", True))
+    if status in ("agent_error", "harness_error") and not any(p for _, p in found):
+        found.append((f"statut `{status}` sans erreur provider", False))
     return found
 
 
-def invalidations(run: Path) -> str:
-    """Invalidations journalisées par cause, et sessions touchées (principales, sous-agents)."""
+# --- Unités ------------------------------------------------------------------------------
+
+
+def one_result(report: dict, task: str) -> dict:
+    found = [r for r in report["results"] if r["task"] == task]
+    if len(found) != 1:
+        raise SystemExit(f"{report['_dir'].name} : {len(found)} résultat(s) pour {task}, 1 attendu")
+    return found[0]
+
+
+def units_from_plan(plan_path: Path, stall_gap: float) -> tuple[list[dict], dict]:
+    """Unités (passe, tâche) d'un A/B entrelacé ; écart par unité."""
+    ab = json.loads(plan_path.read_text())
+    units: dict[tuple[int, str], dict] = {}
+    for arm in ab["arms"]:
+        key = (arm["pass"], arm["task"])
+        unit = units.setdefault(key, {"pass": arm["pass"], "task": arm["task"],
+                                      "order": arm["order"], "arms": {}, "causes": [],
+                                      "notes": []})
+        run_dir = REPO / arm["run_dir"] if arm.get("run_dir") else None
+        if arm["exit"] != 0 or run_dir is None or not (run_dir / "report.json").exists():
+            unit["causes"].append(f"bras {arm['arm']} : lancement en échec (code {arm['exit']})")
+            continue
+        report = load_report(run_dir)
+        require_theoretical(report)
+        result = one_result(report, arm["task"])
+        unit["arms"][arm["arm"]] = {"result": result, "run": run_dir, "report": report}
+        for cause, provider in incidents(run_dir, result, stall_gap):
+            (unit["causes"] if provider else unit["notes"]).append(f"bras {arm['arm']} : {cause}")
+    for key, unit in units.items():
+        missing = {"A", "B"} - set(unit["arms"]) - {c.split()[1] for c in unit["causes"]}
+        for side in sorted(missing):
+            unit["causes"].append(f"bras {side} : absent du plan (A/B interrompu)")
+    return sorted(units.values(), key=lambda u: (u["pass"], u["task"])), ab
+
+
+def units_from_pairs(runs: list[Path], stall_gap: float) -> tuple[list[dict], None]:
+    """Unités (paire, tâche) d'un A/B par passes complètes ; écart par paire entière."""
+    reports = [load_report(r) for r in runs]
+    for report in reports:
+        require_theoretical(report)
+    common = sorted(set.intersection(*({r["task"] for r in rep["results"]} for rep in reports)))
+    units = []
+    for i, (a, b) in enumerate(zip(reports[0::2], reports[1::2]), 1):
+        pair_causes = []
+        pair_units = []
+        for task in common:
+            unit = {"pass": i, "task": task, "order": "AB", "arms": {}, "causes": [],
+                    "notes": []}
+            for side, rep in (("A", a), ("B", b)):
+                result = one_result(rep, task)
+                unit["arms"][side] = {"result": result, "run": rep["_dir"], "report": rep}
+                for cause, provider in incidents(rep["_dir"], result, stall_gap):
+                    text = f"bras {side} : {task} : {cause}"
+                    (pair_causes if provider else unit["notes"]).append(text)
+            pair_units.append(unit)
+        for unit in pair_units:
+            unit["causes"] = [f"paire {i} écartée entière ({c})" for c in pair_causes]
+        units += pair_units
+    return units, None
+
+
+# --- Mesures -----------------------------------------------------------------------------
+
+
+def cost(result: dict, measure: str) -> float:
+    value = result["cost"].get(MEASURES[measure])
+    return value if value is not None else 0.0
+
+
+def tokens(result: dict, cat: str) -> float:
+    return result["tokens"].get(cat) or 0
+
+
+def per_task(units: list[dict]) -> dict[str, dict]:
+    """Moyenne de chaque bras sur les unités retenues d'une tâche."""
+    tasks: dict[str, dict] = {}
+    for task in sorted({u["task"] for u in units}):
+        kept = [u for u in units if u["task"] == task]
+        row = {"units": len(kept)}
+        for side in ("A", "B"):
+            results = [u["arms"][side]["result"] for u in kept]
+            for m in MEASURES:
+                row[side, m] = statistics.mean(cost(r, m) for r in results)
+            row[side, "resolved"] = sum(r["resolved"] for r in results)
+            row[side, "turns"] = statistics.mean(r["calls"]["turns"] for r in results)
+        tasks[task] = row
+    return tasks
+
+
+def aggregate_lines(table: dict[str, dict], tasks: list[str], label: str, draws: int,
+                    seed: int) -> list[str]:
+    lines = []
+    if not tasks:
+        return [f"- {label} : aucune tâche retenue"]
+    for m in MEASURES:
+        def ratio(sample, m=m):
+            return pct(sum(table[t]["A", m] for t in sample), sum(table[t]["B", m] for t in sample))
+
+        def mean_diff(sample, m=m):
+            return statistics.mean(table[t]["B", m] - table[t]["A", m] for t in sample)
+
+        lo, hi = bootstrap(tasks, ratio, draws, seed)
+        dlo, dhi = bootstrap(tasks, mean_diff, draws, seed)
+        rels = [pct(table[t]["A", m], table[t]["B", m]) for t in tasks]
+        rels = [r for r in rels if r is not None]
+        bold = "**" if m == DECISION else ""
+        lines.append(f"- {bold}{label}, {m}{' (décision)' if m == DECISION else ''} : "
+                     f"{fmt_pct(ratio(tasks))} % [{lo:+.1f} ; {hi:+.1f}]{bold} ; écart apparié "
+                     f"moyen {mean_diff(tasks):+.4f} $ [{dlo:+.4f} ; {dhi:+.4f}] ; médiane des "
+                     f"écarts par tâche {fmt_pct(statistics.median(rels) if rels else None)} %")
+    return lines
+
+
+def arm_measures(units: list[dict], side: str) -> dict:
+    """Sommes sur les unités retenues, moyennées par passe."""
+    by_pass: dict[int, list[dict]] = {}
+    for u in units:
+        by_pass.setdefault(u["pass"], []).append(u["arms"][side]["result"])
+
+    def per_pass(f):
+        return statistics.mean(sum(f(r) for r in rs) for rs in by_pass.values())
+
+    def sent(r):
+        return tokens(r, "input") + tokens(r, "cacheRead") + tokens(r, "cacheWrite")
+
+    return {"resolved": {p: sum(r["resolved"] for r in rs) for p, rs in sorted(by_pass.items())},
+            "turns": per_pass(lambda r: r["calls"]["turns"]),
+            "sent": per_pass(sent), "input": per_pass(lambda r: tokens(r, "input")),
+            "cacheRead": per_pass(lambda r: tokens(r, "cacheRead")),
+            "cacheRead_th": per_pass(lambda r: (r["cost"].get("theoretical") or {})
+                                     .get("cacheRead") or 0),
+            "cacheWrite": per_pass(lambda r: tokens(r, "cacheWrite")),
+            "misses": per_pass(lambda r: len(r.get("server_misses", []))),
+            "sub_cost": per_pass(lambda r: (r.get("subagents") or {}).get("cost") or 0),
+            "cost": per_pass(lambda r: cost(r, "rapporté"))}
+
+
+def invalidations(root: Path) -> tuple[dict[str, int], dict[str, list[int]]]:
+    """Invalidations journalisées sous `root`, par cause, et sessions touchées par le
+    masquage (principales, sous-agents : [touchées, total])."""
     causes: dict[str, int] = {}
     touched = {"principales": [0, 0], "sous-agents": [0, 0]}
-    for path in run.glob("tasks/*/run-*/sessions/**/*.usage.ndjson"):
+    for path in sorted(root.rglob("*.usage.ndjson")):
         hit = False
-        for line in path.read_text().splitlines():
-            cause = (json.loads(line).get("invalidation") or {}).get("cause")
+        for record in read_ndjson(path):
+            cause = (record.get("invalidation") or {}).get("cause")
             if cause:
                 causes[cause] = causes.get(cause, 0) + 1
                 hit = hit or cause == "masking"
         side = touched["sous-agents" if "subagents" in path.parts else "principales"]
         side[0] += hit
         side[1] += 1
-    return (", ".join(f"{c} {n}" for c, n in sorted(causes.items())) or "aucune") + " ; sessions " \
-        "touchées par le masquage : " + ", ".join(f"{k} {v[0]}/{v[1]}" for k, v in touched.items())
+    return causes, touched
+
+
+def merge_invalidations(parts: list[tuple[dict, dict]]) -> str:
+    causes: dict[str, int] = {}
+    touched = {"principales": [0, 0], "sous-agents": [0, 0]}
+    for c, t in parts:
+        for k, n in c.items():
+            causes[k] = causes.get(k, 0) + n
+        for k, (hit, total) in t.items():
+            touched[k][0] += hit
+            touched[k][1] += total
+    return ((", ".join(f"{c} {n}" for c, n in sorted(causes.items())) or "aucune")
+            + " ; sessions touchées par le masquage : "
+            + ", ".join(f"{k} {v[0]}/{v[1]}" for k, v in touched.items()))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--baseline", type=Path, required=True)
-    parser.add_argument("runs", type=Path, nargs="+", help="A1 B1 A2 B2 ...")
+    parser.add_argument("--plan", type=Path, help="ab.json d'un A/B entrelacé (tools/ab.py)")
+    parser.add_argument("--baseline", type=Path, help="tâches stables : `aggregate.tasks`")
+    parser.add_argument("--draws", type=int, default=DRAWS)
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--stall-gap", type=float, default=STALL_GAP_S,
+                        help=f"timeout classé « flux bloqué » au-delà (s, défaut {STALL_GAP_S})")
+    parser.add_argument("--no-exclusion", action="store_true",
+                        help="sensibilité : garde les unités touchées par une erreur provider")
+    parser.add_argument("runs", type=Path, nargs="*", help="A1 B1 A2 B2 ... (passes complètes)")
     args = parser.parse_args()
-    if len(args.runs) % 2:
+    if bool(args.plan) == bool(args.runs):
+        parser.error("--plan ou des paires de runs (A1 B1 ...), pas les deux")
+    if args.runs and len(args.runs) % 2:
         parser.error("nombre pair de runs attendu (A1 B1 A2 B2 ...)")
-    reports = [load(r) for r in args.runs]
-    pairs = list(zip(reports[0::2], reports[1::2]))
-    stable = json.loads(args.baseline.read_text())["aggregate"]["tasks"]
-    common = sorted(set.intersection(*(set(r["per_task"]) for r in reports)))
-    stable = [t for t in stable if t in common]
-    sets = {"stables": stable, "toutes": common}
-    measures = {"rapporté": "cost_mean", "pessimiste": "cost_pessimistic_mean"}
+    if args.plan:
+        units, ab = units_from_plan(args.plan, args.stall_gap)
+        form = "entrelacé par tâche"
+    else:
+        units, ab = units_from_pairs(args.runs, args.stall_gap)
+        form = "par passes complètes"
+    dropped = [u for u in units if u["causes"]]
+    kept = units if args.no_exclusion else [u for u in units if not u["causes"]]
+    stable = (json.loads(args.baseline.read_text())["aggregate"]["tasks"] if args.baseline
+              else None)
+    table = per_task(kept)
+    tasks = sorted(table)
+    sets = [("toutes", tasks)]
+    if stable is not None:
+        sets.insert(0, ("stables", [t for t in stable if t in table]))
 
-    out = [f"Paires : {len(pairs)} ; tâches stables : {len(stable)} ; tâches communes : "
-           f"{len(common)}", "", "## Par paire", "",
-           "| Paire | A | B | Tâches | Coût | A $ | B $ | Écart % |", "|---|---|---|---|---|---|---|---|"]
-    for i, (a, b) in enumerate(pairs, 1):
-        for sname, tasks in sets.items():
-            for mname, key in measures.items():
-                ca, cb = cost(a, tasks, key), cost(b, tasks, key)
-                out.append(f"| {i} | {a['_name'][:16]} | {b['_name'][:16]} | {sname} | {mname} | "
-                           f"{ca:.4f} | {cb:.4f} | {pct(ca, cb):+.1f} |")
-    out += ["", "Moyenne des écarts par paire, IC 95 % par bootstrap sur les paires :", ""]
-    for sname, tasks in sets.items():
-        for mname, key in measures.items():
-            d = [pct(cost(a, tasks, key), cost(b, tasks, key)) for a, b in pairs]
-            lo, hi = bootstrap(d, statistics.mean)
-            out.append(f"- {sname}, {mname} : {statistics.mean(d):+.1f} % [{lo:+.1f} ; {hi:+.1f}] "
-                       f"(paires : {', '.join(f'{x:+.1f}' for x in d)})")
+    out = [f"A/B {form} ; unités (passe, tâche) : {len(units)}, retenues {len(kept)}, écartées "
+           f"{0 if args.no_exclusion else len(dropped)} ; tâches retenues : {len(tasks)}"
+           + (f" (stables : {len(sets[0][1])})" if stable is not None else "")]
+    if ab is not None:
+        out += [f"Graine de l'ordre des bras : `{ab['seed']}` ({ab['seed_source']}) ; écart de "
+                "réglages (A → B) : " + (", ".join(f"`{k}` {json.dumps(v[0])} → "
+                                                   f"{json.dumps(v[1])}"
+                                                   for k, v in ab["settings_diff"].items())
+                                         or "aucun (A/A)")
+                + f" ; garde-fou d'inactivité {ab.get('idle_timeout_s')} s"]
+    out += [f"Métrique de décision : coût à cache théorique. Bootstrap sur les tâches, "
+            f"{args.draws} tirages, graine {args.seed}.", "", "## Unités écartées (erreur provider)", ""]
+    if args.no_exclusion:
+        out.append("- **sensibilité (`--no-exclusion`)** : unités gardées malgré leurs erreurs "
+                   "provider, listées ci-dessous")
+    groups: dict[tuple, list[str]] = {}
+    for u in dropped:
+        groups.setdefault((u["pass"], tuple(u["causes"])), []).append(u["task"])
+    for (p, causes), names in groups.items():
+        whole = ab is None and len(names) == len([u for u in units if u["pass"] == p])
+        where = "toutes ses tâches" if whole else ", ".join(names)
+        out.append(f"- passe {p} ({where}) : " + "; ".join(causes))
+    if not groups:
+        out.append("- aucune")
 
-    out += ["", "## Par tâche", "", "Coût moyen sur les passes de chaque bras.", "",
-            "| Tâche | Stable | A $ | B $ | Écart % | A pess. $ | B pess. $ | Écart pess. % | "
-            "Résolue A | Résolue B |", "|---|---|---|---|---|---|---|---|---|---|"]
-    mean_cost = {}
-    for t in common:
-        row = {}
-        for side, idx in (("A", 0), ("B", 1)):
-            for mname, key in measures.items():
-                row[side, mname] = statistics.mean(p[idx]["per_task"][t][key] for p in pairs)
-            row[side, "res"] = sum(p[idx]["per_task"][t]["resolved_rate"] >= 0.5 for p in pairs)
-        mean_cost[t] = row
-        out.append(f"| {t} | {'oui' if t in stable else 'non'} | {row['A', 'rapporté']:.4f} | "
-                   f"{row['B', 'rapporté']:.4f} | {pct(row['A', 'rapporté'], row['B', 'rapporté']):+.1f} | "
-                   f"{row['A', 'pessimiste']:.4f} | {row['B', 'pessimiste']:.4f} | "
-                   f"{pct(row['A', 'pessimiste'], row['B', 'pessimiste']):+.1f} | "
-                   f"{row['A', 'res']}/{len(pairs)} | {row['B', 'res']}/{len(pairs)} |")
-    out += ["", "Écart agrégé (somme B / somme A − 1), IC 95 % par bootstrap sur les tâches :", ""]
-    for sname, tasks in sets.items():
-        for mname in measures:
-            def agg(sample, m=mname):
-                return pct(sum(mean_cost[t]["A", m] for t in sample),
-                           sum(mean_cost[t]["B", m] for t in sample))
-            per_task = [pct(mean_cost[t]["A", mname], mean_cost[t]["B", mname]) for t in tasks]
-            lo, hi = bootstrap(tasks, agg)
-            out.append(f"- {sname}, {mname} : {agg(tasks):+.1f} % [{lo:+.1f} ; {hi:+.1f}] ; "
-                       f"médiane des écarts par tâche {statistics.median(per_task):+.1f} %")
+    out += ["", "## Par tâche", "",
+            "Moyenne de chaque bras sur les unités retenues de la tâche.", "",
+            "| Tâche | Stable | Unités | A th. $ | B th. $ | Écart th. % | A $ | B $ | Écart % | "
+            "A pess. $ | B pess. $ | Écart pess. % | Résolue A | Résolue B | Tours A | Tours B |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for t in tasks:
+        r = table[t]
+        cells = []
+        for m in MEASURES:
+            cells += [f"{r['A', m]:.4f}", f"{r['B', m]:.4f}", fmt_pct(pct(r["A", m], r["B", m]))]
+        out.append(f"| {t} | {'-' if stable is None else ('oui' if t in stable else 'non')} | "
+                   f"{r['units']} | " + " | ".join(cells)
+                   + f" | {r['A', 'resolved']}/{r['units']} | {r['B', 'resolved']}/{r['units']} | "
+                   f"{r['A', 'turns']:.1f} | {r['B', 'turns']:.1f} |")
 
-    out += ["", "## Par bras", "",
-            "Sommes sur les tâches communes, moyennées sur les passes (résolution : par passe).", "",
-            "| Mesure | A | B | Écart % |", "|---|---|---|---|"]
-    ma = arm([a for a, _ in pairs], common)
-    mb = arm([b for _, b in pairs], common)
-    out.append(f"| Tâches résolues par passe | {', '.join(map(str, ma['resolved']))} (total "
-               f"{sum(ma['resolved'])}) | {', '.join(map(str, mb['resolved']))} (total "
-               f"{sum(mb['resolved'])}) | |")
-    for key, label in (("turns", "Tours de la session principale"),
-                       ("sent", "Tokens envoyés (input + cacheRead + cacheWrite)"),
-                       ("input", "Input non caché"), ("cacheRead", "Cache lu"),
-                       ("cacheWrite", "Cache écrit"), ("misses", "Miss serveur")):
-        change = f"{pct(ma[key], mb[key]):+.1f}" if ma[key] else "n/a"
-        out.append(f"| {label} | {ma[key]:.1f} | {mb[key]:.1f} | {change} |")
-    out.append(f"| Part du coût des sous-agents | {ma['sub_share'] * 100:.1f} % | "
-               f"{mb['sub_share'] * 100:.1f} % | |")
+    out += ["", "## Écart agrégé", "",
+            "Somme B / somme A − 1 sur les tâches (moyennes par tâche ci-dessus), et moyenne des "
+            "écarts appariés B − A en $ ; IC 95 % par bootstrap sur les tâches.", ""]
+    for name, subset in sets:
+        out += aggregate_lines(table, subset, name, args.draws, args.seed)
+
+    out += ["", "## Par passe", "", "Sommes sur les unités retenues de la passe.", "",
+            "| Passe | Unités | Coût | A $ | B $ | Écart % |", "|---|---|---|---|---|---|"]
+    for p in sorted({u["pass"] for u in kept}):
+        pu = [u for u in kept if u["pass"] == p]
+        for m in MEASURES:
+            ca = sum(cost(u["arms"]["A"]["result"], m) for u in pu)
+            cb = sum(cost(u["arms"]["B"]["result"], m) for u in pu)
+            out.append(f"| {p} | {len(pu)} | {m} | {ca:.4f} | {cb:.4f} | {fmt_pct(pct(ca, cb))} |")
+
+    if kept:
+        ma, mb = arm_measures(kept, "A"), arm_measures(kept, "B")
+        out += ["", "## Par bras", "",
+                "Sommes sur les unités retenues, moyennées par passe (résolution : par passe).", "",
+                "| Mesure | A | B | Écart % |", "|---|---|---|---|",
+                f"| Tâches résolues par passe | {', '.join(map(str, ma['resolved'].values()))} "
+                f"(total {sum(ma['resolved'].values())}) | "
+                f"{', '.join(map(str, mb['resolved'].values()))} (total "
+                f"{sum(mb['resolved'].values())}) | |"]
+        for key, label in (("turns", "Tours de la session principale"),
+                           ("sent", "Tokens envoyés (input + cacheRead + cacheWrite)"),
+                           ("input", "Input non caché"), ("cacheRead", "Cache lu (rapporté)"),
+                           ("cacheRead_th", "Cache lu (théorique)"),
+                           ("cacheWrite", "Cache écrit"), ("misses", "Miss serveur")):
+            out.append(f"| {label} | {ma[key]:.1f} | {mb[key]:.1f} | "
+                       f"{fmt_pct(pct(ma[key], mb[key]))} |")
+        share = [m["sub_cost"] / m["cost"] * 100 if m["cost"] else 0 for m in (ma, mb)]
+        out.append(f"| Part du coût rapporté des sous-agents | {share[0]:.1f} % | "
+                   f"{share[1]:.1f} % | |")
 
     out += ["", "## Invalidations journalisées", ""]
-    for run in args.runs:
-        out.append(f"- {run.name} : {invalidations(run)}")
+    if ab is None:
+        runs: list[Path] = []
+        for u in units:
+            for side in ("A", "B"):
+                if u["arms"][side]["run"] not in runs:
+                    runs.append(u["arms"][side]["run"])
+        out += [f"- {run.name} : {merge_invalidations([invalidations(run / 'tasks')])}"
+                for run in runs]
+    else:
+        for side in ("A", "B"):
+            parts = [invalidations(task_dir(u["arms"][side]["run"], u["arms"][side]["result"]))
+                     for u in units if side in u["arms"]]
+            out.append(f"- bras {side} (toutes unités) : {merge_invalidations(parts)}")
 
-    out += ["", "## Incidents", ""]
-    for run, report in zip(args.runs, reports):
-        found = incidents(run, report)
-        out.append(f"- {run.name} : " + ("aucun" if not found else "; ".join(found)))
+    out += ["", "## Incidents", "",
+            "Écartants (erreur provider) : section « Unités écartées ». Non écartants :", ""]
+    notes = [f"- passe {u['pass']}, {u['task']} : " + "; ".join(u["notes"])
+             for u in units if u["notes"]]
+    out += notes or ["- aucun"]
+
+    if ab is not None:
+        o = ab.get("overhead") or {}
+        out += ["", "## Surcoût par lancement", ""]
+        out.append(f"- {o.get('measured', 0)} lancement(s) mesuré(s) : médiane "
+                   f"{o.get('overhead_median_s')} s, total {o.get('overhead_total_s')} s sur "
+                   f"{o.get('wall_total_s')} s ({(o.get('overhead_share') or 0) * 100:.1f} %)"
+                   if o.get("measured") else "- aucun lancement mesuré")
     print("\n".join(out))
 
 

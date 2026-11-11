@@ -88,6 +88,10 @@ CACHE_WRITE_PRICE = "cache_write_30m"
 WARMUP_PROMPT = "Réponds uniquement : OK."
 PROBE_PROMPT = "Exécute la sonde réseau."
 GRADE_TIMEOUT_S = 300
+# Garde-fou d'inactivité (YA-14) : une tâche dont aucun octet ne passe par le reverse proxy
+# pendant ce délai est arrêtée, statut `stalled` (flux bloqué, incident écarté des A/B).
+# Réglable (`--idle-timeout`, 0 : désactivé), noté dans l'en-tête du rapport.
+IDLE_TIMEOUT_S = 300
 PREP_TIMEOUT_S = 900
 VALIDATE_RUNS = 3  # exécutions de chaque vérification de --validate-gold (instabilité)
 HARD_MIN_TURNS = 10  # tâche `difficile` résolue en moins de tours : signalée (T07)
@@ -327,22 +331,42 @@ def agent_profile(cache: "Cache", workspace: Path, binary: Path | None,
 
 
 def run_process(cmd: list[str], env: dict, cwd: Path, out: Path, err: Path, timeout: int,
-                sandboxed: bool, profile: list[str] | None = None) -> dict:
-    """Lance `cmd` ; sous sandbox, profil réseau du banc de capture sauf `profile` donné."""
+                sandboxed: bool, profile: list[str] | None = None,
+                idle: tuple | None = None) -> dict:
+    """Lance `cmd` ; sous sandbox, profil réseau du banc de capture sauf `profile` donné.
+
+    `idle` : (fonction qui rend les secondes d'inactivité du reverse proxy, limite en s).
+    Au-delà de la limite, le processus est arrêté et le résultat porte `stalled`.
+    """
     if sandboxed:
         cmd = ["/usr/bin/sandbox-exec", *(profile or ["-f", str(SANDBOX)]), *cmd]
     started = time.monotonic()
+    timed_out = stalled = False
+    code = None
     with out.open("w") as stdout, err.open("w") as stderr:
         proc = subprocess.Popen(cmd, env=env, cwd=cwd, stdin=subprocess.DEVNULL, stdout=stdout,
                                 stderr=stderr, start_new_session=True)
-        try:
-            code = proc.wait(timeout=timeout)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-            code, timed_out = None, True
-    return {"exit": code, "timeout": timed_out, "seconds": round(time.monotonic() - started, 2)}
+        while True:
+            remaining = timeout - (time.monotonic() - started)
+            try:
+                code = proc.wait(timeout=max(0.01, min(1.0, remaining)))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() - started >= timeout:
+                timed_out = True
+            elif idle is not None and idle[1] and idle[0]() >= idle[1]:
+                stalled = True
+            if timed_out or stalled:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+                code = None
+                break
+    result = {"exit": code, "timeout": timed_out, "seconds": round(time.monotonic() - started, 2)}
+    if idle is not None:
+        result["stalled"] = stalled
+        result["idle_timeout_s"] = idle[1]
+    return result
 
 
 def agent_cmd(binary: Path, model: str, effort: str, prompt: str) -> list[str]:
@@ -744,8 +768,10 @@ def validate_gold(tasks: list[dict], cache: Cache, out: Path, runs: int,
 
 def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model: str,
                   effort: str, prompt: str, cwd: Path, access: Access, connect: proxies.ConnectProxy,
-                  source: dict, settings: dict, capture: bool, timeout: int) -> dict:
-    """Une session d'agent sous sandbox, avec ses journaux copiés dans `out`."""
+                  source: dict, settings: dict, capture: bool, timeout: int,
+                  idle_timeout: int | None = None) -> dict:
+    """Une session d'agent sous sandbox, avec ses journaux copiés dans `out`. Avec
+    `idle_timeout`, garde-fou d'inactivité sur le reverse proxy (`run_process`)."""
     out.mkdir(parents=True, exist_ok=True)
     write_agent_config(agent_dir, access.port, source, settings)
     before = session_files(agent_dir)
@@ -753,7 +779,9 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
     env = agent_env(cache, agent_dir, connect.port, capture)
     process = run_process(agent_cmd(binary, model, effort, prompt), env, cwd,
                           out / "out.jsonl", out / "err.log", timeout, sandboxed=True,
-                          profile=agent_profile(cache, cwd, binary, agent_dir))
+                          profile=agent_profile(cache, cwd, binary, agent_dir),
+                          idle=(access.proxy.idle_seconds, idle_timeout)
+                          if idle_timeout is not None else None)
     copied = copy_new_sessions(agent_dir, before, out / "sessions")
     connect_entries = proxies.read_log(connect.log.path)[connect_before:]
     with (out / "connect.ndjson").open("w") as handle:
@@ -852,7 +880,8 @@ def warmup(binary: Path, cache: Cache, out: Path, model: str, effort: str, sourc
 def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, model: str,
              effort: str, source: dict, settings: dict, connect: proxies.ConnectProxy,
              capture: bool, capture_fail: set[str], server_args: list[str],
-             prices: dict, capture_spawn: bool = False) -> dict:
+             prices: dict, capture_spawn: bool = False,
+             idle_timeout: int = IDLE_TIMEOUT_S) -> dict:
     workspace = restore(task, cache)
     prompt = (task["dir"] / "prompt.md").read_text()
     # Seules les tâches d'exemple ont un scénario de capture qui les résout. Avec
@@ -865,7 +894,7 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     try:
         session = agent_session(binary, cache, cache.agent, out, model, effort, prompt,
                                 workspace, access, connect, source, settings, capture,
-                                int(task.get("timeout_s", 1800)))
+                                int(task.get("timeout_s", 1800)), idle_timeout)
     finally:
         access.stop()
     graded = run_tests(task, workspace, out / "grading", cache, sandboxed=True)
@@ -884,7 +913,9 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
     all_entries = entries + session["sub_entries"]
     final = metrics.final_assistant(entries)
     resolved = graded["junit"] and all(s == "passed" for s in graded["tests"].values())
-    if not entries:
+    if process.get("stalled"):
+        status = "stalled"
+    elif not entries:
         status = "harness_error"
     elif process["timeout"]:
         status = "timeout"
@@ -898,6 +929,10 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
     misses = metrics.server_misses(records, transports["per_request"])
     calls = metrics.calls(records)
     anomalies = []
+    if process.get("stalled"):
+        anomalies.append(f"flux bloqué : aucun octet par le reverse proxy pendant "
+                         f"{process.get('idle_timeout_s')} s, tâche arrêtée à "
+                         f"{process['seconds']} s (statut `stalled`)")
     if transports["loop_on_sse"]:
         anomalies.append(f"{transports['loop_on_sse']} appel(s) de boucle en SSE (bascule)")
     if transports["unmatched_usage"] or transports["unmatched_proxy"]:
@@ -992,6 +1027,11 @@ def aggregate(results: list[dict]) -> dict:
                 statistics.mean(r["cost"]["pessimistic_total"] for r in runs)
                 if runs and all(r["cost"].get("pessimistic_total") is not None for r in runs)
                 else None),
+            # YA-14 : coût à cache théorique, `None` si un run n'en a pas (rapport antérieur).
+            "cost_theoretical_mean": (
+                statistics.mean(r["cost"]["theoretical_total"] for r in runs)
+                if runs and all(r["cost"].get("theoretical_total") is not None for r in runs)
+                else None),
             "tokens_mean": statistics.mean(tokens),
             "tokens_stdev": statistics.stdev(tokens) if len(tokens) > 1 else None,
             "turns_mean": statistics.mean(r["calls"]["turns"] for r in runs),
@@ -1012,6 +1052,8 @@ def totals(results: list[dict]) -> dict:
     cost = sum(costs) if costs and None not in costs else None
     pessimistic = [r["cost"].get("pessimistic_total") for r in results]
     cost_pessimistic = sum(pessimistic) if pessimistic and None not in pessimistic else None
+    theoretical = [r["cost"].get("theoretical_total") for r in results]
+    cost_theoretical = sum(theoretical) if theoretical and None not in theoretical else None
     read = sum(r["tokens"]["cacheRead"] or 0 for r in results)
     tokens = {k: (sum(r["tokens"][k] for r in results)
                   if results and all(r["tokens"][k] is not None for r in results) else None)
@@ -1024,6 +1066,13 @@ def totals(results: list[dict]) -> dict:
             "cost_pessimistic_per_resolved": (cost_pessimistic / resolved
                                               if cost_pessimistic is not None and resolved
                                               else None),
+            "cost_theoretical": cost_theoretical,
+            "cost_theoretical_per_resolved": (cost_theoretical / resolved
+                                              if cost_theoretical is not None and resolved
+                                              else None),
+            "cache_theory_check": metrics.theory_check(
+                [g for r in results
+                 for g in ((r["cost"].get("theoretical") or {}).get("check_gaps") or [])]),
             "tokens": tokens,
             "turns_median": metrics.median([r["calls"]["turns"] for r in results]),
             "cache_rate_all_calls": read / prompt if prompt else None,
@@ -1069,7 +1118,7 @@ def fmt(value, digits: int = 4) -> str:
 
 def write_report(run_dir: Path, report: dict) -> None:
     (run_dir / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
-    fields = ["task", "run", "status", "cost", "cost_pessimistic", "input", "output", "cacheRead",
+    fields = ["task", "run", "status", "cost", "cost_pessimistic", "cost_theoretical", "input", "output", "cacheRead",
               "cacheWrite", "reasoning", "context_peak", "turns", "calls", "cache_session_rate",
               "cache_continuation_median", "cache_avoidable_rate", "server_misses",
               "ttft_median_ms", "seconds", "websocket", "sse", "loop_on_sse", "connect_refused",
@@ -1083,6 +1132,7 @@ def write_report(run_dir: Path, report: dict) -> None:
                 "task": r["task"], "run": r["run"], "status": r["status"],
                 "cost": r["cost"]["total"],
                 "cost_pessimistic": r["cost"].get("pessimistic_total"),
+                "cost_theoretical": r["cost"].get("theoretical_total"),
                 **{k: r["tokens"][k] for k in
                                                ("input", "output", "cacheRead", "cacheWrite",
                                                 "reasoning")},
@@ -1109,7 +1159,8 @@ def write_report(run_dir: Path, report: dict) -> None:
     for key in ("mode", "commit", "commit_dirty", "binary", "binary_sha256", "binary_manifest",
                 "binary_version", "models_bundled_sha256", "provider", "model", "model_source",
                 "model_fiche_hypotheses", "effort", "settings_file", "settings_non_default", "prices_version",
-                "prices_sha256", "cache_write_price", "hosts", "runs", "tasks", "rereport"):
+                "prices_sha256", "cache_write_price", "idle_timeout_s", "hosts", "runs", "tasks",
+                "timing_s", "ab", "rereport"):
         lines.append(f"| {key} | `{json.dumps(h.get(key), ensure_ascii=False)}` |")
     p, w = report["probe"], report["warmup"]
     lines += ["", "## Sonde réseau (serveur de capture, sandbox)", "",
@@ -1132,6 +1183,9 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"({fmt(pct_change(t['cost'], t.get('cost_pessimistic')), 1)} %)",
               f"- Par tâche résolue : {fmt(t['cost_per_resolved'])} $ (rapporté) ; pessimiste : "
               f"{fmt(t.get('cost_pessimistic_per_resolved'))} $",
+              f"- Coût à cache théorique : {fmt(t.get('cost_theoretical'))} $ "
+              f"({fmt(pct_change(t['cost'], t.get('cost_theoretical')), 1)} % du rapporté) ; par "
+              f"tâche résolue : {fmt(t.get('cost_theoretical_per_resolved'))} $",
               f"- Tokens : {json.dumps(t['tokens'])}",
               f"- Tours médians : {fmt(t['turns_median'], 1)} ; taux de cache (tous appels) : "
               f"{fmt(t['cache_rate_all_calls'])} ; miss serveur : {t['server_misses']}",
@@ -1142,17 +1196,19 @@ def write_report(run_dir: Path, report: dict) -> None:
               f"{fmt(sub.get('cost'))} $ ({fmt(pct(sub.get('cost_share')), 1)} % du coût), taux de "
               f"cache (tous appels) {fmt(sub.get('cache_rate_all_calls'))}",
               "", "## Tâches", "",
-              "| Tâche | Run | Statut | Coût $ | Coût pess. $ | input | output | cacheRead |"
+              "| Tâche | Run | Statut | Coût $ | Coût pess. $ | Coût th. $ | input | output |"
+              " cacheRead |"
               " cacheWrite | reasoning |"
               " Pic de contexte | Tours |"
               " Cache session | Cache contin. (méd.) | Cache évitable | Miss serveur |"
               " TTFT méd. ms | Durée s | WS | SSE | Cellules en erreur (Syntax) | Coupées |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
-              "---|---|"]
+              "---|---|---|"]
     for r in report["results"]:
         lines.append(
             f"| {r['task']} | {r['run']} | {r['status']} | {fmt(r['cost']['total'])} | "
             f"{fmt(r['cost'].get('pessimistic_total'))} | "
+            f"{fmt(r['cost'].get('theoretical_total'))} | "
             f"{fmt(r['tokens']['input'])} | {fmt(r['tokens']['output'])} | "
             f"{fmt(r['tokens']['cacheRead'])} | {fmt(r['tokens']['cacheWrite'])} | "
             f"{fmt(r['tokens']['reasoning'])} | "
@@ -1188,6 +1244,7 @@ def write_report(run_dir: Path, report: dict) -> None:
             lines.append(f"| {task} | {a['runs']} | {fmt(a['resolved_rate'], 2)} | {a['flip']} | "
                          f"{fmt(a['cost_mean'])} | {fmt(a['cost_stdev'])} | "
                          f"{fmt(a['tokens_mean'], 1)} | {fmt(a['tokens_stdev'], 1)} |")
+    lines += theory_section(report)
     misses = [(r["task"], r["run"], m) for r in report["results"]
               for m in r.get("server_misses", [])]
     lines += ["", "## Miss serveur", "",
@@ -1208,6 +1265,35 @@ def write_report(run_dir: Path, report: dict) -> None:
     (run_dir / "report.md").write_text("\n".join(lines))
 
 
+def theory_section(report: dict) -> list[str]:
+    """Coût à cache théorique : appels par base et validation de la méthode (YA-14)."""
+    check = report["totals"].get("cache_theory_check") or metrics.theory_check([])
+    bases = {b: 0 for b in metrics.THEORY_BASES}
+    for r in report["results"]:
+        for b, n in ((r["cost"].get("theoretical") or {}).get("calls") or {}).items():
+            bases[b] = bases.get(b, 0) + n
+    lines = ["", "## Coût à cache théorique", "",
+             "Cache qu'un serveur qui ne rate jamais aurait lu : préfixe commun avec la requête "
+             "précédente de la même session (méthode dans les notes). Appels par base : "
+             + ", ".join(f"{b} {n}" for b, n in bases.items()) + ".", ""]
+    if not check["n"]:
+        return lines + ["- Validation : aucun appel de continuation sans miss serveur"]
+    q = check["quantiles"]
+    lines += [f"- Validation (appels de continuation sans miss serveur, {check['n']}) : rapporté "
+              f"> théorique {fmt(pct(check['above_share']), 2)} % (critère ≤ "
+              f"{metrics.THEORY_MAX_ABOVE_SHARE * 100:g} %), écart médian (théorique − rapporté) "
+              f"{fmt(pct(check['median_gap']), 2)} % du prompt (critère ≤ "
+              f"{metrics.THEORY_MAX_MEDIAN_GAP * 100:g} %) : **{metrics.theory_verdict(check)}**",
+              "- Distribution de l'écart, % du prompt : "
+              + ", ".join(f"{k} {fmt(pct(v), 2)}" for k, v in q.items())
+              + f" ; au-delà de {metrics.THEORY_PARTIAL_GAP * 100:g} % (miss partiels du serveur)"
+              f" : {fmt(pct(check['partial_share']), 1)} %"]
+    if report["header"].get("mode") == "capture":
+        lines.append("- Mode capture : usage simulé par le serveur de capture (lecture de 90 % "
+                     "du prompt précédent), la validation n'a pas de sens ici")
+    return lines
+
+
 def report_notes(prices: dict, effort: str) -> list[str]:
     notes = [
         "Tokens et usage : journal d'usage du harness (`<id>.usage.ndjson`), rien n'est "
@@ -1223,6 +1309,17 @@ def report_notes(prices: dict, effort: str) -> list[str]:
         "n'a pas été lu en cache y avait été écrit. Plafond pour un provider qui n'annonce pas "
         "ses écritures (Codex : `cache_write_tokens` toujours à 0, docs/usage.md) ; trop haut "
         "pour un provider qui les annonce.",
+        "Coût à cache théorique (YA-14) : décision du banc. Par appel, `cacheRead` = "
+        "préfixe commun avec la requête précédente de la même session (chaque sous-agent dans "
+        "la sienne), le reste du prompt au tarif d'entrée, sortie et raisonnement inchangés. "
+        "Le corps WebSocket (`previous_response_id`) ne porte pas tout le contexte : préfixe "
+        "approché depuis l'usage, min(prompt, prompt précédent + output précédent) sur une "
+        "continuation append-only ; `cacheRead` rapporté gardé sur une invalidation "
+        "journalisée, après un appel annexe ou si le prompt raccourcit (ruptures du harness) ; "
+        "de même au premier appel de boucle d'une session et sur un appel annexe (théorique "
+        "non calculable). Les miss serveur disparaissent, les "
+        "ruptures causées par le harness restent comptées. Validation : section « Coût à "
+        "cache théorique ».",
         "Transport : WebSocket attendu pour les appels de boucle (main, subagent) ; "
         "compaction, /refine et résumé de branche passent en SSE par construction.",
         "Taux de cache de session : cacheRead / (input + cacheRead + cacheWrite) sur les "
@@ -1232,6 +1329,8 @@ def report_notes(prices: dict, effort: str) -> list[str]:
         "dossier agent, copiées dans `sessions/subagents/`) comptent dans les totaux, le coût, "
         "le transport, le cache et les miss ; leur part est donnée à part. Tours : appels "
         "`main` de la session principale.",
+        f"Garde-fou d'inactivité : une tâche dont aucun octet ne passe par le reverse proxy "
+        f"pendant `idle_timeout_s` (en-tête) est arrêtée, statut `stalled` (flux bloqué).",
     ]
     if effort != DEFAULT_EFFORT:
         notes.append(f"Effort {effort} au lieu de {DEFAULT_EFFORT} (décision du 04/11).")
@@ -1388,6 +1487,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validate-runs", type=int, default=VALIDATE_RUNS)
     parser.add_argument("--validate-profile", choices=["task", "agent"], default="task",
                         help="profil des tests de --validate-gold (agent : phase agent)")
+    parser.add_argument("--idle-timeout", type=int, default=IDLE_TIMEOUT_S, metavar="S",
+                        help="arrête une tâche dont aucun octet ne passe par le reverse proxy "
+                             f"pendant S secondes (statut stalled ; défaut {IDLE_TIMEOUT_S}, "
+                             "0 : désactivé)")
+    parser.add_argument("--ab", default=None, metavar="JSON",
+                        help="A/B (tools/ab.py) : objet JSON noté dans l'en-tête du rapport "
+                             "(bras, passe, graine, écart de réglages)")
     parser.add_argument("--record-hosts", action="store_true",
                         help="run de chauffe réel, proxy CONNECT en enregistrement : écrit "
                              f"{HOSTS.relative_to(REPO)}")
@@ -1419,6 +1525,10 @@ def main() -> None:
         fail(f"provider {args.provider} non pris en charge (seul {PROVIDER})")
     if args.runs < 1:
         fail("RUNS doit valoir au moins 1")
+    if args.idle_timeout < 0:
+        fail("--idle-timeout doit valoir 0 ou plus")
+    ab_note = json.loads(args.ab) if args.ab else None
+    started = time.monotonic()
     if args.capture_spawn and not args.capture:
         fail("--capture-spawn demande --capture")
     if args.record_hosts and args.capture:
@@ -1449,6 +1559,7 @@ def main() -> None:
     prepare_kernel(binary, cache)
     for task in tasks:
         prepare_task(task, cache)
+    prepare_s = round(time.monotonic() - started, 2)
 
     manifest = binary_manifest(binary)
     short = (manifest or {}).get("commit") or git("rev-parse", "HEAD") or "nocommit"
@@ -1459,10 +1570,14 @@ def main() -> None:
         connect = proxies.ConnectProxy(run_dir / "connect.ndjson", hosts,
                                        record=args.record_hosts)
         proxies.serve(connect)
+        timing = {"prepare": prepare_s}
         try:
             # En enregistrement, le proxy CONNECT accepte tout hôte : pas de sonde.
+            mark = time.monotonic()
             probe_result = None if args.record_hosts else probe(binary, cache,
                                                                 run_dir / "probe", connect, tasks)
+            timing["probe"] = round(time.monotonic() - mark, 2)
+            mark = time.monotonic()
             warm = warmup(binary, cache, run_dir / "warmup", model, args.effort, sources[model],
                           settings, connect, args.capture, warmup_args)
             if args.record_hosts:
@@ -1481,6 +1596,8 @@ def main() -> None:
                 fail(f"préparation en échec : le run de chauffe de {model} n'a pas abouti "
                      f"(arrêt {warm['stop_reason']}, erreur {warm['error']!r}), voir "
                      f"{run_dir}/warmup")
+            timing["warmup"] = round(time.monotonic() - mark, 2)
+            mark = time.monotonic()
             results = []
             for task in tasks:
                 for index in range(1, args.runs + 1):
@@ -1488,9 +1605,11 @@ def main() -> None:
                     result = run_task(task, index, binary, cache, out, model, args.effort,
                                       sources[model], settings, connect, args.capture,
                                       capture_fail, task_args, prices,
-                                      capture_spawn=args.capture_spawn)
+                                      capture_spawn=args.capture_spawn,
+                                      idle_timeout=args.idle_timeout)
                     print(f"  {task['id']} run {index} : {result['status']}")
                     results.append(result)
+            timing["tasks"] = round(time.monotonic() - mark, 2)
         finally:
             connect.shutdown()
             connect.server_close()
@@ -1508,7 +1627,8 @@ def main() -> None:
             if args.settings.resolve().is_relative_to(REPO) else str(args.settings),
             "settings": settings, "settings_non_default": known_settings(settings),
             "prices_version": prices.get("version"), "prices_sha256": sha256(PRICES),
-            "cache_write_price": CACHE_WRITE_PRICE, "hosts": sorted(hosts),
+            "cache_write_price": CACHE_WRITE_PRICE, "idle_timeout_s": args.idle_timeout,
+            "timing_s": timing, "ab": ab_note, "hosts": sorted(hosts),
             "runs": args.runs, "tasks": [t["id"] for t in tasks],
             "tools": {"python": platform.python_version(), "node": version_of(["node", "--version"]),
                       "uv": version_of(["uv", "--version"])},

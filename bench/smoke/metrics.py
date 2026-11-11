@@ -184,10 +184,134 @@ def pessimistic_request_cost(prices: dict, model: str, record: dict,
             + (record.get("output") or 0) * row["output"]) / per
 
 
+# Coût à cache théorique (YA-14, décision du 11/11/2026) : le cache qu'un serveur qui ne
+# rate jamais aurait lu. Voir `theoretical_cache` ; la validation de la méthode est
+# `theory_check` (`python3 -I bench/smoke/metrics.py --theory-check <run> ...`).
+THEORY_BASES = ("premier", "continuation", "invalidation", "rupture", "annexe")
+# Critères de validation, fixés avant la mesure : sur les appels de continuation sans miss
+# serveur, le cacheRead rapporté ne dépasse pas le théorique (sinon la borne est fausse)
+# pour 99 % des appels au moins, et l'écart médian reste sous 2 % du prompt.
+THEORY_MAX_ABOVE_SHARE = 0.01
+THEORY_MAX_MEDIAN_GAP = 0.02
+THEORY_PARTIAL_GAP = 0.05  # écart au-delà duquel un appel est compté en miss partiel
+# Verdict par run seulement à partir de ce nombre d'appels (ajouté après la première mesure :
+# deux runs `gpt-6-luna` de 5 et 7 appels, prompts d'environ 6 000 tokens, où la granularité
+# de 128 tokens du cache Codex fait à elle seule un écart médian proche de 2 %).
+THEORY_MIN_CALLS = 30
+
+
+def theoretical_cache(records: list[dict]) -> list[dict]:
+    """`cacheRead` théorique de chaque appel : préfixe commun avec la requête précédente de
+    la même session (chaque sous-agent a sa session), si le serveur ne ratait jamais.
+
+    Méthode (approximation depuis l'usage et les invalidations) : en WebSocket avec
+    `previous_response_id`, la requête ne porte pas tout le contexte et le corps n'est pas
+    journalisé ; le provider compte pourtant le prompt entier (`input + cacheRead +
+    cacheWrite`). Le contexte de la boucle étant append-only, la requête i commence par la
+    requête i-1 suivie de sa réponse : préfixe commun = min(prompt_i, prompt_{i-1} +
+    output_{i-1}), `output` raisonnement compris (base « continuation »). Le prompt i-1 est
+    celui du dernier appel de boucle de la session au prompt non vide.
+
+    Les ruptures causées par le harness restent comptées : appel portant une invalidation
+    journalisée (masquage), appel annexe (compaction, `/refine`, résumé) intercalé dans la
+    session depuis l'appel de boucle précédent, ou prompt plus court que le précédent
+    (rupture non journalisée) : le préfixe commun n'est pas connu sans le corps, le
+    `cacheRead` rapporté (borne basse) est gardé (bases « invalidation », « rupture »).
+    Même règle partout où le théorique n'est pas calculable : premier appel de boucle d'une
+    session (pas de requête précédente, base « premier ») et appels annexes (préfixe propre,
+    base « annexe ») gardent le `cacheRead` rapporté.
+    """
+    by_session: dict[str, list[dict]] = {}
+    for r in records:
+        by_session.setdefault(r.get("sessionId") or "", []).append(r)
+    out = []
+    for session_records in by_session.values():
+        prev = None  # (prompt, output) du dernier appel de boucle au prompt non vide
+        annex_since = False
+        for r in sorted(session_records, key=lambda r: r.get("seq", 0)):
+            prompt, reported = prompt_size(r), r.get("cacheRead") or 0
+            if r.get("kind") not in LOOP_KINDS:
+                basis, theo = "annexe", reported
+                annex_since = True
+            elif prev is None:
+                basis, theo = "premier", reported
+            elif "invalidation" in r:
+                basis, theo = "invalidation", reported
+            elif annex_since or prompt < prev[0]:
+                basis, theo = "rupture", reported
+            else:
+                basis, theo = "continuation", min(prompt, prev[0] + prev[1])
+            out.append({"session": r.get("sessionId"), "seq": r.get("seq"), "kind": r.get("kind"),
+                        "basis": basis, "prompt": prompt, "reported": reported,
+                        "theoretical": theo, "previous": prev[0] if prev else None, "record": r})
+            if r.get("kind") in LOOP_KINDS and prompt:
+                prev, annex_since = (prompt, r.get("output") or 0), False
+    return out
+
+
+def theoretical_request_cost(prices: dict, model: str, call: dict) -> float | None:
+    """Coût d'un appel au cache théorique : `theoretical` au tarif de lecture, le reste du
+    prompt au tarif d'entrée, sortie (raisonnement compris) inchangée. `None` sans tarif."""
+    record = call["record"]
+    row, _ = price_row(prices, model, record)
+    if row is None:
+        return None
+    return (call["theoretical"] * row["cached_input"]
+            + (call["prompt"] - call["theoretical"]) * row["input"]
+            + (record.get("output") or 0) * row["output"]) / 1_000_000
+
+
+def theory_gaps(calls: list[dict]) -> list[float]:
+    """Écart (théorique − rapporté) / prompt des appels de continuation sans miss serveur
+    (`cacheRead` rapporté > 0) : la population de validation de la méthode."""
+    return [(c["theoretical"] - c["reported"]) / c["prompt"] for c in calls
+            if c["basis"] == "continuation" and c["reported"] > 0 and c["prompt"]]
+
+
+def theory_check(gaps: list[float]) -> dict:
+    """Distribution des écarts et verdict de validation (critères `THEORY_*`)."""
+    if not gaps:
+        return {"n": 0, "above_share": None, "median_gap": None, "quantiles": None,
+                "partial_share": None, "valid": None}
+    ordered = sorted(gaps)
+
+    def q(p: float) -> float:
+        return ordered[min(len(ordered) - 1, int(p * len(ordered)))]
+
+    above = sum(1 for g in gaps if g < 0) / len(gaps)
+    med = statistics.median(gaps)
+    valid = (above <= THEORY_MAX_ABOVE_SHARE and med <= THEORY_MAX_MEDIAN_GAP
+             if len(gaps) >= THEORY_MIN_CALLS else None)
+    return {"n": len(gaps), "above_share": above, "median_gap": med,
+            "quantiles": {k: q(p) for k, p in (("p05", 0.05), ("p25", 0.25), ("p50", 0.5),
+                                               ("p75", 0.75), ("p90", 0.9), ("p95", 0.95),
+                                               ("max", 1.0))},
+            "partial_share": sum(1 for g in gaps if g > THEORY_PARTIAL_GAP) / len(gaps),
+            "valid": valid}
+
+
+def theory_verdict(check: dict) -> str:
+    if check["valid"] is None:
+        return f"sans verdict ({check['n']} appel(s), {THEORY_MIN_CALLS} au moins)"
+    return "conforme" if check["valid"] else "NON CONFORME"
+
+
+def theory_summary(prices: dict, model: str, records: list[dict]) -> dict:
+    """Coût à cache théorique d'un run de tâche, tokens théoriques et écarts de validation."""
+    calls = theoretical_cache(records)
+    per_call = [theoretical_request_cost(prices, model, c) for c in calls]
+    read = sum(c["theoretical"] for c in calls)
+    return {"total": sum(per_call) if per_call and None not in per_call else None,
+            "cacheRead": read, "input": sum(c["prompt"] for c in calls) - read,
+            "calls": {b: sum(1 for c in calls if c["basis"] == b) for b in THEORY_BASES},
+            "check_gaps": [round(g, 6) for g in theory_gaps(calls)]}
+
+
 def costs(prices: dict, model: str, records: list[dict], write_key: str) -> dict:
     per_request = [request_cost(prices, model, r, write_key) for r in records]
     known = [c for c in per_request if c is not None]
     pessimistic = [pessimistic_request_cost(prices, model, r, write_key) for r in records]
+    theory = theory_summary(prices, model, records)
     invalidated = [r for r in records if "invalidation" in r]
     invalidation_cost = None
     if invalidated and model in prices.get("models", {}):
@@ -198,6 +322,8 @@ def costs(prices: dict, model: str, records: list[dict], write_key: str) -> dict
     return {"total": sum(known) if known and len(known) == len(per_request) else None,
             "pessimistic_total": (sum(pessimistic) if pessimistic and None not in pessimistic
                                   else None),
+            "theoretical_total": theory["total"],
+            "theoretical": {k: v for k, v in theory.items() if k != "total"},
             "missing_price": model not in prices.get("models", {}),
             "tiers": tiers,
             "invalidations": {"count": len(invalidated),
@@ -375,8 +501,102 @@ def task_run_cache(run_task_dir: Path) -> dict:
             "cache_session_rate": cache_rates(records)["session_rate"]}
 
 
+def theory_check_main(runs: list[Path]) -> None:
+    """Validation du cache théorique sur des runs déjà faits (journaux, `prices.json` et
+    modèle de l'en-tête) : distribution des écarts (théorique − rapporté) / prompt sur les
+    appels de continuation sans miss serveur, par run puis sur l'ensemble, et verdict
+    (critères `THEORY_*`). Donne aussi le coût à cache théorique, sessions principales et
+    sous-agents."""
+    prices = json.loads((Path(__file__).resolve().parent / "prices.json").read_text())
+    costs_by_side: dict[str, float] = {}
+
+    def side_costs(run: Path, calls: list[dict]) -> None:
+        model = json.loads((run / "report.json").read_text())["header"]["model"]
+        for c in calls:
+            side = "sous-agents" if c["kind"] == "subagent" else "principales"
+            costs_by_side[side] = (costs_by_side.get(side, 0.0)
+                                   + (theoretical_request_cost(prices, model, c) or 0.0))
+    def line(name: str, gaps: list[float], calls: list[dict]) -> str:
+        c = theory_check(gaps)
+        if not c["n"]:
+            return f"{name} : aucun appel de continuation sans miss serveur"
+        qs = ", ".join(f"{k} {v * 100:+.2f} %" for k, v in c["quantiles"].items())
+        bases = {b: sum(1 for x in calls if x["basis"] == b) for b in THEORY_BASES}
+        population = [x for x in calls if x["basis"] == "continuation" and x["reported"] > 0]
+        beyond = sum(1 for x in population if x["reported"] > x["previous"]) / len(population)
+        first = [x for x in calls if x["basis"] == "premier"]
+        first_read = sum(x["reported"] for x in first)
+        first_prompt = sum(x["prompt"] for x in first)
+        return (f"{name} : {c['n']} appels, rapporté > théorique {c['above_share'] * 100:.2f} %,"
+                f" écart médian {c['median_gap'] * 100:+.2f} % du prompt ({qs}), au-delà de "
+                f"{THEORY_PARTIAL_GAP * 100:g} % (miss partiels) {c['partial_share'] * 100:.1f} %"
+                f" ; rapporté > prompt précédent (output précédent lu en cache) "
+                f"{beyond * 100:.1f} % ; premiers appels : {first_read} tokens lus en cache "
+                f"rapportés sur {first_prompt} ({first_read / first_prompt * 100 if first_prompt else 0:.1f} %)"
+                f" ; bases {bases} ; validation {theory_verdict(c)}")
+
+    all_gaps: list[float] = []
+    all_calls: list[dict] = []
+    for run in runs:
+        calls: list[dict] = []
+        for task_dir in sorted(run.glob("tasks/*/run-*")):
+            records = read_ndjson(sorted((task_dir / "sessions").rglob("*.usage.ndjson")))
+            calls += theoretical_cache(records)
+        side_costs(run, calls)
+        gaps = theory_gaps(calls)
+        all_gaps += gaps
+        all_calls += calls
+        print(line(run.name, gaps, calls))
+    if len(runs) > 1:
+        print(line(f"ensemble ({len(runs)} runs)", all_gaps, all_calls))
+    print(f"coût à cache théorique : {sum(costs_by_side.values()):.4f} $ ("
+          + ", ".join(f"{k} {v:.4f} $" for k, v in sorted(costs_by_side.items())) + ")")
+    verdict = theory_check(all_gaps)["valid"]
+    sys.exit(0 if verdict in (True, None) else 1)
+
+
+def since_prev_main(args: list[str]) -> None:
+    """`sincePrevMs` (délai depuis le début de l'appel précédent du même `kind` dans la
+    session) de tous les appels des runs donnés : nombre, p99 (rang le plus proche) et
+    maximum, avec l'appel du maximum. `--exclude <run>:<tâche>` (répétable) retire un run de
+    tâche (par exemple un flux bloqué)."""
+    excluded, runs = set(), []
+    while args:
+        arg = args.pop(0)
+        if arg == "--exclude":
+            run, _, task = args.pop(0).partition(":")
+            excluded.add((run, task))
+        else:
+            runs.append(Path(arg))
+    values = []
+    for run in runs:
+        for task_dir in sorted(run.glob("tasks/*/run-*")):
+            if (run.name, task_dir.parent.name) in excluded:
+                continue
+            for r in read_ndjson(sorted((task_dir / "sessions").rglob("*.usage.ndjson"))):
+                if isinstance(r.get("sincePrevMs"), (int, float)):
+                    values.append((r["sincePrevMs"], run.name, task_dir.parent.name,
+                                   r.get("kind"), r.get("seq")))
+    if not values:
+        print("aucun appel avec sincePrevMs")
+        return
+    ordered = sorted(v[0] for v in values)
+    p99 = ordered[max(0, -(-99 * len(ordered) // 100) - 1)]
+    top = max(values)
+    print(f"{len(values)} appels, exclus {sorted(excluded) or 'aucun'} : sincePrevMs p99 "
+          f"{p99} ms, maximum {top[0]} ms ({top[1]}, {top[2]}, {top[3]} seq {top[4]})")
+
+
 def main() -> None:
-    """Recalcule les miss serveur et le taux évitable de chaque run de tâche d'un run."""
+    """Recalcule les miss serveur et le taux évitable de chaque run de tâche d'un run ;
+    `--theory-check <run> ...` : validation du cache théorique ; `--since-prev <run> ...
+    [--exclude <run>:<tâche>]` : p99 et maximum de `sincePrevMs`."""
+    if sys.argv[1:2] == ["--theory-check"]:
+        theory_check_main([Path(a) for a in sys.argv[2:]])
+        return
+    if sys.argv[1:2] == ["--since-prev"]:
+        since_prev_main(sys.argv[2:])
+        return
     for run in (Path(a) for a in sys.argv[1:]):
         print(f"# {run.name}")
         for task_dir in sorted(run.glob("tasks/*/run-*")):
