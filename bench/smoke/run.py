@@ -88,6 +88,10 @@ CACHE_WRITE_PRICE = "cache_write_30m"
 WARMUP_PROMPT = "Réponds uniquement : OK."
 PROBE_PROMPT = "Exécute la sonde réseau."
 GRADE_TIMEOUT_S = 300
+# Garde-fou d'inactivité (YA-14) : une tâche dont aucun octet ne passe par le reverse proxy
+# pendant ce délai est arrêtée, statut `stalled` (flux bloqué, incident écarté des A/B).
+# Réglable (`--idle-timeout`, 0 : désactivé), noté dans l'en-tête du rapport.
+IDLE_TIMEOUT_S = 300
 PREP_TIMEOUT_S = 900
 VALIDATE_RUNS = 3  # exécutions de chaque vérification de --validate-gold (instabilité)
 HARD_MIN_TURNS = 10  # tâche `difficile` résolue en moins de tours : signalée (T07)
@@ -327,22 +331,42 @@ def agent_profile(cache: "Cache", workspace: Path, binary: Path | None,
 
 
 def run_process(cmd: list[str], env: dict, cwd: Path, out: Path, err: Path, timeout: int,
-                sandboxed: bool, profile: list[str] | None = None) -> dict:
-    """Lance `cmd` ; sous sandbox, profil réseau du banc de capture sauf `profile` donné."""
+                sandboxed: bool, profile: list[str] | None = None,
+                idle: tuple | None = None) -> dict:
+    """Lance `cmd` ; sous sandbox, profil réseau du banc de capture sauf `profile` donné.
+
+    `idle` : (fonction qui rend les secondes d'inactivité du reverse proxy, limite en s).
+    Au-delà de la limite, le processus est arrêté et le résultat porte `stalled`.
+    """
     if sandboxed:
         cmd = ["/usr/bin/sandbox-exec", *(profile or ["-f", str(SANDBOX)]), *cmd]
     started = time.monotonic()
+    timed_out = stalled = False
+    code = None
     with out.open("w") as stdout, err.open("w") as stderr:
         proc = subprocess.Popen(cmd, env=env, cwd=cwd, stdin=subprocess.DEVNULL, stdout=stdout,
                                 stderr=stderr, start_new_session=True)
-        try:
-            code = proc.wait(timeout=timeout)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-            code, timed_out = None, True
-    return {"exit": code, "timeout": timed_out, "seconds": round(time.monotonic() - started, 2)}
+        while True:
+            remaining = timeout - (time.monotonic() - started)
+            try:
+                code = proc.wait(timeout=max(0.01, min(1.0, remaining)))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() - started >= timeout:
+                timed_out = True
+            elif idle is not None and idle[1] and idle[0]() >= idle[1]:
+                stalled = True
+            if timed_out or stalled:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+                code = None
+                break
+    result = {"exit": code, "timeout": timed_out, "seconds": round(time.monotonic() - started, 2)}
+    if idle is not None:
+        result["stalled"] = stalled
+        result["idle_timeout_s"] = idle[1]
+    return result
 
 
 def agent_cmd(binary: Path, model: str, effort: str, prompt: str) -> list[str]:
@@ -744,8 +768,10 @@ def validate_gold(tasks: list[dict], cache: Cache, out: Path, runs: int,
 
 def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model: str,
                   effort: str, prompt: str, cwd: Path, access: Access, connect: proxies.ConnectProxy,
-                  source: dict, settings: dict, capture: bool, timeout: int) -> dict:
-    """Une session d'agent sous sandbox, avec ses journaux copiés dans `out`."""
+                  source: dict, settings: dict, capture: bool, timeout: int,
+                  idle_timeout: int | None = None) -> dict:
+    """Une session d'agent sous sandbox, avec ses journaux copiés dans `out`. Avec
+    `idle_timeout`, garde-fou d'inactivité sur le reverse proxy (`run_process`)."""
     out.mkdir(parents=True, exist_ok=True)
     write_agent_config(agent_dir, access.port, source, settings)
     before = session_files(agent_dir)
@@ -753,7 +779,9 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
     env = agent_env(cache, agent_dir, connect.port, capture)
     process = run_process(agent_cmd(binary, model, effort, prompt), env, cwd,
                           out / "out.jsonl", out / "err.log", timeout, sandboxed=True,
-                          profile=agent_profile(cache, cwd, binary, agent_dir))
+                          profile=agent_profile(cache, cwd, binary, agent_dir),
+                          idle=(access.proxy.idle_seconds, idle_timeout)
+                          if idle_timeout is not None else None)
     copied = copy_new_sessions(agent_dir, before, out / "sessions")
     connect_entries = proxies.read_log(connect.log.path)[connect_before:]
     with (out / "connect.ndjson").open("w") as handle:
@@ -852,7 +880,8 @@ def warmup(binary: Path, cache: Cache, out: Path, model: str, effort: str, sourc
 def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, model: str,
              effort: str, source: dict, settings: dict, connect: proxies.ConnectProxy,
              capture: bool, capture_fail: set[str], server_args: list[str],
-             prices: dict, capture_spawn: bool = False) -> dict:
+             prices: dict, capture_spawn: bool = False,
+             idle_timeout: int = IDLE_TIMEOUT_S) -> dict:
     workspace = restore(task, cache)
     prompt = (task["dir"] / "prompt.md").read_text()
     # Seules les tâches d'exemple ont un scénario de capture qui les résout. Avec
@@ -865,7 +894,7 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     try:
         session = agent_session(binary, cache, cache.agent, out, model, effort, prompt,
                                 workspace, access, connect, source, settings, capture,
-                                int(task.get("timeout_s", 1800)))
+                                int(task.get("timeout_s", 1800)), idle_timeout)
     finally:
         access.stop()
     graded = run_tests(task, workspace, out / "grading", cache, sandboxed=True)
@@ -884,7 +913,9 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
     all_entries = entries + session["sub_entries"]
     final = metrics.final_assistant(entries)
     resolved = graded["junit"] and all(s == "passed" for s in graded["tests"].values())
-    if not entries:
+    if process.get("stalled"):
+        status = "stalled"
+    elif not entries:
         status = "harness_error"
     elif process["timeout"]:
         status = "timeout"
@@ -898,6 +929,10 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
     misses = metrics.server_misses(records, transports["per_request"])
     calls = metrics.calls(records)
     anomalies = []
+    if process.get("stalled"):
+        anomalies.append(f"flux bloqué : aucun octet par le reverse proxy pendant "
+                         f"{process.get('idle_timeout_s')} s, tâche arrêtée à "
+                         f"{process['seconds']} s (statut `stalled`)")
     if transports["loop_on_sse"]:
         anomalies.append(f"{transports['loop_on_sse']} appel(s) de boucle en SSE (bascule)")
     if transports["unmatched_usage"] or transports["unmatched_proxy"]:
@@ -1124,7 +1159,8 @@ def write_report(run_dir: Path, report: dict) -> None:
     for key in ("mode", "commit", "commit_dirty", "binary", "binary_sha256", "binary_manifest",
                 "binary_version", "models_bundled_sha256", "provider", "model", "model_source",
                 "model_fiche_hypotheses", "effort", "settings_file", "settings_non_default", "prices_version",
-                "prices_sha256", "cache_write_price", "hosts", "runs", "tasks", "rereport"):
+                "prices_sha256", "cache_write_price", "idle_timeout_s", "hosts", "runs", "tasks",
+                "rereport"):
         lines.append(f"| {key} | `{json.dumps(h.get(key), ensure_ascii=False)}` |")
     p, w = report["probe"], report["warmup"]
     lines += ["", "## Sonde réseau (serveur de capture, sandbox)", "",
@@ -1292,6 +1328,8 @@ def report_notes(prices: dict, effort: str) -> list[str]:
         "dossier agent, copiées dans `sessions/subagents/`) comptent dans les totaux, le coût, "
         "le transport, le cache et les miss ; leur part est donnée à part. Tours : appels "
         "`main` de la session principale.",
+        f"Garde-fou d'inactivité : une tâche dont aucun octet ne passe par le reverse proxy "
+        f"pendant `idle_timeout_s` (en-tête) est arrêtée, statut `stalled` (flux bloqué).",
     ]
     if effort != DEFAULT_EFFORT:
         notes.append(f"Effort {effort} au lieu de {DEFAULT_EFFORT} (décision du 04/11).")
@@ -1448,6 +1486,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validate-runs", type=int, default=VALIDATE_RUNS)
     parser.add_argument("--validate-profile", choices=["task", "agent"], default="task",
                         help="profil des tests de --validate-gold (agent : phase agent)")
+    parser.add_argument("--idle-timeout", type=int, default=IDLE_TIMEOUT_S, metavar="S",
+                        help="arrête une tâche dont aucun octet ne passe par le reverse proxy "
+                             f"pendant S secondes (statut stalled ; défaut {IDLE_TIMEOUT_S}, "
+                             "0 : désactivé)")
     parser.add_argument("--record-hosts", action="store_true",
                         help="run de chauffe réel, proxy CONNECT en enregistrement : écrit "
                              f"{HOSTS.relative_to(REPO)}")
@@ -1479,6 +1521,9 @@ def main() -> None:
         fail(f"provider {args.provider} non pris en charge (seul {PROVIDER})")
     if args.runs < 1:
         fail("RUNS doit valoir au moins 1")
+    if args.idle_timeout < 0:
+        fail("--idle-timeout doit valoir 0 ou plus")
+
     if args.capture_spawn and not args.capture:
         fail("--capture-spawn demande --capture")
     if args.record_hosts and args.capture:
@@ -1548,7 +1593,8 @@ def main() -> None:
                     result = run_task(task, index, binary, cache, out, model, args.effort,
                                       sources[model], settings, connect, args.capture,
                                       capture_fail, task_args, prices,
-                                      capture_spawn=args.capture_spawn)
+                                      capture_spawn=args.capture_spawn,
+                                      idle_timeout=args.idle_timeout)
                     print(f"  {task['id']} run {index} : {result['status']}")
                     results.append(result)
         finally:
@@ -1568,7 +1614,8 @@ def main() -> None:
             if args.settings.resolve().is_relative_to(REPO) else str(args.settings),
             "settings": settings, "settings_non_default": known_settings(settings),
             "prices_version": prices.get("version"), "prices_sha256": sha256(PRICES),
-            "cache_write_price": CACHE_WRITE_PRICE, "hosts": sorted(hosts),
+            "cache_write_price": CACHE_WRITE_PRICE, "idle_timeout_s": args.idle_timeout,
+            "hosts": sorted(hosts),
             "runs": args.runs, "tasks": [t["id"] for t in tasks],
             "tools": {"python": platform.python_version(), "node": version_of(["node", "--version"]),
                       "uv": version_of(["uv", "--version"])},

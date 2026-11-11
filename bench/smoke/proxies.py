@@ -17,6 +17,10 @@ transport, méthode, chemin, statut, octets, et l'identifiant de session lu dans
 corps (`prompt_cache_key`, l'id de session du harness), qui sert à apparier la
 requête avec le journal d'usage. Par CONNECT : hôte, port, accepté ou refusé.
 
+Inactivité (YA-14) : le reverse proxy note l'heure du dernier octet relayé, dans un sens ou
+dans l'autre (`idle_seconds`) ; le runner arrête une tâche dont le flux reste muet trop
+longtemps (`--idle-timeout`, statut `stalled`).
+
 Bibliothèque standard uniquement.
 """
 
@@ -91,13 +95,15 @@ def session_of(body: bytes) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def pipe(src: socket.socket, dst: socket.socket, counter: list[int]) -> None:
+def pipe(src: socket.socket, dst: socket.socket, counter: list[int], on_bytes=None) -> None:
     try:
         while True:
             chunk = src.recv(65536)
             if not chunk:
                 break
             counter[0] += len(chunk)
+            if on_bytes is not None:
+                on_bytes()
             dst.sendall(chunk)
     except OSError:
         pass
@@ -179,11 +185,21 @@ class ReverseProxy(socketserver.ThreadingTCPServer):
             raise ValueError("cible amont de test : 127.0.0.1 uniquement")
         self.log = JsonLog(log_path)
         self.tls = ssl.create_default_context()
+        # Garde-fou d'inactivité du runner (YA-14) : dernier octet relayé, dans un sens ou
+        # dans l'autre (horloge monotone).
+        self.last_activity = time.monotonic()
         super().__init__(("127.0.0.1", 0), ReverseHandler)
 
     @property
     def port(self) -> int:
         return self.server_address[1]
+
+    def touch(self) -> None:
+        self.last_activity = time.monotonic()
+
+    def idle_seconds(self) -> float:
+        """Secondes depuis le dernier octet relayé (ou le démarrage du proxy)."""
+        return time.monotonic() - self.last_activity
 
     def connect_upstream(self) -> socket.socket:
         host, port, tls = self.upstream
@@ -196,6 +212,7 @@ class ReverseHandler(socketserver.BaseRequestHandler):
     server: ReverseProxy
 
     def handle(self) -> None:
+        self.server.touch()
         client = self.request
         started = time.monotonic()
         try:
@@ -226,6 +243,7 @@ class ReverseHandler(socketserver.BaseRequestHandler):
             if not chunk:
                 break
             body += chunk
+            self.server.touch()
         host = self.server.upstream[0]
         out = [f"{method} {target} HTTP/1.1", f"Host: {host}"]
         out += [f"{k}: {v}" for k, v in headers
@@ -248,6 +266,7 @@ class ReverseHandler(socketserver.BaseRequestHandler):
     def relay_http(self, client, upstream, method, path, body, started) -> None:
         received = [0]
         first = upstream.recv(65536)
+        self.server.touch()
         status = first.split(b" ", 2)[1].decode("latin-1") if first.count(b" ") >= 2 else None
         self.server.log.write(event="request", transport="sse" if method == "POST" else "http",
                               method=method, path=path, status=status,
@@ -257,13 +276,14 @@ class ReverseHandler(socketserver.BaseRequestHandler):
         except OSError:
             return
         received[0] += len(first)
-        pipe(upstream, client, received)
+        pipe(upstream, client, received, self.server.touch)
         self.server.log.write(event="done", transport="sse" if method == "POST" else "http",
                               path=path, bytes_down=received[0],
                               ms=round((time.monotonic() - started) * 1000))
 
     def relay_websocket(self, client, upstream, path, started) -> None:
         head, rest = read_head(upstream)
+        self.server.touch()
         status_line, _ = parse_head(head)
         parts = status_line.split(" ", 2)
         status = parts[1] if len(parts) > 1 else None
@@ -288,6 +308,7 @@ class ReverseHandler(socketserver.BaseRequestHandler):
                     if not chunk:
                         break
                     up[0] += len(chunk)
+                    self.server.touch()
                     counter.feed(chunk)
                     upstream.sendall(chunk)
             except OSError:
@@ -301,7 +322,7 @@ class ReverseHandler(socketserver.BaseRequestHandler):
 
         thread = threading.Thread(target=client_to_upstream, daemon=True)
         thread.start()
-        pipe(upstream, client, down)
+        pipe(upstream, client, down, self.server.touch)
         thread.join(timeout=5)
         self.server.log.write(event="ws_close", transport="websocket", path=path,
                               bytes_up=up[0], bytes_down=down[0],
