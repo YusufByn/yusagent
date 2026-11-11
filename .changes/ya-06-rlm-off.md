@@ -1,0 +1,1 @@
+- yusAgent: `"rlmMaxDepth": 0` now also removes the subagent surface from the system prompt of a root session (the `## Subagents` tools of the core layer, the multi-agent usage block, and the subagent clauses of the daemonless session-role line). Agent-to-agent messaging, heartbeats and the continual harness stay. With any other bound the prompt is unchanged.

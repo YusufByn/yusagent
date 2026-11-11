@@ -10,6 +10,9 @@ pub mod model_prompts;
 // yusAgent (T03, YA-04): per-session paths read from the kernel, not the prompt.
 pub mod session_paths;
 
+// yusAgent (YA-06): `rlmMaxDepth` 0 drops the subagent surface from the prompt.
+pub mod rlm_off;
+
 pub mod system_prompt;
 
 pub use system_prompt::{

@@ -618,6 +618,13 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             factory_child: config.factory_child,
             daemonless: config.daemonless,
             can_spawn: config.rlm_subagent_host.is_some(),
+            // yusAgent (YA-06): a root with `rlmMaxDepth` 0 gets no subagent surface.
+            rlm_spawn_off: crate::prompts::rlm_off::spawn_off(
+                config.rlm_depth,
+                conversation_log.as_deref(),
+                &cwd,
+                &config.agent_dir,
+            ),
             generic_mcp_servers,
             append_system_prompt: Some(resources.append_system_prompt.join("\n\n")),
             ..Default::default()
