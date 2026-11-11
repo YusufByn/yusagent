@@ -1,6 +1,6 @@
 # Cahier des charges yusAgent
 
-Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Version 4.1 (03/11/2026) : constats de l'audit d'entrée du fork (cœur Rust, un seul tool `python_repl`). Version 4 (31/10/2026) : base = fork de Prime Agent (MIT), plus de contrainte de langage pour le cœur. Version 3 (28/10/2026) : kernel Python comme outil d'exécution unique, bash appelé en async depuis le kernel. Version 2 (24/10/2026) : priorité à la capacité maximale du modèle.
+Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Version 4.3 (11/11/2026) : ordre de travail après la PR #18, variante bash natif en réglage, YA-11 découpé. Version 4.2 (08/11/2026) : builds publiés avec « OAuth abonnement pour provider » à côté des clés API, aucun build donné à des testeurs avant le sandbox du kernel, CLI renommé yusAgent. Version 4.1 (03/11/2026) : constats de l'audit d'entrée du fork (cœur Rust, un seul tool `python_repl`). Version 4 (31/10/2026) : base = fork de Prime Agent (MIT), plus de contrainte de langage pour le cœur. Version 3 (28/10/2026) : kernel Python comme outil d'exécution unique, bash appelé en async depuis le kernel. Version 2 (24/10/2026) : priorité à la capacité maximale du modèle.
 
 ## Journal des décisions
 
@@ -9,10 +9,10 @@ Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Versio
 | 24/10/2026 | Priorité à la capacité maximale du modèle, coût minimal à qualité égale | Validé | YA-00, YA-12, YA-17 |
 | 28/10/2026 | Pas de tool `bash` séparé : le kernel IPython est l'outil d'exécution unique, bash est une fonction async du kernel (`await bash(...)`) | Validé, à confirmer par le banc | YA-03, YA-11, YA-12, YA-14, YA-17 |
 | 28/10/2026 | Le tool `edit` reste séparé, au format natif de chaque famille | Validé, à confirmer par le banc | YA-03, YA-14, YA-17 |
-| 28/10/2026 | Sandbox du kernel : P1 en usage perso avec auto-approve des cellules verrouillé hors sandbox ou conteneur ; obligatoire et bloquant pour la publication publique | Validé | YA-11, YA-16 |
+| 28/10/2026 | Sandbox du kernel : P1 en usage perso avec auto-approve des cellules verrouillé hors sandbox ou conteneur ; obligatoire et bloquant pour la publication publique | Validé ; étendu aux testeurs le 08/11/2026 | YA-11, YA-16 |
 | 28/10/2026 | Kernel dans le venv du harness ; le code du projet s'exécute via `bash()` dans son propre environnement (ex. `uv run pytest`), rien n'est installé dans l'environnement de l'utilisateur | Validé | YA-03, YA-07 |
 | 28/10/2026 | Crash du kernel : redémarrage auto, helpers rechargés, observation « kernel redémarré, variables perdues » en fin de contexte, aucune cellule rejouée | Validé | YA-01, YA-03 |
-| 28/10/2026 | Providers : ChatGPT, Gemini, Kimi, Mistral, DeepSeek, OpenRouter, Claude, au choix de l'utilisateur. Chaque provider utilise le mode d'auth qu'il permet : « OAuth abonnement pour provider » quand c'est autorisé, clé API sinon. Builds publiés en v2 : clés API uniquement | Validé | YA-02, YA-13, YA-16 |
+| 28/10/2026 | Providers : ChatGPT, Gemini, Kimi, Mistral, DeepSeek, OpenRouter, Claude, au choix de l'utilisateur. Chaque provider utilise le mode d'auth qu'il permet : « OAuth abonnement pour provider » quand c'est autorisé, clé API sinon. Builds publiés en v2 : clés API uniquement | Validé ; builds publiés remplacés le 08/11/2026 | YA-02, YA-13, YA-16 |
 | 28/10/2026 | Tests : la CI n'utilise que le provider factice (lint, tests unitaires et d'intégration, build). Les tests avec un vrai modèle (smoke bench, banc) tournent en local avec « OAuth abonnement pour provider » en MVP et v1, puis passent en CI en v2 avec les clés API | Validé | YA-01, YA-14, YA-16 |
 | 28/10/2026 | Smoke bench local tracé : rapport horodaté avec hash du commit, case dédiée dans le modèle de PR | Validé | YA-14 |
 | 31/10/2026 | Cache : objectifs relevés (session ≥ 90 % MVP, ≥ 95 % v1 ; ≥ 98 % médian par requête de continuation), misses évitables et coût des reconstructions mesurés. Indicateur dans l'extension : barre de contexte en %, tokens / fenêtre du modèle, « Cache XX % » de la dernière requête avec détail au survol | Validé | YA-04, YA-10, YA-13 |
@@ -31,6 +31,15 @@ Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Versio
 | 04/11/2026 | Mention « clé API uniquement » propre à un provider retirée du CDC ; le mode d'auth reste celui que chaque provider permet | Validé | YA-02 |
 | 04/11/2026 | Tâches du smoke bench : 10 vrais bugs corrigés après le 01/08/2026 dans des dépôts publics Python et TS/JS sous licence MIT, Apache-2.0, BSD ou ISC, rejoués depuis le commit parent (minage `bench/smoke/tools/mine.py`, validation rouge -> vert sur runners Linux jetables puis revalidation macOS sous sandbox, `UV_NO_BUILD=1`). Choix de Yusuf : 7 tâches courtes, 3 difficiles multi-fichiers. Les projets de Yusuf s'ajouteront au banc complet (held-out) | Validé | YA-14 |
 | 04/11/2026 | Runs du smoke bench : baseline de 3 runs sur `main` pour mesurer le bruit, puis 1 run par PR, 2 runs de plus seulement si `compare.py` lève une alerte. Modèle du smoke de PR : `gpt-6.1-terra` ; `gpt-6-luna` en option, pas par défaut | Validé | YA-14 |
+| 06/11/2026 | Règle de verdict de l'A/B masquage : activé par défaut si le coût pessimiste des tâches stables baisse de 30 % ou plus, avec un IC 95 % qui exclut zéro et pas moins de tâches résolues ; zone grise si seul le coût rapporté passe ; rejeté sinon. Une paire touchée par une erreur de quota (429 ou équivalent) est écartée entière. Verdict du 11/11 (`bench/smoke/ab/masquage-20261106.md`, `gpt-6.1-terra`, binaire `0fa8fad` aux sources livrées identiques à `db8b1ff`) : **rejeté**. Coût pessimiste des tâches stables +4,6 % [-5,6 ; +14,7] sur 2 paires (paire 1 écartée : rejet « overloaded » du serveur), +6,2 % sur 3 ; 17 tâches résolues contre 17. Vaut pour la config `rlm.spawn` actif, rejugé après la décision sur `rlm`. Le masquage reste désactivé par défaut | Validé ; verdict du 11/11/2026 : rejeté | YA-05, YA-14 |
+| 08/11/2026 | Auth des builds publiés : les builds publiés v2 gardent « OAuth abonnement pour provider » à côté des clés API, OAuth non désactivé par défaut. Remplace « builds publiés en v2 : clés API uniquement » du 28/10 | Validé | YA-02, YA-16 |
+| 08/11/2026 | Testeurs : aucun build donné à des testeurs avant que le sandbox du kernel (YA-11) soit fonctionnel. Le gate de publication s'applique dès la première distribution à des testeurs, pas seulement à la publication publique | Validé | YA-11, YA-16 |
+| 08/11/2026 | CLI : avant les testeurs, CLI renommé yusAgent (binaire `yusagent`, dossier `~/.yusagent`, version et aide, plus de mention de Prime Agent dans l'interface). Refonte de l'affichage du CLI après l'extension (YA-10), sur le modèle de ce que l'extension affiche, sans casser le mode non interactif (`-p`) ni les options utilisées par `bench/smoke/run.py`. Remplace « pas de refonte du CLI interactif » du 04/11 (décision non portée au journal du CDC) | Validé | YA-10, YA-14, YA-16 |
+| 11/11/2026 | Ordre de travail après la PR #18 : d'abord le banc (métrique « coût à cache théorique » calculée sur le préfixe commun entre requêtes consécutives, A/B entrelacés par tâche avec ordre tiré au sort, bootstrap sur les tâches), puis A/B `rlm.spawn` on/off et nouvelle baseline sur la config retenue, puis la suite du plan | Validé | YA-06, YA-14 |
+| 11/11/2026 | Variante « bash natif » livrée en réglage dans le même ticket que `edit` en tool natif (YA-03), A/B smoke avant la réduction du prompt (YA-09) | Validé | YA-03, YA-09, YA-14 |
+| 11/11/2026 | YA-11 découpé : modèle de permissions et `session/request_permission` dans le cœur avant YA-10 ; sandbox du kernel ensuite | Validé | YA-10, YA-11 |
+| 11/11/2026 | Outillage de coût du backend d'abonnement gelé : plus de raffinement tant qu'il n'y a pas de clés API | Validé | YA-13 |
+| 11/11/2026 | PR vers upstream (correctifs génériques) : après les testeurs, depuis un fork GitHub séparé `YusufByn/prime-agent`, branches créées depuis `upstream/main`, relecture par Yusuf avant ouverture | Validé | YA-16 |
 
 ## Résumé
 
@@ -89,7 +98,7 @@ Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Versio
 ### 8. Auto-amélioration et authentification
 
 - Meta-Harness (arXiv 2603.28052) optimise le code du harness à partir des traces brutes et dépasse les harness faits main sur TerminalBench-2 (76,4 % contre 74,7 % avec Opus 4.6). Risque principal : surapprentissage au benchmark.
-- Certains fournisseurs interdisent l'usage des jetons d'abonnement dans des outils tiers (Anthropic depuis janvier-février 2026). Le mode « OAuth abonnement pour provider » est un mode de développement personnel, à vérifier provider par provider, jamais un mode de distribution.
+- Certains fournisseurs interdisent l'usage des jetons d'abonnement dans des outils tiers (Anthropic depuis janvier-février 2026). Le mode « OAuth abonnement pour provider » est un mode de développement personnel, à vérifier provider par provider ; dans les builds publiés, chaque utilisateur se connecte avec son propre abonnement.
 
 ---
 
@@ -134,7 +143,7 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 
 - Harness (fork de Prime Agent) : boucle agentique, tools (REPL Python avec bash async, édition), gestion de contexte, sous-agents, vérification, télémétrie.
 - Exploitation maximale des capacités de chaque famille de modèles (YA-17).
-- Couche providers multi-fournisseurs (ChatGPT, Gemini, Kimi, Mistral, DeepSeek, OpenRouter, Claude) : « OAuth abonnement pour provider » quand le provider l'autorise, clé API sinon ; builds publiés en clés API uniquement (v2).
+- Couche providers multi-fournisseurs (ChatGPT, Gemini, Kimi, Mistral, DeepSeek, OpenRouter, Claude) : « OAuth abonnement pour provider » quand le provider l'autorise, clé API sinon ; les builds publiés (v2) gardent les deux modes.
 - Extension VS Code : chat, diffs, permissions, diagnostics, terminal, réglages.
 - Banc d'évaluation reproductible et publication des résultats.
 - Auto-amélioration contrôlée (v2).
@@ -188,13 +197,13 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 
 ### YA-02 : Couche providers, « OAuth abonnement pour provider » et clés API
 
-- **Description** : base = couche providers de Prime Agent (héritée de pi). Interface interne unique (messages, blocs texte/raisonnement/tool_use/tool_result, usage avec cache lu/écrit). Adaptateurs Anthropic Messages, OpenAI Responses, Gemini, OpenRouter, plus les API compatibles (Kimi, Mistral, DeepSeek). Le modèle se choisit dans les réglages. Deux modes d'auth, selon ce que chaque provider autorise : « OAuth abonnement pour provider » (usage perso) et clé API (seul mode des builds publiés). Normalisation du streaming, des erreurs, des retries, et matrice de capacités par modèle (fenêtre, cache, parallélisme, raisonnement, vision, format d'édition).
+- **Description** : base = couche providers de Prime Agent (héritée de pi). Interface interne unique (messages, blocs texte/raisonnement/tool_use/tool_result, usage avec cache lu/écrit). Adaptateurs Anthropic Messages, OpenAI Responses, Gemini, OpenRouter, plus les API compatibles (Kimi, Mistral, DeepSeek). Le modèle se choisit dans les réglages. Deux modes d'auth, selon ce que chaque provider autorise : « OAuth abonnement pour provider » et clé API, les deux dans les builds de dev comme publiés. Normalisation du streaming, des erreurs, des retries, et matrice de capacités par modèle (fenêtre, cache, parallélisme, raisonnement, vision, format d'édition).
 - **Justification** : mécanismes de cache et de raisonnement différents selon les providers ; restrictions des fournisseurs sur les jetons d'abonnement dans les outils tiers.
 - **Critères d'acceptation** :
   - Un même scénario (lecture, édition, test) passe sur au moins 3 providers sans changement de la boucle.
   - Usage remonté : `input`, `output`, `cache_read`, `cache_write`, `reasoning` quand exposés.
   - Login par abonnement Claude hérité de Prime Agent : conservé pour l'instant, Yusuf le retire à la main plus tard (hors du plan de build).
-  - « OAuth abonnement pour provider » désactivé par défaut dans les builds publiés, avec avertissement sur les conditions du provider.
+  - Builds publiés : OAuth et clés API disponibles, OAuth non désactivé par défaut.
   - Clés jamais écrites dans les logs.
 - **Dépendances** : YA-01. **Priorité** : P0. **Complexité** : M.
 
@@ -336,7 +345,7 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
   - Le classifieur de commandes s'applique à chaque `bash()` (YA-03). **Limite** : le Python arbitraire du kernel (`subprocess`, `os`, `shutil`, `socket`, requêtes HTTP) n'est pas filtrable de façon fiable. Sans sandbox, il n'est couvert que par l'avertissement persistant ; une détection heuristique (imports et appels sensibles, confirmation de la cellule) peut s'ajouter mais reste contournable et doit être présentée comme telle.
   - Sandbox OS (`@anthropic-ai/sandbox-runtime`, WSL2 sous Windows, ou Docker), appliqué au process du kernel entier, pas seulement aux commandes `bash()`.
   - **Verrou auto-approve** : hors sandbox ou conteneur, l'auto-approve des cellules du kernel est impossible. Chaque cellule à effet de bord (écriture, réseau, process) demande confirmation, quel que soit le réglage de l'utilisateur.
-  - **Usage perso vs publication** : en usage perso (MVP), le sandbox reste optionnel grâce au verrou. Pour la publication publique, il est obligatoire et bloquant (YA-16) : les utilisateurs tiers exécutent l'agent sur leurs propres machines et projets, avec des réglages par défaut qu'ils ne liront pas forcément.
+  - **Usage perso vs publication** : en usage perso (MVP), le sandbox reste optionnel grâce au verrou. Dès la première distribution à des testeurs, et pas seulement pour la publication publique, il est obligatoire et bloquant (YA-16) : les utilisateurs tiers exécutent l'agent sur leurs propres machines et projets, avec des réglages par défaut qu'ils ne liront pas forcément.
   - Réglages par défaut sûrs pour tous : auto-approve désactivé, sandbox activé quand la plateforme le permet, détection et message clair quand elle ne le permet pas.
   - Contenus externes (web, issues, fichiers non suivis) marqués non fiables.
   - Interdiction de lire `~/.ssh`, `.env` hors workspace, magasins de secrets.
@@ -350,7 +359,7 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
   - Auto-approve des cellules refusé hors sandbox ou conteneur, testé.
   - Aucun secret du harness (clés API, jetons OAuth) visible depuis le kernel ou `bash()` (`os.environ`, `env`, `/proc`), testé.
   - Sandbox fonctionnel sur Linux et macOS, et sous Windows via WSL2 ou Docker.
-- **Dépendances** : YA-03, YA-10. **Priorité** : P0 (permissions et verrou auto-approve), P1 (sandbox en usage perso), P0 bloquant pour la publication (YA-16). **Complexité** : M.
+- **Dépendances** : YA-03, YA-10. **Priorité** : P0 (permissions et verrou auto-approve), P1 (sandbox en usage perso), P0 bloquant dès la première distribution à des testeurs (YA-16). **Complexité** : M.
 
 ### YA-12 : Budget de raisonnement et réduction des tours
 
@@ -411,16 +420,16 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
 
 ### YA-16 : Packaging, CI et publication
 
-- **Description** : harness distribué comme Prime Agent (installeur avec binaires de release construits en CI, ou npm), extension sur VS Code Marketplace et Open VSX. CI GitHub Actions : lint, tests avec provider factice, build .vsix ; smoke bench ajouté en v2 avec les clés API. Binaires natifs construits en CI, jamais en local. Bascule de « OAuth abonnement pour provider » vers clés API avant publication. README avec résultats du banc, guide d'architecture, démo vidéo.
+- **Description** : harness distribué comme Prime Agent (installeur avec binaires de release construits en CI, ou npm), extension sur VS Code Marketplace et Open VSX. CI GitHub Actions : lint, tests avec provider factice, build .vsix ; smoke bench ajouté en v2 avec les clés API. Binaires natifs construits en CI, jamais en local. Clés API ajoutées à côté de l'OAuth avant publication. README avec résultats du banc, guide d'architecture, démo vidéo.
 - **Justification** : contrainte de stockage ; politiques des fournisseurs.
 - **Critères d'acceptation** :
   - Installation < 2 min sur machine vierge.
   - < 50 Mo sur disque hors environnement Python.
   - Aucune étape de build local > 1 Go.
   - Licence MIT, copyrights de Prime Agent et pi conservés dans LICENSE, attribution de mini-SWE-agent.
-  - **Gate de publication** : aucune publication publique tant que le sandbox du kernel (YA-11) n'est pas fonctionnel et que la suite de tests d'injection ne passe pas en mode sandbox.
+  - **Gate de publication** : aucune distribution, dès la première remise d'un build à des testeurs, ni publication publique tant que le sandbox du kernel (YA-11) n'est pas fonctionnel et que la suite de tests d'injection ne passe pas en mode sandbox.
   - Doc d'installation Windows : WSL2 requis, projets à placer dans le système de fichiers Linux plutôt que sur `/mnt/c` (accès lent).
-  - Build publié : clés API uniquement, « OAuth abonnement pour provider » absent ou désactivé (YA-02), auto-approve désactivé par défaut.
+  - Build publié : clés API et OAuth (YA-02), auto-approve désactivé par défaut.
 - **Dépendances** : YA-10, YA-11, YA-14. **Priorité** : P1. **Complexité** : M.
 
 ### YA-17 : Exploitation maximale des capacités du modèle
@@ -513,8 +522,8 @@ Rapport complet : `docs/audit/audit-entree.md` (binaire de HEAD construit en CI,
 | Phase | Contenu | Sortie attendue |
 |---|---|---|
 | MVP (4 à 6 semaines) | YA-01, YA-02 (2 providers + « OAuth abonnement pour provider »), YA-03 (kernel + `bash()` async + `edit`), YA-04, YA-05 (masquage), YA-07, YA-10 (chat + diff + permissions), YA-11 (permissions), YA-06 (`rlm()` minimal en lecture seule, désactivable, en fin de MVP), YA-13, YA-14 (suite interne + mini-SWE-agent + comparaison kernel seul vs bash natif + A/B avec et sans `rlm()`), YA-17 (formats natifs, raisonnement entrelacé, prompts par famille), YA-18 | Harness utilisable au quotidien dans VS Code ; premier rapport de banc vs mini-SWE-agent ; choix d'exécution confirmé ou révisé |
-| v1 (6 à 8 semaines) | YA-02 (providers supplémentaires, « OAuth abonnement pour provider »), YA-05 (compaction LLM), YA-06 (extensions selon le banc), YA-08, YA-09, YA-11 (sandbox OS, bloquant pour la publication), YA-12, YA-14 (vs Claude Code, Codex CLI, OpenCode), YA-17 (mode effort maximal, auto-revue, vision), YA-19, YA-20, YA-21 | Résolution ≥ harness du fournisseur ; rapport de banc public |
-| v2 (publication) | YA-02 (clés API, OAuth retiré des builds publiés), YA-13 (vérification coût vs facture), YA-16 (publication Marketplace, Open VSX, distribution du harness), YA-15, YA-17 (best-of-N), boucle Meta-Harness hors ligne, ACP multi-éditeurs, tools MCP yusAi avancés | Publication ; résolution > harness du fournisseur ; article technique |
+| v1 (6 à 8 semaines) | YA-02 (providers supplémentaires, « OAuth abonnement pour provider »), YA-05 (compaction LLM), YA-06 (extensions selon le banc), YA-08, YA-09, YA-11 (sandbox OS, bloquant avant les testeurs et la publication), YA-12, YA-14 (vs Claude Code, Codex CLI, OpenCode), YA-17 (mode effort maximal, auto-revue, vision), YA-19, YA-20, YA-21 | Résolution ≥ harness du fournisseur ; rapport de banc public |
+| v2 (publication) | YA-02 (clés API en plus de l'OAuth), YA-13 (vérification coût vs facture), YA-16 (publication Marketplace, Open VSX, distribution du harness), YA-15, YA-17 (best-of-N), boucle Meta-Harness hors ligne, ACP multi-éditeurs, tools MCP yusAi avancés | Publication ; résolution > harness du fournisseur ; article technique |
 
 ## Ordre de démarrage du build (proposé, 31/10/2026 ; mis à jour 03/11/2026)
 
@@ -536,7 +545,7 @@ Aucun modèle réel nécessaire pour ces étapes : tout se teste avec le provide
 - Choisir le format d'édition et le prompt par famille de modèle.
 - Garder la variante « bash natif » prête dans le code (quelques dizaines de lignes) pour pouvoir trancher par le banc sans refonte. Plus généralement, toute variante à tester est un réglage dans la même branche, jamais une branche séparée.
 - En cas de conflit entre qualité et coût, la qualité gagne.
-- Traiter « OAuth abonnement pour provider » comme strictement personnel et temporaire.
+- « OAuth abonnement pour provider » : chaque utilisateur se connecte avec son propre abonnement, jamais d'accès partagé.
 
 ## Limites
 
