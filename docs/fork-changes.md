@@ -96,6 +96,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `docs/tickets/08-usage-ecriture-cache.md` | modif. | Décision du 04/11/2026 après la CI : ventilation hors de `Usage`. | T08 (YA-13) |
 | `.changes/ya-08.md` | ajout | Fragment de changelog. | T08 (YA-13) |
 | `bench/smoke/metrics.py`, `run.py`, `compare.py`, `README.md` | modif. (fichiers du fork) | Coût pessimiste (`input` non caché au tarif `cache_write_30m`) à côté du coût rapporté : `pessimistic_request_cost`, totaux, colonne du tableau des tâches, `tasks.csv`, `report.json` ; section du coût agrégé de `compare.py` avec le même détail, sans alerte. Aucun changement du harness. | T08b (YA-13) |
+| `Cargo.lock`, `.changes/rustix-1-1-6-advisory-bump.md` | cherry-pick d'upstream | Commit upstream `450314627` (#4030), repris en entier : `rustix` 1.1.4 → 1.1.6 pour RUSTSEC-2026-0486 (xattr *unsound*), qui fait échouer le job `deny` de `ci.yml` ; le fragment de changelog est celui d'upstream, exigé par `changelog-fragment.yml`. Aucune autre dépendance ne bouge (l'entrée `rustix` 0.38.44 de crossterm est hors de la plage touchée). Le prochain cherry-pick de ce commit est vide. | YA-00 |
 
 ## Smoke bench (T06, YA-14)
 
