@@ -494,7 +494,18 @@ jobs:
           targets: x86_64-pc-windows-gnu
           components: clippy
       - name: Install the mingw-w64 cross toolchain (ring C for the target)
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+        # yusAgent (YA-00): the runner's apt mirror (azure.archive.ubuntu.com)
+        # fails to resolve or hangs at times. 3 attempts 30 s apart, each step
+        # capped at 5 min (green runs take under 2 min); worst case 31 min.
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 300 sudo apt-get update && timeout 300 sudo apt-get install -y gcc-mingw-w64-x86-64; then
+              exit 0
+            fi
+            echo "::warning::apt attempt ${attempt}/3 failed"
+            if [ "${attempt}" -lt 3 ]; then sleep 30; fi
+          done
+          exit 1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: windows-cross
