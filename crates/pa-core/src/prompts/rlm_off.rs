@@ -34,31 +34,32 @@ pub const DAEMONLESS_SPAWN_LINE: &str = "This session has no daemon: heartbeats 
 /// The same line with the subagent clauses removed.
 pub const DAEMONLESS_NO_SUBAGENT_LINE: &str = "This session has no daemon: heartbeats never fire, and background `bash()` completions wake you with a queued `[bash-done]` turn; the run waits for live background commands before it exits.";
 
-/// Whether this session's prompt drops the subagent surface: a root
-/// session whose resolved `rlmMaxDepth` is 0 (same resolver as the spawn
-/// gate, `rlm_host::resolve_rlm_max_depth`). A child (depth ≥ 1) never
-/// drops it: it only exists when the bound is above 0.
+/// The resolved `rlmMaxDepth` of a root session (same resolver as the
+/// spawn gate, `rlm_host::resolve_rlm_max_depth`), `None` for a child
+/// (depth ≥ 1): a child only exists when the bound is above 0, so its
+/// prompt never drops the subagent surface.
 #[must_use]
-pub fn spawn_off(
+pub fn root_max_depth(
     rlm_depth: Option<u32>,
     session_file: Option<&str>,
     cwd: &std::path::Path,
     agent_dir: &std::path::Path,
-) -> bool {
-    rlm_depth.unwrap_or(0) == 0
-        && crate::session_engine::rlm_host::resolve_rlm_max_depth(
-            session_file,
-            None,
-            cwd,
-            agent_dir,
-        )
-        .0 == 0
+) -> Option<u64> {
+    (rlm_depth.unwrap_or(0) == 0).then(|| {
+        crate::session_engine::rlm_host::resolve_rlm_max_depth(session_file, None, cwd, agent_dir).0
+    })
 }
 
-/// The core layer, without its subagent part when `spawn_off`.
+/// Whether the prompt drops the subagent surface: a root bound of 0.
 #[must_use]
-pub fn core_layer(layer: &'static str, spawn_off: bool) -> Cow<'static, str> {
-    if !spawn_off {
+pub fn spawn_off(root_max_depth: Option<u64>) -> bool {
+    root_max_depth == Some(0)
+}
+
+/// The core layer, without its subagent part at a root bound of 0.
+#[must_use]
+pub fn core_layer(layer: &'static str, root_max_depth: Option<u64>) -> Cow<'static, str> {
+    if !spawn_off(root_max_depth) {
         return Cow::Borrowed(layer);
     }
     match (layer.find(CORE_SUBAGENTS_START), layer.find(CORE_A2A_START)) {
@@ -70,10 +71,10 @@ pub fn core_layer(layer: &'static str, spawn_off: bool) -> Cow<'static, str> {
 }
 
 /// The usage layer, without its multi-agent block and subagent clause
-/// when `spawn_off`.
+/// at a root bound of 0.
 #[must_use]
-pub fn usage_layer(layer: &'static str, spawn_off: bool) -> Cow<'static, str> {
-    if !spawn_off {
+pub fn usage_layer(layer: &'static str, root_max_depth: Option<u64>) -> Cow<'static, str> {
+    if !spawn_off(root_max_depth) {
         return Cow::Borrowed(layer);
     }
     let mut out = String::with_capacity(layer.len());
@@ -97,8 +98,8 @@ pub fn usage_layer(layer: &'static str, spawn_off: bool) -> Cow<'static, str> {
 
 /// The daemonless session-role line of a session that has a spawn host.
 #[must_use]
-pub fn daemonless_spawn_line(spawn_off: bool) -> &'static str {
-    if spawn_off {
+pub fn daemonless_spawn_line(root_max_depth: Option<u64>) -> &'static str {
+    if spawn_off(root_max_depth) {
         DAEMONLESS_NO_SUBAGENT_LINE
     } else {
         DAEMONLESS_SPAWN_LINE
@@ -121,19 +122,24 @@ mod tests {
             rlm_depth: Some(0),
             daemonless: true,
             can_spawn: true,
-            rlm_spawn_off: spawn_off,
+            rlm_max_depth: Some(if spawn_off { 0 } else { 2 }),
             ..Default::default()
         }
     }
 
-    /// Default bound: every piece is the upstream text, unchanged.
+    /// Any bound but a root 0 (default 2, 1, a child's `None`): every piece
+    /// is the upstream text, unchanged.
     #[test]
     fn the_default_keeps_the_upstream_text() {
-        assert!(matches!(core_layer(CORE_LAYER, false), Cow::Borrowed(text) if text == CORE_LAYER));
-        assert!(
-            matches!(usage_layer(USAGE_LAYER, false), Cow::Borrowed(text) if text == USAGE_LAYER)
-        );
-        assert_eq!(daemonless_spawn_line(false), DAEMONLESS_SPAWN_LINE);
+        for bound in [Some(2), Some(1), None] {
+            assert!(
+                matches!(core_layer(CORE_LAYER, bound), Cow::Borrowed(text) if text == CORE_LAYER)
+            );
+            assert!(
+                matches!(usage_layer(USAGE_LAYER, bound), Cow::Borrowed(text) if text == USAGE_LAYER)
+            );
+            assert_eq!(daemonless_spawn_line(bound), DAEMONLESS_SPAWN_LINE);
+        }
     }
 
     /// The markers still match the layers: an upstream edit that moves one
@@ -180,13 +186,20 @@ mod tests {
         assert!(!prompt.contains("\n\n\n"));
     }
 
-    /// The default prompt still has the whole subagent surface.
+    /// The default prompt still has the whole subagent surface, with a
+    /// bound above 0 or with none given (an embedding that does not set it).
     #[test]
     fn default_prompt_keeps_the_subagent_surface() {
-        let prompt = build_system_prompt(&print_root(false));
-        assert!(prompt.contains("rlm.spawn("));
-        assert!(prompt.contains("## Subagents"));
-        assert!(prompt.contains(DAEMONLESS_SPAWN_LINE));
+        let unset = BuildSystemPromptOptions {
+            rlm_max_depth: None,
+            ..print_root(false)
+        };
+        for options in [print_root(false), unset] {
+            let prompt = build_system_prompt(&options);
+            assert!(prompt.contains("rlm.spawn("));
+            assert!(prompt.contains("## Subagents"));
+            assert!(prompt.contains(DAEMONLESS_SPAWN_LINE));
+        }
     }
 
     fn agent_dir_with(settings_json: Option<&str>) -> tempfile::TempDir {
@@ -204,10 +217,15 @@ mod tests {
         let off = agent_dir_with(Some(r#"{ "rlmMaxDepth": 0 }"#));
         let one = agent_dir_with(Some(r#"{ "rlmMaxDepth": 1 }"#));
         let unset = agent_dir_with(None);
-        assert!(spawn_off(Some(0), None, cwd.path(), off.path()));
-        assert!(spawn_off(None, None, cwd.path(), off.path()));
-        assert!(!spawn_off(Some(1), None, cwd.path(), off.path()));
-        assert!(!spawn_off(Some(0), None, cwd.path(), one.path()));
-        assert!(!spawn_off(Some(0), None, cwd.path(), unset.path()));
+        let root =
+            |depth, dir: &tempfile::TempDir| root_max_depth(depth, None, cwd.path(), dir.path());
+        assert_eq!(root(Some(0), &off), Some(0));
+        assert_eq!(root(None, &off), Some(0));
+        assert_eq!(root(Some(1), &off), None);
+        assert_eq!(root(Some(0), &one), Some(1));
+        assert!(spawn_off(root(Some(0), &off)));
+        assert!(!spawn_off(root(Some(1), &off)));
+        assert!(!spawn_off(root(Some(0), &one)));
+        assert!(!spawn_off(root(Some(0), &unset)));
     }
 }

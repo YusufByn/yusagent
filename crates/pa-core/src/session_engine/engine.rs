@@ -619,7 +619,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             daemonless: config.daemonless,
             can_spawn: config.rlm_subagent_host.is_some(),
             // yusAgent (YA-06): a root with `rlmMaxDepth` 0 gets no subagent surface.
-            rlm_spawn_off: crate::prompts::rlm_off::spawn_off(
+            rlm_max_depth: crate::prompts::rlm_off::root_max_depth(
                 config.rlm_depth,
                 conversation_log.as_deref(),
                 &cwd,

@@ -97,8 +97,9 @@ pub struct BuildSystemPromptOptions<'a> {
     /// daemonless print host or a daemon worker); a daemonless session
     /// without one cannot spawn at all.
     pub can_spawn: bool,
-    /// yusAgent (YA-06): `rlmMaxDepth` 0, the subagent surface leaves the prompt.
-    pub rlm_spawn_off: bool,
+    /// yusAgent (YA-06): resolved `rlmMaxDepth` of a root session (`None`
+    /// for a child or when unknown); `Some(0)` drops the subagent surface.
+    pub rlm_max_depth: Option<u64>,
     /// Enabled user-configured generic MCP servers.
     pub generic_mcp_servers: Vec<String>,
 }
@@ -127,14 +128,14 @@ pub fn system_prompt_breakdown(options: &BuildSystemPromptOptions) -> SystemProm
             segments.push(PromptSegment::static_segment(
                 "core",
                 layers::layer_source("core").unwrap_or_default(),
-                super::rlm_off::core_layer(layers::CORE_LAYER, options.rlm_spawn_off)
+                super::rlm_off::core_layer(layers::CORE_LAYER, options.rlm_max_depth)
                     .trim()
                     .to_string(),
             ));
             segments.push(PromptSegment::static_segment(
                 "usage",
                 layers::layer_source("usage").unwrap_or_default(),
-                super::rlm_off::usage_layer(layers::USAGE_LAYER, options.rlm_spawn_off)
+                super::rlm_off::usage_layer(layers::USAGE_LAYER, options.rlm_max_depth)
                     .trim()
                     .to_string(),
             ));
@@ -305,7 +306,7 @@ fn session_role_section(options: &BuildSystemPromptOptions, has_ipython: bool) -
     if options.daemonless {
         lines.push(if options.can_spawn {
             // yusAgent (YA-06): text in `rlm_off`, without the subagent clauses at depth bound 0.
-            super::rlm_off::daemonless_spawn_line(options.rlm_spawn_off).to_string()
+            super::rlm_off::daemonless_spawn_line(options.rlm_max_depth).to_string()
         } else {
             "This session has no daemon: `rlm.spawn` is unavailable, heartbeats never fire, and background `bash()` completions wake you with a queued `[bash-done]` turn."
                 .to_string()
