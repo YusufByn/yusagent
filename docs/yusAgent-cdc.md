@@ -525,18 +525,21 @@ Rapport complet : `docs/audit/audit-entree.md` (binaire de HEAD construit en CI,
 | v1 (6 à 8 semaines) | YA-02 (providers supplémentaires, « OAuth abonnement pour provider »), YA-05 (compaction LLM), YA-06 (extensions selon le banc), YA-08, YA-09, YA-11 (sandbox OS, bloquant avant les testeurs et la publication), YA-12, YA-14 (vs Claude Code, Codex CLI, OpenCode), YA-17 (mode effort maximal, auto-revue, vision), YA-19, YA-20, YA-21 | Résolution ≥ harness du fournisseur ; rapport de banc public |
 | v2 (publication) | YA-02 (clés API en plus de l'OAuth), YA-13 (vérification coût vs facture), YA-16 (publication Marketplace, Open VSX, distribution du harness), YA-15, YA-17 (best-of-N), boucle Meta-Harness hors ligne, ACP multi-éditeurs, tools MCP yusAi avancés | Publication ; résolution > harness du fournisseur ; article technique |
 
-## Ordre de démarrage du build (proposé, 31/10/2026 ; mis à jour 03/11/2026)
+## Ordre de démarrage du build (proposé, 31/10/2026 ; mis à jour 03/11/2026 et 11/11/2026)
 
 Aucun modèle réel nécessaire pour ces étapes : tout se teste avec le provider factice ou des requêtes interceptées (base URL pointée vers un serveur local).
 
 1. **Fait (03/11).** Repo neuf `YusufByn/yusagent` (public) créé depuis un clone de `PrimeIntellect-ai/prime-agent`, upstream en remote, LICENSE conservée, ajout de `bench/` (banc de capture, `bench/tools/capture/`). `extension/` et l'adaptateur Harbor ne sont pas encore créés (constat du 04/11). CI héritée, réduite à lint + tests avec provider factice.
 2. **Fait (03/11), rapport dans `docs/audit/audit-entree.md`.** Audit d'entrée : taille du préambule au premier appel, test de préfixe octet par octet N+1 vs N (YA-04), état du mode ACP, taille sur disque, points d'entrée pour le masquage (YA-05) et le tool `edit` (YA-03).
-3. Ticket 01 : désactivations par défaut (Continual Harness, `/refine` automatique, messagerie entre agents, heartbeats, télémétrie distante, vérification de version) et correctif du shard CI 1.
-4. Ticket 02 : environnement filtré du kernel et de `bash()` (YA-03, YA-11).
-5. Ticket 03 : YA-04, test de préfixe en CI, volatil (date, cwd, chemin du journal) sorti du prompt système, réglage du TTL.
-6. Ticket 04 : YA-13 base, journal d'usage par appel, champ raisonnement, correctif de l'usage Anthropic.
-7. Ticket 05 : YA-05 masquage par le hook `transform_context`, réglage désactivé par défaut jusqu'au banc.
-8. Ensuite : smoke bench (YA-14) avant toute réduction du prompt (YA-09), puis YA-03 (`edit` en tool, `read` numéroté, plafond de sortie, notice de redémarrage), conservation des messages utilisateur à la compaction (YA-05), YA-06, YA-10 (permissions ACP). Si le planning glisse, c'est l'extension qui recule, pas le banc.
+3. **Fait (03/11, PR #2).** Ticket 01 : désactivations par défaut (Continual Harness, `/refine` automatique, messagerie entre agents, heartbeats, télémétrie distante, vérification de version) et correctif du shard CI 1.
+4. **Fait (03/11, PR #3).** Ticket 02 : environnement filtré du kernel et de `bash()` (YA-03, YA-11).
+5. **Fait (03/11, PR #4).** Ticket 03 : YA-04, test de préfixe en CI, volatil (date, cwd, chemin du journal) sorti du prompt système, réglage du TTL.
+6. **Fait (03/11, PR #5).** Ticket 04 : YA-13 base, journal d'usage par appel, champ raisonnement, correctif de l'usage Anthropic.
+7. **Fait (04/11, PR #6).** Ticket 05 : YA-05 masquage par le hook `transform_context`, réglage désactivé par défaut jusqu'au banc.
+8. Ensuite, ordre validé le 11/11/2026 (journal des décisions), après le smoke bench (YA-14, PR #9 à #14) et l'A/B masquage (PR #19, rejeté) :
+   1. Banc : métrique « coût à cache théorique » calculée sur le préfixe commun entre requêtes consécutives, A/B entrelacés par tâche avec ordre tiré au sort, bootstrap sur les tâches (YA-14).
+   2. A/B `rlm.spawn` on/off, puis nouvelle baseline sur la config retenue (YA-06, YA-14).
+   3. La suite du plan : YA-03 (`edit` en tool natif avec la variante « bash natif » en réglage, `read` numéroté, plafond de sortie, notice de redémarrage), A/B smoke de la variante avant la réduction du prompt (YA-09) ; conservation des messages utilisateur à la compaction (YA-05) ; YA-06 ; modèle de permissions et `session/request_permission` dans le cœur (YA-11) avant YA-10 ; sandbox du kernel (YA-11) ensuite. Si le planning glisse, c'est l'extension qui recule, pas le banc.
 
 ## Recommandations
 
