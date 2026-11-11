@@ -9,7 +9,7 @@ Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Versio
 | 24/10/2026 | Priorité à la capacité maximale du modèle, coût minimal à qualité égale | Validé | YA-00, YA-12, YA-17 |
 | 28/10/2026 | Pas de tool `bash` séparé : le kernel IPython est l'outil d'exécution unique, bash est une fonction async du kernel (`await bash(...)`) | Validé, à confirmer par le banc | YA-03, YA-11, YA-12, YA-14, YA-17 |
 | 28/10/2026 | Le tool `edit` reste séparé, au format natif de chaque famille | Validé, à confirmer par le banc | YA-03, YA-14, YA-17 |
-| 28/10/2026 | Sandbox du kernel : P1 en usage perso avec auto-approve des cellules verrouillé hors sandbox ou conteneur ; obligatoire et bloquant pour la publication publique | Validé | YA-11, YA-16 |
+| 28/10/2026 | Sandbox du kernel : P1 en usage perso avec auto-approve des cellules verrouillé hors sandbox ou conteneur ; obligatoire et bloquant pour la publication publique | Validé ; étendu aux testeurs le 08/11/2026 | YA-11, YA-16 |
 | 28/10/2026 | Kernel dans le venv du harness ; le code du projet s'exécute via `bash()` dans son propre environnement (ex. `uv run pytest`), rien n'est installé dans l'environnement de l'utilisateur | Validé | YA-03, YA-07 |
 | 28/10/2026 | Crash du kernel : redémarrage auto, helpers rechargés, observation « kernel redémarré, variables perdues » en fin de contexte, aucune cellule rejouée | Validé | YA-01, YA-03 |
 | 28/10/2026 | Providers : ChatGPT, Gemini, Kimi, Mistral, DeepSeek, OpenRouter, Claude, au choix de l'utilisateur. Chaque provider utilise le mode d'auth qu'il permet : « OAuth abonnement pour provider » quand c'est autorisé, clé API sinon. Builds publiés en v2 : clés API uniquement | Validé ; builds publiés remplacés le 08/11/2026 | YA-02, YA-13, YA-16 |
@@ -203,7 +203,7 @@ Cibles à valider par le banc YA-14, à modèle et ressources identiques.
   - Un même scénario (lecture, édition, test) passe sur au moins 3 providers sans changement de la boucle.
   - Usage remonté : `input`, `output`, `cache_read`, `cache_write`, `reasoning` quand exposés.
   - Login par abonnement Claude hérité de Prime Agent : conservé pour l'instant, Yusuf le retire à la main plus tard (hors du plan de build).
-  - Builds publiés : OAuth et clés API disponibles, OAuth non désactivé par défaut, avec avertissement sur les conditions du provider.
+  - Builds publiés : OAuth et clés API disponibles, OAuth non désactivé par défaut.
   - Clés jamais écrites dans les logs.
 - **Dépendances** : YA-01. **Priorité** : P0. **Complexité** : M.
 
@@ -522,7 +522,7 @@ Rapport complet : `docs/audit/audit-entree.md` (binaire de HEAD construit en CI,
 | Phase | Contenu | Sortie attendue |
 |---|---|---|
 | MVP (4 à 6 semaines) | YA-01, YA-02 (2 providers + « OAuth abonnement pour provider »), YA-03 (kernel + `bash()` async + `edit`), YA-04, YA-05 (masquage), YA-07, YA-10 (chat + diff + permissions), YA-11 (permissions), YA-06 (`rlm()` minimal en lecture seule, désactivable, en fin de MVP), YA-13, YA-14 (suite interne + mini-SWE-agent + comparaison kernel seul vs bash natif + A/B avec et sans `rlm()`), YA-17 (formats natifs, raisonnement entrelacé, prompts par famille), YA-18 | Harness utilisable au quotidien dans VS Code ; premier rapport de banc vs mini-SWE-agent ; choix d'exécution confirmé ou révisé |
-| v1 (6 à 8 semaines) | YA-02 (providers supplémentaires, « OAuth abonnement pour provider »), YA-05 (compaction LLM), YA-06 (extensions selon le banc), YA-08, YA-09, YA-11 (sandbox OS, bloquant pour la publication), YA-12, YA-14 (vs Claude Code, Codex CLI, OpenCode), YA-17 (mode effort maximal, auto-revue, vision), YA-19, YA-20, YA-21 | Résolution ≥ harness du fournisseur ; rapport de banc public |
+| v1 (6 à 8 semaines) | YA-02 (providers supplémentaires, « OAuth abonnement pour provider »), YA-05 (compaction LLM), YA-06 (extensions selon le banc), YA-08, YA-09, YA-11 (sandbox OS, bloquant avant les testeurs et la publication), YA-12, YA-14 (vs Claude Code, Codex CLI, OpenCode), YA-17 (mode effort maximal, auto-revue, vision), YA-19, YA-20, YA-21 | Résolution ≥ harness du fournisseur ; rapport de banc public |
 | v2 (publication) | YA-02 (clés API en plus de l'OAuth), YA-13 (vérification coût vs facture), YA-16 (publication Marketplace, Open VSX, distribution du harness), YA-15, YA-17 (best-of-N), boucle Meta-Harness hors ligne, ACP multi-éditeurs, tools MCP yusAi avancés | Publication ; résolution > harness du fournisseur ; article technique |
 
 ## Ordre de démarrage du build (proposé, 31/10/2026 ; mis à jour 03/11/2026)
