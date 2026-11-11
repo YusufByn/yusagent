@@ -555,11 +555,47 @@ def theory_check_main(runs: list[Path]) -> None:
     sys.exit(0 if verdict in (True, None) else 1)
 
 
+def since_prev_main(args: list[str]) -> None:
+    """`sincePrevMs` (délai depuis le début de l'appel précédent du même `kind` dans la
+    session) de tous les appels des runs donnés : nombre, p99 (rang le plus proche) et
+    maximum, avec l'appel du maximum. `--exclude <run>:<tâche>` (répétable) retire un run de
+    tâche (par exemple un flux bloqué)."""
+    excluded, runs = set(), []
+    while args:
+        arg = args.pop(0)
+        if arg == "--exclude":
+            run, _, task = args.pop(0).partition(":")
+            excluded.add((run, task))
+        else:
+            runs.append(Path(arg))
+    values = []
+    for run in runs:
+        for task_dir in sorted(run.glob("tasks/*/run-*")):
+            if (run.name, task_dir.parent.name) in excluded:
+                continue
+            for r in read_ndjson(sorted((task_dir / "sessions").rglob("*.usage.ndjson"))):
+                if isinstance(r.get("sincePrevMs"), (int, float)):
+                    values.append((r["sincePrevMs"], run.name, task_dir.parent.name,
+                                   r.get("kind"), r.get("seq")))
+    if not values:
+        print("aucun appel avec sincePrevMs")
+        return
+    ordered = sorted(v[0] for v in values)
+    p99 = ordered[max(0, -(-99 * len(ordered) // 100) - 1)]
+    top = max(values)
+    print(f"{len(values)} appels, exclus {sorted(excluded) or 'aucun'} : sincePrevMs p99 "
+          f"{p99} ms, maximum {top[0]} ms ({top[1]}, {top[2]}, {top[3]} seq {top[4]})")
+
+
 def main() -> None:
     """Recalcule les miss serveur et le taux évitable de chaque run de tâche d'un run ;
-    `--theory-check <run> ...` : validation du cache théorique."""
+    `--theory-check <run> ...` : validation du cache théorique ; `--since-prev <run> ...
+    [--exclude <run>:<tâche>]` : p99 et maximum de `sincePrevMs`."""
     if sys.argv[1:2] == ["--theory-check"]:
         theory_check_main([Path(a) for a in sys.argv[2:]])
+        return
+    if sys.argv[1:2] == ["--since-prev"]:
+        since_prev_main(sys.argv[2:])
         return
     for run in (Path(a) for a in sys.argv[1:]):
         print(f"# {run.name}")
