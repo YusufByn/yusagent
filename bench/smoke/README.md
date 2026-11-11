@@ -142,6 +142,7 @@ Alerte (le run de PR est alors relancé 2 fois) : tâche stable en baseline (ré
 | `compare.py` | Comparaison appariée de deux runs ; alertes au-delà du bruit de la baseline |
 | `baseline.py` | Baseline : bruit par tâche sur plusieurs runs de `main` (`baseline/<modèle>.json`, versionné) |
 | `tools/ab_stats.py` | Statistiques d'un A/B apparié : écarts par paire et par tâche, IC par bootstrap, mesures par bras, invalidations et incidents |
+| `ab/` | Rapports d'A/B (versionnés) |
 | `prices.json` | Tarifs API (source, date) |
 | `models/openai-codex.json` | Fiches des modèles absents du catalogue (`gpt-6.1-terra`) |
 | `hosts/openai-codex.txt` | Hôtes autorisés au proxy CONNECT (établi par `--record-hosts`) |
