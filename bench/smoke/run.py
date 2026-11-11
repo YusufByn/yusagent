@@ -1316,7 +1316,8 @@ def report_notes(prices: dict, effort: str) -> list[str]:
         "approché depuis l'usage, min(prompt, prompt précédent + output précédent) sur une "
         "continuation append-only ; `cacheRead` rapporté gardé sur une invalidation "
         "journalisée, après un appel annexe ou si le prompt raccourcit (ruptures du harness) ; "
-        "0 au premier appel de boucle d'une session. Les miss serveur disparaissent, les "
+        "de même au premier appel de boucle d'une session et sur un appel annexe (théorique "
+        "non calculable). Les miss serveur disparaissent, les "
         "ruptures causées par le harness restent comptées. Validation : section « Coût à "
         "cache théorique ».",
         "Transport : WebSocket attendu pour les appels de boucle (main, subagent) ; "

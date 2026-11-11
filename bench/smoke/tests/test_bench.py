@@ -57,7 +57,7 @@ class TheoreticalCache(unittest.TestCase):
 
     def test_bases(self):
         records = [
-            rec(1, 1000, 7000, 50),            # premier : 0
+            rec(1, 1000, 7000, 50),            # premier : rapporté
             rec(2, 1500, 7000, 40),            # continuation : min(8500, 8000 + 50)
             rec(3, 8740, 0, 30),               # miss serveur : min(8740, 8500 + 40)
             rec(4, 6000, 2000, 20, invalidation={"cause": "masking"}),  # rapporté
@@ -66,11 +66,11 @@ class TheoreticalCache(unittest.TestCase):
             rec(7, 100, 1100, 5),              # continuation sur l'appel 5 : min(1200, 1110)
             rec(8, 1500, 0, 5, kind="compaction"),  # annexe : rapporté
             rec(9, 100, 1100, 5),              # après une annexe : rupture, rapporté
-            rec(1, 900, 0, 7, kind="subagent", session="sub"),  # autre session : premier
+            rec(1, 900, 0, 7, kind="subagent", session="sub"),  # autre session : premier, rapporté
             rec(2, 950, 0, 7, kind="subagent", session="sub"),  # min(950, 907)
         ]
         got = self.theo(records)
-        self.assertEqual(got["s", 1], ("premier", 0))
+        self.assertEqual(got["s", 1], ("premier", 7000))
         self.assertEqual(got["s", 2], ("continuation", 8050))
         self.assertEqual(got["s", 3], ("continuation", 8540))
         self.assertEqual(got["s", 4], ("invalidation", 2000))
@@ -83,13 +83,14 @@ class TheoreticalCache(unittest.TestCase):
         self.assertEqual(got["sub", 2], ("continuation", 907))
 
     def test_cost_and_gaps(self):
-        records = [rec(1, 1000, 0, 100), rec(2, 200, 900, 10)]
+        records = [rec(1, 600, 400, 100), rec(2, 200, 900, 10)]
         summary = metrics.theory_summary(PRICES, "m", records)
-        # Appel 1 : 1000 × 1 + 100 × 10 ; appel 2 : théorique min(1100, 1100) = 1100 lu.
-        expected = (1000 * 1.0 + 100 * 10.0 + 1100 * 0.1 + 0 * 1.0 + 10 * 10.0) / 1e6
+        # Appel 1 (premier) : 400 lus (rapporté), 600 × 1 + 100 × 10 ; appel 2 : théorique
+        # min(1100, 1000 + 100) = 1100 lu.
+        expected = (400 * 0.1 + 600 * 1.0 + 100 * 10.0 + 1100 * 0.1 + 0 * 1.0 + 10 * 10.0) / 1e6
         self.assertAlmostEqual(summary["total"], expected)
-        self.assertEqual(summary["cacheRead"], 1100)
-        self.assertEqual(summary["input"], 2100 - 1100)
+        self.assertEqual(summary["cacheRead"], 400 + 1100)
+        self.assertEqual(summary["input"], 2100 - 1500)
         self.assertEqual(summary["check_gaps"], [round(200 / 1100, 6)])
         costs = metrics.costs(PRICES, "m", records, "cache_write_30m")
         self.assertAlmostEqual(costs["theoretical_total"], expected)

@@ -217,8 +217,9 @@ def theoretical_cache(records: list[dict]) -> list[dict]:
     session depuis l'appel de boucle précédent, ou prompt plus court que le précédent
     (rupture non journalisée) : le préfixe commun n'est pas connu sans le corps, le
     `cacheRead` rapporté (borne basse) est gardé (bases « invalidation », « rupture »).
-    Premier appel de boucle d'une session : pas de requête précédente, 0 (base « premier »).
-    Appels annexes : préfixe propre, `cacheRead` rapporté (base « annexe »).
+    Même règle partout où le théorique n'est pas calculable : premier appel de boucle d'une
+    session (pas de requête précédente, base « premier ») et appels annexes (préfixe propre,
+    base « annexe ») gardent le `cacheRead` rapporté.
     """
     by_session: dict[str, list[dict]] = {}
     for r in records:
@@ -233,7 +234,7 @@ def theoretical_cache(records: list[dict]) -> list[dict]:
                 basis, theo = "annexe", reported
                 annex_since = True
             elif prev is None:
-                basis, theo = "premier", 0
+                basis, theo = "premier", reported
             elif "invalidation" in r:
                 basis, theo = "invalidation", reported
             elif annex_since or prompt < prev[0]:
@@ -501,9 +502,20 @@ def task_run_cache(run_task_dir: Path) -> dict:
 
 
 def theory_check_main(runs: list[Path]) -> None:
-    """Validation du cache théorique sur des runs déjà faits (journaux seuls, sans prix) :
-    distribution des écarts (théorique − rapporté) / prompt sur les appels de continuation
-    sans miss serveur, par run puis sur l'ensemble, et verdict (critères `THEORY_*`)."""
+    """Validation du cache théorique sur des runs déjà faits (journaux, `prices.json` et
+    modèle de l'en-tête) : distribution des écarts (théorique − rapporté) / prompt sur les
+    appels de continuation sans miss serveur, par run puis sur l'ensemble, et verdict
+    (critères `THEORY_*`). Donne aussi le coût à cache théorique, sessions principales et
+    sous-agents."""
+    prices = json.loads((Path(__file__).resolve().parent / "prices.json").read_text())
+    costs_by_side: dict[str, float] = {}
+
+    def side_costs(run: Path, calls: list[dict]) -> None:
+        model = json.loads((run / "report.json").read_text())["header"]["model"]
+        for c in calls:
+            side = "sous-agents" if c["kind"] == "subagent" else "principales"
+            costs_by_side[side] = (costs_by_side.get(side, 0.0)
+                                   + (theoretical_request_cost(prices, model, c) or 0.0))
     def line(name: str, gaps: list[float], calls: list[dict]) -> str:
         c = theory_check(gaps)
         if not c["n"]:
@@ -520,8 +532,8 @@ def theory_check_main(runs: list[Path]) -> None:
                 f"{THEORY_PARTIAL_GAP * 100:g} % (miss partiels) {c['partial_share'] * 100:.1f} %"
                 f" ; rapporté > prompt précédent (output précédent lu en cache) "
                 f"{beyond * 100:.1f} % ; premiers appels : {first_read} tokens lus en cache "
-                f"rapportés sur {first_prompt} ({first_read / first_prompt * 100 if first_prompt else 0:.1f} %),"
-                f" comptés au tarif d'entrée ; bases {bases} ; validation {theory_verdict(c)}")
+                f"rapportés sur {first_prompt} ({first_read / first_prompt * 100 if first_prompt else 0:.1f} %)"
+                f" ; bases {bases} ; validation {theory_verdict(c)}")
 
     all_gaps: list[float] = []
     all_calls: list[dict] = []
@@ -530,12 +542,15 @@ def theory_check_main(runs: list[Path]) -> None:
         for task_dir in sorted(run.glob("tasks/*/run-*")):
             records = read_ndjson(sorted((task_dir / "sessions").rglob("*.usage.ndjson")))
             calls += theoretical_cache(records)
+        side_costs(run, calls)
         gaps = theory_gaps(calls)
         all_gaps += gaps
         all_calls += calls
         print(line(run.name, gaps, calls))
     if len(runs) > 1:
         print(line(f"ensemble ({len(runs)} runs)", all_gaps, all_calls))
+    print(f"coût à cache théorique : {sum(costs_by_side.values()):.4f} $ ("
+          + ", ".join(f"{k} {v:.4f} $" for k, v in sorted(costs_by_side.items())) + ")")
     verdict = theory_check(all_gaps)["valid"]
     sys.exit(0 if verdict in (True, None) else 1)
 

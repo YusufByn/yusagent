@@ -109,13 +109,13 @@ Métrique de décision des A/B (décision du 11/11/2026). Pour chaque appel, le 
 
 | Appel | `cacheRead` théorique | Base |
 |---|---|---|
-| Premier appel de boucle de la session | 0 (pas de requête précédente) | `premier` |
+| Premier appel de boucle de la session (pas de requête précédente) | `cacheRead` rapporté | `premier` |
 | Continuation (contexte append-only) | min(prompt, prompt précédent + output précédent), `output` raisonnement compris | `continuation` |
 | Invalidation journalisée (masquage) | `cacheRead` rapporté (préfixe commun inconnu sans le corps : borne basse) | `invalidation` |
 | Appel annexe intercalé depuis l'appel de boucle précédent (compaction…), ou prompt plus court que le précédent sans invalidation | `cacheRead` rapporté | `rupture` |
 | Appel annexe (compaction, `/refine`, résumé) | `cacheRead` rapporté | `annexe` |
 
-Le prompt précédent est celui du dernier appel de boucle de la session au prompt non vide. L'output précédent compte : le serveur Codex garde la réponse, le `cacheRead` rapporté dépasse le prompt précédent dans 18,3 % des appels de continuation sans miss serveur, jamais le prompt précédent + output (mesure ci-dessous).
+Règle commune : quand le théorique n'est pas calculable (premier appel, invalidation, rupture, appel annexe), le `cacheRead` rapporté est gardé. Le prompt précédent est celui du dernier appel de boucle de la session au prompt non vide. L'output précédent compte : le serveur Codex garde la réponse, le `cacheRead` rapporté dépasse le prompt précédent dans 18,3 % des appels de continuation sans miss serveur, jamais le prompt précédent + output (mesure ci-dessous).
 
 **Validation** (critères fixés avant la mesure, `metrics.THEORY_*`) : sur les appels de continuation sans miss serveur (`cacheRead` rapporté > 0), écart (théorique − rapporté) / prompt. La borne est fausse si le rapporté dépasse le théorique sur plus de 1 % des appels ; la méthode est trop large si l'écart médian dépasse 2 % du prompt. Verdict par run à partir de 30 appels (`THEORY_MIN_CALLS`, ajouté après la première mesure : deux runs `gpt-6-luna` de 5 et 7 appels, prompts d'environ 6 000 tokens, où la granularité de 128 tokens du cache fait seule un écart médian proche de 2 %). Mesure du 11/11/2026 sur les 11 runs réels de `runs/` (`gpt-6.1-terra` et `gpt-6-luna`, 04/11 et 06/11) :
 
@@ -126,6 +126,8 @@ R=bench/smoke/runs; python3 -I bench/smoke/metrics.py --theory-check $R/20261104
   $R/20261106T213306Z-0fa8fad-gpt-6.1-terra $R/20261106T215117Z-0fa8fad-gpt-6.1-terra $R/20261106T221035Z-0fa8fad-gpt-6.1-terra \
   $R/20261106T222846Z-0fa8fad-gpt-6.1-terra
 ```
+
+`--theory-check` donne aussi le coût à cache théorique de l'ensemble, sessions principales et sous-agents : 11,4717 $ (principales 5,1131 $, sous-agents 6,3585 $).
 
 3 917 appels : rapporté > théorique 0,00 % ; écart médian +0,93 % du prompt (p05 +0,42 %, p25 +0,66 %, p75 +1,54 %, p90 +5,31 %, p95 +17,78 %, max +72,66 %) : **conforme**. L'écart courant (≈ 1 %) vient de la granularité de 128 tokens du cache et de quelques tokens de mise en forme ; la queue (10,4 % des appels au-delà de 5 %) est lue comme des miss partiels du serveur (interprétation : le rapporté y retombe sur un préfixe plus court, plus ancien de la session ou celui du prompt système partagé), que la métrique retire. Biais connu : le théorique surestime le cache d'environ 1 % du prompt sur chaque continuation, dans les deux bras d'un A/B.
 
