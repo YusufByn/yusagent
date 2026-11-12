@@ -57,9 +57,9 @@ Tokens des instructions : `~/.cache/yusagent-capture/analysis-venv/bin/python3` 
 
 ## Points ouverts
 
-- **Nouvelle baseline** sur la config retenue (sous-agents coupés), étape du plan après l'A/B. `baseline.py` peut la construire à partir des 30 bras B de `bench/smoke/runs/ab-20261112T185001Z/`, sans changement de code ; limites et commande dans le compte rendu de la PR #23. À décider par Yusuf : ces 30 bras, ou 3 runs neufs sur `main`.
+- **Baseline reconstruite** (commit `4024960`) : `bench/smoke/baseline/gpt-6.1-terra.json` vient des 30 bras B de `bench/smoke/runs/ab-20261112T185001Z/` (binaire `69cc894`, joués en alternance avec les bras A, pas sur `main` ; requêtes identiques au nouveau défaut, banc de capture du 12/11). 8 tâches stables (les mêmes qu'au 04/11), coût moyen 0,3953 $ (1,0654 $ au 04/11, rlm actif), CV retenu 0,060 (0,167) : seuil de l'alerte agrégée de `compare.py` 12,1 % (33,4 %). L'en-tête porte `rlmMaxDepth: 0` en réglage explicite ; `compare.py` ne compare que le modèle. L'ancienne baseline reste dans l'historique git (`59e93cb3b`).
+- **Verdict `rlm` provisoire** : A/B à refaire au banc complet (YA-14) avec des tâches d'exploration sur gros dépôt, comme l'exige le CDC.
 - **Masquage à rejuger** sur la nouvelle config (verdict du 11/11 obtenu avec `rlm.spawn` actif, `bench/smoke/ab/masquage-20261106.md`).
-- **Verdict `rlm` limité à ce banc**, qui a peu de tâches longues ; à revoir sur le banc complet (YA-14).
 - **`bench/smoke/settings/rlm-off.json`** est redondant avec le nouveau défaut ; gardé pour relire l'A/B du 12/11. Proposition : le garder tel quel, ou le supprimer avec une note dans le rapport. Rien n'est supprimé.
 - **Runs fantômes** : 6 runs du push de `69cc894` (11/11 20:18Z : 43095249092, 43095251157, 43095251164, 43095251116, 43095251115, 43095251139) restent `queued` sans job ; `gh run cancel`, `force-cancel` et `gh run delete` échouent (409, 409, 403). Ils n'ont pas bloqué les runs suivants. À voir avec le support GitHub si besoin.
 - Rappels des passations précédentes : relecture des 64 derniers Kio du journal d'usage au redémarrage (`crates/pa-core/src/session_engine/usage_log.rs:33`) ; `cache_write_tokens` de Codex toujours à 0 ; `release.yml` sur `macos-15` non testé avant la prochaine release.
