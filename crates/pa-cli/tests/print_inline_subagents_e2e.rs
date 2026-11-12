@@ -87,7 +87,9 @@ impl PrintLane {
                 std::env::join_paths(python_paths).expect("skill import paths"),
             )
             .env_remove("RLM_DEPTH")
-            .env_remove("RLM_MAX_DEPTH")
+            // yusAgent (YA-06): the default bound is 0; these lanes spawn at
+            // the upstream bound (a lane's `env_extra` still overrides it).
+            .env("RLM_MAX_DEPTH", "2")
             .env_remove("PRIME_AGENT_SESSION_DIR")
             .env_remove("PRIME_AGENT_CODING_AGENT_SESSION_DIR")
             .current_dir(self.home.path());
@@ -439,6 +441,66 @@ fn print_inline_subagents_enforce_the_depth_limit() {
     assert!(
         parent_text.contains("[child-exited: no-reply child:kid]"),
         "the parent read the no-reply notice: {parent_text}"
+    );
+}
+
+/// yusAgent (YA-06): the default bound is 0. `RLM_MAX_DEPTH=0` sets no
+/// bound (the env layer only takes 1 or more), so the root falls back to
+/// the default: its spawn fails with the shared depth-limit error, no
+/// child session exists, and the print run still completes.
+#[test]
+fn print_root_spawn_is_refused_at_the_default_bound() {
+    let lane = lane();
+    let kernel = PrintLane::kernel_python();
+    let spawn_attempt = "try:\n    kid = await rlm.spawn(\"run the kid task\", name=\"kid\")\n    print(\"SPAWN_OK\", kid.rlm_child_id)\nexcept Exception as error:\n    print(\"SPAWN_FAILED:\", error)";
+    let script = serde_json::json!({
+        "responses": [
+            { "content": [
+                { "type": "toolCall", "name": "ipython",
+                  "arguments": { "code": spawn_attempt } },
+            ] },
+            "PARENT DONE",
+        ],
+        "repeatLastResponse": true,
+    });
+    let (stdout, stderr, code) = lane.run(
+        &["-p", "delegate once"],
+        &script,
+        &kernel,
+        &[("RLM_MAX_DEPTH", "0")],
+    );
+    assert_eq!(code, 0, "stderr: {stderr}\nstdout: {stdout}");
+    assert_eq!(stdout.trim_end(), "PARENT DONE");
+
+    let parent_file = lane.parent_session_file();
+    let parent_text = serde_json::to_string(&PrintLane::entries(&parent_file)).unwrap();
+    assert!(
+        parent_text.contains("RLM recursion depth limit reached (RLM_DEPTH=0, RLM_MAX_DEPTH=0)"),
+        "the root's spawn carried the depth-limit error at the default bound: {parent_text}"
+    );
+    // The cell's own code holds the `SPAWN_OK` literal; a spawned child
+    // would print it followed by its `sub-` id.
+    assert!(
+        !parent_text.contains("SPAWN_OK sub-"),
+        "no child at the default bound"
+    );
+    let parent_id = Path::new(&parent_file)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .expect("the parent session id")
+        .to_string();
+    let artifacts = lane.agent_dir.join("session-artifacts").join(&parent_id);
+    let children = std::fs::read_dir(&artifacts).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("sub-"))
+            .count()
+    });
+    assert_eq!(
+        children,
+        0,
+        "no child session dir under {}",
+        artifacts.display()
     );
 }
 

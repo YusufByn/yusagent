@@ -1004,7 +1004,7 @@ def version_of(cmd: list[str]) -> str | None:
 
 def known_settings(settings: dict) -> dict:
     """Réglages de variante non par défaut (CLAUDE.md règle 5), plus le TTL fixé."""
-    keys = ("masking", "rlm", "cacheRetention", "transport")
+    keys = ("masking", "rlm", "rlmMaxDepth", "cacheRetention", "transport")
     merged = {"cacheRetention": CACHE_RETENTION, **settings}
     return {k: merged[k] for k in keys if k in merged}
 

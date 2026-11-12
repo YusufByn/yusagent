@@ -283,7 +283,8 @@ def run_case(binary, root, observation):
         'baseUrl': 'http://127.0.0.1:%s/v1' % provider.server_port,
         'models': [{'id': 'observe-fixture', 'name': 'Observe Fixture', 'reasoning': False,
                     'contextWindow': 128000, 'maxTokens': 4096}]}}}))
-    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False,
+    # yusAgent (YA-06): the default rlmMaxDepth is 0; spawn at the upstream 2.
+    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2,
         'defaultProvider': 'fixture', 'defaultModel': 'observe-fixture'}))
     socket_path = root / 'd.sock'
     scope = OwnedProcesses(binary, root, socket_path)

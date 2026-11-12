@@ -416,6 +416,8 @@ async fn sessions_with_fake_child_subagents(
     sessions.set_identity(ParentIdentity {
         model: Some("mock/mock-1".to_string()),
         cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
+        // yusAgent (YA-06): the default bound is 0; spawn at the upstream 2.
+        rlm_max_depth: 2,
         ..ParentIdentity::with_default_depth()
     });
     (sessions, kill_rx)
@@ -509,6 +511,8 @@ async fn sessions_with_roster_peers(
     sessions.set_identity(ParentIdentity {
         model: Some("mock/mock-1".to_string()),
         cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
+        // yusAgent (YA-06): the default bound is 0; spawn at the upstream 2.
+        rlm_max_depth: 2,
         ..ParentIdentity::with_default_depth()
     });
     (sessions, kill_rx)

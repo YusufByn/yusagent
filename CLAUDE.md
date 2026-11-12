@@ -31,6 +31,7 @@ Hard fork de Prime Agent (MIT), transformé en harness d'agent de code cache-fir
 2. Push : `ya-build-macos-arm64.yml` construit le binaire de la branche (environ 8 min).
 3. `gh run download <run> --repo YusufByn/yusagent --dir <dossier>`, puis `python3 bench/tools/capture/run.py --binary <dossier>/prime-agent`.
 4. PR vers `main` : `ci.yml` lance les tests Rust. Merge uniquement sur un run `ci.yml` vert du dernier commit poussé. Un push annule le run en cours de la branche : regrouper les corrections avant de pousser.
+   - Attente CI : toute attente d'un run a un délai maximal de 30 min sans démarrage (aucun job attribué à un runner). Au-delà, s'arrêter et rendre compte.
    - Relance CI : un job en échec pour une panne d'infrastructure du runner (réseau, disque, téléchargement), cause vérifiée dans son journal, est relancé une seule fois, seul et sans push (`gh run rerun <run> --job <job>`). S'il échoue encore, s'arrêter et montrer l'erreur. Un échec de compilation ou de test reste bloquant : pas de relance.
 5. Mesures toujours avec `DO_NOT_TRACK=1 PI_OFFLINE=1` et `PI_CACHE_RETENTION` fixé.
 

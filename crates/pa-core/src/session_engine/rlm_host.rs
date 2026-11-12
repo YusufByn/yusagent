@@ -277,7 +277,8 @@ pub fn no_children_collect(targets: &[String]) -> anyhow::Result<Vec<RlmChildRes
 // daemonless inline host answer with the same text and the same layout).
 
 /// The workspace's default recursion bound (TS `DEFAULT_RLM_MAX_DEPTH`).
-pub const DEFAULT_RLM_MAX_DEPTH: u32 = 2;
+/// yusAgent (YA-06): the fork default, 0 (upstream: 2).
+pub const DEFAULT_RLM_MAX_DEPTH: u32 = crate::settings::fork_defaults::RLM_MAX_DEPTH;
 
 /// The spawn refusal at the recursion bound.
 #[must_use]
