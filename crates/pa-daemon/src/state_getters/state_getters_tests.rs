@@ -675,10 +675,20 @@ async fn rlm_max_depth_status_matches_the_ts_shape() {
         )
         .await;
     assert!(response.success);
-    assert_eq!(
-        response.data.expect("data"),
-        json!({ "maxDepth": crate::rlm_children::DEFAULT_RLM_MAX_DEPTH, "source": "default" })
-    );
+    // yusAgent (YA-06): `.cargo/config.toml` sets `RLM_MAX_DEPTH` for the
+    // tests (the default bound is 0); the status names the env layer when
+    // it is set, the default otherwise.
+    let expected = match std::env::var("RLM_MAX_DEPTH")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value >= 1)
+    {
+        Some(depth) => json!({ "maxDepth": depth, "source": "env" }),
+        None => {
+            json!({ "maxDepth": crate::rlm_children::DEFAULT_RLM_MAX_DEPTH, "source": "default" })
+        }
+    };
+    assert_eq!(response.data.expect("data"), expected);
 }
 
 #[tokio::test]

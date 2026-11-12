@@ -1,0 +1,1 @@
+- yusAgent: subagents are off by default. The default `rlmMaxDepth` is now 0 (upstream: 2): a root session cannot call `rlm.spawn`, and its system prompt has no subagent surface. Set `"rlmMaxDepth"` (or `RLM_MAX_DEPTH`) to 1 or more to turn spawning back on; the prompt is then the upstream one, byte for byte.

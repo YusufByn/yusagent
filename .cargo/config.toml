@@ -3,3 +3,7 @@
 # already set, so a test that needs it can still set its own value.
 [env]
 DO_NOT_TRACK = "1"
+# yusAgent (YA-06): the default recursion bound is 0 (no subagents); the
+# upstream tests exercise spawning at the upstream bound, 2. Same rule: a
+# test that sets its own value keeps it.
+RLM_MAX_DEPTH = "2"

@@ -1,4 +1,5 @@
-//! yusAgent (YA-06): with `rlmMaxDepth` 0 no session can spawn a subagent,
+//! yusAgent (YA-06): with `rlmMaxDepth` 0, the default since the A/B of
+//! 12/11/2026 (`DEFAULT_RLM_MAX_DEPTH`), no session can spawn a subagent,
 //! so the prompt drops what only concerns subagents: the subagent part of
 //! the core layer's `## Subagents` section, the multi-agent block of the
 //! usage layer, and the subagent clauses of the daemonless session-role
@@ -11,8 +12,9 @@
 //! session that owns it (`skills/rlm-heartbeat/SKILL.md`); the continual
 //! harness API.
 //!
-//! With the default bound (or any bound above 0) every function here
-//! returns the upstream text unchanged, byte for byte.
+//! With a bound above 0 (`rlmMaxDepth` or `RLM_MAX_DEPTH` at 1 or more,
+//! the upstream default being 2) every function here returns the upstream
+//! text unchanged, byte for byte.
 
 use std::borrow::Cow;
 
@@ -127,10 +129,10 @@ mod tests {
         }
     }
 
-    /// Any bound but a root 0 (default 2, 1, a child's `None`): every piece
-    /// is the upstream text, unchanged.
+    /// Any bound but a root 0 (the upstream 2, 1, a child's `None`): every
+    /// piece is the upstream text, unchanged.
     #[test]
-    fn the_default_keeps_the_upstream_text() {
+    fn a_bound_above_zero_keeps_the_upstream_text() {
         for bound in [Some(2), Some(1), None] {
             assert!(
                 matches!(core_layer(CORE_LAYER, bound), Cow::Borrowed(text) if text == CORE_LAYER)
@@ -186,10 +188,11 @@ mod tests {
         assert!(!prompt.contains("\n\n\n"));
     }
 
-    /// The default prompt still has the whole subagent surface, with a
-    /// bound above 0 or with none given (an embedding that does not set it).
+    /// With spawning on (a bound above 0), or with no bound given (an
+    /// embedding that does not set it), the prompt has the whole subagent
+    /// surface.
     #[test]
-    fn default_prompt_keeps_the_subagent_surface() {
+    fn spawn_on_prompt_keeps_the_subagent_surface() {
         let unset = BuildSystemPromptOptions {
             rlm_max_depth: None,
             ..print_root(false)
@@ -210,6 +213,21 @@ mod tests {
         dir
     }
 
+    /// The default bound is 0: a root with no setting drops the subagent
+    /// surface.
+    #[test]
+    fn the_default_bound_drops_the_subagent_surface() {
+        use crate::session_engine::rlm_host::DEFAULT_RLM_MAX_DEPTH;
+        let default = Some(u64::from(DEFAULT_RLM_MAX_DEPTH));
+        assert!(spawn_off(default));
+        let prompt = build_system_prompt(&BuildSystemPromptOptions {
+            rlm_max_depth: default,
+            ..print_root(true)
+        });
+        assert!(!prompt.contains("rlm.spawn"));
+        assert!(!prompt.contains("## Subagents"));
+    }
+
     /// The switch is the global `rlmMaxDepth` setting, read for roots only.
     #[test]
     fn spawn_off_follows_rlm_max_depth() {
@@ -226,6 +244,15 @@ mod tests {
         assert!(spawn_off(root(Some(0), &off)));
         assert!(!spawn_off(root(Some(1), &off)));
         assert!(!spawn_off(root(Some(0), &one)));
-        assert!(!spawn_off(root(Some(0), &unset)));
+        // No setting: the env layer when set (`.cargo/config.toml` pins
+        // `RLM_MAX_DEPTH` to 2 for the tests), the default 0 otherwise.
+        let env_or_default = std::env::var("RLM_MAX_DEPTH")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value >= 1)
+            .unwrap_or(u64::from(
+                crate::session_engine::rlm_host::DEFAULT_RLM_MAX_DEPTH,
+            ));
+        assert_eq!(root(Some(0), &unset), Some(env_or_default));
     }
 }

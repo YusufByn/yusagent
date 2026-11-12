@@ -103,16 +103,43 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/prompts/system_prompt.rs` | modif. | Champ `rlm_max_depth: Option<u64>` de `BuildSystemPromptOptions` (`None` par défaut ; un 4ᵉ booléen ferait échouer `clippy::struct_excessive_bools`) ; couches `core` et `usage` passées par `rlm_off::core_layer` / `usage_layer` ; ligne de rôle sans démon lue dans `rlm_off::daemonless_spawn_line` (texte upstream déplacé tel quel). | YA-06 |
 | `crates/pa-core/src/session_engine/engine.rs` | modif. (7 lignes) | `rlm_max_depth` = `rlm_off::root_max_depth(...)` dans les options du prompt. | YA-06 |
 | `.changes/ya-06-rlm-off.md` | ajout | Fragment de changelog. | YA-06 |
+| `crates/pa-core/src/settings/fork_defaults.rs` | modif. (fichier du fork) | `RLM_MAX_DEPTH = 0` : défaut de `rlmMaxDepth` du fork, verdict de l'A/B du 12/11/2026 (`bench/smoke/ab/rlm-spawn-20261112.md`). Voir « Sous-agents coupés (YA-06) ». | YA-06 |
+| `crates/pa-core/src/session_engine/rlm_host.rs` | modif. (1 ligne + commentaire) | `DEFAULT_RLM_MAX_DEPTH` lit `fork_defaults::RLM_MAX_DEPTH` (0) au lieu du littéral `2` (`:279-281`). Le résolveur, le statut du démon et l'identité initiale des enfants (`crates/pa-daemon/src/rlm_children.rs:109`) suivent. | YA-06 |
+| `.cargo/config.toml` | modif. (4 lignes) | `RLM_MAX_DEPTH = "2"` dans `[env]`, à côté de `DO_NOT_TRACK` : les tests upstream lancés par `cargo test` exercent le spawn à la borne upstream. Comme `[env]` ne remplace jamais une variable déjà posée, un test qui fixe sa valeur la garde. Effet de bord : un `cargo run` local démarre aussi à 2 ; les binaires de la CI et du banc ne lisent pas ce fichier. | YA-06 |
+| Tests upstream | modif. | Voir « Tests upstream touchés (YA-06) » ci-dessous. | YA-06 |
+| `bench/smoke/README.md` | modif. (fichier du fork) | `settings/rlm-off.json` noté redondant avec le nouveau défaut ; gardé pour relire l'A/B du 12/11. | YA-06 |
+| `.changes/ya-06-rlm-default-off.md` | ajout | Fragment de changelog. | YA-06 |
 
 ## Sous-agents coupés (YA-06)
 
-Réglage unique : `"rlmMaxDepth": 0` dans le `settings.json` global (dossier agent). Il coupait déjà `rlm.spawn` à l'exécution (`crates/pa-cli/src/print_rlm.rs:639`, `crates/pa-daemon/src/rlm_children/host.rs:85`) ; depuis YA-06, il retire aussi du prompt ce qui ne concerne que les sous-agents. Aucune ligne n'est ajoutée à la place (pas de « spawning is disabled »).
+Réglage unique : `rlmMaxDepth`. À 0, il coupait déjà `rlm.spawn` à l'exécution (`crates/pa-cli/src/print_rlm.rs:639`, `crates/pa-daemon/src/rlm_children/host.rs:85`) ; depuis YA-06, il retire aussi du prompt ce qui ne concerne que les sous-agents. Aucune ligne n'est ajoutée à la place (pas de « spawning is disabled »).
 
-- **Condition** (`rlm_off::root_max_depth`, puis `spawn_off` : borne `Some(0)`) : session racine (`rlm_depth` absent ou 0) et borne résolue à 0 par le même résolveur que la porte du spawn (`rlm_host::resolve_rlm_max_depth` : réglage de chat > global > `RLM_MAX_DEPTH` (≥ 1 seulement) > 2). Une session enfant n'existe que si la borne dépasse 0 : son prompt ne change jamais. Évaluée à la création de la session, comme le reste du préfixe.
+**Défaut du fork : 0** depuis le verdict de l'A/B du 12/11/2026 (`bench/smoke/ab/rlm-spawn-20261112.md` : coût à cache théorique des tâches stables -65.2 % [-69.6 ; -56.6], 25 tâches résolues contre 25). Constante `fork_defaults::RLM_MAX_DEPTH`, lue par `rlm_host::DEFAULT_RLM_MAX_DEPTH`. Réactivation : `"rlmMaxDepth": 2` (ou toute valeur ≥ 1) dans le `settings.json` global, `RLM_MAX_DEPTH=2` dans l'environnement (≥ 1 seulement, 0 y est ignoré), ou `/rlm-max-depth` dans une session.
+
+- **Condition** (`rlm_off::root_max_depth`, puis `spawn_off` : borne `Some(0)`) : session racine (`rlm_depth` absent ou 0) et borne résolue à 0 par le même résolveur que la porte du spawn (`rlm_host::resolve_rlm_max_depth` : réglage de chat > hérité > global > `RLM_MAX_DEPTH` (≥ 1 seulement) > défaut 0). Une session enfant n'existe que si la borne dépasse 0 : son prompt ne change jamais. Évaluée à la création de la session, comme le reste du préfixe.
 - **Retiré** : dans `core.md`, de `## Subagents` jusqu'à la phrase des outils a2a exclue (description de l'arbre d'agents, `rlm.spawn`, `rlm.create_session`, `rlm.find_models`, `rlm.list_subagents`, `rlm.delete_subagent`, `rlm.rename`, `rlm.collect`, `rlm.progress_note` et leurs types) ; dans `usage.md`, le bloc « Instructions to agents for multi-agent work » et la mention « uses many subagents » de la règle des points d'avancement ; dans la ligne de rôle sans démon, « and your subagents » et « Subagent replies and exit notices still wake you. ».
 - **Gardé** : les outils a2a (`agent_message`, `agent_observe`) et le skill `agent-message`, parce que les sessions racines sont sœurs et s'écrivent par le démon (`crates/pa-daemon/src/agent_messaging.rs:157-168`, `skills/agent-message/SKILL.md` : « Roots are siblings ») ; la section Heartbeat et le skill `rlm-heartbeat`, parce qu'un heartbeat réveille la session qui le crée (`skills/rlm-heartbeat/SKILL.md`, `crates/pa-daemon/src/scheduled_jobs.rs:295`) ; l'API du harnais continu, dont les entrées de type `subagent` (`rlm.harness.*_subagent`) et les « subagent specs » de `usage.md`.
-- **Défaut** (borne ≥ 1, non réglée, ou `None` quand l'appelant ne la donne pas) : chaque fonction de `rlm_off` rend le texte upstream inchangé (`Cow::Borrowed`), donc le prompt est identique octet pour octet. Tests : `rlm_off::tests`.
+- **Borne ≥ 1, ou `None`** quand l'appelant ne la donne pas : chaque fonction de `rlm_off` rend le texte upstream inchangé (`Cow::Borrowed`), donc le prompt est identique octet pour octet à celui de `0fa8fad`. Tests : `rlm_off::tests`.
+- **Borne non réglée** : défaut 0 depuis le 12/11, donc prompt sans sous-agents. Requêtes envoyées : celles du réglage `{"rlmMaxDepth": 0}` de `69cc894`, octet pour octet (banc de capture, PR #23).
 - **Cherry-pick** : si upstream déplace l'un des repères (`## Subagents`, phrase a2a, bloc multi-agent, phrase des points d'avancement, ligne de rôle), `the_markers_match_the_layers` échoue au lieu de laisser passer la surface des sous-agents.
+
+## Tests upstream touchés (YA-06)
+
+Même règle qu'en YA-01 : aucun test supprimé ni affaibli ; chaque modification porte un commentaire `yusAgent (YA-06)`.
+
+Les tests upstream lancés par `cargo test` reçoivent `RLM_MAX_DEPTH=2` de `.cargo/config.toml` : ceux qui passent par le résolveur (démon, mode print, ACP, `prefix_stability`) gardent la borne et le prompt upstream sans modification. Restent ceux qui retirent la variable ou lisent la constante sans le résolveur :
+
+| Fichier de test | Test(s) | Nature | Changement |
+|---|---|---|---|
+| `crates/pa-cli/tests/print_inline_subagents_e2e.rs` | `PrintLane::run` (helper de toutes les voies du fichier) | setup | `env("RLM_MAX_DEPTH", "2")` au lieu de `env_remove("RLM_MAX_DEPTH")` ; l'`env_extra` d'une voie la remplace toujours (`RLM_MAX_DEPTH=1` du test de la porte de profondeur) |
+| `crates/pa-cli/tests/print_inline_subagents_e2e.rs` | `print_root_spawn_is_refused_at_the_default_bound` | nouveau | binaire réel, sans réglage (`RLM_MAX_DEPTH=0` est ignoré, donc défaut) : `rlm.spawn` refusé avec « RLM recursion depth limit reached (RLM_DEPTH=0, RLM_MAX_DEPTH=0) », aucun dossier d'enfant, run terminé |
+| `crates/pa-daemon/src/rlm_children/watch_tests.rs` | `sessions_with_fake_child_subagents` (helper) | setup | `rlm_max_depth: 2` dans l'identité du parent (`with_default_depth` vaut 0) |
+| `crates/pa-daemon/src/rlm_children/spawn_name_reservation_tests.rs` | `sessions_with_gated_supervisor` (helper), `self_rename_targets_the_caller_without_the_parent_marker` | setup | `rlm_max_depth: 2` dans l'identité du parent |
+| `crates/pa-daemon/src/state_getters/state_getters_tests.rs` | `rlm_max_depth_status_matches_the_ts_shape` | défaut | attendu : couche `env` si `RLM_MAX_DEPTH` est posé (≥ 1), sinon `DEFAULT_RLM_MAX_DEPTH` et `default` |
+
+Tests du fork (`crates/pa-core/src/prompts/rlm_off.rs`) : `the_default_bound_drops_the_subagent_surface` (nouveau : la borne par défaut retire `rlm.spawn` et `## Subagents`) ; `spawn_off_follows_rlm_max_depth` (sans réglage : couche `env` si posée, sinon 0) ; `a_bound_above_zero_keeps_the_upstream_text` et `spawn_on_prompt_keeps_the_subagent_surface` (renommés : la borne upstream n'est plus le défaut).
+
+Hors CI, non modifiés : les vérifications manuelles `scripts/check_launch_env.py`, `check_observe_selectors.py`, `check_late_message_receipt.py` et `check_ledger_liveness.py` lancent `rlm.spawn` sur le binaire de `PA_RUST_BINARY` sans passer par `cargo`. Elles demandent `RLM_MAX_DEPTH=2` (ou `rlmMaxDepth` dans le dossier agent) ; `check_observe_selectors.py` filtre l'environnement (`:270`), la variable doit y être ajoutée.
 
 ## Smoke bench (T06, YA-14)
 
@@ -209,6 +236,7 @@ Session lancée sans `settings.json` ni variable d'environnement. Chaque ligne s
 | Continual Harness (création de raffinements, digest du harness dans le contexte) | coupé | `"harnessRefinements": true` | `fork_defaults.rs:7`, `interactive_settings.rs:17` |
 | `/refine` automatique (par intervalle de tours) | coupé | `"autoRefine": {"enabled": true}` (et `harnessRefinements`) | `fork_defaults.rs:10`, `refine.rs:42` |
 | `/refine` automatique après compaction | coupé | `"autoRefine": {"compact": true}` (et `harnessRefinements`) | `fork_defaults.rs:13`, `refine.rs:44` |
+| Sous-agents (`rlm.spawn`) et leur surface dans le prompt (YA-06, 12/11/2026) | coupés | `"rlmMaxDepth": 2` (ou toute valeur ≥ 1 ; `RLM_MAX_DEPTH=2`) | `fork_defaults.rs` (`RLM_MAX_DEPTH`), `rlm_host.rs:281` |
 
 Skills `agent-message` et `rlm-heartbeat` : **actifs par défaut**, comme upstream. La couche statique `core.md` les documente (`crates/pa-core/src/prompts/layers/core.md:68`, `:156`), et les enfants de `rlm.spawn` répondent au parent par `agent_message.send` (`prime-agent-runtime/src/rlm/harness.py:1219-1221`). Leur sort sera décidé dans YA-09. Un réglage permet déjà de les couper : `"bundledSkills": {"agentMessage": false}` ou `{"rlmHeartbeat": false}` (`fork_defaults.rs`, `disabled_bundled_skill_overrides`). Un skill coupé disparaît de l'inventaire et des imports du kernel.
 

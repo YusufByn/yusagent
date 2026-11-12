@@ -25,6 +25,13 @@ pub const BUNDLED_AGENT_MESSAGE: bool = true;
 /// See [`BUNDLED_AGENT_MESSAGE`].
 pub const BUNDLED_RLM_HEARTBEAT: bool = true;
 
+/// `rlmMaxDepth` when no layer sets it (upstream: 2), YA-06. 0: a root
+/// session spawns no subagent and its prompt drops the subagent surface
+/// (`prompts::rlm_off`); A/B of 12/11/2026,
+/// `bench/smoke/ab/rlm-spawn-20261112.md`. `rlmMaxDepth` or `RLM_MAX_DEPTH`
+/// at 1 or more turns spawning back on.
+pub const RLM_MAX_DEPTH: u32 = 0;
+
 /// The force-exclude overrides for the switchable bundled skills
 /// (`bundledSkills.agentMessage`, `bundledSkills.rlmHeartbeat`): each one
 /// set to `false` is left out, in the same `-<dir>/SKILL.md` form as the

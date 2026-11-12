@@ -149,6 +149,8 @@ async fn sessions_with_gated_supervisor(
     sessions.set_identity(ParentIdentity {
         model: Some("mock/mock-1".to_string()),
         cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
+        // yusAgent (YA-06): the default bound is 0; spawn at the upstream 2.
+        rlm_max_depth: 2,
         ..ParentIdentity::with_default_depth()
     });
     sessions
@@ -386,6 +388,8 @@ async fn self_rename_targets_the_caller_without_the_parent_marker() {
         model: Some("mock/mock-1".to_string()),
         cwd: Some(std::env::temp_dir().to_string_lossy().to_string()),
         session_id: Some("parent-file".to_string()),
+        // yusAgent (YA-06): the default bound is 0; spawn at the upstream 2.
+        rlm_max_depth: 2,
         ..ParentIdentity::with_default_depth()
     });
 
