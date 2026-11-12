@@ -40,7 +40,8 @@ def observe(binary, root, observed):
         'baseUrl': f'http://127.0.0.1:{provider.server_port}/v1', 'models': [{
             'id': 'parity-1', 'name': 'Parity 1', 'reasoning': False,
             'contextWindow': 128000, 'maxTokens': 4096}]}}}))
-    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False,
+    # yusAgent (YA-06): the default rlmMaxDepth is 0; spawn at the upstream 2.
+    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2,
         'defaultProvider': 'parity-local', 'defaultModel': 'parity-1'}))
     path = root / 'd.sock'
     scope = OwnedProcesses(binary, root, path)

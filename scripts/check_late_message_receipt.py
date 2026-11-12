@@ -159,7 +159,8 @@ def observe(binary, root, observed):
     provider = Provider(root)
     thread = threading.Thread(target=provider.serve_forever, daemon=True)
     thread.start()
-    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False}))
+    # yusAgent (YA-06): the default rlmMaxDepth is 0; spawn at the upstream 2.
+    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2}))
     (root / 'agent/models.json').write_text(json.dumps({'providers': {'fixture': {
         'api': 'openai-completions', 'apiKey': 'fixture-only',
         'baseUrl': f'http://127.0.0.1:{provider.server_port}/v1', 'models': [{

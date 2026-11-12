@@ -120,7 +120,8 @@ def observe(binary, root, observed):
     env[TAG] = str(root)
     server = Provider()
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    (root / 'agent/settings.json').write_text(json.dumps({'factory': {'enabled': True},
+    # yusAgent (YA-06): the default rlmMaxDepth is 0; spawn at the upstream 2.
+    (root / 'agent/settings.json').write_text(json.dumps({'factory': {'enabled': True}, 'rlmMaxDepth': 2,
         'prewarmPythonKernel': False, 'defaultProvider': 'parity-local', 'defaultModel': 'parity-1',
         'onboardingCompleted': True, 'onboardingShown': True, 'telemetry': {'noticeShown': True}}))
     (root / 'agent/models.json').write_text(json.dumps({'providers': {'parity-local': {

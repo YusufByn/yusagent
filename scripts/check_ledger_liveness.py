@@ -288,7 +288,8 @@ def run_case(binary, root, observed):
         'models': [{'id': 'parity-1', 'name': 'Parity 1', 'reasoning': False,
                     'contextWindow': 128000, 'maxTokens': 4096}]}}}
     (root / 'agent/models.json').write_text(json.dumps(models))
-    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False,
+    # yusAgent (YA-06): the default rlmMaxDepth is 0; spawn at the upstream 2.
+    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2,
         'defaultProvider': 'parity-local', 'defaultModel': 'parity-1',
         'onboardingCompleted': True, 'telemetry': {'noticeShown': True}}))
     process, client = None, None

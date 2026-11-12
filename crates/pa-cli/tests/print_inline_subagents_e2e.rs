@@ -478,8 +478,10 @@ fn print_root_spawn_is_refused_at_the_default_bound() {
         parent_text.contains("RLM recursion depth limit reached (RLM_DEPTH=0, RLM_MAX_DEPTH=0)"),
         "the root's spawn carried the depth-limit error at the default bound: {parent_text}"
     );
+    // The cell's own code holds the `SPAWN_OK` literal; a spawned child
+    // would print it followed by its `sub-` id.
     assert!(
-        !parent_text.contains("SPAWN_OK"),
+        !parent_text.contains("SPAWN_OK sub-"),
         "no child at the default bound"
     );
     let parent_id = Path::new(&parent_file)
