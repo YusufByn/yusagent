@@ -205,6 +205,7 @@ Une erreur provider sur un bras écarte la paire entière ; en A/B entrelacé pa
 | `tools/make_task.py` | Construction d'une tâche depuis un candidat |
 | `tools/install-bin.sh` | Installation du binaire d'un run CI dans `~/.cache/yusagent-bin/<sha>/`, sommes et version vérifiées ; dossier existant laissé tel quel s'il passe les contrôles, sinon erreur ; `--force` le remplace après vérification de la nouvelle copie |
 | `tools/ab.py` | A/B entrelacé par tâche (YA-14) : contrôles, ordre des bras tiré au sort à graine notée, un appel à `run.py` par bras, surcoût par lancement |
+| `tools/compare_capture_prompts.py` | Comparaison des requêtes capturées de deux runs `--capture` (YA-06) : instructions, tools et input requête par requête, caractères et tokens (o200k_base, estimation), mentions des sous-agents ; usage : `python3 -I bench/smoke/tools/compare_capture_prompts.py <run X> <run Y>` |
 | `metrics.py` | Mesures depuis le journal d'usage, la session et les journaux des proxys ; cache théorique et sa validation (`--theory-check`) |
 | `compare.py` | Comparaison appariée de deux runs ; alertes au-delà du bruit de la baseline |
 | `baseline.py` | Baseline : bruit par tâche sur plusieurs runs de `main` (`baseline/<modèle>.json`, versionné) |
