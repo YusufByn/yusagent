@@ -16,7 +16,7 @@ Rien d'autre ne change entre les bras : même binaire, mêmes tâches, même mod
 - `gpt-6.1-terra`, provider `openai-codex`, effort `high`.
 - Les 10 tâches du banc (`bench/smoke/tasks/`, sans les exemples).
 - 3 passes entrelacées par tâche (`tools/ab.py`) : à chaque passe, chaque tâche lance ses deux bras dos à dos, dans un ordre tiré au sort. Graine : **1782223764** (tirée de `os.urandom` le 11/11/2026, avant le run).
-- Binaire **`f5e0cb4`** (`f5e0cb4254790b8e0e6345eeb1eec76fb80722a9`, branche `ya-ab-rlm`, artefact de `ya-build-macos-arm64.yml`), installé par `tools/install-bin.sh` dans `~/.cache/yusagent-bin/f5e0cb4254790b8e0e6345eeb1eec76fb80722a9/`. Il remplace `0fa8fad` : il est le seul à porter le réglage B complet.
+- Binaire **`69cc894`** (`69cc89460afc65a675235a8adb08f2c628188c80`, branche `ya-ab-rlm`, artefact de `ya-build-macos-arm64.yml`), installé par `tools/install-bin.sh` dans `~/.cache/yusagent-bin/69cc89460afc65a675235a8adb08f2c628188c80/`. Il remplace `0fa8fad` : il est le seul à porter le réglage B complet. Il remplace aussi `f5e0cb4`, noté dans la première version de ce plan : même comportement, mais `ci.yml` refusait sa compilation (`clippy::struct_excessive_bools`) ; la règle de verdict n'a pas changé.
 - `DO_NOT_TRACK=1 PI_OFFLINE=1`, `PI_CACHE_RETENTION=short` (fixé par le runner), garde-fou d'inactivité 300 s.
 - Statistiques : `python3 -I bench/smoke/tools/ab_stats.py --plan <ab.json> --baseline bench/smoke/baseline/gpt-6.1-terra.json`. Tâches stables : `aggregate.tasks` de la baseline.
 
