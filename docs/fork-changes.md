@@ -109,6 +109,22 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | Tests upstream | modif. | Voir « Tests upstream touchés (YA-06) » ci-dessous. | YA-06 |
 | `bench/smoke/README.md` | modif. (fichier du fork) | `settings/rlm-off.json` noté redondant avec le nouveau défaut ; gardé pour relire l'A/B du 12/11. | YA-06 |
 | `.changes/ya-06-rlm-default-off.md` | ajout | Fragment de changelog. | YA-06 |
+| `crates/pa-ai/src/providers/ya_freeform.rs` | ajout | Tools libres (`custom`) de l'API Responses : marque d'un tool libre dans `parameters`, d'un appel libre dans `ToolCall.rest`, items `custom_tool_call` et `custom_tool_call_output`. Voir « Tools libres côté providers (YA-03) ». | YA-03 |
+| `crates/pa-ai/src/providers/mod.rs` | modif. (2 lignes) | Déclare `ya_freeform`. | YA-03 |
+| `crates/pa-ai/src/providers/openai_responses_shared.rs` | modif. | `convert_responses_tools` : un tool libre part en `custom`. `convert_responses_messages` : un appel libre est rejoué en `custom_tool_call`, son résultat en `custom_tool_call_output`. | YA-03 |
+| `crates/pa-ai/src/providers/openai_responses_stream.rs` | modif. | `handle_event` : item `custom_tool_call` (`added`, `done`) et événement `response.custom_tool_call_input.delta`. | YA-03 |
+| `crates/pa-ai/src/providers/openai_codex_responses/mod.rs` | modif. (2 lignes) | Déclare le module de tests `tests/ya_freeform.rs` dans `mod tests` (accès aux helpers privés du serveur scripté). | YA-03 |
+| `crates/pa-ai/src/providers/openai_codex_responses/tests/ya_freeform.rs` | ajout | Tests : appel libre en SSE (`process_sse_chunk`, événement coupé entre deux morceaux), item `done` seul, tour WebSocket de bout en bout et requête de suite. | YA-03 |
+
+
+## Tools libres côté providers (YA-03)
+
+Ticket 09. Forme sur le fil d'openai/codex au SHA `69231e1` : tool `{"type": "custom", "name", "description", "format": {type, syntax, definition}}` (`codex-rs/tools/src/tool_spec.rs:54-55`, `responses_api.rs:17-30`) ; items `custom_tool_call` (`call_id`, `name`, `input` en texte) et `custom_tool_call_output` (`codex-rs/protocol/src/models.rs:1282-1319`) ; événements `response.output_item.added` / `.done` et `response.custom_tool_call_input.delta` (`codex-rs/codex-api/src/sse/responses.rs:411-568`).
+
+- **Types partagés inchangés** (`pa_types::ai::Tool`, `ToolCall`) : un tool libre porte son `format` sous la clé `x-yusagent-freeform` de `parameters`, à côté d'un schéma objet `{input: string}` requis, que la validation des arguments (`crates/pa-agent/src/validation.rs`) accepte sans changement. Un appel libre a pour arguments `{input: <texte brut>}` et porte `yaFreeformItemId` (id d'item du provider) dans `rest`, aplati dans le JSONL de session : une session rechargée rejoue l'appel en `custom_tool_call`.
+- **Rejeu** : l'id d'item d'origine n'est renvoyé que pour un appel du même modèle et du même provider (comme l'id `fc_` d'un `function_call`, `openai_responses_shared.rs`) ; sinon il est omis. Le résultat d'un appel libre part en `custom_tool_call_output` (même encodage de `output` que `function_call_output`).
+- **Flux** : SSE et WebSocket de Codex passent par `ResponsesStreamProcessor::handle_event` (`openai_codex_responses/mod.rs`, `run_websocket_attempt` et `run_sse_stream`). L'entrée arrive par deltas, l'item `done` porte l'entrée complète, qui fait foi. Le bloc vivant est retrouvé par son id (le slot est déjà retiré au `done`, `openai_responses_stream.rs`) ; sans événement `added`, l'appel est créé au `done`.
+- **Portée** : seules les API Responses (`openai-responses`, `openai-codex-responses`, `azure-openai-responses`) savent envoyer un tool libre. Le tool `apply_patch` n'est enregistré que pour elles (PR 2) ; aucun autre provider n'en reçoit.
 
 ## Sous-agents coupés (YA-06)
 
