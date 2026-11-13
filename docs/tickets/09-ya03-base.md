@@ -83,3 +83,9 @@ Le rapport dit que la résolution ne se tranche pas à 10 tâches. La condition 
 ### Métriques du banc
 
 `bench/smoke/metrics.py` doit compter les cellules en erreur d'appel et les edits appliqués au premier essai ; ajoutés au banc s'ils n'y sont pas (PR 2).
+
+## Points ouverts
+
+- `crates/pa-core/src/prompts/layers/bash-over-subprocess.md` (règle `glm-5.3*` de `model_prompts.toml`) parle de `bash()` ; laissé tel quel (décision du 13/11/2026). Sans effet sur la variante `shellTool: "native"`, réservée à la famille Codex.
+- Réglages `editTool` et `shellTool` figés à la création de la session, mais relus à la reprise d'une session (rien n'est écrit dans le fichier de session) : changer les réglages entre deux reprises change les tools.
+- `scripts/ci_pr_crates.py` ne connaît pas `ya-apply-patch` (dont dépend désormais `pa-core`) : une PR qui le touche lance la sélection complète (sans danger).
