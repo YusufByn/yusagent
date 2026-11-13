@@ -6,12 +6,20 @@
 //! symlinks mode), after every path it touches was checked against the workspace
 //! (`tools::ya_workspace`): one path outside refuses the whole patch and nothing is written.
 //!
-//! The result keeps Codex's shape for the model (`codex-rs/core/src/tools/mod.rs:92-116`,
-//! `format_exec_output_for_model`: `Exit code`, `Wall time`, `Output:` then the crate's
-//! stdout and stderr), followed by the changed region of each updated file with its line
-//! numbers (the `cat -n` layout of `read()`), so the model needs no read-back to check it.
+//! The result is Codex's text for the model, without additions:
+//! - a patch that does not parse or cannot apply (missing file, lines not found, two hunks on
+//!   one path) fails Codex's verification before anything is written
+//!   (`codex-rs/core/src/tools/handlers/apply_patch.rs:477-519`, `prepare_patch_request`;
+//!   `codex-rs/apply-patch/src/invocation.rs:179-251`, `verify_apply_patch_args`): the whole
+//!   result is `apply_patch verification failed: <error>`;
+//! - an applied (or failed) patch gives `format_exec_output_for_model`
+//!   (`codex-rs/core/src/tools/mod.rs:92-117`): `Exit code`, `Wall time`, `Output:` then the
+//!   crate's stdout and stderr (`codex-rs/core/src/tools/runtimes/apply_patch.rs:202-238`).
+//!
+//! The workspace refusal (`[outside-workspace]`, exit code 1, nothing applied) is ours; it runs
+//! after the parse and before the verification, so no file outside the workspace is read.
 
-use std::fmt::Write as _;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -25,9 +33,6 @@ use crate::tools::ya_workspace::{allowed_roots, check_inside, WorkspaceScope};
 
 /// Name of the tool (Codex's).
 pub const APPLY_PATCH_TOOL_NAME: &str = ya_apply_patch::APPLY_PATCH_TOOL_NAME;
-
-/// Unchanged lines shown around each change in the result.
-const ZONE_CONTEXT_LINES: usize = 3;
 
 /// The `apply_patch` tool for a session working in `cwd`.
 #[must_use]
@@ -88,36 +93,73 @@ pub(crate) struct PatchOutcome {
 /// Check, apply and describe one patch.
 pub(crate) fn run_patch(patch: &str, cwd: &Path) -> PatchOutcome {
     let start = Instant::now();
-    if let Some(refusal) = workspace_refusal(patch, cwd) {
+    let hunks = match ya_apply_patch::parse_patch(patch) {
+        Ok(args) => args.hunks,
+        Err(error) => return verification_failure(&error),
+    };
+    if let Some(refusal) = workspace_refusal(&hunks, cwd) {
         return PatchOutcome {
             text: codex_exec_text(1, start, &format!("{refusal}\nNothing was applied.\n")),
             applied: false,
         };
     }
+    if let Err(error) = verify_hunks(&hunks, cwd) {
+        return verification_failure(&error);
+    }
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let result = ya_apply_patch::apply_patch(patch, cwd, &mut stdout, &mut stderr);
-    let mut output = String::from_utf8_lossy(&stdout).into_owned();
-    output.push_str(&String::from_utf8_lossy(&stderr));
-    let (applied, delta) = match &result {
-        Ok(delta) => (true, delta),
-        Err(failure) => (false, failure.delta()),
-    };
-    let zones = changed_zones(delta, cwd);
-    let mut text = codex_exec_text(i32::from(!applied), start, &output);
-    if !zones.is_empty() {
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(&zones);
+    let applied = result.is_ok();
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+    PatchOutcome {
+        text: codex_exec_text(i32::from(!applied), start, &output),
+        applied,
     }
-    PatchOutcome { text, applied }
 }
 
-/// The refusal of the first path that leaves the workspace, `None` when all stay inside or
-/// the patch does not parse (the crate then reports the parse error, writing nothing).
-fn workspace_refusal(patch: &str, cwd: &Path) -> Option<String> {
-    let hunks = ya_apply_patch::parse_patch(patch).ok()?.hunks;
+/// Codex's result for a patch that fails its verification.
+fn verification_failure(error: &dyn std::fmt::Display) -> PatchOutcome {
+    PatchOutcome {
+        text: format!("apply_patch verification failed: {error}"),
+        applied: false,
+    }
+}
+
+/// Codex's `try_verify_apply_patch_args` (`codex-rs/apply-patch/src/invocation.rs:179-251`),
+/// on `std::fs`: two hunks on one path are refused, a deleted file must be readable, an
+/// updated file must take its chunks. Nothing is written.
+fn verify_hunks(hunks: &[ya_apply_patch::Hunk], cwd: &Path) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for hunk in hunks {
+        let path = hunk.resolve_path(cwd);
+        if !seen.insert(path.clone()) {
+            return Err(ya_apply_patch::ParseError::InvalidPatchError(format!(
+                "multiple operations target {}",
+                path.display()
+            ))
+            .to_string());
+        }
+        match hunk {
+            ya_apply_patch::Hunk::AddFile { .. } => {}
+            ya_apply_patch::Hunk::DeleteFile { .. } => {
+                std::fs::read_to_string(&path)
+                    .map_err(|source| format!("Failed to read {}: {source}", path.display()))?;
+            }
+            ya_apply_patch::Hunk::UpdateFile { chunks, .. } => {
+                ya_apply_patch::unified_diff_from_chunks(&path, chunks)
+                    .map_err(|error| format!("{error}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The refusal of the first path that leaves the workspace, `None` when all stay inside.
+fn workspace_refusal(hunks: &[ya_apply_patch::Hunk], cwd: &Path) -> Option<String> {
     let roots = match allowed_roots(&WorkspaceScope { session_cwd: cwd }) {
         Ok(roots) => roots,
         Err(error) => {
@@ -128,7 +170,7 @@ fn workspace_refusal(patch: &str, cwd: &Path) -> Option<String> {
             ))
         }
     };
-    for hunk in &hunks {
+    for hunk in hunks {
         let mut targets = vec![hunk.resolve_path(cwd)];
         if let ya_apply_patch::Hunk::UpdateFile {
             move_path: Some(dest),
@@ -153,57 +195,6 @@ fn codex_exec_text(exit_code: i32, start: Instant, output: &str) -> String {
     // Rounded to 1 decimal place, as Codex does.
     let duration_seconds = (start.elapsed().as_secs_f32() * 10.0).round() / 10.0;
     format!("Exit code: {exit_code}\nWall time: {duration_seconds} seconds\nOutput:\n{output}")
-}
-
-/// The changed region of each updated or moved file, numbered from its new content.
-fn changed_zones(delta: &ya_apply_patch::AppliedPatchDelta, cwd: &Path) -> String {
-    let mut out = String::new();
-    for change in delta.changes() {
-        let ya_apply_patch::AppliedPatchFileChange::Update {
-            move_path,
-            old_content,
-            new_content,
-            ..
-        } = &change.change
-        else {
-            continue;
-        };
-        let path = move_path.as_deref().unwrap_or(&change.path);
-        let zone = numbered_zone(old_content, new_content);
-        if zone.is_empty() {
-            continue;
-        }
-        let shown = path.strip_prefix(cwd).unwrap_or(path);
-        let _ = write!(out, "\n{} after the edit:\n{zone}", shown.display());
-    }
-    out
-}
-
-/// The lines of `new` around each difference from `old`, as `<number:6>\t<text>`, groups
-/// separated by `...`.
-fn numbered_zone(old: &str, new: &str) -> String {
-    let diff = similar::TextDiff::from_lines(old, new);
-    let lines: Vec<&str> = new.split_inclusive('\n').collect();
-    let mut out = String::new();
-    for (index, group) in diff.grouped_ops(ZONE_CONTEXT_LINES).iter().enumerate() {
-        let (Some(first), Some(last)) = (group.first(), group.last()) else {
-            continue;
-        };
-        let start = first.new_range().start;
-        let end = last.new_range().end.min(lines.len());
-        if start >= end {
-            continue;
-        }
-        if index > 0 {
-            out.push_str("...\n");
-        }
-        for (offset, line) in lines[start..end].iter().enumerate() {
-            let text = line.strip_suffix('\n').unwrap_or(line);
-            let text = text.strip_suffix('\r').unwrap_or(text);
-            let _ = writeln!(out, "{:>6}\t{text}", start + offset + 1);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -233,8 +224,9 @@ mod tests {
             .starts_with("start: begin_patch hunk+ end_patch\n"));
     }
 
+    /// The whole result is Codex's, byte for byte (the wall time of a local patch rounds to 0).
     #[test]
-    fn update_reports_codex_header_and_numbered_zone() {
+    fn update_result_is_codex_text_only() {
         let dir = tempfile::tempdir().unwrap();
         let body = (1..=20)
             .map(|i| format!("line {i}\n"))
@@ -246,41 +238,33 @@ mod tests {
             dir.path(),
         );
         assert!(outcome.applied, "{}", outcome.text);
-        assert!(
-            outcome
-                .text
-                .starts_with("Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nM a.txt\n"),
-            "{}",
-            outcome.text
+        assert_eq!(
+            outcome.text,
+            "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nM a.txt\n"
         );
-        assert!(
-            outcome.text.contains("\na.txt after the edit:\n"),
-            "{}",
-            outcome.text
-        );
-        assert!(
-            outcome.text.contains("     7\tline 7\n"),
-            "{}",
-            outcome.text
-        );
-        assert!(
-            outcome.text.contains("    10\tline ten\n"),
-            "{}",
-            outcome.text
-        );
-        assert!(
-            outcome.text.contains("    13\tline 13\n"),
-            "{}",
-            outcome.text
-        );
-        assert!(!outcome.text.contains("\tline 1\n"), "{}", outcome.text);
         assert!(std::fs::read_to_string(dir.path().join("a.txt"))
             .unwrap()
             .contains("line ten\n"));
     }
 
     #[test]
-    fn failed_patch_is_an_error_with_exit_code_one() {
+    fn add_and_delete_results_are_codex_text_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("old.txt"), "x\n").unwrap();
+        let outcome = run_patch(
+            &patch("*** Add File: new.txt\n+hi\n*** Delete File: old.txt\n"),
+            dir.path(),
+        );
+        assert!(outcome.applied, "{}", outcome.text);
+        assert_eq!(
+            outcome.text,
+            "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA new.txt\nD old.txt\n"
+        );
+    }
+
+    /// Lines not found: Codex's verification fails before any write, without the exec header.
+    #[test]
+    fn unmatched_update_fails_codex_verification() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.txt"), "x\n").unwrap();
         let outcome = run_patch(
@@ -289,14 +273,56 @@ mod tests {
         );
         assert!(!outcome.applied);
         assert!(
-            outcome.text.starts_with("Exit code: 1\n"),
+            outcome
+                .text
+                .starts_with("apply_patch verification failed: Failed to find expected lines in "),
             "{}",
             outcome.text
         );
+        assert!(!outcome.text.contains("Exit code"), "{}", outcome.text);
         assert_eq!(
             std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
             "x\n"
         );
+    }
+
+    #[test]
+    fn invalid_patch_fails_codex_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let outcome = run_patch("*** Update File: a.txt\n", dir.path());
+        assert!(!outcome.applied);
+        assert_eq!(
+            outcome.text,
+            "apply_patch verification failed: invalid patch: The first line of the patch must be '*** Begin Patch'"
+        );
+    }
+
+    /// A missing file, two hunks on one path: refused by the verification, nothing written.
+    #[test]
+    fn verification_refuses_missing_files_and_repeated_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = run_patch(&patch("*** Delete File: gone.txt\n"), dir.path());
+        assert!(!missing.applied);
+        assert!(
+            missing.text.starts_with(&format!(
+                "apply_patch verification failed: Failed to read {}: ",
+                dir.path().join("gone.txt").display()
+            )),
+            "{}",
+            missing.text
+        );
+        let repeated = run_patch(
+            &patch("*** Add File: a.txt\n+1\n*** Add File: a.txt\n+2\n"),
+            dir.path(),
+        );
+        assert_eq!(
+            repeated.text,
+            format!(
+                "apply_patch verification failed: invalid patch: multiple operations target {}",
+                dir.path().join("a.txt").display()
+            )
+        );
+        assert!(!dir.path().join("a.txt").exists(), "nothing written");
     }
 
     #[test]
@@ -357,19 +383,5 @@ mod tests {
         let outcome = run_patch(&patch("*** Add File: link/x.txt\n+no\n"), dir.path());
         assert!(!outcome.applied, "{}", outcome.text);
         assert!(!other.path().join("x.txt").exists());
-    }
-
-    #[test]
-    fn numbered_zone_groups_distant_changes() {
-        let old = (1..=30)
-            .map(|i| format!("l{i}\n"))
-            .collect::<Vec<_>>()
-            .concat();
-        let new = old.replace("l2\n", "L2\n").replace("l28\n", "L28\n");
-        let zone = numbered_zone(&old, &new);
-        assert!(zone.contains("     2\tL2\n"), "{zone}");
-        assert!(zone.contains("...\n"), "{zone}");
-        assert!(zone.contains("    28\tL28\n"), "{zone}");
-        assert!(!zone.contains("\tl15\n"), "{zone}");
     }
 }
