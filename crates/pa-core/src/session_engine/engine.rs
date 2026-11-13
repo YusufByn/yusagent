@@ -279,6 +279,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let python_cell_timeout_ms = settings.get_python_cell_timeout_ms();
     // yusAgent (YA-02): `kernel.envAllowlist`, captured before the move too.
     let kernel_env_allowlist = crate::kernel::env_allowlist::env_allowlist(settings.settings());
+    // yusAgent (YA-03): `kernel.maxOutputChars`, captured before the move too.
+    let max_output_chars = crate::tools::ya_output_cap::max_output_chars(settings.settings());
     // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
     let cache_retention =
         super::cache_retention::resolve_from_env(settings.settings().cache_retention);
@@ -512,6 +514,9 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     // unbounded by design (#3523), so their cells are never annotated.
     let cell_timeout_ms =
         super::runtime_wiring::arm_cell_timeout_ms(config.daemonless, python_cell_timeout_ms);
+    // yusAgent (YA-03): full outputs over the cap go next to the session's artifacts.
+    let output_dir =
+        crate::tools::ya_output_cap::output_dir(session_artifact_dir.as_deref(), &session_id);
     let provisioner = super::runtime_wiring::kernel_provisioner(
         session_id.clone(),
         handlers,
@@ -532,12 +537,17 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     );
     let mut tools = config.tools.clone();
     if !tools.iter().any(|tool| tool.name() == PYTHON_TOOL_NAME) {
-        let definition = crate::tools::ipython::create_ipython_tool_definition(
+        let mut definition = crate::tools::ipython::create_ipython_tool_definition(
             &cwd.to_string_lossy(),
             super::runtime_wiring::ipython_tool_options(
                 provisioner.clone(),
                 config.on_late_sent_agent_message.clone(),
             ),
+        );
+        // yusAgent (YA-03): cap of the cell text, full output in a file.
+        crate::tools::ya_output_cap::wrap_execute(
+            &mut definition,
+            crate::tools::ya_output_cap::OutputCap::new(max_output_chars, output_dir),
         );
         tools.push(Arc::new(
             crate::session_engine::tool_bridge::ToolDefinitionBridge::new(definition),

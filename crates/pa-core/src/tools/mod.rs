@@ -7,3 +7,5 @@ pub(crate) mod ipython;
 pub(crate) mod path_utils;
 pub(crate) mod render_utils;
 pub(crate) mod tool_definition;
+// yusAgent (YA-03): output cap of a `python_repl` cell.
+pub(crate) mod ya_output_cap;

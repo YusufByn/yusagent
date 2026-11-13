@@ -115,6 +115,11 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-ai/src/providers/openai_responses_stream.rs` | modif. | `handle_event` : item `custom_tool_call` (`added`, `done`) et événement `response.custom_tool_call_input.delta`. | YA-03 |
 | `crates/pa-ai/src/providers/openai_codex_responses/mod.rs` | modif. (2 lignes) | Déclare le module de tests `tests/ya_freeform.rs` dans `mod tests` (accès aux helpers privés du serveur scripté). | YA-03 |
 | `crates/pa-ai/src/providers/openai_codex_responses/tests/ya_freeform.rs` | ajout | Tests : appel libre en SSE (`process_sse_chunk`, événement coupé entre deux morceaux), item `done` seul, tour WebSocket de bout en bout et requête de suite. | YA-03 |
+| `crates/pa-core/src/tools/ya_output_cap.rs` | ajout | Plafond du texte d'une cellule `python_repl` (`kernel.maxOutputChars`, 40 000 par défaut), sortie complète en fichier. Voir « Plafond de sortie (YA-03) ». | YA-03 |
+| `crates/pa-core/src/tools/mod.rs` | modif. (2 lignes) | Déclare `ya_output_cap`. | YA-03 |
+| `crates/pa-core/src/kernel/env_allowlist.rs` | modif. (fichier du fork, YA-02) | `KernelSettings` : champ `max_output_chars` (`kernel.maxOutputChars`). | YA-03 |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | Lit `kernel.maxOutputChars`, calcule le dossier des sorties complètes, enveloppe l'`execute` du tool `python_repl` avec `ya_output_cap::wrap_execute`. | YA-03 |
+| `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (1 ligne + commentaire) | `KernelManagerExecutor::execute` : `max_output_chars` à `ya_output_cap::KERNEL_BUFFER_CHARS` (2 000 000 par flux) au lieu du défaut upstream de 65 536, pour que la sortie complète soit gardée puis enregistrée. |  YA-03 |
 
 
 ## Tools libres côté providers (YA-03)
@@ -125,6 +130,16 @@ Ticket 09. Forme sur le fil d'openai/codex au SHA `69231e1` : tool `{"type": "cu
 - **Rejeu** : l'id d'item d'origine n'est renvoyé que pour un appel du même modèle et du même provider (comme l'id `fc_` d'un `function_call`, `openai_responses_shared.rs`) ; sinon il est omis. Le résultat d'un appel libre part en `custom_tool_call_output` (même encodage de `output` que `function_call_output`).
 - **Flux** : SSE et WebSocket de Codex passent par `ResponsesStreamProcessor::handle_event` (`openai_codex_responses/mod.rs`, `run_websocket_attempt` et `run_sse_stream`). L'entrée arrive par deltas, l'item `done` porte l'entrée complète, qui fait foi. Le bloc vivant est retrouvé par son id (le slot est déjà retiré au `done`, `openai_responses_stream.rs`) ; sans événement `added`, l'appel est créé au `done`.
 - **Portée** : seules les API Responses (`openai-responses`, `openai-codex-responses`, `azure-openai-responses`) savent envoyer un tool libre. Le tool `apply_patch` n'est enregistré que pour elles (PR 2) ; aucun autre provider n'en reçoit.
+
+
+## Plafond de sortie (YA-03)
+
+Ticket 09. Avant : le gestionnaire du kernel tronque chaque flux (stdout, stderr, résultat) à 65 536 caractères en gardant le début (`crates/pa-core/src/kernel/shared.rs:14`, `kernel/manager/execution.rs`), sans fichier.
+
+- **Plafond** : `kernel.maxOutputChars` (défaut 40 000 ≈ 10 000 tokens, estimation à 4 caractères par token : troncature de Codex pour `gpt-6.1-terra`, `codex-rs/models-manager/models.json` au SHA `69231e1`) s'applique au texte complet de la cellule tel que le modèle le reçoit (le premier bloc texte du résultat du tool). `0` le coupe.
+- **Au-delà** : début et fin du texte, moitié chacun, autour d'une ligne `[... output truncated: <N> characters in total; full output in <chemin> ...]`. Le total, ligne comprise, ne dépasse pas le plafond. Le fichier est `<dossier d'artefacts de la session>/outputs/<id de l'appel>.txt` (sans dossier d'artefacts : `<tmp>/yusagent-outputs/<id de session>/`). Si l'écriture échoue, la ligne donne l'erreur.
+- **Tampon du kernel** : 2 000 000 caractères par flux pour les cellules du modèle, pour que le fichier soit complet jusqu'à cette taille. Le runtime Python ne tronque pas les flux (trames de 64 Kio, `prime-agent-runtime/src/rlm/repl.py:50`) ; il plafonne le résultat à 1 Mio (`repl.py:53`). Les cellules internes du harness gardent le défaut upstream.
+- **Préfixe** : inchangé. Seul le contenu d'un résultat qui dépasse le plafond change, en fin de contexte.
 
 ## Sous-agents coupés (YA-06)
 

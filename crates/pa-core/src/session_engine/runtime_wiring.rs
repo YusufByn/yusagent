@@ -407,6 +407,9 @@ impl KernelExecutor for KernelManagerExecutor {
                         signal: signal.map(crate::kernel::cancellation::AbortSignal::from_token),
                         on_late_sent_agent_message,
                         cell_timeout_ms,
+                        // yusAgent (YA-03): keep the full output; the cell text is capped
+                        // later, with the full output saved (`tools::ya_output_cap`).
+                        max_output_chars: Some(crate::tools::ya_output_cap::KERNEL_BUFFER_CHARS),
                         ..Default::default()
                     },
                 )

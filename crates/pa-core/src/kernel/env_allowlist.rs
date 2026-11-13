@@ -31,6 +31,9 @@ pub struct KernelSettings {
     /// `DATABASE_*`): names, `*` wildcards accepted. Project settings replace
     /// the global list (arrays replace in `deep_merge`).
     pub env_allowlist: Option<Vec<String>>,
+    /// yusAgent (YA-03): cap of the text of one `python_repl` cell, in characters
+    /// (`crate::tools::ya_output_cap`); `0` disables it.
+    pub max_output_chars: Option<usize>,
 }
 
 /// Ambient vars the kernel always inherits when set. Every name the kernel
