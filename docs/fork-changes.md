@@ -158,6 +158,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `bench/smoke/metrics.py`, `bench/smoke/run.py`, `bench/smoke/tools/ab_stats.py`, `bench/smoke/tests/test_bench.py` | modif. (fichiers du fork) | Edits appliqués au premier essai (`apply_patch` et `edit()`), patchs refusés hors workspace, cellules en erreur d'appel par bras. | YA-03 |
 | `bench/smoke/settings/edit-kernel.json`, `bash-native.json`, `bash-native-edit-kernel.json` | ajout | Réglages des bras des A/B YA-03. | YA-03 |
 | `bench/smoke/tools/sizes.py` | ajout | Estimation de la taille des changements de prompt (tiktoken) ; la capture fait foi. | YA-03 |
+| `bench/tools/capture/run.py` | modif. (fichier du fork) | Cas `codex-default`, `codex-edit-kernel`, `codex-shell-native` : provider intégré `openai` surchargé vers le serveur local (`models.json`), modèle `gpt-6.1-terra`, clé factice ; provider et modèle passés à `write_models_json` et `agent_cmd`. Les cas existants ne changent pas. | YA-03 |
 
 
 
