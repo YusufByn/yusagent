@@ -242,6 +242,11 @@ impl SessionFile {
         );
         forked.header.git =
             pa_core::session::manager::capture_git_context(Path::new(&self.header.cwd));
+        // yusAgent (YA-03): the copied history keeps the tools it was written with.
+        pa_core::session::manager::ya_header::inherit_header_fields(
+            &mut forked.header,
+            &self.header.rest,
+        );
         // Same directory as the source session, like TS `createUniqueSessionFileTarget`.
         let file = session_dir.join(session_file_name(forked.session_id()));
         forked.set_path(file);
