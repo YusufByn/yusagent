@@ -326,10 +326,11 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         .stream_fn
         .ok_or_else(|| anyhow::anyhow!("a provider stream_fn is required"))?;
     let stream_fn = super::cache_retention::scoped_stream_fn(stream_fn, cache_retention);
-    // yusAgent (YA-03): the native tools of the model's family, frozen for the session
-    // (`ya_tool_family`); an explicit native setting outside the Codex family fails here.
+    // yusAgent (YA-03): the native tools of the model's family, frozen for the session in its
+    // header (`ya_tool_family`); an explicit native setting outside the Codex family fails here.
     let ya_family = super::ya_tool_family::tool_family(&model.provider, &model.api, &model.id);
-    let ya_tools = super::ya_tool_family::resolve_tool_choice(
+    let ya_tools = super::ya_tool_family::freeze_session_tools(
+        &mut *wiring.session.lock().await,
         ya_family,
         ya_edit_tool,
         ya_shell_tool,

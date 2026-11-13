@@ -11,7 +11,9 @@
 //!   (`tools::ya_exec`);
 //! - Other: none; edits go through `edit()` and commands through `bash()` in the kernel.
 //!
-//! Settings, frozen for the session at creation:
+//! Settings, frozen for the session at creation (written to the session header, field
+//! [`FROZEN_TOOLS_HEADER_KEY`], and read back on every resume; settings changed in between give
+//! a warning, not other tools):
 //! - `editTool` unset: `apply_patch` on Codex, the kernel's `edit()` elsewhere; `"kernel"`: the
 //!   kernel everywhere; `"native"`: `apply_patch`, refused outside Codex.
 //! - `shellTool` unset or `"kernel"`: `bash()` in the kernel; `"native"`: `exec_command` /
@@ -22,6 +24,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::AgentSession;
+use crate::session::manager::SessionManager;
 
 /// The models of openai/codex `codex-rs/models-manager/models.json` at
 /// `69231e119bfca0b14453515e97d99688ce1c47c9`, in file order. Every one has
@@ -136,6 +139,137 @@ pub fn resolve_tool_choice(
         apply_patch,
         native_shell,
     })
+}
+
+/// The session header field that freezes `editTool` and `shellTool` for the session
+/// (`SessionManager::ya_set_header_field`).
+pub const FROZEN_TOOLS_HEADER_KEY: &str = "yaTools";
+
+/// The effective `editTool` and `shellTool` of a session, written to its header at creation and
+/// read back on every resume: unset settings are stored as the value they resolved to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrozenTools {
+    pub edit_tool: EditToolSetting,
+    pub shell_tool: ShellToolSetting,
+}
+
+impl FrozenTools {
+    /// The settings that resolve to `choice` in its family.
+    #[must_use]
+    pub fn of(choice: ToolChoice) -> Self {
+        FrozenTools {
+            edit_tool: if choice.apply_patch {
+                EditToolSetting::Native
+            } else {
+                EditToolSetting::Kernel
+            },
+            shell_tool: if choice.native_shell {
+                ShellToolSetting::Native
+            } else {
+                ShellToolSetting::Kernel
+            },
+        }
+    }
+
+    /// The frozen tools of a session header field; `None` when absent or unreadable.
+    #[must_use]
+    pub fn from_header_value(value: Option<&serde_json::Value>) -> Option<Self> {
+        value.and_then(|value| serde_json::from_value(value.clone()).ok())
+    }
+}
+
+/// The tools of a session being built, and what the engine does about its header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTools {
+    pub choice: ToolChoice,
+    /// To write to the header: the session had no frozen tools (a new session, or one created
+    /// before the field existed).
+    pub to_write: Option<FrozenTools>,
+    /// Shown at resume when the current settings would give other tools.
+    pub warning: Option<String>,
+}
+
+fn setting_label<T: Serialize>(setting: Option<T>) -> String {
+    setting
+        .and_then(|value| serde_json::to_value(value).ok())
+        .map_or_else(|| "unset".to_string(), |value| format!("{value}"))
+}
+
+/// The tools of a session: the frozen ones of its header when it has them (a resume), else the
+/// current settings (frozen from now on).
+///
+/// # Errors
+///
+/// Refuses a native setting outside the Codex family: a current one for a new session, a frozen
+/// one when a session created on a Codex model is resumed on another family.
+pub fn session_tools(
+    family: ToolFamily,
+    frozen: Option<FrozenTools>,
+    edit_tool: Option<EditToolSetting>,
+    shell_tool: Option<ShellToolSetting>,
+    model_label: &str,
+) -> anyhow::Result<SessionTools> {
+    let current = resolve_tool_choice(family, edit_tool, shell_tool, model_label);
+    let Some(frozen) = frozen else {
+        let choice = current?;
+        return Ok(SessionTools {
+            choice,
+            to_write: Some(FrozenTools::of(choice)),
+            warning: None,
+        });
+    };
+    let choice = resolve_tool_choice(
+        family,
+        Some(frozen.edit_tool),
+        Some(frozen.shell_tool),
+        model_label,
+    )
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "This session was created with editTool {} and shellTool {}, which need the Codex model family; {model_label} is not one. Resume it on a Codex model or start a new session.",
+            setting_label(Some(frozen.edit_tool)),
+            setting_label(Some(frozen.shell_tool)),
+        )
+    })?;
+    let warning = (current.ok() != Some(choice)).then(|| {
+        format!(
+            "Warning: this session keeps the tools it was created with (editTool {}, shellTool {}); the current settings (editTool {}, shellTool {}) apply to new sessions only.",
+            setting_label(Some(frozen.edit_tool)),
+            setting_label(Some(frozen.shell_tool)),
+            setting_label(edit_tool),
+            setting_label(shell_tool),
+        )
+    });
+    Ok(SessionTools {
+        choice,
+        to_write: None,
+        warning,
+    })
+}
+
+/// The tools of the session `manager` holds: the frozen ones of its header, or the current
+/// settings written to a header that has none. Prints the resume warning to stderr.
+///
+/// # Errors
+///
+/// As [`session_tools`].
+pub fn freeze_session_tools(
+    manager: &mut SessionManager,
+    family: ToolFamily,
+    edit_tool: Option<EditToolSetting>,
+    shell_tool: Option<ShellToolSetting>,
+    model_label: &str,
+) -> anyhow::Result<ToolChoice> {
+    let frozen = FrozenTools::from_header_value(manager.ya_header_field(FROZEN_TOOLS_HEADER_KEY));
+    let tools = session_tools(family, frozen, edit_tool, shell_tool, model_label)?;
+    if let Some(to_write) = tools.to_write {
+        manager.ya_set_header_field(FROZEN_TOOLS_HEADER_KEY, serde_json::to_value(to_write)?);
+    }
+    if let Some(warning) = &tools.warning {
+        eprintln!("{warning}");
+    }
+    Ok(tools.choice)
 }
 
 /// Whether a session frozen on `frozen` may switch to the model `provider/model_id` on `api`.
@@ -330,6 +464,110 @@ mod tests {
             "gpt-6.1-terra"
         )
         .is_err());
+    }
+
+    const CODEX_DEFAULT: ToolChoice = ToolChoice {
+        apply_patch: true,
+        native_shell: false,
+    };
+
+    #[test]
+    fn new_session_freezes_its_effective_settings() {
+        let tools = session_tools(ToolFamily::Codex, None, None, None, "m").unwrap();
+        assert_eq!(tools.choice, CODEX_DEFAULT);
+        assert_eq!(
+            tools.to_write,
+            Some(FrozenTools {
+                edit_tool: EditToolSetting::Native,
+                shell_tool: ShellToolSetting::Kernel,
+            })
+        );
+        assert_eq!(tools.warning, None);
+        let value = serde_json::to_value(tools.to_write.unwrap()).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"editTool": "native", "shellTool": "kernel"})
+        );
+        assert_eq!(FrozenTools::from_header_value(Some(&value)), tools.to_write);
+        let other = session_tools(ToolFamily::Other, None, None, None, "m").unwrap();
+        assert_eq!(other.to_write, Some(FrozenTools::of(ToolChoice::default())));
+        assert!(session_tools(
+            ToolFamily::Other,
+            None,
+            Some(EditToolSetting::Native),
+            None,
+            "m"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn resume_keeps_the_frozen_tools_and_warns_when_settings_differ() {
+        let frozen = FrozenTools::of(CODEX_DEFAULT);
+        // Unchanged settings: same tools, nothing to write, no warning.
+        let same = session_tools(ToolFamily::Codex, Some(frozen), None, None, "m").unwrap();
+        assert_eq!(same.choice, CODEX_DEFAULT);
+        assert_eq!((same.to_write, same.warning), (None, None));
+        // Other settings: the frozen tools win, with a warning naming both.
+        let changed = session_tools(
+            ToolFamily::Codex,
+            Some(frozen),
+            Some(EditToolSetting::Kernel),
+            Some(ShellToolSetting::Native),
+            "m",
+        )
+        .unwrap();
+        assert_eq!(changed.choice, CODEX_DEFAULT);
+        assert_eq!(changed.to_write, None);
+        let warning = changed.warning.expect("a warning");
+        assert!(
+            warning.contains("editTool \"native\", shellTool \"kernel\""),
+            "{warning}"
+        );
+        assert!(
+            warning.contains("editTool \"kernel\", shellTool \"native\""),
+            "{warning}"
+        );
+        // Settings invalid for the family also warn instead of failing the resume.
+        let frozen_kernel = FrozenTools::of(ToolChoice::default());
+        let invalid = session_tools(
+            ToolFamily::Other,
+            Some(frozen_kernel),
+            Some(EditToolSetting::Native),
+            None,
+            "m",
+        )
+        .unwrap();
+        assert_eq!(invalid.choice, ToolChoice::default());
+        assert!(invalid
+            .warning
+            .unwrap()
+            .contains("editTool \"native\", shellTool unset"));
+    }
+
+    #[test]
+    fn native_frozen_tools_refuse_a_resume_on_another_family() {
+        let error = session_tools(
+            ToolFamily::Other,
+            Some(FrozenTools::of(CODEX_DEFAULT)),
+            None,
+            None,
+            "anthropic/claude-opus-5-5",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.starts_with("This session was created with"),
+            "{error}"
+        );
+        assert!(error.contains("anthropic/claude-opus-5-5"), "{error}");
+    }
+
+    #[test]
+    fn unreadable_header_value_is_absent() {
+        assert_eq!(FrozenTools::from_header_value(None), None);
+        let bad = serde_json::json!({"editTool": "bash"});
+        assert_eq!(FrozenTools::from_header_value(Some(&bad)), None);
     }
 
     #[test]

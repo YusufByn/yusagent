@@ -494,6 +494,18 @@ async fn open_session(
     }
     let mut session = SessionManager::in_memory(cwd);
     session.materialize_session_file(Some(agent_dir.join("sessions")));
+    engine_for(api, server, agent_dir, cwd, variant, session).await
+}
+
+/// yusAgent (YA-03): the engine of `session` (new or reopened), served by `server`.
+async fn engine_for(
+    api: Api,
+    server: &ModelServer,
+    agent_dir: &Path,
+    cwd: &Path,
+    variant: Variant,
+    session: SessionManager,
+) -> SessionEngine {
     let provider_model: pa_types::ai::Model =
         serde_json::from_value(model_json(api, server.port, variant)).expect("provider model");
     let loop_model: pa_agent::types::Model =
@@ -874,6 +886,54 @@ async fn codex_shell_native_prefix_is_stable_across_requests() {
             .is_some_and(|description| description.contains("the `exec_command` tool")),
         "{repl}"
     );
+}
+
+/// yusAgent (YA-03): `editTool` and `shellTool` are frozen in the session header at creation.
+/// A Codex session created with the default settings, resumed after the settings changed to
+/// `editTool: "kernel"` and `shellTool: "native"`, keeps its tools and its prefix: the request
+/// after the resume extends the one before it.
+#[tokio::test]
+async fn resumed_session_keeps_its_tools_when_settings_change() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+    let frozen = json!({"editTool": "native", "shellTool": "kernel"});
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
+
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"editTool": "kernel", "shellTool": "native"}"#,
+    )
+    .expect("settings.json");
+    let resumed = SessionManager::open(&cwd, &sessions, &path);
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, resumed).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2, "one request per prompt");
+    assert_prefix_stable(api, &bodies);
+    for (index, body) in bodies.iter().enumerate() {
+        let request = request_object(api, index + 1, body);
+        assert_eq!(
+            tool_names(&request),
+            CODEX_DEFAULT.tools,
+            "request {}",
+            index + 1
+        );
+    }
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
 }
 
 /// The first request of a one-prompt session (a text answer: no kernel cell).
