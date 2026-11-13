@@ -142,8 +142,7 @@ pub fn convert_responses_messages(
     };
     // yusAgent (YA-03): calls of the request's freeform tools replay as `custom_tool_call`, their
     // results as `custom_tool_call_output`.
-    let mut freeform =
-        crate::providers::ya_freeform::FreeformReplay::new(context, &normalize_tool_call_id);
+    let mut freeform = crate::providers::ya_freeform::FreeformReplay::new(context);
 
     let transformed =
         transform_messages_with_normalizer(&context.messages, model, &|id, _model, source| {

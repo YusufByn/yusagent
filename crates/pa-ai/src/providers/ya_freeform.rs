@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Map, Value};
 
-use crate::types::{AssistantContent, AssistantMessage, Context, Message, Tool, ToolCall};
+use crate::types::{AssistantContent, Context, Message, Tool, ToolCall};
 
 /// Key of the freeform `format` object inside a tool's `parameters`.
 pub const FREEFORM_FORMAT_KEY: &str = "x-yusagent-freeform";
@@ -116,9 +116,9 @@ pub fn freeform_tools_of_request(body: &Value) -> Option<Vec<Tool>> {
 pub struct FreeformReplay {
     /// Names of the tools declared freeform in the request.
     tools: HashSet<String>,
-    /// Item id of each freeform call, by its normalized tool-call id: the normalization of the
-    /// Responses conversion rewrites item ids for function calls (`fc_` prefix), so the
-    /// original is read before it.
+    /// Item id of each freeform call, by its tool-call id. The id is sent back only for a call
+    /// of the same model (see [`FreeformReplay::custom_tool_call_item`]), whose id the
+    /// conversion leaves as is (`transform_messages` normalizes only other models' calls).
     item_ids: HashMap<String, String>,
     /// Call ids replayed as `custom_tool_call` so far.
     call_ids: HashSet<String>,
@@ -126,9 +126,9 @@ pub struct FreeformReplay {
 
 impl FreeformReplay {
     /// The replay of `context`: its freeform tools, and the item id of each freeform call of its
-    /// history, keyed by the id `normalize` gives the call (the conversion's normalizer).
+    /// history.
     #[must_use]
-    pub fn new(context: &Context, normalize: &dyn Fn(&str, &AssistantMessage) -> String) -> Self {
+    pub fn new(context: &Context) -> Self {
         let tools: HashSet<String> = context
             .tools
             .iter()
@@ -150,7 +150,7 @@ impl FreeformReplay {
                 }
                 if let Some((_, item_id)) = call.id.split_once('|') {
                     if !item_id.is_empty() {
-                        item_ids.insert(normalize(&call.id, assistant), item_id.to_string());
+                        item_ids.insert(call.id.clone(), item_id.to_string());
                     }
                 }
             }
@@ -202,6 +202,7 @@ impl FreeformReplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::AssistantMessage;
 
     fn format() -> Value {
         json!({ "type": "grammar", "syntax": "lark", "definition": "start: x" })
@@ -271,14 +272,6 @@ mod tests {
         }
     }
 
-    /// A normalizer like the conversion's: the item id gets an `fc_` prefix.
-    fn normalize(id: &str, _source: &AssistantMessage) -> String {
-        match id.split_once('|') {
-            Some((call_id, item_id)) => format!("{call_id}|fc_{item_id}"),
-            None => id.to_string(),
-        }
-    }
-
     #[test]
     fn streamed_call_keeps_its_input_and_ids() {
         let item = json!({
@@ -295,8 +288,8 @@ mod tests {
         assert!(call.rest.is_empty(), "no mark on the call: {:?}", call.rest);
     }
 
-    /// The call is freeform because `apply_patch` is declared freeform in the request; its
-    /// original item id survives the normalization; its result goes back as a custom output.
+    /// The call is freeform because `apply_patch` is declared freeform in the request; it keeps
+    /// its item id; its result goes back as a custom output.
     #[test]
     fn calls_of_declared_freeform_tools_replay_as_custom() {
         let freeform = tool_call_from_item(
@@ -310,15 +303,11 @@ mod tests {
             messages: vec![Message::Assistant(assistant)],
             tools: Some(vec![apply_patch_tool()]),
         };
-        let mut replay = FreeformReplay::new(&context, &normalize);
-        let normalized = ToolCall {
-            id: "call_1|fc_ctc_1".into(),
-            ..freeform
-        };
-        assert!(replay.is_freeform(&normalized));
+        let mut replay = FreeformReplay::new(&context);
+        assert!(replay.is_freeform(&freeform));
         assert!(!replay.is_freeform(&python));
         assert_eq!(
-            replay.custom_tool_call_item(&normalized, true),
+            replay.custom_tool_call_item(&freeform, true),
             json!({
                 "type": "custom_tool_call",
                 "id": "ctc_1",
@@ -328,7 +317,7 @@ mod tests {
             })
         );
         assert_eq!(
-            replay.custom_tool_call_item(&normalized, false).get("id"),
+            replay.custom_tool_call_item(&freeform, false).get("id"),
             None
         );
         assert_eq!(replay.output_type("call_1"), "custom_tool_call_output");
@@ -353,7 +342,7 @@ mod tests {
                 messages: vec![Message::Assistant(assistant_with(vec![call.clone()]))],
                 tools,
             };
-            assert!(!FreeformReplay::new(&context, &normalize).is_freeform(&call));
+            assert!(!FreeformReplay::new(&context).is_freeform(&call));
         }
     }
 
