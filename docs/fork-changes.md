@@ -111,6 +111,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `.changes/ya-06-rlm-default-off.md` | ajout | Fragment de changelog. | YA-06 |
 | `crates/pa-ai/src/providers/ya_freeform.rs` | ajout | Tools libres (`custom`) de l'API Responses : marque d'un tool libre dans `parameters`, d'un appel libre dans `ToolCall.rest`, items `custom_tool_call` et `custom_tool_call_output`. Voir « Tools libres côté providers (YA-03) ». | YA-03 |
 | `crates/pa-ai/src/providers/mod.rs` | modif. (2 lignes) | Déclare `ya_freeform`. | YA-03 |
+| `crates/pa-ai/src/lib.rs` | modif. (2 lignes) | Exporte `providers::ya_freeform` (`providers` est privé) : `pa-core` construit le tool `apply_patch` avec (PR 2). | YA-03 |
 | `crates/pa-ai/src/providers/openai_responses_shared.rs` | modif. | `convert_responses_tools` : un tool libre part en `custom`. `convert_responses_messages` : un appel libre est rejoué en `custom_tool_call`, son résultat en `custom_tool_call_output`. | YA-03 |
 | `crates/pa-ai/src/providers/openai_responses_stream.rs` | modif. | `handle_event` : item `custom_tool_call` (`added`, `done`) et événement `response.custom_tool_call_input.delta`. | YA-03 |
 | `crates/pa-ai/src/providers/openai_codex_responses/mod.rs` | modif. (2 lignes) | Déclare le module de tests `tests/ya_freeform.rs` dans `mod tests` (accès aux helpers privés du serveur scripté). | YA-03 |
@@ -131,6 +132,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `prime-agent-runtime/src/rlm/bash.py` | modif. | `bash(command, persistent=False, env=None)` : variables pour cette commande seule, par-dessus l'environnement du kernel (`os.environ` du kernel inchangé), clés et valeurs `str` (`_checked_env`). `_child_env(extra)` les ajoute en dernier ; `BashHandle` et `_spawn_persistent` les reçoivent. Écart noté au T02 (« `bash()` n'a pas de paramètre `env=` »). Pas encore documenté dans le prompt (PR 2). | YA-03 |
 | `prime-agent-runtime/src/rlm/repl.py` | modif. (1 ligne + commentaire) | `_ALWAYS_SKIP` : `read`, comme `bash`, n'est pas mis dans le snapshot (le bootstrap le relie). | YA-03 |
 | `crates/pa-core/src/kernel/bootstrap/runtime_code.rs` | modif. | Le bootstrap relie `read` à côté de `bash` ; le repli sans runtime accepte `env=` et définit `read`. | YA-03 |
+| `crates/pa-core/src/kernel/bootstrap/venv/probe.rs` | modif. (1 ligne + commentaire) | `RUNTIME_READY_CHECK` : la signature attendue de `rlm.bash` devient `['command', 'persistent', 'env']`, et `rlm.read` doit être appelable. Sans ce changement, le runtime de la branche est jugé « pas prêt » et le kernel ne démarre pas (run CI 43479147466 : 13 binaires de test en échec). | YA-03 |
 | `prime-agent-runtime/test/test_ya_read_env.py` | ajout | Tests de `read()` et de `bash(env=)`. | YA-03 |
 
 
