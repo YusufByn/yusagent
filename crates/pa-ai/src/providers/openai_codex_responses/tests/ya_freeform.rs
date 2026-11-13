@@ -261,3 +261,84 @@ async fn websocket_turn_round_trips_a_freeform_call() {
         "a freeform call must not be replayed as a function call: {input:?}"
     );
 }
+
+/// WebSocket continuation: the turn after a freeform call rides the same connection with
+/// `previous_response_id` (`websocket.rs`, `get_cached_websocket_input_delta`) and sends only
+/// the call's result, as `custom_tool_call_output`, with the tools unchanged.
+#[tokio::test]
+async fn websocket_continuation_sends_the_freeform_result_after_previous_response_id() {
+    let server = spawn_scripted_codex_server(vec![vec![
+        custom_call_events("resp_cont_1"),
+        codex_response_events("resp_cont_2", "msg_cont_2", "Done"),
+    ]])
+    .await;
+    let model = codex_test_model(server.port);
+    let session_id = format!("session-ya-freeform-continuation-{}", std::process::id());
+    let mut context = codex_test_context("Create a.txt");
+    context.tools = Some(vec![apply_patch_tool()]);
+    let first = stream_openai_codex_responses(
+        &model,
+        &context,
+        Some(&codex_test_options(&server, &session_id)),
+    )
+    .result()
+    .await;
+    assert_freeform_call(&first);
+
+    let followup = Context {
+        system_prompt: context.system_prompt.clone(),
+        messages: vec![
+            context.messages[0].clone(),
+            Message::Assistant(first),
+            Message::ToolResult(ToolResultMessage {
+                tool_call_id: "call_p|ctc_1".into(),
+                tool_name: "apply_patch".into(),
+                content: vec![UserOrToolContent::Text(TextContent {
+                    text: "Success.".into(),
+                    text_signature: None,
+                    rest: Map::default(),
+                })],
+                details: None,
+                is_error: false,
+                timestamp: 0,
+                rest: Map::default(),
+            }),
+        ],
+        tools: context.tools.clone(),
+    };
+    let second = stream_openai_codex_responses(
+        &model,
+        &followup,
+        Some(&codex_test_options(&server, &session_id)),
+    )
+    .result()
+    .await;
+    assert_eq!(
+        codex_message_text(&second).as_deref(),
+        Some("Done"),
+        "the second turn completes: {:?}",
+        second.error_message
+    );
+
+    let bodies = server.sent_bodies.lock().expect("bodies").clone();
+    assert_eq!(
+        bodies.len(),
+        2,
+        "both turns ride one connection: {bodies:?}"
+    );
+    assert_eq!(
+        bodies[1].get("previous_response_id"),
+        Some(&json!("resp_cont_1"))
+    );
+    assert_eq!(bodies[1].get("tools"), bodies[0].get("tools"));
+    assert_eq!(bodies[1]["tools"][0]["type"], json!("custom"));
+    assert_eq!(
+        bodies[1].get("input"),
+        Some(&json!([{
+            "type": "custom_tool_call_output",
+            "call_id": "call_p",
+            "output": "Success.",
+        }])),
+        "only the freeform result goes after previous_response_id"
+    );
+}
