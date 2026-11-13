@@ -539,7 +539,15 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
                 .clone()
                 .unwrap_or_else(|| std::path::PathBuf::from("/bin/sh")),
             command_prefix: kernel_command_prefix.clone(),
-            env: crate::tools::ya_exec::shell_env(&kernel_env_allowlist),
+            env: {
+                // The session paths `bash()` inherited from the kernel env.
+                let mut env = crate::tools::ya_exec::shell_env(&kernel_env_allowlist);
+                crate::prompts::session_paths::insert_kernel_env(
+                    &mut env,
+                    conversation_log.as_deref(),
+                );
+                env
+            },
             policy_bytes: max_output_chars,
             output_dir: output_dir.clone(),
         });

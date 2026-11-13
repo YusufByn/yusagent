@@ -64,6 +64,8 @@ const DAEMONLESS_NO_SPAWN_HOST_SHELL: &str =
     "This session has no daemon: `rlm.spawn` is unavailable and heartbeats never fire.";
 const DAEMONLESS_SHELL_SPAWN: &str = "This session has no daemon: heartbeats never fire; the run waits for your subagents before it exits. Subagent replies and exit notices still wake you.";
 const DAEMONLESS_SHELL_NO_SUBAGENT: &str = "This session has no daemon: heartbeats never fire.";
+const SKILLS_NOTE_BASH: &str = "of the Python REPL and `bash()`";
+const SKILLS_NOTE_SHELL: &str = "of the Python REPL and of `exec_command`";
 const PYTHON_REPL_BASH: &str = "Run shell commands with `bash('cmd')` / `await bash('cmd')`.";
 const PYTHON_REPL_SHELL: &str = "Run shell commands with the `exec_command` tool.";
 
@@ -170,6 +172,17 @@ pub fn daemonless_line(line: &str, choice: ToolChoice) -> Cow<'_, str> {
     }
 }
 
+/// The skills inventory for the session's tools: in a native-shell session, the bundled-skills
+/// variable is documented for `exec_command` instead of `bash()` (`session_paths`).
+#[must_use]
+pub fn skills_inventory(text: &str, choice: ToolChoice) -> Cow<'_, str> {
+    if choice.native_shell {
+        Cow::Owned(replace_once(text, SKILLS_NOTE_BASH, SKILLS_NOTE_SHELL))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 /// Whether the session role carries the `await bash(cmd)` contract line.
 #[must_use]
 pub fn has_bash_await_line(choice: ToolChoice) -> bool {
@@ -230,6 +243,12 @@ mod tests {
         assert_eq!(
             crate::prompts::layers::OPINIONATED_LAYER
                 .matches(OPINIONATED_BASH_PATTERN)
+                .count(),
+            1
+        );
+        assert_eq!(
+            crate::prompts::session_paths::BUNDLED_SKILLS_NOTE
+                .matches(SKILLS_NOTE_BASH)
                 .count(),
             1
         );
@@ -299,6 +318,11 @@ mod tests {
         assert_eq!(
             opinionated_layer(crate::prompts::layers::OPINIONATED_LAYER, PATCH),
             crate::prompts::layers::OPINIONATED_LAYER
+        );
+        let note = skills_inventory(crate::prompts::session_paths::BUNDLED_SKILLS_NOTE, SHELL);
+        assert!(
+            note.contains(SKILLS_NOTE_SHELL) && !note.contains("bash("),
+            "{note}"
         );
         assert!(!has_bash_await_line(SHELL));
         assert!(has_bash_await_line(PATCH));

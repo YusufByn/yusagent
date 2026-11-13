@@ -205,7 +205,13 @@ pub fn system_prompt_breakdown(options: &BuildSystemPromptOptions) -> SystemProm
         .filter(|skill| !skill.disable_model_invocation)
         .collect();
     if has_file_access && !visible_skills.is_empty() {
-        let inventory = format_skills_for_prompt(&options.skills).trim().to_string();
+        // yusAgent (YA-03): the bundled-skills note names the session's shell.
+        let inventory = super::ya_tools_prompt::skills_inventory(
+            &format_skills_for_prompt(&options.skills),
+            options.ya_tool_choice,
+        )
+        .trim()
+        .to_string();
         segments.push(PromptSegment::dynamic_segment(
             "skills-inventory",
             "skill discovery",
@@ -462,10 +468,13 @@ mod tests {
         );
         assert_eq!(
             &prompt[..breakdown.cached_prefix_len],
+            // yusAgent (YA-03): the layers as every session gets them (`ya_tools_prompt`).
             format!(
                 "{}\n\n{}\n\n{}",
-                layers::CORE_LAYER.trim(),
-                layers::USAGE_LAYER.trim(),
+                super::super::ya_tools_prompt::core_layer(layers::CORE_LAYER, Default::default())
+                    .trim(),
+                super::super::ya_tools_prompt::usage_layer(layers::USAGE_LAYER, Default::default())
+                    .trim(),
                 layers::OPINIONATED_LAYER.trim()
             )
         );
