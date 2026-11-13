@@ -86,11 +86,21 @@ impl OutputCap {
     }
 
     fn save(&self, text: &str, tool_call_id: &str) -> std::io::Result<PathBuf> {
-        std::fs::create_dir_all(&self.dir)?;
-        let path = self.dir.join(format!("{}.txt", file_stem(tool_call_id)));
-        std::fs::write(&path, text)?;
-        Ok(path)
+        save_full_output(&self.dir, tool_call_id, text)
     }
+}
+
+/// Write the full output of one tool call to `<dir>/<call id>.txt` and return the path (also
+/// used by `tools::ya_exec`).
+pub(crate) fn save_full_output(
+    dir: &Path,
+    tool_call_id: &str,
+    text: &str,
+) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(format!("{}.txt", file_stem(tool_call_id)));
+    std::fs::write(&path, text)?;
+    Ok(path)
 }
 
 /// A file name stem from an id: ASCII letters, digits, `-` and `_` kept, anything else `_`.
