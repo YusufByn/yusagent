@@ -963,6 +963,7 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
                                             model, CACHE_WRITE_PRICE),
         "cost": metrics.costs(prices, model, records, CACHE_WRITE_PRICE),
         "cells": metrics.cell_errors(all_entries),
+        "edits": metrics.edit_attempts(all_entries),
         "transports": {k: v for k, v in transports.items() if k != "per_request"},
         "transport_failures_in_session": metrics.session_transport_failures(all_entries),
         "per_request": transports["per_request"],
@@ -1122,7 +1123,8 @@ def write_report(run_dir: Path, report: dict) -> None:
               "cacheWrite", "reasoning", "context_peak", "turns", "calls", "cache_session_rate",
               "cache_continuation_median", "cache_avoidable_rate", "server_misses",
               "ttft_median_ms", "seconds", "websocket", "sse", "loop_on_sse", "connect_refused",
-              "cell_errors", "syntax_errors", "truncated", "subagent_sessions", "subagent_calls",
+              "cell_errors", "syntax_errors", "edit_attempts", "edits_applied",
+              "patches_refused_outside_workspace", "truncated", "subagent_sessions", "subagent_calls",
               "subagent_cost", "task_tree"]
     with (run_dir / "tasks.csv").open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -1147,7 +1149,12 @@ def write_report(run_dir: Path, report: dict) -> None:
                 "sse": r["transports"]["requests"].get("sse", 0),
                 "loop_on_sse": r["transports"]["loop_on_sse"],
                 "connect_refused": r["connect"]["refused"], "cell_errors": r["cells"]["errors"],
-                "syntax_errors": r["cells"]["syntax_errors"], "truncated": r["calls"]["truncated"],
+                "syntax_errors": r["cells"]["syntax_errors"],
+                "edit_attempts": (r.get("edits") or {}).get("attempts"),
+                "edits_applied": (r.get("edits") or {}).get("applied"),
+                "patches_refused_outside_workspace": ((r.get("edits") or {}).get("apply_patch")
+                                                      or {}).get("refused_outside_workspace"),
+                "truncated": r["calls"]["truncated"],
                 "subagent_sessions": (r.get("subagents") or {}).get("sessions"),
                 "subagent_calls": (r.get("subagents") or {}).get("calls"),
                 "subagent_cost": (r.get("subagents") or {}).get("cost"),
