@@ -175,6 +175,7 @@ impl AgentSessionEngine {
             children,
             usage_producer: std::sync::Mutex::new(None),
             rlm_usage_store: std::sync::Mutex::new(None),
+            ya_header_sink: std::sync::Mutex::new(None),
             quota_park: std::sync::Arc::new(std::sync::Mutex::new(None)),
             quota_parked_this_run: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             autonomous_driver,
@@ -1080,7 +1081,10 @@ impl AgentSessionEngine {
                 id: Some(header.id),
                 ..Default::default()
             });
+            // yusAgent (YA-03): the session's frozen tools (`ya_frozen_tools`).
+            session_manager.ya_inherit_header_fields(&header.rest);
         }
+        let ya_session_file = session_file.clone();
         if let Some(children) = &self.children {
             children.set_model(format!("{}/{}", model.provider, model.id));
         }
@@ -1267,6 +1271,8 @@ impl AgentSessionEngine {
         })
         .await
         .inspect(|engine| {
+            // yusAgent (YA-03): a newly frozen session's tools go to the durable header.
+            self.ya_sync_frozen_tools(engine, ya_session_file.as_deref());
             // A queue-mode switch that landed mid-build wrote only the live slot: re-apply the
             // modes so the first build never serves a stale one.
             let (steering_mode, follow_up_mode) = {

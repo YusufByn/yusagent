@@ -287,6 +287,29 @@ def arm_measures(units: list[dict], side: str) -> dict:
             "cost": per_pass(lambda r: cost(r, "rapporté"))}
 
 
+def edit_totals(units: list[dict], side: str) -> dict:
+    """Sommes du bras sur les unités retenues (YA-03) : edits (`metrics.edit_attempts`),
+    patchs refusés hors workspace, cellules en erreur d'appel. Un rapport antérieur à YA-03
+    n'a pas `edits` : compté 0."""
+    totals = {"attempts": 0, "applied": 0, "refused": 0, "cell_errors": 0, "syntax_errors": 0}
+    for u in units:
+        r = u["arms"][side]["result"]
+        edits = r.get("edits") or {}
+        totals["attempts"] += edits.get("attempts") or 0
+        totals["applied"] += edits.get("applied") or 0
+        totals["refused"] += (edits.get("apply_patch") or {}).get("refused_outside_workspace") or 0
+        totals["cell_errors"] += (r.get("cells") or {}).get("errors") or 0
+        totals["syntax_errors"] += (r.get("cells") or {}).get("syntax_errors") or 0
+    return totals
+
+
+def first_try(totals: dict) -> str:
+    if not totals["attempts"]:
+        return "aucun edit"
+    rate = totals["applied"] / totals["attempts"] * 100
+    return f"{totals['applied']}/{totals['attempts']} ({rate:.1f} %)"
+
+
 def invalidations(root: Path) -> tuple[dict[str, int], dict[str, list[int]]]:
     """Invalidations journalisées sous `root`, par cause, et sessions touchées par le
     masquage (principales, sous-agents : [touchées, total])."""
@@ -425,6 +448,12 @@ def main() -> None:
         share = [m["sub_cost"] / m["cost"] * 100 if m["cost"] else 0 for m in (ma, mb)]
         out.append(f"| Part du coût rapporté des sous-agents | {share[0]:.1f} % | "
                    f"{share[1]:.1f} % | |")
+        ea, eb = edit_totals(kept, "A"), edit_totals(kept, "B")
+        out += [f"| Edits appliqués au premier essai (total) | {first_try(ea)} | "
+                f"{first_try(eb)} | |",
+                f"| Patchs refusés hors workspace (total) | {ea['refused']} | {eb['refused']} | |",
+                f"| Cellules en erreur d'appel (total, dont SyntaxError) | {ea['cell_errors']} "
+                f"({ea['syntax_errors']}) | {eb['cell_errors']} ({eb['syntax_errors']}) | |"]
 
     out += ["", "## Invalidations journalisées", ""]
     if ab is None:

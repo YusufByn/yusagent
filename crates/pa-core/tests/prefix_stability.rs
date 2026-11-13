@@ -43,6 +43,42 @@ const THIRD_CELL: &str = "import os\nprint(x + 1)\nprint(os.environ['PRIME_AGENT
 /// Requests the scenario sends: two tool calls then text, text, one tool call then text.
 const EXPECTED_REQUESTS: usize = 6;
 
+/// yusAgent (YA-03): the model and settings of one scenario. The upstream scenarios use a model
+/// outside the Codex family (kernel tools only); the Codex scenarios use `gpt-6.1-terra` on
+/// `OpenAI` with each tool setting of the YA-03 A/Bs.
+#[derive(Debug, Clone, Copy)]
+struct Variant {
+    provider: &'static str,
+    model_id: &'static str,
+    /// Written to the agent dir's `settings.json`.
+    settings: Option<&'static str>,
+    /// Tool names of every request, in order.
+    tools: &'static [&'static str],
+}
+
+const OTHER_FAMILY: Variant = Variant {
+    provider: "prefix-test",
+    model_id: "prefix-model",
+    settings: None,
+    tools: &["python_repl"],
+};
+const CODEX_DEFAULT: Variant = Variant {
+    provider: "openai",
+    model_id: "gpt-6.1-terra",
+    settings: None,
+    tools: &["python_repl", "apply_patch"],
+};
+const CODEX_EDIT_KERNEL: Variant = Variant {
+    settings: Some(r#"{"editTool": "kernel"}"#),
+    tools: &["python_repl"],
+    ..CODEX_DEFAULT
+};
+const CODEX_SHELL_NATIVE: Variant = Variant {
+    settings: Some(r#"{"shellTool": "native"}"#),
+    tools: &["python_repl", "apply_patch", "exec_command", "write_stdin"],
+    ..CODEX_DEFAULT
+};
+
 /// Process env is shared by the tests of this binary: one scenario at a time.
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -435,10 +471,10 @@ fn responses_events(reply: &Reply, seq: usize) -> String {
 
 // Session
 
-fn model_json(api: Api, port: u16) -> Value {
+fn model_json(api: Api, port: u16, variant: Variant) -> Value {
     json!({
-        "id": "prefix-model", "name": "Prefix model", "api": api.name(),
-        "provider": "prefix-test", "baseUrl": api.base_url(port), "reasoning": false,
+        "id": variant.model_id, "name": "Prefix model", "api": api.name(),
+        "provider": variant.provider, "baseUrl": api.base_url(port), "reasoning": false,
         "input": ["text"],
         "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
         "contextWindow": 200_000, "maxTokens": 32_000
@@ -451,13 +487,29 @@ async fn open_session(
     server: &ModelServer,
     agent_dir: &Path,
     cwd: &Path,
+    variant: Variant,
 ) -> SessionEngine {
+    if let Some(settings) = variant.settings {
+        std::fs::write(agent_dir.join("settings.json"), settings).expect("settings.json");
+    }
     let mut session = SessionManager::in_memory(cwd);
     session.materialize_session_file(Some(agent_dir.join("sessions")));
+    engine_for(api, server, agent_dir, cwd, variant, session).await
+}
+
+/// yusAgent (YA-03): the engine of `session` (new or reopened), served by `server`.
+async fn engine_for(
+    api: Api,
+    server: &ModelServer,
+    agent_dir: &Path,
+    cwd: &Path,
+    variant: Variant,
+    session: SessionManager,
+) -> SessionEngine {
     let provider_model: pa_types::ai::Model =
-        serde_json::from_value(model_json(api, server.port)).expect("provider model");
+        serde_json::from_value(model_json(api, server.port, variant)).expect("provider model");
     let loop_model: pa_agent::types::Model =
-        serde_json::from_value(model_json(api, server.port)).expect("loop model");
+        serde_json::from_value(model_json(api, server.port, variant)).expect("loop model");
     create_session(SessionEngineConfig {
         on_late_sent_agent_message: None,
         semantic_edges: None,
@@ -682,12 +734,12 @@ fn assert_prefix_stable(api: Api, bodies: &[Vec<u8>]) {
 
 // Scenarios
 
-async fn prefix_scenario(api: Api) {
+async fn prefix_scenario(api: Api, variant: Variant) -> Vec<Vec<u8>> {
     let Some(fixture) = Fixture::new().await else {
-        return;
+        return Vec::new();
     };
     let server = ModelServer::start(api).await;
-    let engine = open_session(api, &server, &fixture.agent_dir(), &fixture.cwd()).await;
+    let engine = open_session(api, &server, &fixture.agent_dir(), &fixture.cwd(), variant).await;
     for prompt in PROMPTS {
         run_prompt(&engine, prompt).await;
     }
@@ -709,6 +761,33 @@ async fn prefix_scenario(api: Api) {
         "{}: kernel outputs",
         api.name()
     );
+    // yusAgent (YA-03): the tool set of the variant, in its fixed order.
+    assert_eq!(tool_names(&last), variant.tools, "{variant:?}: tools");
+    bodies
+}
+
+/// The tool names of a request, in order.
+fn tool_names(request: &Map<String, Value>) -> Vec<String> {
+    request
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The system prompt of a Responses request (its first `input` item), as text.
+fn responses_system_prompt(body: &[u8]) -> String {
+    let request = request_object(Api::OpenAiResponses, 1, body);
+    let (fixed, _) = split_request(Api::OpenAiResponses, &request);
+    fixed
+        .get("input[0] (system)")
+        .map(Value::to_string)
+        .unwrap_or_default()
 }
 
 /// The text of every tool result in a request, trimmed.
@@ -744,18 +823,182 @@ fn tool_outputs(api: Api, request: &Map<String, Value>) -> Vec<String> {
 
 #[tokio::test]
 async fn anthropic_messages_prefix_is_stable_across_requests() {
-    prefix_scenario(Api::AnthropicMessages).await;
+    prefix_scenario(Api::AnthropicMessages, OTHER_FAMILY).await;
 }
 
 #[tokio::test]
 async fn openai_responses_prefix_is_stable_across_requests() {
-    prefix_scenario(Api::OpenAiResponses).await;
+    prefix_scenario(Api::OpenAiResponses, OTHER_FAMILY).await;
+}
+
+/// yusAgent (YA-03): Codex family, default settings: `apply_patch` (freeform) after
+/// `python_repl`, and the prompt documents it.
+#[tokio::test]
+async fn codex_default_prefix_is_stable_across_requests() {
+    let bodies = prefix_scenario(Api::OpenAiResponses, CODEX_DEFAULT).await;
+    let Some(first) = bodies.first() else { return };
+    let request = request_object(Api::OpenAiResponses, 1, first);
+    let tools = request["tools"].as_array().expect("tools");
+    assert_eq!(tools[1]["type"], "custom", "apply_patch is a freeform tool");
+    let prompt = responses_system_prompt(first);
+    assert!(
+        prompt.contains("and `apply_patch`, which edits files."),
+        "{prompt}"
+    );
+    assert!(prompt.contains("`read(path: str"), "{prompt}");
+    assert!(
+        prompt.contains("env: dict[str, str] | None = None"),
+        "{prompt}"
+    );
+}
+
+/// yusAgent (YA-03): `editTool: "kernel"`: no edit tool, `edit()` documented as on `main`.
+#[tokio::test]
+async fn codex_edit_kernel_prefix_is_stable_across_requests() {
+    let bodies = prefix_scenario(Api::OpenAiResponses, CODEX_EDIT_KERNEL).await;
+    let Some(first) = bodies.first() else { return };
+    let prompt = responses_system_prompt(first);
+    assert!(prompt.contains("has one tool: `python_repl`"), "{prompt}");
+    assert!(
+        prompt.contains("the primary method for editing files"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("apply_patch"), "{prompt}");
+}
+
+/// yusAgent (YA-03): `shellTool: "native"`: `exec_command` and `write_stdin` after
+/// `apply_patch`, no `bash()` in the prompt; the kernel cells still run.
+#[tokio::test]
+async fn codex_shell_native_prefix_is_stable_across_requests() {
+    let bodies = prefix_scenario(Api::OpenAiResponses, CODEX_SHELL_NATIVE).await;
+    let Some(first) = bodies.first() else { return };
+    let prompt = responses_system_prompt(first);
+    assert!(
+        prompt.contains("`exec_command` and `write_stdin`, which run shell commands"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("bash("), "{prompt}");
+    let request = request_object(Api::OpenAiResponses, 1, first);
+    let repl = &request["tools"][0];
+    assert!(
+        repl["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("the `exec_command` tool")),
+        "{repl}"
+    );
+}
+
+/// yusAgent (YA-03): `editTool` and `shellTool` are frozen in the session header at creation.
+/// A Codex session created with the default settings, resumed after the settings changed to
+/// `editTool: "kernel"` and `shellTool: "native"`, keeps its tools and its prefix: the request
+/// after the resume extends the one before it.
+#[tokio::test]
+async fn resumed_session_keeps_its_tools_when_settings_change() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+    let frozen = json!({"editTool": "native", "shellTool": "kernel"});
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
+
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"editTool": "kernel", "shellTool": "native"}"#,
+    )
+    .expect("settings.json");
+    let resumed = SessionManager::open(&cwd, &sessions, &path);
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, resumed).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2, "one request per prompt");
+    assert_prefix_stable(api, &bodies);
+    for (index, body) in bodies.iter().enumerate() {
+        let request = request_object(api, index + 1, body);
+        assert_eq!(
+            tool_names(&request),
+            CODEX_DEFAULT.tools,
+            "request {}",
+            index + 1
+        );
+    }
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
+}
+
+/// yusAgent (YA-03): a fork keeps the frozen tools of its source. A Codex session created with
+/// the default settings is forked after the settings changed to `editTool: "kernel"` and
+/// `shellTool: "native"`: the fork's header carries the source's `yaTools`, and its request has
+/// the source's tools and system prompt.
+#[tokio::test]
+async fn forked_session_keeps_the_tools_of_its_source_when_settings_change() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"editTool": "kernel", "shellTool": "native"}"#,
+    )
+    .expect("settings.json");
+    let forked = SessionManager::fork_from(&path, &cwd, &sessions).expect("fork");
+    let forked_path = forked.get_session_file().expect("fork file").to_path_buf();
+    assert_ne!(forked_path, path);
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, forked).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    let frozen = json!({"editTool": "native", "shellTool": "kernel"});
+    let header = pa_core::session::manager::read_session_header(&forked_path).expect("header");
+    assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2, "one request per session");
+    for (index, body) in bodies.iter().enumerate() {
+        let request = request_object(api, index + 1, body);
+        assert_eq!(
+            tool_names(&request),
+            CODEX_DEFAULT.tools,
+            "request {}",
+            index + 1
+        );
+    }
+    assert_eq!(
+        responses_system_prompt(&bodies[0]),
+        responses_system_prompt(&bodies[1]),
+        "the fork's system prompt is the source's"
+    );
 }
 
 /// The first request of a one-prompt session (a text answer: no kernel cell).
 async fn first_request_of_a_session(api: Api, fixture: &Fixture) -> Map<String, Value> {
     let server = ModelServer::start(api).await;
-    let engine = open_session(api, &server, &fixture.agent_dir(), &fixture.cwd()).await;
+    let engine = open_session(
+        api,
+        &server,
+        &fixture.agent_dir(),
+        &fixture.cwd(),
+        OTHER_FAMILY,
+    )
+    .await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
     let bodies = server.bodies();

@@ -10,6 +10,7 @@ mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
 mod text_file;
+mod tool_spec;
 
 use std::io;
 use std::path::Path;
@@ -31,6 +32,9 @@ use file_update::derive_new_contents_from_chunks;
 pub use file_update::unified_diff_from_chunks;
 pub use file_update::unified_diff_from_chunks_with_context;
 pub use standalone_executable::main;
+pub use tool_spec::APPLY_PATCH_LARK_GRAMMAR;
+pub use tool_spec::APPLY_PATCH_TOOL_DESCRIPTION;
+pub use tool_spec::APPLY_PATCH_TOOL_NAME;
 
 /// Special argv[1] flag used when the Codex executable self-invokes to run the
 /// internal `apply_patch` path.

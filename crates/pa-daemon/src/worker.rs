@@ -456,6 +456,10 @@ impl Worker {
                 concrete.register_arc();
                 concrete
                     .set_rlm_usage_store(std::sync::Arc::new(CoreUsageStore(Arc::clone(&core))));
+                // yusAgent (YA-03): the frozen tools reach the durable header.
+                concrete.set_ya_header_sink(
+                    crate::agent_engine::ya_frozen_tools::core_header_sink(Arc::clone(&core)),
+                );
                 let sink_core = Arc::clone(&core);
                 let sink_notify = Arc::clone(&work_notify);
                 let autonomous_sink: crate::agent_engine::AutonomousAdmission = {

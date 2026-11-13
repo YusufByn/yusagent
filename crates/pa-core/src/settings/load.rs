@@ -68,6 +68,9 @@ const KNOWN_FIELDS: &[&str] = &[
     "cacheRetention",
     // yusAgent (T05, YA-05): masking of old outputs.
     "masking",
+    // yusAgent (YA-03): native edit and shell tools.
+    "editTool",
+    "shellTool",
 ];
 
 /// Extract each known field independently; ignore fields whose JSON type does not match the Rust

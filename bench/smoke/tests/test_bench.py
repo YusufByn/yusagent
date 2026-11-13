@@ -286,5 +286,54 @@ class AbStats(unittest.TestCase):
             self.assertFalse(ab_stats.incidents(run_dir, result, 600)[0][1])
 
 
+
+class EditAttempts(unittest.TestCase):
+    """YA-03 : edits appliqués au premier essai et patchs refusés hors workspace."""
+
+    @staticmethod
+    def call(call_id: str, code: str) -> dict:
+        return {"message": {"role": "assistant", "content": [
+            {"type": "toolCall", "id": call_id, "name": "python_repl",
+             "arguments": {"code": code}}]}}
+
+    @staticmethod
+    def result(call_id: str, tool: str, text: str, error: bool, diffs: int = 0) -> dict:
+        details = {"diffs": [{"path": "f"}] * diffs} if diffs else {}
+        return {"message": {"role": "toolResult", "toolCallId": call_id, "toolName": tool,
+                            "isError": error, "details": details,
+                            "content": [{"type": "text", "text": text}]}}
+
+    def test_counts(self):
+        entries = [
+            self.result("p1", "apply_patch", "Exit code: 0\nOutput:\nSuccess.", False),
+            self.result("p2", "apply_patch", "Exit code: 1\nOutput:\n"
+                        "[outside-workspace] /x: resolves to /x, outside the workspace (/w)", True),
+            self.result("p3", "apply_patch", "Exit code: 1\nOutput:\nFailed to find", True),
+            self.call("c1", "await edit(path='a', old_str='x', new_str='y')\n"
+                            "await edit.run('b', 'x', 'y')"),
+            self.result("c1", "python_repl", "", False, diffs=2),
+            self.call("c2", "await edit(path='a', old_str='zz', new_str='y')"),
+            self.result("c2", "python_repl", "Traceback\nValueError: string not found in a", True),
+            self.call("c3", "await edit(path='q', old_str='x', new_str='y')"),
+            self.result("c3", "python_repl", "FileNotFoundError: q not found", True),
+            # Une erreur sans rapport avec edit() ne compte pas.
+            self.call("c4", "await edit(path='a', old_str='y', new_str='z')\n1/0"),
+            self.result("c4", "python_repl", "ZeroDivisionError: division by zero", True, diffs=1),
+            # Pas d'appel d'edit() : pas d'essai, même avec un message semblable.
+            self.call("c5", "raise ValueError('string not found in a')"),
+            self.result("c5", "python_repl", "ValueError: string not found in a", True),
+        ]
+        got = metrics.edit_attempts(entries)
+        self.assertEqual(got["apply_patch"],
+                         {"calls": 3, "applied": 1, "refused_outside_workspace": 1})
+        self.assertEqual(got["edit"], {"applied": 3, "failed": 2})
+        self.assertEqual(got["attempts"], 8)
+        self.assertEqual(got["applied"], 4)
+        self.assertAlmostEqual(got["first_try_rate"], 0.5)
+
+    def test_no_edit(self):
+        self.assertIsNone(metrics.edit_attempts([])["first_try_rate"])
+        self.assertEqual(ab_stats.first_try({"attempts": 0, "applied": 0}), "aucun edit")
+
 if __name__ == "__main__":
     unittest.main()

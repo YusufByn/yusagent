@@ -9,3 +9,7 @@ pub(crate) mod render_utils;
 pub(crate) mod tool_definition;
 // yusAgent (YA-03): output cap of a `python_repl` cell.
 pub(crate) mod ya_output_cap;
+// yusAgent (YA-03): native tools of the Codex family and the workspace check.
+pub(crate) mod ya_apply_patch;
+pub(crate) mod ya_exec;
+pub(crate) mod ya_workspace;

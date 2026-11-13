@@ -3,8 +3,8 @@
 Sources, sans rien recalculer qui existe déjà :
   - `<id>.usage.ndjson` (T04, sémantique dans `docs/usage.md`) : tokens, type d'appel,
     raison d'arrêt, effort, TTFT, invalidations ;
-  - JSONL de session : cellules `python_repl` en erreur, échecs de transport notés par
-    le harness (`diagnostics`, `provider_transport_failure`) ;
+  - JSONL de session : cellules `python_repl` en erreur, edits (`apply_patch`, `edit()`),
+    échecs de transport notés par le harness (`diagnostics`, `provider_transport_failure`) ;
   - journal du reverse proxy : transport de chaque requête modèle ;
   - journal du proxy CONNECT : CONNECT refusés.
 
@@ -41,6 +41,15 @@ LOOP_KINDS = {"main", "subagent"}
 # jamais 12 h.
 PESSIMISTIC_INPUT_PRICE = "cache_write_30m"
 ERROR_LINE = re.compile(r"^(\w+(?:Error|Exception|Exit|Interrupt))\b")
+# YA-03 (ticket 09) : edits. Un appel de `edit()` dans le code d'une cellule (fonction du
+# kernel ou `edit.run`), les messages d'échec du skill (`skills/edit/src/edit/__init__.py`) et
+# le marqueur du contrôle de workspace d'`apply_patch` (`crates/pa-core/src/tools/ya_workspace.rs`,
+# `OUTSIDE_WORKSPACE_MARKER`).
+EDIT_CALL = re.compile(r"(?<![\w.])edit(?:\.run)?\s*\(")
+EDIT_FAILURE = re.compile(
+    r"^(?:ValueError: (?:string not found in |found \d+ occurrences in )"
+    r"|FileNotFoundError: .+ not found$)")
+OUTSIDE_WORKSPACE_MARKER = "[outside-workspace]"
 
 
 def read_ndjson(paths: list[Path]) -> list[dict]:
@@ -388,6 +397,60 @@ def cell_errors(entries: list[dict]) -> dict:
         else:
             by_type[kind] = by_type.get(kind, 0) + 1
     return {"cells": cells, "errors": errors, "syntax_errors": syntax, "by_type": by_type}
+
+
+def result_text(message: dict) -> str:
+    return "".join(part.get("text", "") for part in message.get("content") or []
+                   if isinstance(part, dict))
+
+
+def edit_attempts(entries: list[dict]) -> dict:
+    """Edits de la session (YA-03) : appels du tool `apply_patch` et appels de `edit()` dans
+    les cellules `python_repl`.
+
+    - `apply_patch` : un appel = un essai, appliqué si le résultat n'est pas en erreur ; les
+      refus du contrôle de workspace (marqueur `[outside-workspace]`) sont comptés à part, et
+      aussi comme essais ratés.
+    - `edit()` : chaque edit appliqué émet un diff (`details.diffs` du résultat de la cellule) ;
+      une cellule qui contient un appel d'`edit()` et finit sur une erreur du skill (`old_str`
+      absent ou ambigu, fichier introuvable) compte un essai raté (la cellule s'arrête à la
+      première erreur).
+
+    `first_try_rate` : essais appliqués / essais, `null` sans essai.
+    """
+    codes: dict[str, str] = {}
+    for entry in entries:
+        message = entry.get("message") or {}
+        if message.get("role") != "assistant":
+            continue
+        for part in message.get("content") or []:
+            if (isinstance(part, dict) and part.get("type") == "toolCall"
+                    and part.get("name") == "python_repl"):
+                codes[part.get("id")] = str((part.get("arguments") or {}).get("code") or "")
+    patch = {"calls": 0, "applied": 0, "refused_outside_workspace": 0}
+    edit = {"applied": 0, "failed": 0}
+    for entry in entries:
+        message = entry.get("message") or {}
+        if message.get("role") != "toolResult":
+            continue
+        text = result_text(message)
+        if message.get("toolName") == "apply_patch":
+            patch["calls"] += 1
+            if not message.get("isError"):
+                patch["applied"] += 1
+            elif OUTSIDE_WORKSPACE_MARKER in text:
+                patch["refused_outside_workspace"] += 1
+        elif message.get("toolName") == "python_repl":
+            edit["applied"] += len((message.get("details") or {}).get("diffs") or [])
+            if message.get("isError") and EDIT_CALL.search(codes.get(message.get("toolCallId"), "")):
+                for line in reversed(text.splitlines()):
+                    if ERROR_LINE.match(line.strip()):
+                        edit["failed"] += bool(EDIT_FAILURE.match(line.strip()))
+                        break
+    attempts = patch["calls"] + edit["applied"] + edit["failed"]
+    applied = patch["applied"] + edit["applied"]
+    return {"apply_patch": patch, "edit": edit, "attempts": attempts, "applied": applied,
+            "first_try_rate": applied / attempts if attempts else None}
 
 
 def session_transport_failures(entries: list[dict]) -> int:

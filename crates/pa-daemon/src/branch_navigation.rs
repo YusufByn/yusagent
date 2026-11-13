@@ -386,6 +386,11 @@ impl TreeNavigation {
                     store.path.to_str().map(str::to_string).as_deref(),
                     store.header.rlm_depth.unwrap_or(0) as u32,
                 );
+                // yusAgent (YA-03): the fork keeps its source's frozen tools.
+                pa_core::session::manager::ya_header::inherit_header_fields(
+                    &mut forked.header,
+                    &store.header.rest,
+                );
                 if !store.path.as_os_str().is_empty() {
                     let session_dir = store.path.parent().unwrap_or(store.path.as_path());
                     let file = session_dir

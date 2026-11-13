@@ -57,6 +57,8 @@ pub mod turn_boundary;
 pub mod usage_log;
 // yusAgent (YA-03): kernel crash during a cell, restart and notice.
 pub(crate) mod ya_kernel_restart;
+// yusAgent (YA-03): native tools by model family, frozen per session.
+pub mod ya_tool_family;
 
 mod admission;
 mod compaction_arms;
@@ -195,6 +197,9 @@ pub struct AgentSession {
     /// resolves it (verification harnesses building the session directly
     /// keep `None`, which reads as the fail-closed disabled default).
     agent_dir: Option<std::path::PathBuf>,
+    /// yusAgent (YA-03): the model family the session's tools were chosen for
+    /// (`ya_tool_family`); a model change to another family is refused.
+    ya_tool_family: std::sync::OnceLock<ya_tool_family::ToolFamily>,
 }
 
 impl AgentSession {
@@ -264,6 +269,7 @@ impl AgentSession {
             side_question_stream_fn: std::sync::Mutex::new(None),
             agent_dir: None,
             compaction_flight: tokio::sync::Mutex::new(()),
+            ya_tool_family: std::sync::OnceLock::new(),
         };
         this.ensure_harness_digest_context().await?;
         Ok(this)
@@ -336,6 +342,7 @@ impl AgentSession {
         provider: &str,
         model_id: &str,
     ) -> anyhow::Result<()> {
+        self.ya_check_model_change(model)?;
         let wire: pa_agent::types::Model = serde_json::from_value(
             serde_json::to_value(model).map_err(|error| anyhow::anyhow!(error.to_string()))?,
         )
@@ -361,6 +368,7 @@ impl AgentSession {
         model_id: &str,
         thinking_level: ThinkingLevel,
     ) -> anyhow::Result<()> {
+        self.ya_check_model_change(model)?;
         let wire: pa_agent::types::Model = serde_json::from_value(
             serde_json::to_value(model).map_err(|error| anyhow::anyhow!(error.to_string()))?,
         )

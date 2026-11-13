@@ -83,3 +83,9 @@ Le rapport dit que la résolution ne se tranche pas à 10 tâches. La condition 
 ### Métriques du banc
 
 `bench/smoke/metrics.py` doit compter les cellules en erreur d'appel et les edits appliqués au premier essai ; ajoutés au banc s'ils n'y sont pas (PR 2).
+
+## Points ouverts
+
+- `crates/pa-core/src/prompts/layers/bash-over-subprocess.md` (règle `glm-5.3*` de `model_prompts.toml`) parle de `bash()` ; laissé tel quel (décision du 13/11/2026). Sans effet sur la variante `shellTool: "native"`, réservée à la famille Codex.
+- Réglages `editTool` et `shellTool` : figés dans l'en-tête du fichier de session (champ `yaTools`) depuis la correction 1 de la PR #26 ; à la reprise, les tools de la session sont gardés et un avertissement signale des réglages différents. Forks et session matérialisée reprennent le champ de la source ; le démon (mode ACP, TUI) l'écrit dans le fichier durable du worker et le relit à chaque build (dernier tour de la PR #26). Reste ouvert : une grosse session fenêtrée créée avant ce champ ne le garde qu'en mémoire (`docs/fork-changes.md`, « Tools natifs (YA-03, PR 2) »).
+- `scripts/ci_pr_crates.py` ne connaît pas `ya-apply-patch` (dont dépend désormais `pa-core`) : une PR qui le touche lance la sélection complète (sans danger).

@@ -1580,6 +1580,7 @@ dependencies = [
  "unicode-normalization",
  "url",
  "uuid",
+ "ya-apply-patch",
  "yaml_serde",
 ]
 

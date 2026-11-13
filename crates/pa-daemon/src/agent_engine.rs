@@ -74,6 +74,9 @@ use config::{GoalRuntimeHandles, ProducerUsageSink, RestoredSessionModel, Startu
 mod reload;
 mod session_engine_impl;
 
+// yusAgent (YA-03): frozen tools in the durable session header (`docs/fork-changes.md`).
+pub(crate) mod ya_frozen_tools;
+
 mod turn;
 
 /// The live quota park: parked on a provider-reported usage reset, resumed
@@ -246,6 +249,8 @@ pub struct AgentSessionEngine {
     rlm_usage_store: std::sync::Mutex<
         Option<std::sync::Arc<dyn pa_core::session_engine::rlm_usage::RlmChildUsageStore>>,
     >,
+    /// yusAgent (YA-03): writes the frozen tools into the durable header (`ya_frozen_tools`).
+    ya_header_sink: std::sync::Mutex<Option<ya_frozen_tools::YaHeaderSink>>,
     own_summary: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
     pub(crate) create_resources: std::sync::RwLock<CreateSessionResources>,
     pub(crate) autonomous:

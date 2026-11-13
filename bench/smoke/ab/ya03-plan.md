@@ -17,7 +17,8 @@ Règles fixées et versionnées avant tout run réel (ticket 09, `docs/tickets/0
 
 - **Edits appliqués au premier essai**, mesurés dans les deux bras : part des appels d'édition appliqués sans erreur, sur tous les appels d'édition de la session principale. Un appel d'édition est un appel du tool `apply_patch`, ou un appel de `edit()` dans une cellule du kernel. Un échec (patch refusé, `old_str` absent ou ambigu, fichier introuvable) compte comme un essai raté. Critère du CDC (YA-03) : au moins 95 %.
 - **Cellules en erreur d'appel** (syntaxe, quoting), par bras.
-- Calculées par `bench/smoke/metrics.py` (ajoutées dans la PR 2 si elles n'y sont pas).
+- **Patchs refusés hors workspace** (`apply_patch` dont un chemin, après résolution des liens, sort du cwd de la session), par bras ; comptés aussi comme essais ratés.
+- Calculées par `bench/smoke/metrics.py` (`edit_attempts`, `cell_errors`), sommées par bras dans la section « Par bras » d'`ab_stats.py`.
 
 ## A/B 1 : `editTool`
 
@@ -53,7 +54,7 @@ Graine : **2205082327** (tirée de `os.urandom` le 13/11/2026 à 18:08Z, avant l
 1. il **résout au moins 3 tâches de plus** sur les paires valides (seuil fixé avant le run, pas un test statistique) ;
 2. il **coûte moins** en coût à cache théorique des tâches stables, avec un IC bootstrap sur les tâches qui exclut zéro (borne haute de l'IC 95 % < 0), **et** il ne résout pas 3 tâches ou plus de moins.
 
-Le rapport dit que **la résolution ne se tranche pas à 10 tâches**. La condition 2 est un écart avec YA-14, qui ne prévoit que la résolution (journal du CDC, 13/11/2026). Si le tool shell de la variante s'écarte de `exec_command` (format maison), le rapport dit que l'A/B 2 est biaisé contre bash natif. Verdict provisoire : une seule famille de modèles (YA-14 demande au moins deux familles au banc complet).
+Le rapport dit que **la résolution ne se tranche pas à 10 tâches**. Il note aussi, comme biais possibles ou limites (décisions du 13/11/2026, journal du CDC) : le tool de la variante est `exec_command` / `write_stdin` de Codex **sans** `tty`, `shell` ni `login` (retrait qui peut jouer contre bash natif) ; le tool natif et le retrait de la règle de prompt « pas de boucles shell ni de heredocs » sont mesurés **ensemble** ; le tool natif compte sa sortie en octets, `python_repl` en caractères (différence seulement sur du texte non ASCII). La condition 2 est un écart avec YA-14, qui ne prévoit que la résolution (journal du CDC, 13/11/2026). Si le tool shell de la variante s'écarte de `exec_command` (format maison), le rapport dit que l'A/B 2 est biaisé contre bash natif. Verdict provisoire : une seule famille de modèles (YA-14 demande au moins deux familles au banc complet).
 
 **Affichés sans décider** : comme pour l'A/B 1.
 

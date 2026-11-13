@@ -321,6 +321,11 @@ pub struct Settings {
     /// yusAgent (T05, YA-05): masking of old `python_repl` outputs, off by default
     /// (`crate::session_engine::masking`).
     pub masking: Option<crate::session_engine::masking::MaskingSettings>,
+    /// yusAgent (YA-03): `"native"` or `"kernel"`, unset = `apply_patch` on the Codex family
+    /// (`crate::session_engine::ya_tool_family`).
+    pub edit_tool: Option<crate::session_engine::ya_tool_family::EditToolSetting>,
+    /// yusAgent (YA-03): `"kernel"` (unset) or `"native"` (`exec_command`, Codex family only).
+    pub shell_tool: Option<crate::session_engine::ya_tool_family::ShellToolSetting>,
     pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,

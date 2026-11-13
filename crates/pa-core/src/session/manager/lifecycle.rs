@@ -231,6 +231,8 @@ impl SessionManager {
             parent_session: Some(source_path.display().to_string()),
             rlm_depth: Some(rlm_depth),
         });
+        // yusAgent (YA-03): the copied history keeps the tools it was written with.
+        forked.ya_inherit_header_fields(&source_header.rest);
         let branch = forked_branch_entries(entries);
         // The copied rows' assistant entries keep the append path durable
         // from the first new entry: one predicate for the durable-append rule.
@@ -483,6 +485,10 @@ impl SessionManager {
         });
         self.file_entries = vec![header];
         self.file_entries.extend(rest);
+        // yusAgent (YA-03): the session keeps its frozen tools.
+        if let Some(previous) = &previous_header {
+            self.ya_inherit_header_fields(&previous.rest);
+        }
         self.has_assistant_entry = has_assistant;
         self.rewrite_file();
         self.flushed = true;

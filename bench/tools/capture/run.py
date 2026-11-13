@@ -71,6 +71,19 @@ CASES = [
      [PROMPT], {"masking": {"enabled": True}}),
 ]
 
+# YA-03 (PR 2) : famille Codex. Le provider intégré `openai`, surchargé dans models.json pour
+# viser le serveur local, avec un modèle du `models.json` de Codex (SHA 69231e1) : le harness
+# enregistre alors les tools natifs selon les réglages des A/B YA-03. Un binaire antérieur à
+# YA-03 n'a que `python_repl` dans ces cas. Clé factice, jamais une vraie.
+CODEX_PROVIDER = "openai"
+CODEX_MODEL = "gpt-6.1-terra"
+CODEX_ENV = {"OPENAI_API_KEY": "capture-fake-not-a-key"}
+CODEX_CASES = [
+    ("codex-default", "agent-x", None),
+    ("codex-edit-kernel", "agent-y", {"editTool": "kernel"}),
+    ("codex-shell-native", "agent-z", {"shellTool": "native"}),
+]
+
 # Variables factices : le tour 2 du scénario vérifie si le kernel voit des
 # noms de secrets. Aucune n'est une vraie clé.
 FAKE_SECRETS = {
@@ -119,14 +132,15 @@ def write_settings(agent_dir: Path, settings: dict | None = None) -> None:
         json.dumps({**KERNEL_SETTINGS, **CACHE_SETTINGS, **(settings or {})}) + "\n")
 
 
-def write_models_json(agent_dir: Path, api: str, port: int) -> None:
+def write_models_json(agent_dir: Path, api: str, port: int, provider: str = "capture",
+                      model: str = "capture-model") -> None:
     agent_dir.mkdir(parents=True, exist_ok=True)
-    config = {"providers": {"capture": {
+    config = {"providers": {provider: {
         "baseUrl": f"http://127.0.0.1:{port}" + ("/v1" if api == "openai-responses" else ""),
         "apiKey": "capture-dummy",
         "api": api,
         "models": [{
-            "id": "capture-model", "name": "Capture", "reasoning": False, "input": ["text"],
+            "id": model, "name": "Capture", "reasoning": False, "input": ["text"],
             "contextWindow": 200000, "maxTokens": 32000,
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
         }],
@@ -205,9 +219,10 @@ def run_binary(cmd: list[str], env: dict[str, str], cwd: Path, case_dir: Path,
     return {"exit": code, "seconds": round(time.monotonic() - started, 2)}
 
 
-def agent_cmd(binary: Path, prompt: str = PROMPT, resume: bool = False) -> list[str]:
+def agent_cmd(binary: Path, prompt: str = PROMPT, resume: bool = False,
+              provider: str = "capture", model: str = "capture-model") -> list[str]:
     return [str(binary), "-p", *(["--continue"] if resume else []), "--mode", "json",
-            "--provider", "capture", "--model", "capture-model", prompt]
+            "--provider", provider, "--model", model, prompt]
 
 
 def prepare(binary: Path, cache: Path, version: str) -> None:
@@ -484,25 +499,33 @@ def main() -> None:
     (out / "prompt-breakdown.json").write_text(dump.stdout)
     run_info["prompt_command_exit"] = dump.returncode
 
-    for name, api, scenario, extra, agent, prompts, settings in CASES:
+    codex_cases = [(name, "openai-responses", "basic", [], agent, [PROMPT], settings,
+                    CODEX_PROVIDER, CODEX_MODEL)
+                   for name, agent, settings in CODEX_CASES]
+    for name, api, scenario, extra, agent, prompts, settings, provider, model in [
+            (*case, "capture", "capture-model") for case in CASES] + codex_cases:
         case_dir = out / "cases" / name
         case_dir.mkdir(parents=True, exist_ok=True)
         server = CaptureServer(case_dir / "cap", scenario, extra)
         runs = []
         before = journal_sizes(work / agent)
         try:
-            write_models_json(work / agent, api, server.port)
+            write_models_json(work / agent, api, server.port, provider, model)
             write_settings(work / agent, settings)
             env = base_env(cache / "home", work / agent, work / "tmp")
+            if provider == CODEX_PROVIDER:
+                env.update(CODEX_ENV)
             for index, prompt in enumerate(prompts):
-                runs.append(run_binary(agent_cmd(binary, prompt, resume=index > 0), env, project,
-                                       case_dir, sandboxed=True,
+                runs.append(run_binary(agent_cmd(binary, prompt, resume=index > 0,
+                                                 provider=provider, model=model),
+                                       env, project, case_dir, sandboxed=True,
                                        suffix="" if index == 0 else f"-{index + 1}"))
         finally:
             server.stop()
         result = {"exit": [r["exit"] for r in runs], "seconds": [r["seconds"] for r in runs],
                   "api": api, "scenario": scenario, "server_args": extra, "agent_dir": agent,
-                  "prompts": prompts, "settings": settings,
+                  "prompts": prompts, "settings": settings, "provider": provider,
+                  "model": model,
                   "usage_journals": copy_journals(work / agent, before, case_dir)}
         run_info["cases"][name] = result
         print(f"{name}: exit={result['exit']} en {result['seconds']} s")

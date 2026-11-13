@@ -281,6 +281,9 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let kernel_env_allowlist = crate::kernel::env_allowlist::env_allowlist(settings.settings());
     // yusAgent (YA-03): `kernel.maxOutputChars`, captured before the move too.
     let max_output_chars = crate::tools::ya_output_cap::max_output_chars(settings.settings());
+    // yusAgent (YA-03): `editTool` and `shellTool`, captured before the move too.
+    let ya_edit_tool = settings.settings().edit_tool;
+    let ya_shell_tool = settings.settings().shell_tool;
     // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
     let cache_retention =
         super::cache_retention::resolve_from_env(settings.settings().cache_retention);
@@ -323,6 +326,16 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         .stream_fn
         .ok_or_else(|| anyhow::anyhow!("a provider stream_fn is required"))?;
     let stream_fn = super::cache_retention::scoped_stream_fn(stream_fn, cache_retention);
+    // yusAgent (YA-03): the native tools of the model's family, frozen for the session in its
+    // header (`ya_tool_family`); an explicit native setting outside the Codex family fails here.
+    let ya_family = super::ya_tool_family::tool_family(&model.provider, &model.api, &model.id);
+    let ya_tools = super::ya_tool_family::freeze_session_tools(
+        &mut *wiring.session.lock().await,
+        ya_family,
+        ya_edit_tool,
+        ya_shell_tool,
+        &format!("{}/{}", model.provider, model.id),
+    )?;
     // `model.info` facts, captured before the model moves into the loop.
     let model_info = match config.model_info.clone() {
         Some(full) => super::turn_boundary::ModelInfo {
@@ -517,6 +530,28 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     // yusAgent (YA-03): full outputs over the cap go next to the session's artifacts.
     let output_dir =
         crate::tools::ya_output_cap::output_dir(session_artifact_dir.as_deref(), &session_id);
+    // yusAgent (YA-03): the native shell runs like the kernel's `bash()` (same shell, prefix
+    // and filtered environment).
+    let ya_exec_config = ya_tools
+        .native_shell
+        .then(|| crate::tools::ya_exec::ExecConfig {
+            cwd: cwd.clone(),
+            shell: kernel_shell_path
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("/bin/sh")),
+            command_prefix: kernel_command_prefix.clone(),
+            env: {
+                // The session paths `bash()` inherited from the kernel env.
+                let mut env = crate::tools::ya_exec::shell_env(&kernel_env_allowlist);
+                crate::prompts::session_paths::insert_kernel_env(
+                    &mut env,
+                    conversation_log.as_deref(),
+                );
+                env
+            },
+            policy_bytes: max_output_chars,
+            output_dir: output_dir.clone(),
+        });
     let provisioner = super::runtime_wiring::kernel_provisioner(
         session_id.clone(),
         handlers,
@@ -534,6 +569,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         config.on_background_work_settled.clone(),
         on_unavailable_skills,
         on_bootstrap_result,
+        ya_tools.native_shell,
     );
     let mut tools = config.tools.clone();
     if !tools.iter().any(|tool| tool.name() == PYTHON_TOOL_NAME) {
@@ -547,8 +583,13 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         // yusAgent (YA-03): cap of the cell text, full output in a file.
         crate::tools::ya_output_cap::wrap_execute(
             &mut definition,
-            crate::tools::ya_output_cap::OutputCap::new(max_output_chars, output_dir),
+            crate::tools::ya_output_cap::OutputCap::new(max_output_chars, output_dir.clone()),
         );
+        // yusAgent (YA-03): shell commands go through `exec_command` in a native-shell session.
+        if ya_tools.native_shell {
+            definition.description =
+                crate::prompts::ya_tools_prompt::python_repl_description(&definition.description);
+        }
         // yusAgent (YA-03): a cell that kills the kernel restarts it at once and ends with a
         // notice; applied after the cap so the notice is never cut.
         super::ya_kernel_restart::wrap_execute(
@@ -559,6 +600,30 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         tools.push(Arc::new(
             crate::session_engine::tool_bridge::ToolDefinitionBridge::new(definition),
         ));
+    }
+    // yusAgent (YA-03): the native tools, after `python_repl`, in a fixed order: `apply_patch`,
+    // then `exec_command` and `write_stdin`.
+    let mut ya_definitions = Vec::new();
+    if ya_tools.apply_patch {
+        let mut definition =
+            crate::tools::ya_apply_patch::create_apply_patch_tool_definition(cwd.clone());
+        crate::tools::ya_output_cap::wrap_execute(
+            &mut definition,
+            crate::tools::ya_output_cap::OutputCap::new(max_output_chars, output_dir),
+        );
+        ya_definitions.push(definition);
+    }
+    if let Some(exec_config) = ya_exec_config {
+        ya_definitions.extend(crate::tools::ya_exec::create_exec_tool_definitions(
+            exec_config,
+        ));
+    }
+    for definition in ya_definitions {
+        if !tools.iter().any(|tool| tool.name() == definition.name) {
+            tools.push(Arc::new(
+                crate::session_engine::tool_bridge::ToolDefinitionBridge::new(definition),
+            ));
+        }
     }
     let active_tool_names: Vec<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
 
@@ -644,6 +709,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             ),
             generic_mcp_servers,
             append_system_prompt: Some(resources.append_system_prompt.join("\n\n")),
+            // yusAgent (YA-03): the prompt documents the session's native tools.
+            ya_tool_choice: ya_tools,
             ..Default::default()
         },
     );
@@ -847,6 +914,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         &wiring.session,
     )));
     session.set_auto_refine(auto_refine_allowed, auto_refine_gates);
+    // yusAgent (YA-03): a model change to another family is refused from now on.
+    session.ya_freeze_tool_family(ya_family);
     session.set_agent_dir(config.agent_dir.clone());
     // Keep the context descriptor even while disabled, so re-enabling can load it.
     session.harness_digest = Some(digest_context);

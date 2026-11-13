@@ -20,6 +20,8 @@ use pa_core::prompts::model_prompts::MODEL_PROMPTS_TOML;
 use pa_core::prompts::system_prompt::{
     system_prompt_breakdown, BuildSystemPromptOptions, SegmentKind,
 };
+use pa_core::prompts::ya_tools_prompt;
+use pa_core::session_engine::ya_tool_family::ToolChoice;
 use pa_core::skills::load_skills_from_dir;
 
 /// The workspace bundled skills directory (source-checkout layout):
@@ -103,10 +105,11 @@ fn cached_prefix_is_stable_across_sessions() {
     );
     assert_eq!(
         &first.assembled[..first.cached_prefix_len],
+        // yusAgent (YA-03): the layers as every session gets them (`ya_tools_prompt`).
         &format!(
             "{}\n\n{}\n\n{}\n\nmodel guidance.",
-            CORE_LAYER.trim(),
-            USAGE_LAYER.trim(),
+            ya_tools_prompt::core_layer(CORE_LAYER, ToolChoice::default()).trim(),
+            ya_tools_prompt::usage_layer(USAGE_LAYER, ToolChoice::default()).trim(),
             OPINIONATED_LAYER.trim()
         )
     );
