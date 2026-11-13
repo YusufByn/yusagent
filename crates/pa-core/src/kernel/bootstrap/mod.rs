@@ -7,6 +7,8 @@ pub(crate) mod dir_lock;
 mod disk_memo;
 mod runtime_code;
 pub(crate) mod venv;
+// yusAgent (YA-03): bootstrap of a `shellTool: "native"` session (no `bash` in the namespace).
+pub mod ya_native_shell;
 
 use std::fmt::Write as _;
 use std::path::PathBuf;

@@ -134,6 +134,9 @@ pub struct IpythonKernelProvisionerOptions {
     /// Publishes the per-boot result for the `kernel_bootstrap_*` counters.
     /// Telemetry only; kernel behavior never depends on it.
     pub on_bootstrap_result: Option<KernelBootstrapResultHandler>,
+    /// yusAgent (YA-03): `shellTool: "native"`, shell commands go through `exec_command` and
+    /// the bootstrap leaves `bash` out of the namespace (`bootstrap::ya_native_shell`).
+    pub ya_native_shell: bool,
 }
 
 /// Why and how long one startup failed, published through the shared startup
@@ -1063,6 +1066,12 @@ async fn start_kernel_impl(
             .get(BASH_COMPLETED_REQUEST_TYPE)
             .is_some(),
     );
+    // yusAgent (YA-03): no `bash` in a native-shell session's namespace.
+    let bootstrap_code = if options.ya_native_shell {
+        crate::kernel::bootstrap::ya_native_shell::native_shell_bootstrap_code(&bootstrap_code)
+    } else {
+        bootstrap_code
+    };
     let mut env = options.env.clone();
     if let Some(shell_path) = &options.shell_path {
         env.insert(
