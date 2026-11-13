@@ -1,0 +1,43 @@
+# Passation du 13/11/2026
+
+Note écrite après le merge de la PR #24 (`ya-03-base` → `main`, merge `ac8465e`), pour une nouvelle session qui part de `main` et commence la PR 2 de YA-03. Ticket : `docs/tickets/09-ya03-base.md`. Ne traiter que la PR 2.
+
+## État de `main` après #24 (PR 1 de YA-03)
+
+Aucun changement de préfixe : prompt système et définitions de tools identiques à `c105243` (banc de capture, commentaire de la PR #24).
+
+- **Tools libres côté providers** (`crates/pa-ai/src/providers/ya_freeform.rs`, exporté par `crates/pa-ai/src/lib.rs` sous `pa_ai::ya_freeform`) : un `Tool` dont `parameters` porte la clé `x-yusagent-freeform` part en `{"type": "custom", …}` sur les API Responses (`openai-responses`, `openai-codex-responses`, `azure-openai-responses`) ; un `custom_tool_call` reçu (SSE et WebSocket, deltas `response.custom_tool_call_input.delta`) devient un appel `{input: <texte>}` marqué `yaFreeformItemId` dans `ToolCall.rest`, rejoué en `custom_tool_call` avec son résultat en `custom_tool_call_output`. Construire le tool avec `ya_freeform::freeform_tool_parameters(&format)`. Aucun tool libre n'est encore enregistré.
+- **Crate `crates/ya-apply-patch`** : `codex-rs/apply-patch` d'openai/codex au SHA `69231e119bfca0b14453515e97d99688ce1c47c9` (Apache-2.0). Calcul à l'identique, disque en `std::fs`, 67 tests de Codex repris (verts en CI). API : `apply_patch(patch, cwd: &Path, stdout, stderr) -> Result<AppliedPatchDelta, ApplyPatchFailure>` ; `delta.changes()` donne, par fichier, `Add { content, .. }`, `Delete { content }` ou `Update { move_path, old_content, new_content, .. }` (de quoi produire la zone modifiée avec numéros de ligne, par exemple avec `similar::TextDiff`) ; `cwd` doit être absolu. Pas encore utilisé par `pa-core`. Détail : `crates/ya-apply-patch/README.md`, `docs/fork-changes.md` (« Crate `ya-apply-patch` (YA-03) »).
+- **Plafond de sortie** (`crates/pa-core/src/tools/ya_output_cap.rs`) : `kernel.maxOutputChars`, 40 000 par défaut (≈ 10 000 tokens, estimation : troncature de Codex pour `gpt-6.1-terra`), `0` le coupe. Début et fin gardés, sortie complète dans `<artefacts de la session>/outputs/<id d'appel>.txt`. Le kernel garde 2 000 000 caractères par flux pour les cellules du modèle.
+- **Kernel planté** (`crates/pa-core/src/session_engine/ya_kernel_restart.rs`) : redémarrage immédiat (restauration upstream depuis le snapshot), avis `[python-kernel-restarted]` en fin de résultat de la cellule plantée (variante « fresh state » sans snapshot, `[python-kernel-crashed]` si le redémarrage échoue), cellule non relancée, avis upstream du tour suivant retiré.
+- **Kernel** : `read(path, offset=1, limit=2000)` numéroté (`prime-agent-runtime/src/rlm/read.py`) et `bash(command, persistent=False, env=None)` (`rlm/bash.py`), reliés par le bootstrap, **pas encore documentés dans le prompt**. La vérification de démarrage du runtime attend cette signature (`crates/pa-core/src/kernel/bootstrap/venv/probe.rs:32`, `RUNTIME_READY_CHECK`) : tout changement de signature de `bash` ou de l'API `rlm` doit y être reporté, sinon le kernel ne démarre pas (13 binaires de test en échec sur le run 43479147466).
+- **Docs** : ticket 09, journal du CDC (décisions du 13/11), `docs/fork-changes.md`, plan et règles des A/B `bench/smoke/ab/ya03-plan.md`, fragment `.changes/ya-03-base.md`.
+
+## Décisions du 13/11 (journal du CDC et ticket 09)
+
+- **Crash du kernel** : restauration upstream gardée, avis générique en fin de résultat ; remplace « variables perdues » du 28/10. Les deux variantes de l'avis (sans snapshot, redémarrage en échec) sont acceptées.
+- **Edit natif** : tool `apply_patch` au format libre de Codex (grammaire Lark, `codex-rs/core/assets/tools/apply_patch.lark`, description de `apply_patch_spec.rs`), seulement pour la famille Codex (API Responses). Pas d'edit natif hors Codex (écart YA-03). Réglage `editTool` : `"native"` (défaut) ou `"kernel"` (pas de tool d'édition, `edit()` documenté comme sur `main`), figé par session, `bench/smoke/settings/edit-kernel.json`. Changement de famille de modèle en cours de session : refusé avec un message.
+- **Plafond** : 40 000 caractères, ratio réel mesuré au tiktoken sur les sorties du banc.
+- **Variante bash natif** : réglage `shellTool` : `"kernel"` (défaut) ou `"native"`, source `exec_command` de Codex (`codex-rs/core/src/tools/handlers/shell_spec.rs:14-152`, SHA `69231e1` ; `gpt-6.1-terra` a `shell_type: shell_command`, alias d'`UnifiedExec`, `codex-rs/protocol/src/openai_models.rs:330-334`).
+- **Hors YA-03 de base**, groupés avec YA-09 : `timeout=` et `cwd=` de `bash()`, shell principal persistant.
+- **Mesure** : deux A/B séquentiels, non croisés, sur le binaire de la PR 2 ; règles et graines dans `bench/smoke/ab/ya03-plan.md` (A/B 1 `editTool`, charge de la preuve sur le bras `kernel` ; A/B 2 `shellTool`, condition de coût = écart avec YA-14) ; edits appliqués au premier essai mesurés dans les deux bras ; nouvelle baseline depuis les bras de la config retenue après les deux A/B.
+
+## PR 2 de YA-03 (une seule rupture de préfixe)
+
+Branche `ya-*` depuis `main` à jour. Le nom `ya-03` est déjà pris par l'ancienne branche du T03 (YA-04, mergée) : ne pas la réutiliser.
+
+1. **Avant de coder** : proposer à Yusuf le sous-ensemble d'`exec_command` repris pour le tool `bash` de la variante (PTY, `write_stdin`, sessions, `yield_time_ms`, `max_output_tokens`…), et trancher le mode sans suivi des liens d'`apply_patch` (non atomique dans le crate, `docs/fork-changes.md`). Attendre la validation.
+2. Tool `apply_patch` dans `pa-core` (format libre, `ya_freeform::freeform_tool_parameters`, grammaire et description de Codex au SHA `69231e1`), appliqué par `ya_apply_patch`, résultat avec la zone modifiée et ses numéros de ligne ; enregistré seulement pour les API Responses, ordre des tools figé (`python_repl`, puis `apply_patch`). Point d'enregistrement : `crates/pa-core/src/session_engine/engine.rs`, où `python_repl` est ajouté.
+3. Réglages `editTool` et `shellTool` (figés par session), refus du changement de famille de modèle, variante bash natif (tool shell côté Rust avec le même environnement filtré que le kernel, `bash` retiré du namespace du kernel).
+4. Prompt (`crates/pa-core/src/prompts/layers/core.md`, `usage.md`, sur le modèle de `prompts/rlm_off.rs`) : `apply_patch`, `edit()` pour les éditions en lot, `read()`, `bash(env=)`, phrase sur la troncature sans chiffre ; variante `editTool: kernel` (édition comme sur `main`) et variante `shellTool: native`.
+5. Tests : `crates/pa-core/tests/prefix_stability.rs` et contrôles de capture pour le défaut, `editTool: kernel` et `shellTool: native` (comparer les requêtes de l'agent, pas la sonde, qui ne lit pas les réglages du bras).
+6. `bench/smoke/metrics.py` : cellules en erreur d'appel, edits appliqués au premier essai (appels `apply_patch` et `edit()`), à ajouter s'ils manquent.
+7. Le SHA du binaire de la PR 2 est noté dans `bench/smoke/ab/ya03-plan.md` avant le premier run. Run de chauffe d'une tâche sur le défaut avant tout A/B (lancé par Yusuf).
+
+## Points ouverts
+
+- **Builds macOS annulés à 15 min** : le 13/11, trois runs de `ya-build-macos-arm64.yml` (43479083325, 43479303943, 43484769723) sont restés sans runner `macos-15` attribué puis ont été annulés au bout de 15 min (`runner=none`, aucun journal). Chacun a été relancé une fois, sans push (`gh run rerun`), et est passé. Pas de `timeout-minutes` de 15 dans le workflow (le job a `timeout-minutes: 90`) : cause côté GitHub non identifiée. Les jobs Linux de `ci.yml` n'ont pas eu ce problème.
+- **`scripts/ci_pr_crates.py`** ne connaît pas `ya-apply-patch` : une PR qui le touche lance la sélection complète (sans danger). À ajouter (`"ya-apply-patch": set()`) quand le script sera touché.
+- **Capture** : les cas `compact-anthropic` et `refine-anthropic` font `print('x' * 40000)` (`bench/tools/capture/server.py:153`), 40 001 caractères avec le saut de ligne, juste au-dessus du plafond : leurs résultats de tools sont désormais tronqués (attendu, expliqué sur la PR #24).
+- **Binaires en cache** (`~/.cache/yusagent-bin/`) : `c105243…` (`main` avant #24) et `04b2191…` (dernier commit de #24, même code que `ac8465e`). Captures : `bench/tools/capture/runs/ya03-main-c105243`, `ya03-branch-04b2191` (ignorés par git).
+- Rappels de la passation du 12/11 toujours ouverts : verdict `rlm` provisoire (A/B à refaire au banc complet), masquage à rejuger sur la nouvelle config, `bench/smoke/settings/rlm-off.json` redondant, runs fantômes du 11/11, relecture des 64 derniers Kio du journal d'usage, `cache_write_tokens` de Codex à 0, `release.yml` sur `macos-15` non testé.
