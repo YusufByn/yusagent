@@ -13,6 +13,9 @@ pub mod session_paths;
 // yusAgent (YA-06): `rlmMaxDepth` 0 drops the subagent surface from the prompt.
 pub mod rlm_off;
 
+// yusAgent (YA-03): prompt text of the session's native tools (`apply_patch`, `exec_command`).
+pub mod ya_tools_prompt;
+
 pub mod system_prompt;
 
 pub use system_prompt::{

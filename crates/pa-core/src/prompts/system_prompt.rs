@@ -100,6 +100,9 @@ pub struct BuildSystemPromptOptions<'a> {
     /// yusAgent (YA-06): resolved `rlmMaxDepth` of a root session (`None`
     /// for a child or when unknown); `Some(0)` drops the subagent surface.
     pub rlm_max_depth: Option<u64>,
+    /// yusAgent (YA-03): the session's native tools (`apply_patch`, `exec_command`); the
+    /// layers document them (`super::ya_tools_prompt`).
+    pub ya_tool_choice: crate::session_engine::ya_tool_family::ToolChoice,
     /// Enabled user-configured generic MCP servers.
     pub generic_mcp_servers: Vec<String>,
 }
@@ -128,21 +131,33 @@ pub fn system_prompt_breakdown(options: &BuildSystemPromptOptions) -> SystemProm
             segments.push(PromptSegment::static_segment(
                 "core",
                 layers::layer_source("core").unwrap_or_default(),
-                super::rlm_off::core_layer(layers::CORE_LAYER, options.rlm_max_depth)
-                    .trim()
-                    .to_string(),
+                // yusAgent (YA-03): the session's tools on top (`ya_tools_prompt`).
+                super::ya_tools_prompt::core_layer(
+                    &super::rlm_off::core_layer(layers::CORE_LAYER, options.rlm_max_depth),
+                    options.ya_tool_choice,
+                )
+                .trim()
+                .to_string(),
             ));
             segments.push(PromptSegment::static_segment(
                 "usage",
                 layers::layer_source("usage").unwrap_or_default(),
-                super::rlm_off::usage_layer(layers::USAGE_LAYER, options.rlm_max_depth)
-                    .trim()
-                    .to_string(),
+                super::ya_tools_prompt::usage_layer(
+                    &super::rlm_off::usage_layer(layers::USAGE_LAYER, options.rlm_max_depth),
+                    options.ya_tool_choice,
+                )
+                .trim()
+                .to_string(),
             ));
             segments.push(PromptSegment::static_segment(
                 "opinionated",
                 layers::layer_source("opinionated").unwrap_or_default(),
-                layers::OPINIONATED_LAYER.trim().to_string(),
+                super::ya_tools_prompt::opinionated_layer(
+                    layers::OPINIONATED_LAYER,
+                    options.ya_tool_choice,
+                )
+                .trim()
+                .to_string(),
             ));
             if let Some(extras) = options.model_prompt_extras {
                 segments.push(PromptSegment::static_segment(
@@ -304,19 +319,25 @@ fn session_role_section(options: &BuildSystemPromptOptions, has_ipython: bool) -
         if depth == 0 { " (root)" } else { " (not root)" }
     )];
     if options.daemonless {
-        lines.push(if options.can_spawn {
+        let line = if options.can_spawn {
             // yusAgent (YA-06): text in `rlm_off`, without the subagent clauses at depth bound 0.
-            super::rlm_off::daemonless_spawn_line(options.rlm_max_depth).to_string()
+            super::rlm_off::daemonless_spawn_line(options.rlm_max_depth)
         } else {
             "This session has no daemon: `rlm.spawn` is unavailable, heartbeats never fire, and background `bash()` completions wake you with a queued `[bash-done]` turn."
-                .to_string()
-        });
+        };
+        // yusAgent (YA-03): without `bash()`, the `[bash-done]` clauses go.
+        lines.push(
+            super::ya_tools_prompt::daemonless_line(line, options.ya_tool_choice).into_owned(),
+        );
     }
     if has_ipython {
-        lines.push(
+        // yusAgent (YA-03): no `await bash(cmd)` contract without `bash()`.
+        if super::ya_tools_prompt::has_bash_await_line(options.ya_tool_choice) {
+            lines.push(
             "`await bash(cmd)` waits at most 1 second. If the command is still running, it returns a snapshot: `r.running` is True, `r.exit_code` is None, `r.output` is the output so far, and `r.handle` is the live handle. A completed result has `r.running` False and an integer `r.exit_code`. The command keeps running after a snapshot; end the turn and collect the final result on the `[bash-done]` notification."
                 .to_string(),
-        );
+            );
+        }
     } else {
         lines.push(
             "This session has no Python REPL (`python_repl` tool): the programmatic tools described above are unavailable here."
