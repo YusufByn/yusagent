@@ -120,6 +120,9 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/kernel/env_allowlist.rs` | modif. (fichier du fork, YA-02) | `KernelSettings` : champ `max_output_chars` (`kernel.maxOutputChars`). | YA-03 |
 | `crates/pa-core/src/session_engine/engine.rs` | modif. | Lit `kernel.maxOutputChars`, calcule le dossier des sorties complètes, enveloppe l'`execute` du tool `python_repl` avec `ya_output_cap::wrap_execute`. | YA-03 |
 | `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (1 ligne + commentaire) | `KernelManagerExecutor::execute` : `max_output_chars` à `ya_output_cap::KERNEL_BUFFER_CHARS` (2 000 000 par flux) au lieu du défaut upstream de 65 536, pour que la sortie complète soit gardée puis enregistrée. |  YA-03 |
+| `crates/pa-core/src/session_engine/ya_kernel_restart.rs` | ajout | Kernel mort pendant une cellule : redémarrage immédiat, avis en fin de résultat, avis upstream du tour suivant retiré. Voir « Redémarrage du kernel (YA-03) ». | YA-03 |
+| `crates/pa-core/src/session_engine/mod.rs` | modif. (2 lignes) | Déclare `ya_kernel_restart`. | YA-03 |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | Enveloppe aussi l'`execute` de `python_repl` avec `ya_kernel_restart::wrap_execute`, après le plafond (l'avis n'est jamais coupé), avec la boîte des messages du tour suivant (`boot_notice_rows`). | YA-03 |
 
 
 ## Tools libres côté providers (YA-03)
@@ -140,6 +143,18 @@ Ticket 09. Avant : le gestionnaire du kernel tronque chaque flux (stdout, stderr
 - **Au-delà** : début et fin du texte, moitié chacun, autour d'une ligne `[... output truncated: <N> characters in total; full output in <chemin> ...]`. Le total, ligne comprise, ne dépasse pas le plafond. Le fichier est `<dossier d'artefacts de la session>/outputs/<id de l'appel>.txt` (sans dossier d'artefacts : `<tmp>/yusagent-outputs/<id de session>/`). Si l'écriture échoue, la ligne donne l'erreur.
 - **Tampon du kernel** : 2 000 000 caractères par flux pour les cellules du modèle, pour que le fichier soit complet jusqu'à cette taille. Le runtime Python ne tronque pas les flux (trames de 64 Kio, `prime-agent-runtime/src/rlm/repl.py:50`) ; il plafonne le résultat à 1 Mio (`repl.py:53`). Les cellules internes du harness gardent le défaut upstream.
 - **Préfixe** : inchangé. Seul le contenu d'un résultat qui dépasse le plafond change, en fin de contexte.
+
+
+## Redémarrage du kernel (YA-03)
+
+Ticket 09, décision du 13/11/2026 (journal du CDC). Upstream : un kernel mort est relancé au `ensure()` de la cellule suivante (`crates/pa-core/src/kernel/provisioner.rs`, manager `is_defunct`), qui relit le namespace depuis le snapshot pris après les cellules réussies (`restore_state`), et l'avis `[python-state-restored]` (« revived from your previous session », `session_engine/state_restore_notice.rs`) n'arrive qu'au message utilisateur suivant (`admission.rs`, `take_next_turn_rows`).
+
+- **Détection** : après une cellule, le manager publié par le provisioner est `defunct`. Sur un échec côté harness (`Err` du tool), attente d'au plus 500 ms que le guetteur de sortie marque le manager (il le marque avant de rejeter la cellule, `kernel/manager/startup.rs`, `teardown.rs`). Un kill choisi par l'utilisateur sur un kernel occupé (`tools/ipython.rs`, `<ipython_kernel_reset>`) remplace le manager : il n'est pas pris pour un crash.
+- **Redémarrage** : `ensure()` tout de suite, même restauration qu'upstream. Aucune cellule n'est rejouée.
+- **Avis** en fin de résultat de la cellule plantée (après le texte, ou après le message d'erreur) : `[python-kernel-restarted]`, kernel redémarré, état restauré depuis la dernière cellule réussie, répertoire et variables d'environnement remis aux défauts de la session, cette cellule n'a pas été relancée. Sans snapshot à relire : même avis avec « fresh state ». Redémarrage en échec : `[python-kernel-crashed]` avec l'erreur. Pas de liste de noms.
+- **Doublon** : la ligne `ipython_state_restored` que ce redémarrage met dans la boîte du tour suivant est retirée ; son drapeau `restored` choisit l'avis.
+- **Préfixe** : inchangé. Seul le résultat de la cellule plantée change, en fin de contexte.
+- **Test** : `ya_kernel_restart::tests::a_cell_that_kills_the_kernel_gets_the_notice_and_is_not_re_run` (vrai kernel, sauté s'il est absent ; la CI le prépare) : avis en fin de résultat, redémarrage en moins de 5 s, compteur sur disque à 1, `marker` relu depuis le snapshot.
 
 ## Sous-agents coupés (YA-06)
 

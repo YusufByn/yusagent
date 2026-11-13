@@ -549,6 +549,13 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             &mut definition,
             crate::tools::ya_output_cap::OutputCap::new(max_output_chars, output_dir),
         );
+        // yusAgent (YA-03): a cell that kills the kernel restarts it at once and ends with a
+        // notice; applied after the cap so the notice is never cut.
+        super::ya_kernel_restart::wrap_execute(
+            &mut definition,
+            provisioner.clone(),
+            std::sync::Arc::clone(&boot_notice_rows),
+        );
         tools.push(Arc::new(
             crate::session_engine::tool_bridge::ToolDefinitionBridge::new(definition),
         ));
