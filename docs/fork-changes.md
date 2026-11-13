@@ -337,6 +337,20 @@ Symptôme : `connect the supervisor` avec `ConnectionRefused` (os error 111) à 
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
+## Instabilité probable : `rlm_children_delete_e2e` (YA-03)
+
+`crates/pa-daemon/tests/rlm_children_delete_e2e.rs`, test `a_deleted_running_child_records_the_cancel_edge` (`:313`), shard 6/8 de `ci.yml`. Fichier identique à `upstream/main` (`git diff --stat upstream/main -- crates/pa-daemon/tests/rlm_children_delete_e2e.rs` vide au 13/11/2026, `upstream/main` à `ad1613303`).
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 43499374052 | `bd9cccd18` (`ya-03-outils`) | 1 | échec du shard 6/8 |
+| 43501970149 | `25c56570c` (`ya-03-outils`) | 1 | réussi, aucun changement du daemon ni du test |
+| 43504367477 | `58f2542e4` (`ya-03-outils`) | 1 | réussi |
+
+Symptôme : `kernel cell receipt never appeared at /tmp/.../receipts/delete.json` à `rlm_children_delete_e2e.rs:195` : `await_receipt` (`:186-199`) attend une minute le reçu écrit par une cellule du kernel de l'enfant. Hypothèse : démarrage du kernel de l'enfant trop lent sur un runner chargé (le même shard échouait aussi sur `prefix_stability`). Les commits de la PR 2 de YA-03 ne touchent ni le daemon, ni les sous-agents, ni ce test.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
 ## Désactivations par défaut (YA-01)
 
 Session lancée sans `settings.json` ni variable d'environnement. Chaque ligne se réactive dans `settings.json` (global, `~/.prime/agent/settings.json`).
