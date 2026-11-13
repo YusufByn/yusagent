@@ -471,10 +471,16 @@ mod tests {
             // yusAgent (YA-03): the layers as every session gets them (`ya_tools_prompt`).
             format!(
                 "{}\n\n{}\n\n{}",
-                super::super::ya_tools_prompt::core_layer(layers::CORE_LAYER, Default::default())
-                    .trim(),
-                super::super::ya_tools_prompt::usage_layer(layers::USAGE_LAYER, Default::default())
-                    .trim(),
+                super::super::ya_tools_prompt::core_layer(
+                    layers::CORE_LAYER,
+                    crate::session_engine::ya_tool_family::ToolChoice::default(),
+                )
+                .trim(),
+                super::super::ya_tools_prompt::usage_layer(
+                    layers::USAGE_LAYER,
+                    crate::session_engine::ya_tool_family::ToolChoice::default(),
+                )
+                .trim(),
                 layers::OPINIONATED_LAYER.trim()
             )
         );
