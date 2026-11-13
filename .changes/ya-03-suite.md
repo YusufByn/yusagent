@@ -1,0 +1,1 @@
+- yusAgent: freeform `apply_patch` calls now replay as `custom_tool_call` on every turn and after a resume or a fork (a call is freeform when the tool it names is declared freeform in the request), so the Codex WebSocket keeps its continuation (`previous_response_id`) on the turn after an edit.

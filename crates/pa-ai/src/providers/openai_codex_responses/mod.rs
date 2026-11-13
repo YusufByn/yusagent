@@ -500,7 +500,9 @@ async fn run_websocket_attempt(
                     model,
                     &Context {
                         messages: vec![assistant_as_message(output)],
-                        tools: None,
+                        // yusAgent (YA-03): the request's freeform tools, so a freeform call is
+                        // converted as in the next full request.
+                        tools: crate::providers::ya_freeform::freeform_tools_of_request(full_body),
                         system_prompt: None,
                     },
                     &OPENAI_TOOL_CALL_PROVIDERS,

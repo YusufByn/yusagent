@@ -118,8 +118,6 @@ pub fn convert_responses_messages(
 ) -> Vec<Value> {
     use crate::types::{Message, UserMessageContent, UserOrToolContent};
     let mut messages: Vec<Value> = Vec::new();
-    // yusAgent (YA-03): results of freeform calls go back as `custom_tool_call_output`.
-    let mut freeform_call_ids = crate::providers::ya_freeform::FreeformCallIds::default();
 
     let normalize_tool_call_id = |id: &str, source: &AssistantMessage| -> String {
         if !allowed_tool_call_providers.contains(&model.provider.as_str()) {
@@ -142,6 +140,10 @@ pub fn convert_responses_messages(
         }
         format!("{normalized_call_id}|{normalized_item_id}")
     };
+    // yusAgent (YA-03): calls of the request's freeform tools replay as `custom_tool_call`, their
+    // results as `custom_tool_call_output`.
+    let mut freeform =
+        crate::providers::ya_freeform::FreeformReplay::new(context, &normalize_tool_call_id);
 
     let transformed =
         transform_messages_with_normalizer(&context.messages, model, &|id, _model, source| {
@@ -260,17 +262,13 @@ pub fn convert_responses_messages(
                             output.push(Value::Object(entry));
                         }
                         AssistantContent::ToolCall(tool_call)
-                            if crate::providers::ya_freeform::is_freeform_call(tool_call) =>
+                            if freeform.is_freeform(tool_call) =>
                         {
                             // yusAgent (YA-03): a freeform call is replayed as `custom_tool_call`.
-                            freeform_call_ids.record(tool_call);
                             let same_source = !is_different_model
                                 && assistant.provider == model.provider
                                 && assistant.api == model.api;
-                            output.push(crate::providers::ya_freeform::custom_tool_call_item(
-                                tool_call,
-                                same_source,
-                            ));
+                            output.push(freeform.custom_tool_call_item(tool_call, same_source));
                         }
                         AssistantContent::ToolCall(tool_call) => {
                             // The item id is the `fc_` segment after the `|`. Without a `|` there
@@ -358,7 +356,7 @@ pub fn convert_responses_messages(
                 };
 
                 messages.push(json!({
-                    "type": freeform_call_ids.output_type(call_id),
+                    "type": freeform.output_type(call_id),
                     "call_id": call_id,
                     "output": output_value,
                 }));
