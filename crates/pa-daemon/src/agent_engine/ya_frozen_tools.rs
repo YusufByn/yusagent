@@ -71,15 +71,15 @@ pub(crate) fn core_header_sink(core: Arc<Mutex<SessionCore>>) -> YaHeaderSink {
             }
         };
         match core.try_lock() {
-            Ok(mut guard) => write(&mut *guard),
-            Err(std::sync::TryLockError::Poisoned(poison)) => write(&mut *poison.into_inner()),
+            Ok(mut guard) => write(&mut guard),
+            Err(std::sync::TryLockError::Poisoned(poison)) => write(&mut poison.into_inner()),
             Err(std::sync::TryLockError::WouldBlock) => {
                 let core = Arc::clone(&core);
                 std::thread::spawn(move || {
                     let mut guard = core
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    write(&mut *guard);
+                    write(&mut guard);
                 });
             }
         }
@@ -236,11 +236,7 @@ mod tests {
             .expect("build");
         assert_eq!(
             *received.lock().unwrap(),
-            vec![(
-                store.path.clone(),
-                FROZEN_TOOLS_KEY.to_string(),
-                kernel_tools()
-            )]
+            vec![(store.path, FROZEN_TOOLS_KEY.to_string(), kernel_tools())]
         );
     }
 
