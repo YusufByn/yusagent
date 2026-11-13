@@ -115,6 +115,9 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-ai/src/providers/openai_responses_stream.rs` | modif. | `handle_event` : item `custom_tool_call` (`added`, `done`) et événement `response.custom_tool_call_input.delta`. | YA-03 |
 | `crates/pa-ai/src/providers/openai_codex_responses/mod.rs` | modif. (2 lignes) | Déclare le module de tests `tests/ya_freeform.rs` dans `mod tests` (accès aux helpers privés du serveur scripté). | YA-03 |
 | `crates/pa-ai/src/providers/openai_codex_responses/tests/ya_freeform.rs` | ajout | Tests : appel libre en SSE (`process_sse_chunk`, événement coupé entre deux morceaux), item `done` seul, tour WebSocket de bout en bout et requête de suite. | YA-03 |
+| `crates/ya-apply-patch/` | ajout | Crate repris de `codex-rs/apply-patch` d'openai/codex au SHA `69231e119bfca0b14453515e97d99688ce1c47c9` (Apache-2.0, `LICENSE` et `NOTICE` conservés). Analyse et application d'`apply_patch` ; pas encore utilisé par `pa-core` (PR 2). Voir « Crate `ya-apply-patch` (YA-03) ». | YA-03 |
+| `Cargo.toml` | modif. (1 ligne) | `crates/ya-apply-patch` dans les `members` du workspace. | YA-03 |
+| `Cargo.lock` | modif. (ajouts seuls) | Entrées de `ya-apply-patch`, `similar` 2.7.0 et des dépendances de test (`assert_cmd`, `pretty_assertions` et leurs dépendances) ; `regex-automata` ajouté aux dépendances de `bstr` (fonction `unicode` activée par `assert_cmd`). Aucune version existante changée. | YA-03 |
 | `crates/pa-core/src/tools/ya_output_cap.rs` | ajout | Plafond du texte d'une cellule `python_repl` (`kernel.maxOutputChars`, 40 000 par défaut), sortie complète en fichier. Voir « Plafond de sortie (YA-03) ». | YA-03 |
 | `crates/pa-core/src/tools/mod.rs` | modif. (2 lignes) | Déclare `ya_output_cap`. | YA-03 |
 | `crates/pa-core/src/kernel/env_allowlist.rs` | modif. (fichier du fork, YA-02) | `KernelSettings` : champ `max_output_chars` (`kernel.maxOutputChars`). | YA-03 |
@@ -130,6 +133,18 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/kernel/bootstrap/runtime_code.rs` | modif. | Le bootstrap relie `read` à côté de `bash` ; le repli sans runtime accepte `env=` et définit `read`. | YA-03 |
 | `prime-agent-runtime/test/test_ya_read_env.py` | ajout | Tests de `read()` et de `bash(env=)`. | YA-03 |
 
+
+
+## Crate `ya-apply-patch` (YA-03)
+
+Ticket 09, option A validée par Yusuf le 13/11/2026. Source : openai/codex, `codex-rs/apply-patch`, SHA `69231e119bfca0b14453515e97d99688ce1c47c9`. Le crate d'origine dépend de `codex-exec-server` (environ 25 crates internes de Codex, `axum`, `opentelemetry`, `prost`) et de `tree-sitter`/`tree-sitter-bash` (build C) : incompatible avec la règle 8. Détail fichier par fichier : `crates/ya-apply-patch/README.md`.
+
+- **À l'identique** (hash de blob git égal à celui de Codex) : `src/seek_sequence.rs`, `src/streaming_parser.rs`, `src/text_file.rs`, `tests/all.rs`, `tests/suite/mod.rs`, `tests/fixtures/**` (fichiers CRLF compris), `rustfmt.toml`.
+- **Modifiés** (en-tête `// Modified by yusAgent: …` dans chaque fichier) : accès disque passés de `ExecutorFileSystem` (async) à `std::fs` (sync, nouveau `src/local_fs.rs`), `PathUri` remplacé par `Path`/`PathBuf`, plus de paramètre `sandbox`. Le calcul du nouveau contenu ne change pas : dans `file_update.rs`, la lecture du fichier et le calcul sont séparés, le calcul passe sans changement dans `derive_new_contents_from_text`. Dans `lib.rs`, `apply_hunks_to_files` ne change que par ses appels disque.
+- **Retirés** : `src/invocation.rs` (détection d'`apply_patch` dans une commande shell, tree-sitter) et les types qu'il produisait (`MaybeApplyPatchVerified`, `ApplyPatchAction`, `ApplyPatchFileChange`, `ApplyPatchError::ImplicitInvocation`, `ApplyPatchError::PathUri`), `BUILD.bazel`.
+- **Tests** : 67 tests de Codex repris (39 unitaires, 28 d'intégration dont 25 scénarios de fixtures), adaptés seulement pour `Path` et `std::fs` (sync au lieu d'async) ; chemins du binaire et des fixtures par `CARGO_BIN_EXE_apply_patch` / `CARGO_MANIFEST_DIR` au lieu de `codex_utils_cargo_bin` (crate interne de Codex) ; dans `no_follow_rechecks_paths_after_verification`, l'étape `verify_apply_patch_args` (d'`invocation.rs`) est remplacée par `parse_patch`. 28 tests retirés, tous dans `invocation.rs`. Le binaire `apply_patch` est gardé : les tests `cli`, `tool` et `scenarios` le lancent.
+- **Mode sans suivi des liens** (`follow_symlinks: false`) : Codex l'applique de façon atomique (`openat(O_NOFOLLOW)` avec `rustix`) ; ici, vérification `symlink_metadata` de chaque composant avant l'opération, donc **non atomique** (un échange de lien entre la vérification et l'écriture n'est pas couvert). Pas d'`O_NONBLOCK` à l'ouverture : `is_file()` est vérifié avant. À reprendre avec le sandbox (YA-11) si ce mode sert.
+- **Manifeste** : édition 2024 (celle de Codex), table de lints propre au crate (les `[workspace.lints.clippy]` de `codex-rs/Cargo.toml`, plus `unsafe_code = "forbid"`) au lieu du gate pedantic du workspace ; `clippy.toml` (sous-ensemble de `codex-rs/clippy.toml` : `unwrap`/`expect` permis dans les tests) ; `rustfmt.toml` de Codex. Dépendances : `anyhow`, `thiserror` (workspace), `similar` 2.7.0 ; tests : `assert_cmd`, `pretty_assertions`, `tempfile`.
 
 ## Tools libres côté providers (YA-03)
 
