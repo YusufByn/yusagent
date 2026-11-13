@@ -236,7 +236,10 @@ mod tests {
     #[test]
     fn update_reports_codex_header_and_numbered_zone() {
         let dir = tempfile::tempdir().unwrap();
-        let body: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+        let body = (1..=20)
+            .map(|i| format!("line {i}\n"))
+            .collect::<Vec<_>>()
+            .concat();
         std::fs::write(dir.path().join("a.txt"), &body).unwrap();
         let outcome = run_patch(
             &patch("*** Update File: a.txt\n@@\n line 9\n-line 10\n+line ten\n line 11\n"),
@@ -358,7 +361,10 @@ mod tests {
 
     #[test]
     fn numbered_zone_groups_distant_changes() {
-        let old: String = (1..=30).map(|i| format!("l{i}\n")).collect();
+        let old = (1..=30)
+            .map(|i| format!("l{i}\n"))
+            .collect::<Vec<_>>()
+            .concat();
         let new = old.replace("l2\n", "L2\n").replace("l28\n", "L28\n");
         let zone = numbered_zone(&old, &new);
         assert!(zone.contains("     2\tL2\n"), "{zone}");

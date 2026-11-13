@@ -838,7 +838,10 @@ mod tests {
     #[test]
     fn requested_budget_truncates_and_saves_the_full_output() {
         let dir = tempfile::tempdir().unwrap();
-        let output: String = (0..2000).map(|i| format!("line {i}\n")).collect();
+        let output = (0..2000)
+            .map(|i| format!("line {i}\n"))
+            .collect::<Vec<_>>()
+            .concat();
         let out = budgeted_output(&output, "Output:", 40_000, Some(100), |full| {
             crate::tools::ya_output_cap::save_full_output(dir.path(), "c", full)
         });
