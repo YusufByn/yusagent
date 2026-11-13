@@ -67,31 +67,29 @@ async fn restart(
     provisioner: &IpythonKernelProvisioner,
     next_turn_rows: &Mutex<Vec<CustomMessage>>,
 ) -> String {
-    match provisioner.ensure(None, None).await {
-        Err(error) => notice_restart_failed(&error),
-        Ok(_) => {
-            let mut restored = false;
-            next_turn_rows
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .retain(|row| {
-                    if row.custom_type != IPYTHON_STATE_RESTORED_CUSTOM_TYPE {
-                        return true;
-                    }
-                    restored |= row
-                        .details
-                        .as_ref()
-                        .and_then(|details| details.get("restored"))
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false);
-                    false
-                });
-            if restored {
-                NOTICE_RESTORED.to_string()
-            } else {
-                NOTICE_FRESH.to_string()
+    if let Err(error) = provisioner.ensure(None, None).await {
+        return notice_restart_failed(&error);
+    }
+    let mut restored = false;
+    next_turn_rows
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .retain(|row| {
+            if row.custom_type != IPYTHON_STATE_RESTORED_CUSTOM_TYPE {
+                return true;
             }
-        }
+            restored |= row
+                .details
+                .as_ref()
+                .and_then(|details| details.get("restored"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            false
+        });
+    if restored {
+        NOTICE_RESTORED.to_string()
+    } else {
+        NOTICE_FRESH.to_string()
     }
 }
 

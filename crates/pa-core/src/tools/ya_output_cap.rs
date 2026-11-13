@@ -149,7 +149,10 @@ mod tests {
     fn long_text_keeps_start_and_end_and_saves_everything() {
         let dir = tempfile::tempdir().unwrap();
         let cap = OutputCap::new(300, dir.path().join("outputs"));
-        let text: String = (0..1000).map(|i| format!("line {i}\n")).collect();
+        let text = (0..1000)
+            .map(|i| format!("line {i}\n"))
+            .collect::<Vec<_>>()
+            .concat();
         let capped = cap.cap_text(&text, "call_1|fc_1");
         assert!(capped.chars().count() <= 300, "{}", capped.chars().count());
         assert!(capped.starts_with("line 0\n"));
