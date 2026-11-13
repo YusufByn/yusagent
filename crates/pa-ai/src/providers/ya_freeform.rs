@@ -29,7 +29,7 @@ pub const FREEFORM_INPUT_ARG: &str = "input";
 /// `parameters` of a freeform tool: an object schema with one required `input` string (what the
 /// executor receives) plus the `format` sent on the wire (`{type, syntax, definition}`).
 #[must_use]
-pub fn freeform_tool_parameters(format: Value) -> Value {
+pub fn freeform_tool_parameters(format: &Value) -> Value {
     json!({
         "type": "object",
         "properties": {
@@ -157,7 +157,7 @@ mod tests {
         let tool = Tool {
             name: "apply_patch".into(),
             description: "Edit files.".into(),
-            parameters: freeform_tool_parameters(format()),
+            parameters: freeform_tool_parameters(&format()),
         };
         assert_eq!(
             responses_custom_tool(&tool),

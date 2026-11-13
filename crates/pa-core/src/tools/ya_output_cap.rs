@@ -160,7 +160,7 @@ mod tests {
             text.chars().count(),
             path.display()
         )));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert_eq!(std::fs::read_to_string(path).unwrap(), text);
     }
 
     #[test]
@@ -183,12 +183,17 @@ mod tests {
 
     #[test]
     fn default_cap_and_setting() {
-        let mut settings = crate::settings::Settings::default();
-        assert_eq!(max_output_chars(&settings), 40_000);
-        settings.kernel = Some(crate::kernel::env_allowlist::KernelSettings {
-            max_output_chars: Some(1234),
+        assert_eq!(
+            max_output_chars(&crate::settings::Settings::default()),
+            40_000
+        );
+        let settings = crate::settings::Settings {
+            kernel: Some(crate::kernel::env_allowlist::KernelSettings {
+                max_output_chars: Some(1234),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         assert_eq!(max_output_chars(&settings), 1234);
     }
 

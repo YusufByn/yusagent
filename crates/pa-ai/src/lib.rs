@@ -23,6 +23,8 @@ mod prime_inference_differential_test;
 
 pub use event_stream::{AssistantMessageEventExt, AssistantMessageEventStream};
 pub use providers::faux;
+// yusAgent (YA-03): freeform (`custom`) tools, built by pa-core's `apply_patch` tool.
+pub use providers::ya_freeform;
 
 /// Codex WebSocket session debugging and cleanup surface (TS
 /// `getOpenAICodexWebSocketDebugStats` and its reset/close siblings).

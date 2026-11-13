@@ -13,7 +13,7 @@ fn apply_patch_tool() -> Tool {
     Tool {
         name: "apply_patch".into(),
         description: "The `apply_patch` tool can be used to edit files.".into(),
-        parameters: freeform_tool_parameters(json!({
+        parameters: freeform_tool_parameters(&json!({
             "type": "grammar",
             "syntax": "lark",
             "definition": "start: begin_patch hunk+ end_patch",
@@ -131,7 +131,7 @@ fn sse_chunks_carry_a_freeform_call() {
         &writer,
         ResponsesStreamHooks::default(),
     );
-    let body: String = custom_call_events("resp_sse")
+    let frames: Vec<String> = custom_call_events("resp_sse")
         .iter()
         .map(|event| {
             format!(
@@ -140,6 +140,7 @@ fn sse_chunks_carry_a_freeform_call() {
             )
         })
         .collect();
+    let body = frames.concat();
     let split = body.find("custom_tool_call_input.delta").unwrap() + 10;
     let mut decoder = SseDecoder::new();
     process_sse_chunk(&body[..split], &mut decoder, &model, &mut processor).expect("first chunk");
@@ -210,7 +211,7 @@ async fn websocket_turn_round_trips_a_freeform_call() {
         system_prompt: context.system_prompt.clone(),
         messages: vec![
             context.messages[0].clone(),
-            Message::Assistant(first.clone()),
+            Message::Assistant(first),
             Message::ToolResult(ToolResultMessage {
                 tool_call_id: "call_p|ctc_1".into(),
                 tool_name: "apply_patch".into(),

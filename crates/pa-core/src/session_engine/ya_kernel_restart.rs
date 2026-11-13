@@ -263,7 +263,7 @@ mod tests {
         let after = run("marker").await.unwrap();
         assert_eq!(after.content[0].as_text(), Some("2483"));
         assert_eq!(
-            std::fs::read_to_string(&counter).unwrap(),
+            std::fs::read_to_string(counter).unwrap(),
             "1",
             "never re-run"
         );
