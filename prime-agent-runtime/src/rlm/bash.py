@@ -382,8 +382,10 @@ class BashHandle:
     handle; later awaits only wait and cancelling them leaves it running.
     """
 
-    def __init__(self, command: str) -> None:
+    def __init__(self, command: str, env: dict[str, str] | None = None) -> None:
         self.command = command
+        # yusAgent (YA-03): per-call variables over the kernel environment (`bash(env=...)`).
+        self._env = env
         self._activity_id = secrets.token_hex(16)
         completion_context = _current_cell_completion_context()
         self._creating_cell_finished = completion_context[0] if completion_context else None
@@ -459,7 +461,7 @@ class BashHandle:
                 self._proc = subprocess.Popen(
                     [_shell(), "-c", script],
                     cwd=os.getcwd(),
-                    env=_child_env(),
+                    env=_child_env(self._env),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
@@ -467,7 +469,7 @@ class BashHandle:
                 )
             else:
                 self._proc = _winjob.spawn_in_job(
-                    self._job, [_shell(), "-c", script], cwd=os.getcwd(), env=_child_env()
+                    self._job, [_shell(), "-c", script], cwd=os.getcwd(), env=_child_env(self._env)
                 )
         except BaseException:
             for fd in (self._status_read, self._wake_read, self._wake_write):
@@ -1309,7 +1311,7 @@ class PersistentBashHandle(BashHandle):
         return f"<BashHandle persistent pid={self._pid} {state} command={self.command!r}>"
 
 
-def bash(command: str, persistent: bool = False) -> BashHandle:
+def bash(command: str, persistent: bool = False, env: dict[str, str] | None = None) -> BashHandle:
     """Start a shell command immediately; await the handle for the result.
 
     `await bash(cmd)` is a one-shot: cancelling the await (e.g. an interrupt)
@@ -1342,14 +1344,19 @@ def bash(command: str, persistent: bool = False) -> BashHandle:
     kernel ran is listed once, finished. Completion of a re-attached shell is
     polled, so its result and completion notice lag by up to a second; its
     exit_code is -1 when it was killed before recording a status.
+
+    env (yusAgent, YA-03): variables set for this command only, over the
+    kernel environment (the kernel's os.environ is unchanged). Keys and values
+    must be str.
     """
     if not isinstance(command, str) or not command:
         raise TypeError("command must be a non-empty str")
+    env = _checked_env(env)
     if persistent:
-        handle: BashHandle = _spawn_persistent(command)
+        handle: BashHandle = _spawn_persistent(command, env)
     else:
         _install_shutdown_hook()
-        handle = BashHandle(command)
+        handle = BashHandle(command, env)
     from . import repl
 
     repl.emit(
@@ -1421,7 +1428,18 @@ def _status_script(command: str, completion_a: str, completion_b: str) -> str:
     )
 
 
-def _child_env() -> dict[str, str]:
+def _checked_env(env: object) -> dict[str, str] | None:
+    """yusAgent (YA-03): a copy of bash(env=...), str keys and values only."""
+    if env is None:
+        return None
+    if not isinstance(env, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in env.items()
+    ):
+        raise TypeError("env must be a dict of str to str")
+    return dict(env)
+
+
+def _child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     """Environment for kernel-spawned shell commands.
 
     Same non-interactive guard as the coding-agent shell tool
@@ -1448,6 +1466,8 @@ def _child_env() -> dict[str, str]:
         "PAGER": "cat",
         "GIT_PAGER": "cat",
         "DEBIAN_FRONTEND": "noninteractive",
+        # yusAgent (YA-03): bash(env=...) wins over both.
+        **(extra or {}),
     }
 
 
@@ -1545,7 +1565,7 @@ def _shell_identity(pid: int, start_id: str) -> bool | None:
     return None if current is None else current == start_id
 
 
-def _spawn_persistent(command: str) -> PersistentBashHandle:
+def _spawn_persistent(command: str, env: dict[str, str] | None = None) -> PersistentBashHandle:
     if not _IS_POSIX:
         raise RuntimeError("bash(persistent=True) is only supported on POSIX")
     session_id = os.environ.get("RLM_SESSION_ID")
@@ -1564,7 +1584,7 @@ def _spawn_persistent(command: str) -> PersistentBashHandle:
             [shell, "-c", _PERSISTENT_WRAPPER, "prime-agent-persistent", shell, script,
              _persistent_file(home, shell_id, "rc")],
             cwd=os.getcwd(),
-            env=_child_env(),
+            env=_child_env(env),
             stdin=subprocess.PIPE,
             stdout=out,
             stderr=subprocess.STDOUT,

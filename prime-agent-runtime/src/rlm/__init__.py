@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from .bash import BashHandle, BashResult, BashSnapshot, bash, persistent_shells, _set_completion_notices_wired
+# yusAgent (YA-03): numbered file read.
+from .read import read
 from .factory import (
     FACTORY_HELP,
     graph_factory,
@@ -751,6 +753,7 @@ __all__ = [
     "list_subagents",
     "persistent_shells",
     "progress_note",
+    "read",
     "rename",
     "rlm",
     "spawn",

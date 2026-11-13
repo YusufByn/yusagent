@@ -118,6 +118,8 @@ pub fn convert_responses_messages(
 ) -> Vec<Value> {
     use crate::types::{Message, UserMessageContent, UserOrToolContent};
     let mut messages: Vec<Value> = Vec::new();
+    // yusAgent (YA-03): results of freeform calls go back as `custom_tool_call_output`.
+    let mut freeform_call_ids = crate::providers::ya_freeform::FreeformCallIds::default();
 
     let normalize_tool_call_id = |id: &str, source: &AssistantMessage| -> String {
         if !allowed_tool_call_providers.contains(&model.provider.as_str()) {
@@ -257,6 +259,19 @@ pub fn convert_responses_messages(
                             }
                             output.push(Value::Object(entry));
                         }
+                        AssistantContent::ToolCall(tool_call)
+                            if crate::providers::ya_freeform::is_freeform_call(tool_call) =>
+                        {
+                            // yusAgent (YA-03): a freeform call is replayed as `custom_tool_call`.
+                            freeform_call_ids.record(tool_call);
+                            let same_source = !is_different_model
+                                && assistant.provider == model.provider
+                                && assistant.api == model.api;
+                            output.push(crate::providers::ya_freeform::custom_tool_call_item(
+                                tool_call,
+                                same_source,
+                            ));
+                        }
                         AssistantContent::ToolCall(tool_call) => {
                             // The item id is the `fc_` segment after the `|`. Without a `|` there
                             // is no item id: the `id` key is omitted (an empty id is rejected by
@@ -343,7 +358,7 @@ pub fn convert_responses_messages(
                 };
 
                 messages.push(json!({
-                    "type": "function_call_output",
+                    "type": freeform_call_ids.output_type(call_id),
                     "call_id": call_id,
                     "output": output_value,
                 }));
@@ -368,12 +383,15 @@ pub fn convert_responses_tools(
     tools
         .iter()
         .map(|tool| {
-            json!({
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-                "strict": strict,
+            // yusAgent (YA-03): a freeform tool goes on the wire as `custom`.
+            crate::providers::ya_freeform::responses_custom_tool(tool).unwrap_or_else(|| {
+                json!({
+                    "type": "function",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                    "strict": strict,
+                })
             })
         })
         .collect()

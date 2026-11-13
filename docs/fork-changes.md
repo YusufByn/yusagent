@@ -109,6 +109,75 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | Tests upstream | modif. | Voir « Tests upstream touchés (YA-06) » ci-dessous. | YA-06 |
 | `bench/smoke/README.md` | modif. (fichier du fork) | `settings/rlm-off.json` noté redondant avec le nouveau défaut ; gardé pour relire l'A/B du 12/11. | YA-06 |
 | `.changes/ya-06-rlm-default-off.md` | ajout | Fragment de changelog. | YA-06 |
+| `crates/pa-ai/src/providers/ya_freeform.rs` | ajout | Tools libres (`custom`) de l'API Responses : marque d'un tool libre dans `parameters`, d'un appel libre dans `ToolCall.rest`, items `custom_tool_call` et `custom_tool_call_output`. Voir « Tools libres côté providers (YA-03) ». | YA-03 |
+| `crates/pa-ai/src/providers/mod.rs` | modif. (2 lignes) | Déclare `ya_freeform`. | YA-03 |
+| `crates/pa-ai/src/lib.rs` | modif. (2 lignes) | Exporte `providers::ya_freeform` (`providers` est privé) : `pa-core` construit le tool `apply_patch` avec (PR 2). | YA-03 |
+| `crates/pa-ai/src/providers/openai_responses_shared.rs` | modif. | `convert_responses_tools` : un tool libre part en `custom`. `convert_responses_messages` : un appel libre est rejoué en `custom_tool_call`, son résultat en `custom_tool_call_output`. | YA-03 |
+| `crates/pa-ai/src/providers/openai_responses_stream.rs` | modif. | `handle_event` : item `custom_tool_call` (`added`, `done`) et événement `response.custom_tool_call_input.delta`. | YA-03 |
+| `crates/pa-ai/src/providers/openai_codex_responses/mod.rs` | modif. (2 lignes) | Déclare le module de tests `tests/ya_freeform.rs` dans `mod tests` (accès aux helpers privés du serveur scripté). | YA-03 |
+| `crates/pa-ai/src/providers/openai_codex_responses/tests/ya_freeform.rs` | ajout | Tests : appel libre en SSE (`process_sse_chunk`, événement coupé entre deux morceaux), item `done` seul, tour WebSocket de bout en bout et requête de suite. | YA-03 |
+| `crates/ya-apply-patch/` | ajout | Crate repris de `codex-rs/apply-patch` d'openai/codex au SHA `69231e119bfca0b14453515e97d99688ce1c47c9` (Apache-2.0, `LICENSE` et `NOTICE` conservés). Analyse et application d'`apply_patch` ; pas encore utilisé par `pa-core` (PR 2). Voir « Crate `ya-apply-patch` (YA-03) ». | YA-03 |
+| `Cargo.toml` | modif. (1 ligne) | `crates/ya-apply-patch` dans les `members` du workspace. | YA-03 |
+| `Cargo.lock` | modif. (ajouts seuls) | Entrées de `ya-apply-patch`, `similar` 2.7.0 et des dépendances de test (`assert_cmd`, `pretty_assertions` et leurs dépendances) ; `regex-automata` ajouté aux dépendances de `bstr` (fonction `unicode` activée par `assert_cmd`). Aucune version existante changée. | YA-03 |
+| `crates/pa-core/src/tools/ya_output_cap.rs` | ajout | Plafond du texte d'une cellule `python_repl` (`kernel.maxOutputChars`, 40 000 par défaut), sortie complète en fichier. Voir « Plafond de sortie (YA-03) ». | YA-03 |
+| `crates/pa-core/src/tools/mod.rs` | modif. (2 lignes) | Déclare `ya_output_cap`. | YA-03 |
+| `crates/pa-core/src/kernel/env_allowlist.rs` | modif. (fichier du fork, YA-02) | `KernelSettings` : champ `max_output_chars` (`kernel.maxOutputChars`). | YA-03 |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | Lit `kernel.maxOutputChars`, calcule le dossier des sorties complètes, enveloppe l'`execute` du tool `python_repl` avec `ya_output_cap::wrap_execute`. | YA-03 |
+| `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (1 ligne + commentaire) | `KernelManagerExecutor::execute` : `max_output_chars` à `ya_output_cap::KERNEL_BUFFER_CHARS` (2 000 000 par flux) au lieu du défaut upstream de 65 536, pour que la sortie complète soit gardée puis enregistrée. |  YA-03 |
+| `crates/pa-core/src/session_engine/ya_kernel_restart.rs` | ajout | Kernel mort pendant une cellule : redémarrage immédiat, avis en fin de résultat, avis upstream du tour suivant retiré. Voir « Redémarrage du kernel (YA-03) ». | YA-03 |
+| `crates/pa-core/src/session_engine/mod.rs` | modif. (2 lignes) | Déclare `ya_kernel_restart`. | YA-03 |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. | Enveloppe aussi l'`execute` de `python_repl` avec `ya_kernel_restart::wrap_execute`, après le plafond (l'avis n'est jamais coupé), avec la boîte des messages du tour suivant (`boot_notice_rows`). | YA-03 |
+| `prime-agent-runtime/src/rlm/read.py` | ajout | `read(path, offset=1, limit=2000)` : contenu d'un fichier texte avec numéros de ligne (format `cat -n`, coupure sur `\n` seul), ligne de suite quand il reste des lignes. Pas encore documenté dans le prompt (PR 2). | YA-03 |
+| `prime-agent-runtime/src/rlm/__init__.py` | modif. (3 lignes) | Exporte `read` (import et `__all__`). | YA-03 |
+| `prime-agent-runtime/src/rlm/bash.py` | modif. | `bash(command, persistent=False, env=None)` : variables pour cette commande seule, par-dessus l'environnement du kernel (`os.environ` du kernel inchangé), clés et valeurs `str` (`_checked_env`). `_child_env(extra)` les ajoute en dernier ; `BashHandle` et `_spawn_persistent` les reçoivent. Écart noté au T02 (« `bash()` n'a pas de paramètre `env=` »). Pas encore documenté dans le prompt (PR 2). | YA-03 |
+| `prime-agent-runtime/src/rlm/repl.py` | modif. (1 ligne + commentaire) | `_ALWAYS_SKIP` : `read`, comme `bash`, n'est pas mis dans le snapshot (le bootstrap le relie). | YA-03 |
+| `crates/pa-core/src/kernel/bootstrap/runtime_code.rs` | modif. | Le bootstrap relie `read` à côté de `bash` ; le repli sans runtime accepte `env=` et définit `read`. | YA-03 |
+| `crates/pa-core/src/kernel/bootstrap/venv/probe.rs` | modif. (1 ligne + commentaire) | `RUNTIME_READY_CHECK` : la signature attendue de `rlm.bash` devient `['command', 'persistent', 'env']`, et `rlm.read` doit être appelable. Sans ce changement, le runtime de la branche est jugé « pas prêt » et le kernel ne démarre pas (run CI 43479147466 : 13 binaires de test en échec). | YA-03 |
+| `prime-agent-runtime/test/test_ya_read_env.py` | ajout | Tests de `read()` et de `bash(env=)`. | YA-03 |
+
+
+
+## Crate `ya-apply-patch` (YA-03)
+
+Ticket 09, option A validée par Yusuf le 13/11/2026. Source : openai/codex, `codex-rs/apply-patch`, SHA `69231e119bfca0b14453515e97d99688ce1c47c9`. Le crate d'origine dépend de `codex-exec-server` (environ 25 crates internes de Codex, `axum`, `opentelemetry`, `prost`) et de `tree-sitter`/`tree-sitter-bash` (build C) : incompatible avec la règle 8. Détail fichier par fichier : `crates/ya-apply-patch/README.md`.
+
+- **À l'identique** (hash de blob git égal à celui de Codex) : `src/seek_sequence.rs`, `src/streaming_parser.rs`, `src/text_file.rs`, `tests/all.rs`, `tests/suite/mod.rs`, `tests/fixtures/**` (fichiers CRLF compris), `rustfmt.toml`.
+- **Modifiés** (en-tête `// Modified by yusAgent: …` dans chaque fichier) : accès disque passés de `ExecutorFileSystem` (async) à `std::fs` (sync, nouveau `src/local_fs.rs`), `PathUri` remplacé par `Path`/`PathBuf`, plus de paramètre `sandbox`. Le calcul du nouveau contenu ne change pas : dans `file_update.rs`, la lecture du fichier et le calcul sont séparés, le calcul passe sans changement dans `derive_new_contents_from_text`. Dans `lib.rs`, `apply_hunks_to_files` ne change que par ses appels disque.
+- **Retirés** : `src/invocation.rs` (détection d'`apply_patch` dans une commande shell, tree-sitter) et les types qu'il produisait (`MaybeApplyPatchVerified`, `ApplyPatchAction`, `ApplyPatchFileChange`, `ApplyPatchError::ImplicitInvocation`, `ApplyPatchError::PathUri`), `BUILD.bazel`.
+- **Tests** : 67 tests de Codex repris (39 unitaires, 28 d'intégration dont 25 scénarios de fixtures), adaptés seulement pour `Path` et `std::fs` (sync au lieu d'async) ; chemins du binaire et des fixtures par `CARGO_BIN_EXE_apply_patch` / `CARGO_MANIFEST_DIR` au lieu de `codex_utils_cargo_bin` (crate interne de Codex) ; dans `no_follow_rechecks_paths_after_verification`, l'étape `verify_apply_patch_args` (d'`invocation.rs`) est remplacée par `parse_patch`. 28 tests retirés, tous dans `invocation.rs`. Le binaire `apply_patch` est gardé : les tests `cli`, `tool` et `scenarios` le lancent.
+- **Mode sans suivi des liens** (`follow_symlinks: false`) : Codex l'applique de façon atomique (`openat(O_NOFOLLOW)` avec `rustix`) ; ici, vérification `symlink_metadata` de chaque composant avant l'opération, donc **non atomique** (un échange de lien entre la vérification et l'écriture n'est pas couvert). Pas d'`O_NONBLOCK` à l'ouverture : `is_file()` est vérifié avant. À reprendre avec le sandbox (YA-11) si ce mode sert.
+- **Manifeste** : édition 2024 (celle de Codex), table de lints propre au crate (les `[workspace.lints.clippy]` de `codex-rs/Cargo.toml`, plus `unsafe_code = "forbid"`) au lieu du gate pedantic du workspace ; `clippy.toml` (sous-ensemble de `codex-rs/clippy.toml` : `unwrap`/`expect` permis dans les tests) ; `rustfmt.toml` de Codex. Dépendances : `anyhow`, `thiserror` (workspace), `similar` 2.7.0 ; tests : `assert_cmd`, `pretty_assertions`, `tempfile`.
+
+## Tools libres côté providers (YA-03)
+
+Ticket 09. Forme sur le fil d'openai/codex au SHA `69231e1` : tool `{"type": "custom", "name", "description", "format": {type, syntax, definition}}` (`codex-rs/tools/src/tool_spec.rs:54-55`, `responses_api.rs:17-30`) ; items `custom_tool_call` (`call_id`, `name`, `input` en texte) et `custom_tool_call_output` (`codex-rs/protocol/src/models.rs:1282-1319`) ; événements `response.output_item.added` / `.done` et `response.custom_tool_call_input.delta` (`codex-rs/codex-api/src/sse/responses.rs:411-568`).
+
+- **Types partagés inchangés** (`pa_types::ai::Tool`, `ToolCall`) : un tool libre porte son `format` sous la clé `x-yusagent-freeform` de `parameters`, à côté d'un schéma objet `{input: string}` requis, que la validation des arguments (`crates/pa-agent/src/validation.rs`) accepte sans changement. Un appel libre a pour arguments `{input: <texte brut>}` et porte `yaFreeformItemId` (id d'item du provider) dans `rest`, aplati dans le JSONL de session : une session rechargée rejoue l'appel en `custom_tool_call`.
+- **Rejeu** : l'id d'item d'origine n'est renvoyé que pour un appel du même modèle et du même provider (comme l'id `fc_` d'un `function_call`, `openai_responses_shared.rs`) ; sinon il est omis. Le résultat d'un appel libre part en `custom_tool_call_output` (même encodage de `output` que `function_call_output`).
+- **Flux** : SSE et WebSocket de Codex passent par `ResponsesStreamProcessor::handle_event` (`openai_codex_responses/mod.rs`, `run_websocket_attempt` et `run_sse_stream`). L'entrée arrive par deltas, l'item `done` porte l'entrée complète, qui fait foi. Le bloc vivant est retrouvé par son id (le slot est déjà retiré au `done`, `openai_responses_stream.rs`) ; sans événement `added`, l'appel est créé au `done`.
+- **Portée** : seules les API Responses (`openai-responses`, `openai-codex-responses`, `azure-openai-responses`) savent envoyer un tool libre. Le tool `apply_patch` n'est enregistré que pour elles (PR 2) ; aucun autre provider n'en reçoit.
+
+
+## Plafond de sortie (YA-03)
+
+Ticket 09. Avant : le gestionnaire du kernel tronque chaque flux (stdout, stderr, résultat) à 65 536 caractères en gardant le début (`crates/pa-core/src/kernel/shared.rs:14`, `kernel/manager/execution.rs`), sans fichier.
+
+- **Plafond** : `kernel.maxOutputChars` (défaut 40 000 ≈ 10 000 tokens, estimation à 4 caractères par token : troncature de Codex pour `gpt-6.1-terra`, `codex-rs/models-manager/models.json` au SHA `69231e1`) s'applique au texte complet de la cellule tel que le modèle le reçoit (le premier bloc texte du résultat du tool). `0` le coupe.
+- **Au-delà** : début et fin du texte, moitié chacun, autour d'une ligne `[... output truncated: <N> characters in total; full output in <chemin> ...]`. Le total, ligne comprise, ne dépasse pas le plafond. Le fichier est `<dossier d'artefacts de la session>/outputs/<id de l'appel>.txt` (sans dossier d'artefacts : `<tmp>/yusagent-outputs/<id de session>/`). Si l'écriture échoue, la ligne donne l'erreur.
+- **Tampon du kernel** : 2 000 000 caractères par flux pour les cellules du modèle, pour que le fichier soit complet jusqu'à cette taille. Le runtime Python ne tronque pas les flux (trames de 64 Kio, `prime-agent-runtime/src/rlm/repl.py:50`) ; il plafonne le résultat à 1 Mio (`repl.py:53`). Les cellules internes du harness gardent le défaut upstream.
+- **Préfixe** : inchangé. Seul le contenu d'un résultat qui dépasse le plafond change, en fin de contexte.
+
+
+## Redémarrage du kernel (YA-03)
+
+Ticket 09, décision du 13/11/2026 (journal du CDC). Upstream : un kernel mort est relancé au `ensure()` de la cellule suivante (`crates/pa-core/src/kernel/provisioner.rs`, manager `is_defunct`), qui relit le namespace depuis le snapshot pris après les cellules réussies (`restore_state`), et l'avis `[python-state-restored]` (« revived from your previous session », `session_engine/state_restore_notice.rs`) n'arrive qu'au message utilisateur suivant (`admission.rs`, `take_next_turn_rows`).
+
+- **Détection** : après une cellule, le manager publié par le provisioner est `defunct`. Sur un échec côté harness (`Err` du tool), attente d'au plus 500 ms que le guetteur de sortie marque le manager (il le marque avant de rejeter la cellule, `kernel/manager/startup.rs`, `teardown.rs`). Un kill choisi par l'utilisateur sur un kernel occupé (`tools/ipython.rs`, `<ipython_kernel_reset>`) remplace le manager : il n'est pas pris pour un crash.
+- **Redémarrage** : `ensure()` tout de suite, même restauration qu'upstream. Aucune cellule n'est rejouée.
+- **Avis** en fin de résultat de la cellule plantée (après le texte, ou après le message d'erreur) : `[python-kernel-restarted]`, kernel redémarré, état restauré depuis la dernière cellule réussie, répertoire et variables d'environnement remis aux défauts de la session, cette cellule n'a pas été relancée. Sans snapshot à relire : même avis avec « fresh state ». Redémarrage en échec : `[python-kernel-crashed]` avec l'erreur. Pas de liste de noms.
+- **Doublon** : la ligne `ipython_state_restored` que ce redémarrage met dans la boîte du tour suivant est retirée ; son drapeau `restored` choisit l'avis.
+- **Préfixe** : inchangé. Seul le résultat de la cellule plantée change, en fin de contexte.
+- **Test** : `ya_kernel_restart::tests::a_cell_that_kills_the_kernel_gets_the_notice_and_is_not_re_run` (vrai kernel, sauté s'il est absent ; la CI le prépare) : avis en fin de résultat, redémarrage en moins de 5 s, compteur sur disque à 1, `marker` relu depuis le snapshot.
 
 ## Sous-agents coupés (YA-06)
 

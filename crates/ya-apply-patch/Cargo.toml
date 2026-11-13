@@ -1,0 +1,72 @@
+# Ported from openai/codex codex-rs/apply-patch at
+# 69231e119bfca0b14453515e97d99688ce1c47c9 (Apache-2.0). See README.md.
+[package]
+name = "ya-apply-patch"
+version.workspace = true
+# Codex's edition; the workspace default (2021) is not inherited.
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+name = "ya_apply_patch"
+path = "src/lib.rs"
+doctest = false
+
+[[bin]]
+name = "apply_patch"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+similar = "2.7.0"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2"
+pretty_assertions = "1.4.1"
+tempfile = "3.23.0"
+
+# The crate's own lint table instead of `workspace = true`: the workspace's
+# clippy pedantic gate would reject the ported code. These are the
+# [workspace.lints.clippy] of codex-rs/Cargo.toml at the pinned SHA, plus
+# the workspace's `unsafe_code = "forbid"`.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+await_holding_invalid_type = "deny"
+await_holding_lock = "deny"
+disallowed_methods = "deny"
+expect_used = "deny"
+identity_op = "deny"
+manual_clamp = "deny"
+manual_filter = "deny"
+manual_find = "deny"
+manual_flatten = "deny"
+manual_map = "deny"
+manual_memcpy = "deny"
+manual_non_exhaustive = "deny"
+manual_ok_or = "deny"
+manual_range_contains = "deny"
+manual_retain = "deny"
+manual_strip = "deny"
+manual_try_fold = "deny"
+manual_unwrap_or = "deny"
+needless_borrow = "deny"
+needless_borrowed_reference = "deny"
+needless_collect = "deny"
+needless_late_init = "deny"
+needless_option_as_deref = "deny"
+needless_question_mark = "deny"
+needless_update = "deny"
+redundant_clone = "deny"
+redundant_closure = "deny"
+redundant_closure_for_method_calls = "deny"
+redundant_static_lifetimes = "deny"
+trivially_copy_pass_by_ref = "deny"
+uninlined_format_args = "deny"
+unnecessary_filter_map = "deny"
+unnecessary_lazy_evaluations = "deny"
+unnecessary_sort_by = "deny"
+unnecessary_to_owned = "deny"
+unwrap_used = "deny"

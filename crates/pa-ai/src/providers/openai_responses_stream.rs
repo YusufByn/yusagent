@@ -199,7 +199,49 @@ impl<'a> ResponsesStreamProcessor<'a> {
                             );
                         }
                     }
+                    // yusAgent (YA-03): a freeform call; its input streams as raw text.
+                    "custom_tool_call" => {
+                        let input = item.get("input").and_then(Value::as_str).unwrap_or("");
+                        let tool_call =
+                            crate::providers::ya_freeform::tool_call_from_item(&item, input);
+                        self.output
+                            .content
+                            .push(AssistantContent::ToolCall(tool_call));
+                        self.writer.push(AssistantMessageEvent::ToolcallStart {
+                            content_index: content_index as u64,
+                            partial: self.output.clone(),
+                        });
+                        if let Some(index) = output_index {
+                            self.slots.insert(
+                                index,
+                                Slot {
+                                    item,
+                                    partial_json: StreamingJsonAccumulator::default(),
+                                    content_index,
+                                },
+                            );
+                        }
+                    }
                     _ => {}
+                }
+            }
+            // yusAgent (YA-03): raw input delta of a freeform call.
+            "response.custom_tool_call_input.delta" => {
+                let delta = event.get("delta").and_then(Value::as_str).unwrap_or("");
+                let content_index = self
+                    .current_slot(output_index)
+                    .map(|slot| slot.content_index);
+                if let Some(content_index) = content_index {
+                    if let Some(AssistantContent::ToolCall(tool_call)) =
+                        self.output.content.get_mut(content_index)
+                    {
+                        crate::providers::ya_freeform::append_input(tool_call, delta);
+                        self.writer.push(AssistantMessageEvent::ToolcallDelta {
+                            content_index: content_index as u64,
+                            delta: delta.to_string(),
+                            partial: self.output.clone(),
+                        });
+                    }
                 }
             }
             "response.reasoning_summary_part.added" => {
@@ -712,6 +754,47 @@ impl<'a> ResponsesStreamProcessor<'a> {
                                 });
                             }
                         }
+                    }
+                    // yusAgent (YA-03): the done item carries the full input of a freeform
+                    // call. The live block is found by its id (the slot is already gone);
+                    // without one (no `added` event seen) the call is synthesized.
+                    "custom_tool_call" => {
+                        let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
+                        let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                        let id = format!("{call_id}|{item_id}");
+                        let live = self.output.content.iter().position(|block| {
+                            matches!(block, AssistantContent::ToolCall(call) if call.id == id)
+                        });
+                        let streamed = live
+                            .and_then(|index| match self.output.content.get(index) {
+                                Some(AssistantContent::ToolCall(call)) => Some(
+                                    crate::providers::ya_freeform::freeform_input(call).to_string(),
+                                ),
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        let input = item
+                            .get("input")
+                            .and_then(Value::as_str)
+                            .unwrap_or(&streamed)
+                            .to_string();
+                        let tool_call =
+                            crate::providers::ya_freeform::tool_call_from_item(&item, &input);
+                        let content_index = if let Some(index) = live {
+                            self.output.content[index] =
+                                AssistantContent::ToolCall(tool_call.clone());
+                            index
+                        } else {
+                            self.output
+                                .content
+                                .push(AssistantContent::ToolCall(tool_call.clone()));
+                            self.output.content.len() - 1
+                        };
+                        self.writer.push(AssistantMessageEvent::ToolcallEnd {
+                            content_index: content_index as u64,
+                            tool_call,
+                            partial: self.output.clone(),
+                        });
                     }
                     _ => {}
                 }

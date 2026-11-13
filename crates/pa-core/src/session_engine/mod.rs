@@ -55,6 +55,8 @@ pub mod tool_bridge;
 pub mod turn_boundary;
 // yusAgent (T04, YA-13): the per-call usage journal (`<id>.usage.ndjson`).
 pub mod usage_log;
+// yusAgent (YA-03): kernel crash during a cell, restart and notice.
+pub(crate) mod ya_kernel_restart;
 
 mod admission;
 mod compaction_arms;
