@@ -44,7 +44,7 @@ use repair::serialize_entry;
 pub use repair::{load_entries_from_file, repair_jsonl_damage};
 
 // yusAgent (YA-03): per-session header fields (`docs/fork-changes.md`).
-mod ya_header;
+pub mod ya_header;
 
 /// A persist observer; must not break session writes (panics are contained).
 pub type SessionPersistListener = Box<dyn Fn(&Path) + Send + Sync>;

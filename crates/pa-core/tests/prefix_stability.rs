@@ -936,6 +936,58 @@ async fn resumed_session_keeps_its_tools_when_settings_change() {
     assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
 }
 
+/// yusAgent (YA-03): a fork keeps the frozen tools of its source. A Codex session created with
+/// the default settings is forked after the settings changed to `editTool: "kernel"` and
+/// `shellTool: "native"`: the fork's header carries the source's `yaTools`, and its request has
+/// the source's tools and system prompt.
+#[tokio::test]
+async fn forked_session_keeps_the_tools_of_its_source_when_settings_change() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"editTool": "kernel", "shellTool": "native"}"#,
+    )
+    .expect("settings.json");
+    let forked = SessionManager::fork_from(&path, &cwd, &sessions).expect("fork");
+    let forked_path = forked.get_session_file().expect("fork file").to_path_buf();
+    assert_ne!(forked_path, path);
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, forked).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    let frozen = json!({"editTool": "native", "shellTool": "kernel"});
+    let header = pa_core::session::manager::read_session_header(&forked_path).expect("header");
+    assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2, "one request per session");
+    for (index, body) in bodies.iter().enumerate() {
+        let request = request_object(api, index + 1, body);
+        assert_eq!(
+            tool_names(&request),
+            CODEX_DEFAULT.tools,
+            "request {}",
+            index + 1
+        );
+    }
+    assert_eq!(
+        responses_system_prompt(&bodies[0]),
+        responses_system_prompt(&bodies[1]),
+        "the fork's system prompt is the source's"
+    );
+}
+
 /// The first request of a one-prompt session (a text answer: no kernel cell).
 async fn first_request_of_a_session(api: Api, fixture: &Fixture) -> Map<String, Value> {
     let server = ModelServer::start(api).await;
