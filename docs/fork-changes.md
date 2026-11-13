@@ -123,6 +123,12 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/session_engine/ya_kernel_restart.rs` | ajout | Kernel mort pendant une cellule : redémarrage immédiat, avis en fin de résultat, avis upstream du tour suivant retiré. Voir « Redémarrage du kernel (YA-03) ». | YA-03 |
 | `crates/pa-core/src/session_engine/mod.rs` | modif. (2 lignes) | Déclare `ya_kernel_restart`. | YA-03 |
 | `crates/pa-core/src/session_engine/engine.rs` | modif. | Enveloppe aussi l'`execute` de `python_repl` avec `ya_kernel_restart::wrap_execute`, après le plafond (l'avis n'est jamais coupé), avec la boîte des messages du tour suivant (`boot_notice_rows`). | YA-03 |
+| `prime-agent-runtime/src/rlm/read.py` | ajout | `read(path, offset=1, limit=2000)` : contenu d'un fichier texte avec numéros de ligne (format `cat -n`, coupure sur `\n` seul), ligne de suite quand il reste des lignes. Pas encore documenté dans le prompt (PR 2). | YA-03 |
+| `prime-agent-runtime/src/rlm/__init__.py` | modif. (3 lignes) | Exporte `read` (import et `__all__`). | YA-03 |
+| `prime-agent-runtime/src/rlm/bash.py` | modif. | `bash(command, persistent=False, env=None)` : variables pour cette commande seule, par-dessus l'environnement du kernel (`os.environ` du kernel inchangé), clés et valeurs `str` (`_checked_env`). `_child_env(extra)` les ajoute en dernier ; `BashHandle` et `_spawn_persistent` les reçoivent. Écart noté au T02 (« `bash()` n'a pas de paramètre `env=` »). Pas encore documenté dans le prompt (PR 2). | YA-03 |
+| `prime-agent-runtime/src/rlm/repl.py` | modif. (1 ligne + commentaire) | `_ALWAYS_SKIP` : `read`, comme `bash`, n'est pas mis dans le snapshot (le bootstrap le relie). | YA-03 |
+| `crates/pa-core/src/kernel/bootstrap/runtime_code.rs` | modif. | Le bootstrap relie `read` à côté de `bash` ; le repli sans runtime accepte `env=` et définit `read`. | YA-03 |
+| `prime-agent-runtime/test/test_ya_read_env.py` | ajout | Tests de `read()` et de `bash(env=)`. | YA-03 |
 
 
 ## Tools libres côté providers (YA-03)

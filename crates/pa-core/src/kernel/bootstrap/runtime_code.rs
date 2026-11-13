@@ -38,6 +38,7 @@ try:
     import rlm as _prime_agent_rlm_module
     rlm = _prime_agent_rlm_module.rlm
     bash = _prime_agent_rlm_module.bash
+    read = _prime_agent_rlm_module.read
     import rlm.mcp as mcp
 ";
 
@@ -79,7 +80,10 @@ except Exception as _prime_agent_rlm_error:
 
     rlm = _PrimeAgentMissingRlm()
 
-    def bash(command, persistent=False):
+    def bash(command, persistent=False, env=None):
+        rlm._raise_missing()
+
+    def read(path, offset=1, limit=2000):
         rlm._raise_missing()
 "#;
 
