@@ -41,6 +41,9 @@ flate2 = "1"
 unicode-normalization = "0.1"
 serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 ignore = "0.4"
+# yusAgent (YA-03): `apply_patch` (Codex's crate) and the changed-region diff of its result.
+ya-apply-patch = { path = "../ya-apply-patch" }
+similar = "2.7.0"
 
 [dev-dependencies]
 tempfile = "3"

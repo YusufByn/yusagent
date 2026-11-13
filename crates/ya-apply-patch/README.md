@@ -55,6 +55,10 @@ Added (not from Codex):
 - `src/local_fs.rs`: the `std::fs` operations, including a check-then-act
   emulation of Codex's no-follow mode (`follow_symlinks: false`), which Codex
   implements atomically with `openat(O_NOFOLLOW)`.
+- `src/tool_spec.rs`: the name, description and Lark grammar of Codex's
+  freeform tool (`codex-rs/core/src/tools/handlers/apply_patch_spec.rs`
+  lines 5 and 20), exported by `lib.rs`; `assets/apply_patch.lark` is
+  `codex-rs/core/assets/tools/apply_patch.lark` byte for byte.
 - `Cargo.toml`, `clippy.toml` (subset of `codex-rs/clippy.toml`), this README.
 
 Removed:
