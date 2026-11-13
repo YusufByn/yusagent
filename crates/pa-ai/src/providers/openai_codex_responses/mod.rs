@@ -510,7 +510,11 @@ async fn run_websocket_attempt(
                 )
                 .into_iter()
                 .filter(|item| {
-                    item.get("type").and_then(Value::as_str) != Some("function_call_output")
+                    // yusAgent (YA-03): the synthetic result of a freeform call too.
+                    !matches!(
+                        item.get("type").and_then(Value::as_str),
+                        Some("function_call_output" | "custom_tool_call_output")
+                    )
                 })
                 .collect::<Vec<_>>();
                 let continuation = ContinuationState {
