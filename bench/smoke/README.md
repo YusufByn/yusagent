@@ -39,6 +39,7 @@ python3 -I bench/smoke/baseline.py <run> [<run> ...] [--exclude <run>:<tâche>[,
 python3 -I bench/smoke/metrics.py <run> [<run> ...]    # miss serveur et taux évitable, runs déjà faits
 python3 -I bench/smoke/run.py --rereport <run>         # rapport recalculé depuis les journaux du run
 python3 -I bench/smoke/continue_session.py --binary <dossier>/prime-agent --task <id> --out <run>/tasks/<id>/continue-1 "<prompt>"   # appel réel : --continue de la dernière session de la tâche, nouveau processus, mêmes sandbox et proxies
+# --log-bodies (run.py, continue_session.py) : corps JSON de chaque requête de la tâche dans proxy-bodies.ndjson, jamais les en-têtes ; désactivé par défaut, refusé avec --ab (jamais pendant un A/B)
 python3 -I bench/smoke/metrics.py --theory-check <run> [<run> ...]   # validation du cache théorique
 python3 -I bench/smoke/metrics.py --since-prev <run> [<run> ...] [--exclude <run>:<tâche>]   # p99 et maximum de sincePrevMs
 python3 -I bench/smoke/tools/ab.py <dossier du binaire> <sha de référence> --a <réglages A> --b <réglages B> [--tasks ...] [--passes 3] [--seed N]

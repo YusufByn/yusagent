@@ -335,5 +335,80 @@ class EditAttempts(unittest.TestCase):
         self.assertIsNone(metrics.edit_attempts([])["first_try_rate"])
         self.assertEqual(ab_stats.first_try({"attempts": 0, "applied": 0}), "aucun edit")
 
+
+class BodyLog(unittest.TestCase):
+    """`--log-bodies` : corps JSON des requêtes, jamais les en-têtes ; rien sans l'option."""
+
+    def post_through_proxy(self, tmp: Path, bodies: Path | None) -> None:
+        upstream = socket.socket()
+        upstream.bind(("127.0.0.1", 0))
+        upstream.listen()
+
+        def answer():
+            conn, _ = upstream.accept()
+            with conn:
+                conn.recv(65536)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+
+        threading.Thread(target=answer, daemon=True).start()
+        proxy = proxies.ReverseProxy(tmp / "proxy.ndjson",
+                                     ("127.0.0.1", upstream.getsockname()[1], False), bodies)
+        proxies.serve(proxy)
+        body = json.dumps({"prompt_cache_key": "s1", "input": [{"role": "user"}]}).encode()
+        try:
+            with socket.create_connection(("127.0.0.1", proxy.port)) as client:
+                client.sendall(b"POST /backend-api/codex/responses HTTP/1.1\r\n"
+                               b"Authorization: Bearer SECRET-TOKEN\r\n"
+                               b"chatgpt-account-id: SECRET-ACCOUNT\r\n"
+                               b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n"
+                               + body)
+                client.recv(65536)
+            time.sleep(0.2)
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+            upstream.close()
+
+    def test_bodies_written_without_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            self.post_through_proxy(tmp, tmp / "proxy-bodies.ndjson")
+            text = (tmp / "proxy-bodies.ndjson").read_text()
+            entries = [json.loads(line) for line in text.splitlines()]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["session"], "s1")
+            self.assertEqual(entries[0]["body"]["input"], [{"role": "user"}])
+            for secret in ("SECRET-TOKEN", "SECRET-ACCOUNT", "Authorization", "Bearer"):
+                self.assertNotIn(secret, text)
+                self.assertNotIn(secret, (tmp / "proxy.ndjson").read_text())
+
+    def test_no_bodies_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            self.post_through_proxy(tmp, None)
+            self.assertEqual(sorted(p.name for p in tmp.iterdir()), ["proxy.ndjson"])
+
+    def test_websocket_message_reaches_the_body_callback(self):
+        seen = []
+        counter = proxies.FrameCounter(lambda *args: seen.append(args))
+        message = json.dumps({"type": "response.create", "prompt_cache_key": "s2",
+                              "previous_response_id": "resp_1", "input": []}).encode()
+        mask = b"\x01\x02\x03\x04"
+        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(message))
+        counter.feed(bytes([0x81, 0x80 | len(message)]) + mask + masked)
+        self.assertEqual(seen, [("s2", True, len(message), message)])
+
+    def test_refused_during_ab(self):
+        argv = sys.argv
+        sys.argv = ["run.py", "--binary", sys.executable, "--ab", "{}", "--log-bodies"]
+        try:
+            with self.assertRaises(SystemExit) as stop:
+                run.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual(stop.exception.code,
+                         "smoke : --log-bodies est refusé pendant un A/B (--ab)")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -168,7 +168,7 @@ class FrameCounter:
         if isinstance(event, dict) and event.get("type") == "response.create":
             key = event.get("prompt_cache_key")
             self.on_request(key if isinstance(key, str) else None,
-                            event.get("previous_response_id") is not None, len(message))
+                            event.get("previous_response_id") is not None, len(message), message)
 
 
 class ReverseProxy(socketserver.ThreadingTCPServer):
@@ -177,13 +177,17 @@ class ReverseProxy(socketserver.ThreadingTCPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, log_path: Path, upstream: tuple[str, int, bool] | None = None):
+    def __init__(self, log_path: Path, upstream: tuple[str, int, bool] | None = None,
+                 bodies_path: Path | None = None):
         # `upstream` n'est passé que par le mode capture du runner (serveur local, sans
         # TLS) ; sinon la cible est chatgpt.com:443 en TLS.
         self.upstream = upstream or (UPSTREAM_HOST, UPSTREAM_PORT, True)
         if upstream is not None and upstream[0] != "127.0.0.1":
             raise ValueError("cible amont de test : 127.0.0.1 uniquement")
         self.log = JsonLog(log_path)
+        # Corps des requêtes (`--log-bodies`, désactivé par défaut, refusé pendant un A/B) :
+        # le JSON envoyé au modèle seul, jamais les en-têtes (authentification).
+        self.bodies = JsonLog(bodies_path) if bodies_path is not None else None
         self.tls = ssl.create_default_context()
         # Garde-fou d'inactivité du runner (YA-14) : dernier octet relayé, dans un sens ou
         # dans l'autre (horloge monotone).
@@ -196,6 +200,17 @@ class ReverseProxy(socketserver.ThreadingTCPServer):
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
+
+    def write_body(self, transport: str, path: str, session: str | None,
+                   continuation: bool | None, raw: bytes) -> None:
+        if self.bodies is None:
+            return
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            body = None
+        self.bodies.write(transport=transport, path=path, session=session,
+                          continuation=continuation, bytes_up=len(raw), body=body)
 
     def idle_seconds(self) -> float:
         """Secondes depuis le dernier octet relayé (ou le démarrage du proxy)."""
@@ -271,6 +286,8 @@ class ReverseHandler(socketserver.BaseRequestHandler):
         self.server.log.write(event="request", transport="sse" if method == "POST" else "http",
                               method=method, path=path, status=status,
                               session=session_of(body), bytes_up=len(body))
+        if method == "POST":
+            self.server.write_body("sse", path, session_of(body), None, body)
         try:
             client.sendall(first)
         except OSError:
@@ -293,10 +310,11 @@ class ReverseHandler(socketserver.BaseRequestHandler):
             pipe(upstream, client, [0])
             return
 
-        def on_request(session, continuation, size):
+        def on_request(session, continuation, size, message):
             self.server.log.write(event="request", transport="websocket", method="WS",
                                   path=path, status=status, session=session,
                                   continuation=continuation, bytes_up=size)
+            self.server.write_body("websocket", path, session, continuation, message)
 
         counter = FrameCounter(on_request)
         up, down = [0], [len(rest)]

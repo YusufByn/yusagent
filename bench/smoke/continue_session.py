@@ -6,10 +6,11 @@ la session par son cwd. C'est un appel réel au modèle.
     DO_NOT_TRACK=1 PI_OFFLINE=1 python3 -I bench/smoke/continue_session.py \\
         --binary <dossier>/prime-agent --task <id> --out <run>/tasks/<id>/continue-1 \\
         [--model gpt-6.1-terra] [--effort high] [--settings bench/smoke/settings/<x>.json] \\
-        "<prompt>"
+        [--log-bodies] "<prompt>"
 
 Sortie dans `--out` : `proxy.ndjson` (requêtes, champ `continuation`), `connect.ndjson`,
-`out.jsonl`, `err.log`, `sessions/` (session et journal d'usage agrandis).
+`out.jsonl`, `err.log`, `sessions/` (session et journal d'usage agrandis) ; avec `--log-bodies`,
+`proxy-bodies.ndjson` (corps JSON des requêtes, jamais les en-têtes).
 """
 import argparse
 import json
@@ -33,6 +34,8 @@ def main() -> None:
     parser.add_argument("--cache", type=Path, default=R.DEFAULT_CACHE)
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--idle-timeout", type=int, default=R.IDLE_TIMEOUT_S)
+    parser.add_argument("--log-bodies", action="store_true",
+                        help="corps des requêtes dans proxy-bodies.ndjson (sans en-tête)")
     parser.add_argument("prompt")
     args = parser.parse_args()
 
@@ -58,7 +61,7 @@ def main() -> None:
     connect = proxies.ConnectProxy(args.out / "connect-proxy.ndjson",
                                    proxies.load_hosts(R.HOSTS))
     proxies.serve(connect)
-    access = R.Access(args.out, False, "", connect.port)
+    access = R.Access(args.out, False, "", connect.port, log_bodies=args.log_bodies)
     try:
         session = R.agent_session(binary, cache, cache.agent, args.out, args.model,
                                   args.effort, args.prompt, workspace, access, connect, source,
