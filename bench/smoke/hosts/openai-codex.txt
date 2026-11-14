@@ -1,2 +1,3 @@
-# Établi par --record-hosts le 2026-11-04T10:37:11.399379+00:00
-# binaire b8e92ec54f3b73077418d0fd84ba81efe04c3ef349e65485aaef2da182f2f626, modèle gpt-6-luna, run 20261104T103708Z-4718c9f-gpt-6-luna
+# Établi par --record-hosts le 2026-11-14T11:24:02.895678+00:00
+# binaire 099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e, modèle gpt-6.1-terra, run 20261114T112358Z-80e20ea-gpt-6.1-terra
+auth.openai.com
