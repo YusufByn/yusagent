@@ -18,6 +18,7 @@ Version de Codex : dernière release stable au 14/11/2026 (GitHub, `latest` npm)
 
 - `gpt-6-luna`, effort `high` (yusAgent : `--thinking high` ; Codex : `-c model_reasoning_effort=high`, `reasoning.effort` à `high` dans le corps, vérifié au banc de capture).
 - Les 10 tâches du banc (`bench/smoke/tasks/`, sans les exemples), **3 passes entrelacées par tâche** (`tools/ab.py`) : à chaque passe, chaque tâche lance ses deux bras dos à dos, dans un ordre tiré au sort ; graine tirée de `os.urandom` et notée dans `ab.json`.
+- **Garde-fou de lancement** (`codex_arm.check_launch`, tout lancement de `codex` par le banc, `--version` compris) : refus hors `sandbox-exec` avec `sandbox-agent.sb`, ou avec un CODEX_HOME autre que ceux du banc (jamais `~/.codex`) ou le vrai `HOME`. Vient de l'incident du 14/11 (premier essai au banc de capture hors sandbox, passation YA-14).
 - Même runner pour les deux bras (`run.py`) : même préparation des tâches, même sandbox de la phase agent (`sandbox-agent.sb`), mêmes proxys, même notation, même garde-fou d'inactivité (300 s). `DO_NOT_TRACK=1 PI_OFFLINE=1`, `PI_CACHE_RETENTION=short`.
 - **Avant l'A/B** : run de chauffe d'une tâche sur le bras B avec `--log-bodies` (lancé par Yusuf), qui ne compte pas dans l'A/B. Il vérifie au vrai backend : suite de conversation (`previous_response_id`), prewarm (usage renvoyé ou non), aucun appel à `alpha/search` ni hors `/backend-api/codex/responses`, effort `high`, CONNECT refusés.
 - Statistiques : `python3 -I bench/smoke/tools/ab_stats.py --plan <ab.json> --verdict ya14-codex`.
@@ -41,7 +42,7 @@ Verdicts possibles : résolution pour A ou pour B ; sinon coût : A moins cher, 
 
 ### Affiché sans décider
 
-Par bras (`ab_stats.py`, sections « Par bras » et « Affiché sans décider ») : coût rapporté et pessimiste (et sur les mêmes tâches que le coût de décision), coût rapporté par tâche résolue, tours, tokens par catégorie (input non caché, cache lu rapporté et théorique, cache écrit), taille du premier prompt, pic de contexte, taux de cache et miss serveur, ruptures du cache théorique, compactions, appels prewarm, part des sous-agents, durée de la phase agent, edits au premier essai, incidents, quota de l'abonnement (dernier relevé de Codex ; non mesuré côté yusAgent), écarts de config ci-dessous.
+Par bras (`ab_stats.py`, sections « Par bras » et « Affiché sans décider ») : coût rapporté et pessimiste (et sur les mêmes tâches que le coût de décision), coût rapporté par tâche résolue, tours, tokens par catégorie (input non caché, cache lu rapporté et théorique, cache écrit), taille du premier prompt, pic de contexte, taux de cache et miss serveur, ruptures du cache théorique, compactions, appels prewarm, requêtes en corps complet (Codex), part des sous-agents, durée de la phase agent, edits au premier essai, incidents, quota de l'abonnement (dernier relevé de Codex ; non mesuré côté yusAgent), écarts de config ci-dessous.
 
 ## Mesure du bras Codex
 
@@ -51,6 +52,7 @@ Par bras (`ab_stats.py`, sections « Par bras » et « Affiché sans décider »
 - **Rupture sur corps complet** (les deux bras) : un appel de boucle hors premier dont la requête WebSocket part sans `previous_response_id` garde son `cacheRead` rapporté. Recalcul des 120 bras des A/B de YA-03 avec et sans ce changement et la lecture des réponses au proxy : **0 écart** (commande ci-dessous).
 - **Edits au premier essai** : items `file_change` de `--json` (`completed` ou `failed`), un par `apply_patch` imbriqué. Borne haute : un patch refusé à l'analyse, avant application, peut ne produire aucun item.
 - **Cellules en erreur** : pas d'équivalent mesuré pour `exec` (`null`) ; le nombre d'appels d'`exec` est donné.
+- **Requêtes en corps complet** (affiché sans décider) : requêtes de génération (prewarm exclu) parties sans `previous_response_id` sur WebSocket, ou en SSE, lues au reverse proxy, au total et hors première requête de la session (`codex_arm.full_bodies`, section du rapport de chaque lancement, ligne d'`ab_stats.py`). Chacune rejoue ses items sans `encrypted_content` (écart 1, `core/src/client.rs:1231-1249`) : biais contre Codex, de taille inconnue. Au banc de capture : 0 sur 5 par tâche d'exemple.
 
 ## Écarts avec chaque harness tel que livré (biais)
 
@@ -120,6 +122,8 @@ mkdir -p ~/.cache/yusagent-smoke/codex-home
 printf 'cli_auth_credentials_store = "file"\n' > ~/.cache/yusagent-smoke/codex-home/config.toml
 CODEX_HOME=~/.cache/yusagent-smoke/codex-home ~/.cache/yusagent-bin/codex-0.169.0/codex login --device-auth
 ```
+
+Le banc remplace ensuite ce `config.toml` en entier avant chaque session ; sa config garde `cli_auth_credentials_store = "file"`, la même clé que le `printf`, sans conflit.
 
 Chauffe (une tâche, corps journalisés, ne compte pas) :
 
