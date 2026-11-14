@@ -792,7 +792,7 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
     codex = codex_arm.settings_of(settings)
     if codex is not None:
         return codex_session(binary, cache, agent_dir, out, model, effort, prompt, cwd, access,
-                             connect, codex, timeout, idle_timeout)
+                             connect, codex, timeout, idle_timeout, capture)
     out.mkdir(parents=True, exist_ok=True)
     write_agent_config(agent_dir, access.port, source, settings)
     before = session_files(agent_dir)
@@ -836,10 +836,11 @@ def codex_version(binary: Path, cache: Cache) -> str | None:
 def codex_session(binary: Path, cache: Cache, codex_home: Path, out: Path, model: str,
                   effort: str, prompt: str, cwd: Path, access: Access,
                   connect: proxies.ConnectProxy, codex: dict, timeout: int,
-                  idle_timeout: int | None) -> dict:
+                  idle_timeout: int | None, capture: bool) -> dict:
     """Une session `codex exec` (YA-14) : même profil sandbox que yusAgent (`AGENT_DIR` =
     CODEX_HOME, `BIN_DIR` = dossier de Codex), mêmes proxys et garde-fou ; config écrite
-    avant la session et copiée dans `out` ; fichiers de session copiés dans `sessions/`."""
+    avant la session et copiée dans `out` ; fichiers de session copiés dans `sessions/`,
+    masqués au ramassage (ids de `session_meta`, valeurs de `secret_values`)."""
     out.mkdir(parents=True, exist_ok=True)
     config = codex_arm.write_config(codex_home, access.port, binary, codex)
     (out / "codex-config.toml").write_text(config)
@@ -851,7 +852,8 @@ def codex_session(binary: Path, cache: Cache, codex_home: Path, out: Path, model
                           profile=agent_profile(cache, cwd, binary, codex_home),
                           idle=(access.proxy.idle_seconds, idle_timeout)
                           if idle_timeout is not None else None, check=codex_guard(cache))
-    codex_arm.copy_rollouts(codex_home, before, out / "sessions")
+    codex_arm.copy_rollouts(codex_home, before, out / "sessions",
+                            secret_values(cache, capture, codex=True))
     connect_entries = proxies.read_log(connect.log.path)[connect_before:]
     with (out / "connect.ndjson").open("w") as handle:
         for entry in connect_entries:
@@ -1506,16 +1508,51 @@ def auth_values(agent_dir: Path, skip: tuple[str, ...] = ()) -> list[str]:
     return values
 
 
+# Identifiants personnels des claims des jetons (YA-14) : absents d'`auth.json` en clair, mais
+# Codex écrit l'id utilisateur dans `session_meta` (`creator_user_id`).
+CLAIM_KEYS = ("chatgpt_account_id", "chatgpt_user_id", "chatgpt_account_user_id", "user_id",
+              "poid", "sub", "email", "name", "session_id", "sid")
+
+
+def jwt_claims(token: str) -> dict:
+    """Claims d'un JWT (charge utile décodée, signature non vérifiée) ; `{}` sinon."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def claim_values(tokens: list[str]) -> list[str]:
+    """Valeurs des claims `CLAIM_KEYS` (8 caractères au moins) des JWT de `tokens`."""
+    found: list[str] = []
+
+    def walk(value: dict) -> None:
+        for key, item in value.items():
+            if isinstance(item, dict):
+                walk(item)
+            elif key in CLAIM_KEYS and isinstance(item, str) and len(item) >= 8:
+                found.append(item)
+
+    for token in tokens:
+        if token.count(".") == 2:
+            walk(jwt_claims(token))
+    return found
+
+
 def secret_values(cache: Cache, capture: bool, codex: bool = False) -> list[str]:
-    """Valeurs factices du mode capture et, en run réel, celles de `auth.json` ; bras Codex
-    CLI (YA-14) : identifiant factice de Codex et `auth.json` de son CODEX_HOME."""
+    """Valeurs factices du mode capture et, en run réel, celles de `auth.json` et les ids des
+    claims de ses jetons (`claim_values`) ; bras Codex CLI (YA-14) : identifiant factice de
+    Codex et `auth.json` de son CODEX_HOME."""
     values = list(FAKE_SECRETS.values()) + [FAKE_ACCESS, FAKE_REFRESH]
     if codex:
         values += list(codex_arm.FAKE_VALUES)
     if capture:
         return values
-    values += auth_values(cache.agent)
-    return values + (auth_values(cache.codex_home, skip=("last_refresh",)) if codex else [])
+    real = auth_values(cache.agent)
+    real += auth_values(cache.codex_home, skip=("last_refresh",)) if codex else []
+    return list(dict.fromkeys(values + real + claim_values(real)))
 
 
 REPORT_FILES = ("report.json", "report.md", "tasks.csv")

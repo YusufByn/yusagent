@@ -49,6 +49,9 @@ HEAD_LIMIT = 64 * 1024
 # (les trames du client doivent rester lisibles pour compter les requêtes).
 DROPPED_HEADERS = {"host", "connection", "proxy-connection", "keep-alive",
                    "proxy-authorization", "sec-websocket-extensions"}
+# Journal des corps (`--log-bodies`) : champ de `client_metadata` remplacé par `MASKED`.
+INSTALLATION_ID = "x-codex-installation-id"
+MASKED = "<masqué>"
 
 
 class JsonLog:
@@ -302,6 +305,11 @@ class ReverseProxy(socketserver.ThreadingTCPServer):
             body = json.loads(raw)
         except ValueError:
             body = None
+        # Id d'installation de Codex CLI (YA-14) : masqué dans le journal des corps seulement,
+        # la requête relayée est inchangée.
+        meta = body.get("client_metadata") if isinstance(body, dict) else None
+        if isinstance(meta, dict) and INSTALLATION_ID in meta:
+            body = {**body, "client_metadata": {**meta, INSTALLATION_ID: MASKED}}
         self.bodies.write(transport=transport, path=path, session=session,
                           continuation=continuation, bytes_up=len(raw), body=body)
 

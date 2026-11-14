@@ -38,7 +38,6 @@ import json
 import os
 import pwd
 import re
-import shutil
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -239,7 +238,38 @@ def rollouts(codex_home: Path) -> dict[Path, int]:
     return {p: p.stat().st_size for p in root.rglob("*") if p.is_file() and ROLLOUT.match(p.name)}
 
 
-def copy_rollouts(codex_home: Path, before: dict[Path, int], dest: Path) -> list[Path]:
+# Masquage au ramassage (YA-14, chauffe du 14/11/2026) : Codex écrit l'id de compte et l'id
+# utilisateur ChatGPT dans `session_meta` (`core/src/session/session.rs:1222` au tag).
+MASK = "<masqué>"
+META_IDS = ("creator_account_id", "creator_user_id")
+
+
+def mask_text(text: str, secrets) -> tuple[str, int]:
+    """Texte d'un fichier de session avec `META_IDS` de `session_meta` et toute valeur de
+    `secrets` (filet : `run.secret_values`) remplacés par `MASK`, partout dans le fichier ;
+    rend aussi le nombre de remplacements. Le reste du fichier est inchangé."""
+    values = {v for v in secrets if v}
+    for line in text.splitlines():
+        if '"session_meta"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("type") == "session_meta":
+            payload = entry.get("payload") or {}
+            values |= {payload[k] for k in META_IDS if isinstance(payload.get(k), str) and payload[k]}
+    count = 0
+    for value in sorted(values, key=len, reverse=True):
+        count += text.count(value)
+        text = text.replace(value, MASK)
+    return text, count
+
+
+def copy_rollouts(codex_home: Path, before: dict[Path, int], dest: Path,
+                  secrets=()) -> list[Path]:
+    """Copie les fichiers de session nouveaux ou agrandis, masqués (`mask_text`) ; les
+    originaux, dans CODEX_HOME hors du dépôt, ne sont pas modifiés."""
     dest.mkdir(parents=True, exist_ok=True)
     copied = []
     for path, size in sorted(rollouts(codex_home).items()):
@@ -248,7 +278,7 @@ def copy_rollouts(codex_home: Path, before: dict[Path, int], dest: Path) -> list
         if path.name.endswith(".zst"):
             raise ValueError(f"fichier de session compressé, non lisible sans zstd : {path}")
         target = dest / path.name
-        shutil.copyfile(path, target)
+        target.write_text(mask_text(path.read_text(), secrets)[0])
         copied.append(target)
     return copied
 

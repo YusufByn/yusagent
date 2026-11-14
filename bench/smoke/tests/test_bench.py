@@ -729,6 +729,92 @@ class CodexFullBodies(unittest.TestCase):
                          {"generation_requests": 5, "full_body": 3, "after_first": 2})
 
 
+def fake_jwt(claims: dict) -> str:
+    return ".".join([codex_arm.b64({"alg": "none"}), codex_arm.b64(claims), "sig"])
+
+
+class SecretMasking(unittest.TestCase):
+    """YA-14 : ids de compte masqués au ramassage des sessions Codex, id d'installation masqué
+    dans le journal des corps, ids des claims recherchés, scan de la reprise."""
+
+    ACCOUNT = "11111111-2222-3333-4444-555555555555"
+    USER = "user-AbCdEfGhIjKlMnOpQrStUvWx"
+    REFRESH = "rt_secret-refresh-value-0123456789"
+
+    def real_cache(self, root: Path):
+        """Cache de run réel avec un `auth.json` par dossier de login (jetons factices)."""
+        cache = run.Cache(root, None, False)
+        claims = {"https://api.openai.com/auth": {"chatgpt_account_id": self.ACCOUNT,
+                                                  "chatgpt_user_id": self.USER},
+                  "email": "someone@example.org", "exp": 4102444800}
+        for home, data in ((cache.agent, {"openai-codex": {"access": fake_jwt(claims),
+                                                           "refresh": self.REFRESH,
+                                                           "accountId": self.ACCOUNT}}),
+                           (cache.codex_home, {"tokens": {"id_token": fake_jwt(claims),
+                                                          "account_id": self.ACCOUNT},
+                                               "last_refresh": "2026-11-14T00:00:00Z"})):
+            home.mkdir(parents=True, exist_ok=True)
+            (home / "auth.json").write_text(json.dumps(data))
+        return cache
+
+    def test_secret_values_include_claim_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            values = run.secret_values(self.real_cache(Path(tmp)), False, codex=True)
+        for value in (self.ACCOUNT, self.USER, self.REFRESH, "someone@example.org"):
+            self.assertIn(value, values)
+        self.assertEqual(len(values), len(set(values)))
+        self.assertNotIn("2026-11-14T00:00:00Z", values)
+
+    def test_rollout_masked_at_copy(self):
+        lines = [{"timestamp": "t0", "type": "session_meta",
+                  "payload": {"id": "th", "creator_account_id": self.ACCOUNT,
+                              "creator_user_id": self.USER, "cwd": "/w"}},
+                 {"timestamp": "t1", "type": "response_item",
+                  "payload": {"type": "function_call_output", "output": f"x {self.REFRESH} y"}},
+                 {"timestamp": "2026-11-14T10:00:01.000Z", "type": "token_usage_record",
+                  "payload": {"response_id": "r1", "usage": {"input_tokens": 10,
+                                                             "cached_input_tokens": 4,
+                                                             "output_tokens": 2}}}]
+        text = "".join(json.dumps(line) + "\n" for line in lines)
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "codex-home"
+            source = home / "sessions" / "2026" / "11" / "14" / "rollout-x.jsonl"
+            source.parent.mkdir(parents=True)
+            source.write_text(text)
+            [copy] = codex_arm.copy_rollouts(home, {}, Path(tmp) / "out", [self.REFRESH, ""])
+            masked = copy.read_text()
+            self.assertEqual(source.read_text(), text)  # original inchangé
+            records = codex_arm.records([copy], [], "th")
+            scan = run.scan_secrets(Path(tmp) / "out", [self.ACCOUNT, self.USER, self.REFRESH])
+        for value in (self.ACCOUNT, self.USER, self.REFRESH):
+            self.assertNotIn(value, masked)
+        meta = json.loads(masked.splitlines()[0])["payload"]
+        self.assertEqual((meta["creator_account_id"], meta["creator_user_id"], meta["id"]),
+                         (codex_arm.MASK, codex_arm.MASK, "th"))
+        self.assertEqual(masked.splitlines()[2], text.splitlines()[2])
+        self.assertEqual([(r["input"], r["cacheRead"]) for r in records], [(6, 4)])
+        self.assertEqual(scan["files_with_hits"], {})
+        self.assertEqual(codex_arm.mask_text(text, [self.REFRESH])[1], 3)
+
+    def test_installation_id_masked_in_body_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            proxy = proxies.ReverseProxy(tmp / "proxy.ndjson", ("127.0.0.1", 9, False),
+                                         tmp / "proxy-bodies.ndjson")
+            try:
+                raw = json.dumps({"type": "response.create", "client_metadata": {
+                    proxies.INSTALLATION_ID: "inst-0123456789abcdef", "turn_id": "t1"}}).encode()
+                proxy.write_body("websocket", "/backend-api/codex/responses", "s", True, raw)
+            finally:
+                proxy.server_close()
+            text = (tmp / "proxy-bodies.ndjson").read_text()
+        entry = json.loads(text)
+        self.assertNotIn("inst-0123456789abcdef", text)
+        self.assertEqual(entry["body"]["client_metadata"],
+                         {proxies.INSTALLATION_ID: proxies.MASKED, "turn_id": "t1"})
+        self.assertEqual(entry["bytes_up"], len(raw))
+
+
 class CaptureCodex(unittest.TestCase):
     """YA-14 : le serveur de capture reconnaît Codex (`additional_tools`, tool libre `exec`)."""
 
