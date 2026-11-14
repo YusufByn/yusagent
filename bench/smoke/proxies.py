@@ -13,9 +13,13 @@ run de chauffe de `record-hosts` seulement) : accepte tout hôte sur le port 443
 note, pour établir la liste.
 
 Journaux (JSON Lines) : jamais d'en-tête ni de corps. Par requête modèle : horodatage,
-transport, méthode, chemin, statut, octets, et l'identifiant de session lu dans le
+transport, méthode, chemin, statut, octets, l'identifiant de session lu dans le
 corps (`prompt_cache_key`, l'id de session du harness), qui sert à apparier la
-requête avec le journal d'usage. Par CONNECT : hôte, port, accepté ou refusé.
+requête avec le journal d'usage, et son champ `generate` (YA-14 : `false` pour le prewarm
+de Codex CLI). Par réponse (YA-14, sens serveur → client) : sa fin (`event: response` :
+type d'événement, id de réponse, statut, compteurs d'usage) ou une erreur
+(`event: response_error` : statut, type et code), jamais de texte. Par CONNECT : hôte,
+port, accepté ou refusé.
 
 Inactivité (YA-14) : le reverse proxy note l'heure du dernier octet relayé, dans un sens ou
 dans l'autre (`idle_seconds`) ; le runner arrête une tâche dont le flux reste muet trop
@@ -26,6 +30,7 @@ Bibliothèque standard uniquement.
 
 from __future__ import annotations
 
+import collections
 import json
 import socket
 import socketserver
@@ -95,7 +100,17 @@ def session_of(body: bytes) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def pipe(src: socket.socket, dst: socket.socket, counter: list[int], on_bytes=None) -> None:
+def generate_of(body: bytes) -> bool | None:
+    """Champ `generate` d'un corps de requête (YA-14 : `false` pour le prewarm de Codex CLI)."""
+    try:
+        value = json.loads(body).get("generate")
+    except (ValueError, AttributeError):
+        return None
+    return value if isinstance(value, bool) else None
+
+
+def pipe(src: socket.socket, dst: socket.socket, counter: list[int], on_bytes=None,
+         on_data=None) -> None:
     try:
         while True:
             chunk = src.recv(65536)
@@ -104,6 +119,8 @@ def pipe(src: socket.socket, dst: socket.socket, counter: list[int], on_bytes=No
             counter[0] += len(chunk)
             if on_bytes is not None:
                 on_bytes()
+            if on_data is not None:
+                on_data(chunk)
             dst.sendall(chunk)
     except OSError:
         pass
@@ -115,13 +132,13 @@ def pipe(src: socket.socket, dst: socket.socket, counter: list[int], on_bytes=No
                 pass
 
 
-class FrameCounter:
-    """Lit les trames client d'un WebSocket relayé et note chaque `response.create`."""
+class FrameReader:
+    """Messages d'un sens d'un WebSocket relayé (trames texte ou binaires, fragmentées ou non,
+    masquées côté client) ; `message` reçoit chaque message complet."""
 
-    def __init__(self, on_request):
+    def __init__(self):
         self.buffer = b""
         self.parts: list[bytes] = []
-        self.on_request = on_request
 
     def feed(self, data: bytes) -> None:
         self.buffer += data
@@ -161,14 +178,87 @@ class FrameCounter:
         return fin, opcode, payload
 
     def message(self, message: bytes) -> None:
+        raise NotImplementedError
+
+
+class FrameCounter(FrameReader):
+    """Lit les trames client d'un WebSocket relayé et note chaque `response.create`, avec son
+    champ `generate` (YA-14 : `false` pour le prewarm de Codex CLI, sans génération)."""
+
+    def __init__(self, on_request):
+        super().__init__()
+        self.on_request = on_request
+
+    def message(self, message: bytes) -> None:
         try:
             event = json.loads(message)
         except ValueError:
             return
         if isinstance(event, dict) and event.get("type") == "response.create":
             key = event.get("prompt_cache_key")
+            generate = event.get("generate")
             self.on_request(key if isinstance(key, str) else None,
-                            event.get("previous_response_id") is not None, len(message), message)
+                            event.get("previous_response_id") is not None, len(message), message,
+                            generate if isinstance(generate, bool) else None)
+
+
+def usage_counts(usage) -> dict:
+    """Compteurs d'usage d'une réponse Responses : des nombres, rien d'autre."""
+    usage = usage if isinstance(usage, dict) else {}
+    inp = usage.get("input_tokens_details") or {}
+    out = usage.get("output_tokens_details") or {}
+    return {"input_tokens": usage.get("input_tokens"), "cached_tokens": inp.get("cached_tokens"),
+            "cache_write_tokens": inp.get("cache_write_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+            "reasoning_tokens": out.get("reasoning_tokens")}
+
+
+def response_outcome(event) -> dict | None:
+    """Fin d'une réponse dans un événement du serveur (YA-14) : usage d'une réponse terminée,
+    statut d'une réponse en échec ou incomplète, type et code d'une erreur. Jamais de texte."""
+    if not isinstance(event, dict):
+        return None
+    kind = event.get("type")
+    response = event.get("response") if isinstance(event.get("response"), dict) else {}
+    if kind in ("response.completed", "response.done", "response.failed", "response.incomplete"):
+        return {"event": "response", "kind": kind, "response_id": response.get("id"),
+                "status": response.get("status"), "usage": usage_counts(response.get("usage"))}
+    if kind == "error":
+        error = event.get("error") if isinstance(event.get("error"), dict) else {}
+        return {"event": "response_error", "kind": kind, "status": event.get("status"),
+                "error_type": error.get("type"), "error_code": error.get("code")}
+    return None
+
+
+class ResponseWatcher(FrameReader):
+    """Sens serveur → client (YA-14) : fin de chaque réponse (`response_outcome`), trames
+    WebSocket ou flux SSE. Nourri par les octets relayés ; n'écrit ni corps ni texte."""
+
+    def __init__(self, on_outcome, websocket: bool):
+        super().__init__()
+        self.on_outcome = on_outcome
+        self.websocket = websocket
+        self.text = b""
+
+    def feed(self, data: bytes) -> None:
+        if self.websocket:
+            super().feed(data)
+            return
+        self.text += data
+        while b"\n\n" in self.text:
+            block, self.text = self.text.split(b"\n\n", 1)
+            lines = [line[5:].strip() for line in block.replace(b"\r", b"").split(b"\n")
+                     if line.startswith(b"data:")]
+            if lines:
+                self.message(b"\n".join(lines))
+
+    def message(self, message: bytes) -> None:
+        try:
+            outcome = response_outcome(json.loads(message))
+        except ValueError:
+            return
+        if outcome is not None:
+            self.on_outcome(outcome)
 
 
 class ReverseProxy(socketserver.ThreadingTCPServer):
@@ -178,10 +268,13 @@ class ReverseProxy(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
     def __init__(self, log_path: Path, upstream: tuple[str, int, bool] | None = None,
-                 bodies_path: Path | None = None):
+                 bodies_path: Path | None = None, allowed_paths: set[str] | None = None):
         # `upstream` n'est passé que par le mode capture du runner (serveur local, sans
         # TLS) ; sinon la cible est chatgpt.com:443 en TLS.
         self.upstream = upstream or (UPSTREAM_HOST, UPSTREAM_PORT, True)
+        # Liste stricte de chemins (YA-14, bras Codex CLI : `/backend-api/codex/responses`
+        # seul) ; sans elle, tout chemin sous ALLOWED_PREFIX passe.
+        self.allowed_paths = allowed_paths
         if upstream is not None and upstream[0] != "127.0.0.1":
             raise ValueError("cible amont de test : 127.0.0.1 uniquement")
         self.log = JsonLog(log_path)
@@ -239,7 +332,9 @@ class ReverseHandler(socketserver.BaseRequestHandler):
         path = target.split("?", 1)[0]
         is_ws = (header(headers, "upgrade") or "").lower() == "websocket"
         transport = "websocket" if is_ws else "http"
-        if not path.startswith(ALLOWED_PREFIX) or not target.startswith("/"):
+        if (not path.startswith(ALLOWED_PREFIX) or not target.startswith("/")
+                or (self.server.allowed_paths is not None
+                    and path not in self.server.allowed_paths)):
             self.server.log.write(event="refused", transport=transport, method=method,
                                   path=path, reason="chemin hors cible")
             client.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n"
@@ -283,17 +378,24 @@ class ReverseHandler(socketserver.BaseRequestHandler):
         first = upstream.recv(65536)
         self.server.touch()
         status = first.split(b" ", 2)[1].decode("latin-1") if first.count(b" ") >= 2 else None
-        self.server.log.write(event="request", transport="sse" if method == "POST" else "http",
-                              method=method, path=path, status=status,
-                              session=session_of(body), bytes_up=len(body))
+        transport = "sse" if method == "POST" else "http"
+        session, generate = session_of(body), generate_of(body)
+        self.server.log.write(event="request", transport=transport, method=method, path=path,
+                              status=status, session=session, bytes_up=len(body),
+                              generate=generate)
         if method == "POST":
-            self.server.write_body("sse", path, session_of(body), None, body)
+            self.server.write_body("sse", path, session, None, body)
         try:
             client.sendall(first)
         except OSError:
             return
         received[0] += len(first)
-        pipe(upstream, client, received, self.server.touch)
+        # Usage de la réponse, lu dans le flux SSE après l'en-tête HTTP (compteurs seuls).
+        watcher = ResponseWatcher(lambda outcome: self.server.log.write(
+            transport=transport, path=path, session=session, generate=generate, **outcome),
+            websocket=False)
+        watcher.feed(first.partition(b"\r\n\r\n")[2])
+        pipe(upstream, client, received, self.server.touch, watcher.feed)
         self.server.log.write(event="done", transport="sse" if method == "POST" else "http",
                               path=path, bytes_down=received[0],
                               ms=round((time.monotonic() - started) * 1000))
@@ -310,13 +412,25 @@ class ReverseHandler(socketserver.BaseRequestHandler):
             pipe(upstream, client, [0])
             return
 
-        def on_request(session, continuation, size, message):
+        # Requêtes en attente de leur réponse, dans l'ordre (une connexion sert ses requêtes
+        # l'une après l'autre) : la fin de chaque réponse est notée avec sa session.
+        pending: collections.deque = collections.deque()
+
+        def on_request(session, continuation, size, message, generate=None):
+            pending.append((session, generate))
             self.server.log.write(event="request", transport="websocket", method="WS",
                                   path=path, status=status, session=session,
-                                  continuation=continuation, bytes_up=size)
+                                  continuation=continuation, bytes_up=size, generate=generate)
             self.server.write_body("websocket", path, session, continuation, message)
 
+        def on_outcome(outcome):
+            session, generate = pending.popleft() if pending else (None, None)
+            self.server.log.write(transport="websocket", path=path, session=session,
+                                  generate=generate, **outcome)
+
         counter = FrameCounter(on_request)
+        watcher = ResponseWatcher(on_outcome, websocket=True)
+        watcher.feed(rest)
         up, down = [0], [len(rest)]
 
         def client_to_upstream():
@@ -340,7 +454,7 @@ class ReverseHandler(socketserver.BaseRequestHandler):
 
         thread = threading.Thread(target=client_to_upstream, daemon=True)
         thread.start()
-        pipe(upstream, client, down, self.server.touch)
+        pipe(upstream, client, down, self.server.touch, watcher.feed)
         thread.join(timeout=5)
         self.server.log.write(event="ws_close", transport="websocket", path=path,
                               bytes_up=up[0], bytes_down=down[0],
