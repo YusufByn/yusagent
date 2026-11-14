@@ -1,0 +1,40 @@
+# Config de Codex CLI au smoke bench (YA-14), écrite par run.py dans CODEX_HOME avant chaque
+# session (ne rien y mettre à la main). Codex 0.169.0 tel que livré, sauf ce que le banc
+# impose (plan : bench/smoke/ab/ya14-codex-plan.md, « Écarts avec Codex tel que livré ») :
+#   - provider personnalisé vers le reverse proxy du banc, connecté par le login ChatGPT ;
+#   - catalogue des modèles figé (models.json du tag, installé par tools/install-codex.sh) ;
+#   - recherche web coupée (réseau coupé en phase agent ; passerait sur {base}/alpha/search) ;
+#   - analytics coupé (événements et métriques Statsig vers chatgpt.com) ;
+#   - reconnexions sans fin coupées et délai d'inactivité du flux au-delà du garde-fou du
+#     banc (300 s), pour que le banc décide seul d'un flux bloqué ;
+#   - variables de proxy retirées de l'environnement des commandes du modèle (comme le
+#     kernel et bash() de yusAgent, sonde du banc) ;
+#   - fonctions coupées seulement si le premier corps envoyé au modèle reste identique
+#     (réglage `codex.featureCuts`, preuve au banc de capture).
+# Jetons entre doubles accolades remplacés par codex_arm.config_text (URL du reverse proxy,
+# catalogue figé, fonctions coupées).
+model_provider = "ya_bench"
+model_catalog_json = "{{CATALOG}}"
+web_search = "disabled"
+cli_auth_credentials_store = "file"
+check_for_update_on_startup = false
+
+[analytics]
+enabled = false
+
+[features]
+unbounded_connection_retries = false
+{{FEATURE_CUTS}}
+
+[shell_environment_policy]
+exclude = ["*PROXY*"]
+
+# Nom différent de "OpenAI" : pas de routage d'espace de travail par requête vers
+# chatgpt.com (model-provider/src/provider.rs:256-282). Comportements liés au nom : plan.
+[model_providers.ya_bench]
+name = "yusagent-bench"
+base_url = "{{BASE_URL}}"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = true
+stream_idle_timeout_ms = 900000
