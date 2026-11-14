@@ -38,6 +38,7 @@ python3 -I bench/smoke/compare.py <run A> <run B> [--baseline bench/smoke/baseli
 python3 -I bench/smoke/baseline.py <run> [<run> ...] [--exclude <run>:<tâche>[,<tâche>...]]   # écrit bench/smoke/baseline/<modèle>.json
 python3 -I bench/smoke/metrics.py <run> [<run> ...]    # miss serveur et taux évitable, runs déjà faits
 python3 -I bench/smoke/run.py --rereport <run>         # rapport recalculé depuis les journaux du run
+python3 -I bench/smoke/continue_session.py --binary <dossier>/prime-agent --task <id> --out <run>/tasks/<id>/continue-1 "<prompt>"   # appel réel : --continue de la dernière session de la tâche, nouveau processus, mêmes sandbox et proxies
 python3 -I bench/smoke/metrics.py --theory-check <run> [<run> ...]   # validation du cache théorique
 python3 -I bench/smoke/metrics.py --since-prev <run> [<run> ...] [--exclude <run>:<tâche>]   # p99 et maximum de sincePrevMs
 python3 -I bench/smoke/tools/ab.py <dossier du binaire> <sha de référence> --a <réglages A> --b <réglages B> [--tasks ...] [--passes 3] [--seed N]
