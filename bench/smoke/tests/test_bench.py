@@ -680,6 +680,39 @@ class CodexLaunchGuard(unittest.TestCase):
                                             "/x/codex", "exec"]))
 
 
+class CodexConfig(unittest.TestCase):
+    """YA-14 : la config du banc remplace celle du login et garde `auth.json` (pas de trousseau)."""
+
+    def test_rewrite_keeps_file_store(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            # Config laissée par le login du plan, puis par `--trust` pendant une session.
+            (home / "config.toml").write_text(
+                'cli_auth_credentials_store = "file"\n\n[projects."/w"]\ntrust_level = "trusted"\n')
+            text = codex_arm.write_config(home, 4321, Path("/x/codex"), {"version": "1"})
+            written = (home / "config.toml").read_text()
+        self.assertEqual(written, text)
+        conf = tomllib.loads(written)
+        self.assertEqual(conf["cli_auth_credentials_store"], "file")
+        self.assertNotIn("projects", conf)
+        self.assertEqual(written.count("cli_auth_credentials_store"), 1)
+
+    def test_refuses_template_without_file_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / "config.toml.in"
+            template.write_text(codex_arm.TEMPLATE.read_text().replace(
+                'cli_auth_credentials_store = "file"', 'cli_auth_credentials_store = "auto"'))
+            saved, codex_arm.TEMPLATE = codex_arm.TEMPLATE, template
+            try:
+                with self.assertRaisesRegex(ValueError, "cli_auth_credentials_store"):
+                    codex_arm.write_config(Path(tmp) / "home", 1, Path("/x/codex"),
+                                           {"version": "1"})
+            finally:
+                codex_arm.TEMPLATE = saved
+            self.assertFalse((Path(tmp) / "home" / "config.toml").exists())
+
+
 class CaptureCodex(unittest.TestCase):
     """YA-14 : le serveur de capture reconnaît Codex (`additional_tools`, tool libre `exec`)."""
 

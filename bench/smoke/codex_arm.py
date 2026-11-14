@@ -39,6 +39,7 @@ import os
 import pwd
 import re
 import shutil
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -121,9 +122,19 @@ def config_text(proxy_port: int, binary: Path, codex: dict) -> str:
 
 
 def write_config(codex_home: Path, proxy_port: int, binary: Path, codex: dict) -> str:
-    """Écrit `config.toml` et rend son texte (copié dans le run, sha256 dans l'en-tête)."""
+    """Écrit `config.toml` et rend son texte (copié dans le run, sha256 dans l'en-tête).
+
+    Le fichier est remplacé en entier avant chaque session : ce qu'y écrit le login
+    (`printf` du plan, même clé) ou Codex pendant la session (`--trust` y ajoute
+    `[projects."<workspace>"]`, `exec/src/lib.rs:551-577` au tag) ne passe pas d'une session
+    à l'autre. Refus si la config écrite ne garde pas les identifiants dans `auth.json`
+    (`cli_auth_credentials_store = "file"`, jamais le trousseau)."""
     codex_home.mkdir(parents=True, exist_ok=True)
     text = config_text(proxy_port, binary, codex)
+    store = tomllib.loads(text).get("cli_auth_credentials_store")
+    if store != "file":
+        raise ValueError(f"config de Codex : cli_auth_credentials_store = {store!r}, "
+                         "\"file\" requis")
     (codex_home / "config.toml").write_text(text)
     return text
 
