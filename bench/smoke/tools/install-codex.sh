@@ -43,7 +43,14 @@ check() {
     [ "$want" = "$got" ] || { echo "$d : sha256 de $f $got ≠ manifeste $want" >&2; return 1; }
   done
   [ "$(shasum -a 256 "$d/models.json" | cut -d' ' -f1)" = "$CATALOG_SHA" ] || { echo "$d : catalogue ≠ $CATALOG_SHA" >&2; return 1; }
-  "$d/codex" --version 2>/dev/null | grep -qx "codex-cli $VERSION" || { echo "$d : version ≠ codex-cli $VERSION" >&2; return 1; }
+  # CODEX_HOME et HOME dédiés, réseau coupé : sans CODEX_HOME, Codex écrit dans ~/.codex
+  # avant même de lire --version (arg0/src/lib.rs:134, 322-352 au tag ; garde-fou du banc,
+  # codex_arm.check_launch).
+  local vhome="$BASE/.codex-version-home"
+  mkdir -p "$vhome"
+  env -i PATH=/usr/bin:/bin HOME="$vhome" CODEX_HOME="$vhome" \
+    /usr/bin/sandbox-exec -p '(version 1) (allow default) (deny network*)' \
+    "$d/codex" --version 2>/dev/null | grep -qx "codex-cli $VERSION" || { echo "$d : version ≠ codex-cli $VERSION" >&2; return 1; }
 }
 
 if [ -e "$DEST" ] && [ "$FORCE" = 0 ]; then

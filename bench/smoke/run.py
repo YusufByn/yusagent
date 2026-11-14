@@ -337,14 +337,20 @@ def agent_profile(cache: "Cache", workspace: Path, binary: Path | None,
 
 def run_process(cmd: list[str], env: dict, cwd: Path, out: Path, err: Path, timeout: int,
                 sandboxed: bool, profile: list[str] | None = None,
-                idle: tuple | None = None) -> dict:
+                idle: tuple | None = None, check=None) -> dict:
     """Lance `cmd` ; sous sandbox, profil réseau du banc de capture sauf `profile` donné.
 
     `idle` : (fonction qui rend les secondes d'inactivité du reverse proxy, limite en s).
     Au-delà de la limite, le processus est arrêté et le résultat porte `stalled`.
+    `check(argv, env)` : contrôle de la commande finale avant lancement, obligatoire pour
+    Codex CLI (`codex_guard`) : sans lui, un lancement de `codex` est refusé.
     """
     if sandboxed:
         cmd = ["/usr/bin/sandbox-exec", *(profile or ["-f", str(SANDBOX)]), *cmd]
+    if codex_arm.is_codex(cmd):
+        if check is None:
+            raise codex_arm.LaunchRefused("lancement de Codex refusé : sans garde-fou")
+        check(cmd, env)
     started = time.monotonic()
     timed_out = stalled = False
     code = None
@@ -806,6 +812,27 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
             "proxy_log": proxies.read_log(access.log_path), "connect": connect_entries}
 
 
+def codex_guard(cache: Cache):
+    """Garde-fou de tout lancement de Codex (`codex_arm.check_launch`) : profil de la phase
+    agent, CODEX_HOME du banc sous `cache.root`."""
+    return lambda argv, env: codex_arm.check_launch(argv, env, SANDBOX_AGENT, cache.root)
+
+
+def codex_version(binary: Path, cache: Cache) -> str | None:
+    """`codex --version` sous le garde-fou (profil de la phase agent, CODEX_HOME de la sonde) :
+    sans CODEX_HOME, Codex écrit dans `~/.codex` avant même de lire `--version`."""
+    home = cache.probe_codex_home
+    home.mkdir(parents=True, exist_ok=True)
+    project = work_dir(cache, "codex-version")
+    out, err = cache.tmp / "codex-version.out", cache.tmp / "codex-version.err"
+    result = run_process([str(binary), "--version"],
+                         codex_arm.env(tool_path(), cache.home, cache.tmp, home, None), project,
+                         out, err, 30, sandboxed=True,
+                         profile=agent_profile(cache, project, binary, home),
+                         check=codex_guard(cache))
+    return (out.read_text().strip() or None) if result["exit"] == 0 else None
+
+
 def codex_session(binary: Path, cache: Cache, codex_home: Path, out: Path, model: str,
                   effort: str, prompt: str, cwd: Path, access: Access,
                   connect: proxies.ConnectProxy, codex: dict, timeout: int,
@@ -823,7 +850,7 @@ def codex_session(binary: Path, cache: Cache, codex_home: Path, out: Path, model
                           out / "out.jsonl", out / "err.log", timeout, sandboxed=True,
                           profile=agent_profile(cache, cwd, binary, codex_home),
                           idle=(access.proxy.idle_seconds, idle_timeout)
-                          if idle_timeout is not None else None)
+                          if idle_timeout is not None else None, check=codex_guard(cache))
     codex_arm.copy_rollouts(codex_home, before, out / "sessions")
     connect_entries = proxies.read_log(connect.log.path)[connect_before:]
     with (out / "connect.ndjson").open("w") as handle:
@@ -1760,7 +1787,7 @@ def main() -> None:
             "commit": git("rev-parse", "HEAD"), "commit_dirty": bool(git("status", "--porcelain")),
             "binary": str(binary), "binary_sha256": cache.binary_sha,
             "binary_manifest": manifest,
-            "binary_version": (codex_arm.version_line(binary) if codex is not None
+            "binary_version": (codex_version(binary, cache) if codex is not None
                                else version_of([str(binary), "--version"])),
             "harness": "codex" if codex is not None else "yusagent",
             "codex": ({"version": codex["version"],

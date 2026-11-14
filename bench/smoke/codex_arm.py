@@ -8,6 +8,8 @@ Lancement : `codex exec --json` sous le même profil sandbox que yusAgent (`sand
 `AGENT_DIR` = CODEX_HOME du banc, `BIN_DIR` = dossier de Codex), mêmes proxys : le reverse
 proxy du banc sert de `base_url` à un provider personnalisé connecté par le login ChatGPT
 (`codex/config.toml.in`), en WebSocket, chemin `/backend-api/codex/responses` seul.
+Garde-fou (`check_launch`, appelé par `run.run_process` pour tout lancement de `codex`) :
+refus hors `sandbox-exec` ou avec un CODEX_HOME autre que ceux du banc (jamais `~/.codex`).
 
 Mesures, depuis les journaux de Codex 0.169.0 (lus dans le code du tag, plan YA-14) :
   - fichier de session (`$CODEX_HOME/sessions/AAAA/MM/JJ/rollout-*.jsonl`) : une ligne
@@ -34,9 +36,9 @@ import base64
 import hashlib
 import json
 import os
+import pwd
 import re
 import shutil
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -153,6 +155,70 @@ def cmd(binary: Path, model: str, effort: str, prompt: str) -> list[str]:
     return [str(binary), "exec", "--json", "--skip-git-repo-check", "--trust",
             "-s", "danger-full-access", "-m", model, "-c", f"model_reasoning_effort={effort}",
             prompt]
+
+
+# --- Garde-fou de lancement -------------------------------------------------------------
+# Incident du 14/11/2026 (passation YA-14) : un premier essai de Codex a tourné hors sandbox.
+# Sans CODEX_HOME, Codex prend `~/.codex` (`utils/home-dir/src/lib.rs`, au tag) et s'en sert
+# avant même de lire ses arguments, `--version` compris : `.env` lu (`arg0/src/lib.rs:134`),
+# dossier `tmp/arg0-macos` créé (`arg0/src/lib.rs:322-352`).
+
+SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+# CODEX_HOME du banc (`run.Cache`) : run réel, mode capture, sonde.
+BENCH_HOMES = ("codex-home", "capture-codex-home", "probe-codex-home")
+
+
+class LaunchRefused(RuntimeError):
+    """Lancement de Codex refusé par le garde-fou du banc."""
+
+
+def user_homes() -> set[Path]:
+    """Dossier personnel de l'utilisateur, par `HOME` et par le compte (`getpwuid`)."""
+    return {Path.home().resolve(), Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()}
+
+
+def executable(argv: list[str]) -> str | None:
+    """Programme lancé par `argv`, après le préfixe `sandbox-exec` et ses options."""
+    if argv and argv[0] == SANDBOX_EXEC:
+        i = 1
+        while i < len(argv) and argv[i] in ("-f", "-p", "-n", "-D"):
+            i += 2
+        return argv[i] if i < len(argv) else None
+    return argv[0] if argv else None
+
+
+def is_codex(argv: list[str]) -> bool:
+    exe = executable(argv)
+    return exe is not None and Path(exe).name == "codex"
+
+
+def check_launch(argv: list[str], env: dict, profile: Path, cache_root: Path) -> None:
+    """Refuse un lancement de Codex hors `sandbox-exec` avec le profil de la phase agent
+    (`profile`), ou avec un CODEX_HOME autre que ceux du banc sous `cache_root` (jamais
+    `~/.codex`, ni sans CODEX_HOME), ou avec le vrai `HOME`. Le profil doit donner ce
+    CODEX_HOME comme dossier agent (`AGENT_DIR`, seul dossier agent ouvert en écriture)."""
+    problems = []
+    if argv[:3] != [SANDBOX_EXEC, "-f", str(profile)]:
+        problems.append(f"hors {SANDBOX_EXEC} -f {profile}")
+    homes = user_homes()
+    home = env.get("HOME")
+    if not home or Path(home).resolve() in homes:
+        problems.append(f"HOME absent ou réel ({home!r})")
+    codex_home = env.get("CODEX_HOME")
+    if not codex_home:
+        problems.append("CODEX_HOME absent (Codex prendrait ~/.codex)")
+    else:
+        resolved = Path(codex_home).resolve()
+        users = {h / ".codex" for h in homes}
+        if any(resolved == u or u in resolved.parents for u in users):
+            problems.append(f"CODEX_HOME dans ~/.codex ({resolved})")
+        allowed = {(cache_root / name).resolve() for name in BENCH_HOMES}
+        if resolved not in allowed:
+            problems.append(f"CODEX_HOME {resolved} hors du banc ({sorted(map(str, allowed))})")
+        if f"AGENT_DIR={resolved}" not in argv:
+            problems.append(f"AGENT_DIR du profil ≠ CODEX_HOME {resolved}")
+    if problems:
+        raise LaunchRefused("lancement de Codex refusé : " + " ; ".join(problems))
 
 
 def rollouts(codex_home: Path) -> dict[Path, int]:
@@ -390,13 +456,3 @@ def cells(summary: dict) -> dict:
     calls = summary.get("tool_calls") or {}
     return {"cells": calls.get("exec", 0), "errors": None, "syntax_errors": None, "by_type": {},
             "tool_calls": calls}
-
-
-def version_line(binary: Path) -> str | None:
-    try:
-        proc = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
-                              timeout=20, stdin=subprocess.DEVNULL,
-                              env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return proc.stdout.strip() or None

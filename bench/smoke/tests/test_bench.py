@@ -617,6 +617,69 @@ class CodexArm(unittest.TestCase):
         self.assertEqual(codex_arm.final(ev)["stop_reason"], "stop")
 
 
+class CodexLaunchGuard(unittest.TestCase):
+    """YA-14 : Codex ne se lance que sous sandbox-exec, avec un CODEX_HOME du banc (jamais
+    `~/.codex`). Un faux `codex` (script) note son lancement : il ne doit jamais tourner."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.cache = run.Cache(self.root / "cache", None, True)
+        self.marker = self.root / "launched"
+        self.binary = self.root / "bin" / "codex"
+        self.binary.parent.mkdir()
+        self.binary.write_text(f"#!/bin/sh\ntouch {self.marker}\n")
+        self.binary.chmod(0o755)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def launch(self, codex_home, sandboxed=True, check=True, agent_dir=None, home=None):
+        env = codex_arm.env("/usr/bin:/bin", home or self.cache.home, self.cache.tmp,
+                            codex_home, None)
+        if codex_home is None:
+            del env["CODEX_HOME"]
+        work = self.root / "work"
+        work.mkdir(exist_ok=True)
+        profile = run.agent_profile(self.cache, work, self.binary,
+                                    agent_dir or codex_home or self.cache.codex_home)
+        return run.run_process([str(self.binary), "--version"], env, work, self.root / "out",
+                               self.root / "err", 10, sandboxed=sandboxed, profile=profile,
+                               check=run.codex_guard(self.cache) if check else None)
+
+    def assertRefused(self, pattern, **kwargs):
+        with self.assertRaisesRegex(codex_arm.LaunchRefused, pattern):
+            self.launch(**kwargs)
+        self.assertFalse(self.marker.exists())
+
+    def test_refusals(self):
+        bench = self.cache.codex_home
+        self.assertRefused("sans garde-fou", codex_home=bench, check=False)
+        self.assertRefused("hors /usr/bin/sandbox-exec", codex_home=bench, sandboxed=False)
+        self.assertRefused("CODEX_HOME absent", codex_home=None)
+        self.assertRefused(r"CODEX_HOME dans ~/\.codex", codex_home=Path.home() / ".codex")
+        self.assertRefused("hors du banc", codex_home=self.root / "elsewhere")
+        self.assertRefused("AGENT_DIR du profil", codex_home=bench,
+                           agent_dir=self.cache.probe_codex_home)
+        self.assertRefused("HOME absent ou réel", codex_home=bench, home=Path.home())
+
+    def test_accepted_launch_runs(self):
+        for home in (self.cache.codex_home, self.cache.probe_codex_home):
+            home.mkdir(parents=True, exist_ok=True)
+            # Lever l'exception est le seul effet du garde-fou : il ne lance rien lui-même.
+            codex_arm.check_launch(
+                ["/usr/bin/sandbox-exec", "-f", str(run.SANDBOX_AGENT), "-D",
+                 f"AGENT_DIR={home.resolve()}", str(self.binary)],
+                {"HOME": str(self.cache.home), "CODEX_HOME": str(home)},
+                run.SANDBOX_AGENT, self.cache.root)
+
+    def test_other_programs_untouched(self):
+        self.assertFalse(codex_arm.is_codex(["/usr/bin/sandbox-exec", "-f", "p", "-D", "A=codex",
+                                             "/x/prime-agent", "codex"]))
+        self.assertTrue(codex_arm.is_codex(["/usr/bin/sandbox-exec", "-f", "p", "-D", "A=b",
+                                            "/x/codex", "exec"]))
+
+
 class CaptureCodex(unittest.TestCase):
     """YA-14 : le serveur de capture reconnaît Codex (`additional_tools`, tool libre `exec`)."""
 
