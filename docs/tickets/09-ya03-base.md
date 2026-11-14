@@ -149,3 +149,33 @@ Le rapport dit que la résolution ne se tranche pas à 10 tâches. La condition 
   - `crates/pa-core/tests/prefix_stability.rs` (`codex_websocket_apply_patch_replays_as_custom_and_continues`) teste la reprise dans le même processus, sur la connexion déjà ouverte (suite de conversation).
   - La reprise dans un nouveau processus, en corps complet sur une nouvelle connexion, n'a été vérifiée qu'à la main (`bench/smoke/continue_session.py`, chauffe du 14/11), contre le vrai backend.
 - **Hors périmètre de YA-03** (déjà décidé, groupé avec YA-09) : `timeout=` et `cwd=` de `bash()`, shell principal persistant. Le critère du CDC qui en dépend (un `cd` visible dans l'appel séquentiel suivant) passe avec eux.
+
+## Constats de la comparaison YA-14 contre Codex CLI, pour YA-09 (14/11/2026)
+
+Source : `bench/smoke/ab/ya14-codex-20261114.md` (`gpt-6-luna`, binaire `80e20ea`, `default.json`, contre Codex CLI 0.169.0). Mesures : `bench/smoke/ab/ya14-codex-20261114-mesures.py`. Constats seulement, aucune action dans ce ticket. La proposition qui en découle pour YA-09 est au journal du CDC (14/11/2026, « Proposition pour YA-09 »).
+
+- **Tours.** 235,7 appels au modèle par passe pour yusAgent, 126,0 pour Codex. Sur les 5 tâches communes, 17,0 appels par lancement contre 9,0.
+  - Classification heuristique des appels de tools (moyenne par lancement, tâches communes, A contre B) : lecture et exploration 9,5 contre 5,8 ; edit 2,7 contre 1,6 ; test et vérification 3,1 contre 0,4 ; relève 0,5 contre 0,2.
+  - Les lectures se font par tranches, une par tour (par exemple `py-graphiti-2030` passe 1, tours 4 à 12), et les tests partent dans un tour séparé de l'edit.
+- **Attentes de `bash()`.**
+  - `await bash(cmd)` rend la main après 1 s (`prime-agent-runtime/src/rlm/bash.py:69`, `:1076`), comme l'annonce le prompt (`crates/pa-core/src/prompts/system_prompt.rs:343`). L'avis du stderr s'arrête après 3 occurrences par kernel (`bash.py:86-100`).
+  - Sur les 30 lancements yusAgent : 70 cellules revenues avant la fin de la commande, 54 tours de relève (cellule qui ne fait que lire un handle) et 64 notifications `[bash-done]`.
+  - La règle « ne pas relever un handle encore en cours, finir le tour » (`crates/pa-core/src/prompts/ya_tools_prompt.rs:47`, `crates/pa-core/src/prompts/layers/usage.md:17`) n'est pas suivie par `gpt-6-luna`. Exemple : `node-testsprite-356` passe 3, 19 tours de relève. Exemple aussi de mauvais usage de l'API : passe 1, tour 35, `test_handle.output()` sur un `str`, d'où une `TypeError`.
+  - Codex attend ses commandes : sur 252 `exec_command`, 126 donnent `yield_time_ms` dans l'appel (94 à 10 000, 27 à 30 000, 5 à 1 000).
+- **Latence par appel.**
+  - Même débit par token dans les deux harness (environ 14 à 18 ms par token de sortie).
+  - Latence fixe d'un appel avec raisonnement : 3,62 s pour yusAgent contre 0,73 s pour Codex. Sans raisonnement : 0,84 s contre 0,79 s (moindres carrés, 5 tâches communes).
+  - Écart de requête qui correspond : `reasoning.summary` vaut `"auto"` par défaut chez yusAgent (`crates/pa-ai/src/providers/openai_codex_responses/mod.rs:95-99`, `:700` ; aucun appelant ne règle `reasoning_summary`). Codex omet le champ pour `gpt-6-luna` (`default_reasoning_summary: "none"`, `codex-rs/core/src/client.rs:1149-1152` au tag `rust-v0.169.0`).
+  - C'est une corrélation, à mesurer par A/B (réglage du résumé). Toute valeur changerait le corps envoyé, pas le prompt système ni les définitions de tools.
+- **TTFT.** `ttftMs` du journal d'usage est pris au premier événement de contenu, début du raisonnement compris (`crates/pa-core/src/session_engine/usage_log.rs:778-786`) : ce n'est pas le premier token visible. Médiane 0,83 s.
+- **Échecs : mauvaise piste et vérification partielle.**
+  - `py-graphiti-2030` (yusAgent 1/3, Codex 3/3) :
+    - aux passes 1 et 3, `resolve_extracted_edge` n'ajoute que l'épisode courant, sans `extracted_edge.episodes` (passe 1, tours 13 et 24 ; passe 3, tour 12) ;
+    - passe 3, tour 14 : attribut inexistant `self.store_raw_episode_content` ;
+    - les vérifications ne lancent que `test_edge_operations.py` et `test_bulk_utils.py`.
+  - `node-testsprite-356` (yusAgent 1/3, Codex 2/3) :
+    - passe 1 : Connectivity et Local tunnel relisent encore le fichier par `makeHttpClient`. Le test ajouté (tour 24) simule le fichier illisible par `loadConfigFn` au lieu d'un vrai fichier en `chmod 000`, et ne parcourt donc pas ce chemin ;
+    - passe 3, tour 33 : `loadConfig` ne lit plus le fichier quand une clé d'environnement est définie, donc aucun avertissement `cannot be read` ;
+    - le changement de clé d'environnement de la passe 1 (tour 45) n'est pas la réécriture d'un test existant : c'est la fixture de son propre test, dont la clé `sk-from-env` n'avait pas de préfixe admis par la tâche.
+  - La suite complète n'est lancée qu'une fois dans ces 4 échecs (`node-testsprite-356` passe 3, tour 49), et elle y révèle une régression.
+- **Rappel des A/B de YA-03** (point ouvert plus haut) : sur `gpt-6.1-terra`, l'agent réécrit un test existant qui passait avant le correctif dans les 22 bras en échec de `node-filesize-376` et `node-little-coder-102`.
