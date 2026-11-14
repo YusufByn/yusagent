@@ -120,3 +120,32 @@ Le rapport dit que la résolution ne se tranche pas à 10 tâches. La condition 
     - Un correctif toucherait des fichiers d'amont (`tool_bridge.rs`, `AgentToolResult`), à lister dans `docs/fork-changes.md`.
   - *Côté banc* : `bench/smoke/metrics.py` ne lit plus `isError` pour les échecs (commit `fe3dbfa25`).
 - Rejeu des appels libres (ticket `ya-03-suite`, après la chauffe du 14/11/2026) : la marque `yaFreeformItemId` de `ToolCall.rest` se perdait dans la boucle de l'agent (`pa_agent::types::ToolCall` sans `rest`) ; un appel est désormais libre quand le tool qu'il nomme est déclaré libre dans les tools de la requête (`pa_ai::ya_freeform::FreeformReplay`). Défaut upstream des signatures de texte et de raisonnement (suite WebSocket cassée après un message avec texte) : points ouverts du ticket 03 (YA-04).
+- **Tâches non stables du banc : l'agent réécrit un test existant (constat des A/B 1 et 2, 14/11/2026).** `node-filesize-376` et `node-little-coder-102` échouent pour la même raison dans les 22 bras en échec des deux A/B, toutes configurations confondues. Chaque fois, un seul test échoue. Il passait déjà avant le correctif (`pass_to_pass`), et l'agent a réécrit ou retiré le test visible qui l'exprime. Les énoncés restent tels quels.
+  - `node-filesize-376` : le test est `should retain zero precision when a locale is requested` (`bench/smoke/tasks/node-filesize-376/task.toml:155`). L'agent change l'assertion visible `filesize(0, { locale: "de-DE", precision: 3 })` de `"0.00 B"` en `"0,00 B"`. L'énoncé dit seulement « Une précision qui produit zéro garde ses zéros (par exemple `0.00`) ».
+  - `node-little-coder-102` : le test est `parseTextToolCalls > does not extract from nested-object bare JSON (matches Python behavior)` (`bench/smoke/tasks/node-little-coder-102/task.toml:59`). L'agent étend `firstBalancedObject` à l'extraction du JSON nu (`bareRe`), puis réécrit ou retire ce test. Le point 3 de l'énoncé ne vise que la réparation (`repairJson`).
+  - **Contre-exemples** (A/B 2, `bench/smoke/runs/ab-20261114T140538Z`, résolus, aucun test en échec) :
+    - `node-filesize-376`, passe 2, bras A (`20261114T143500Z-80e20ea-gpt-6.1-terra`) : l'assertion de zéro est gardée (« J'ai conservé le comportement existant pour une entrée nulle avec précision ») ;
+    - `node-little-coder-102`, passe 1, bras B (`20261114T140920Z-80e20ea-gpt-6.1-terra`) : `firstBalancedObject` ne sert qu'à `repairJson`, et l'extraction du JSON nu et son test ne sont pas touchés.
+  - Recompté par `bench/smoke/ab/ya03-ab2-20261114-mesures.py`, section « Tâches non stables ». C'est un constat sur la consigne de l'agent (ne pas réécrire un test qui passait), sans action dans ce ticket.
+
+## Clôture de YA-03 (14/11/2026)
+
+**Fait** (`main` à `80e20ea5f` pour le binaire mesuré) :
+- **PR 1** (#24) : moteur `apply_patch` (`crates/ya-apply-patch`, repris de Codex), tools `custom` dans les providers Responses et Codex, `read()` numéroté, `bash(env=)`, plafond de sortie (`kernel.maxOutputChars`), avis de redémarrage du kernel.
+- **PR 2** (#26) : tool `apply_patch` enregistré pour la famille Codex, variante `exec_command` / `write_stdin`, réglages `editTool` et `shellTool` figés dans l'en-tête de session, prompt de chaque variante.
+- **Rejeu des appels libres** (#28) et **signatures du flux Responses** (#30, YA-04, cherry-pick d'upstream) : la suite de conversation tient sur toutes les sessions des deux A/B (0 rupture sur 1 603 requêtes).
+- **Banc** :
+  - métriques d'édition et de cellules lues hors de `isError` (#32, `fe3dbfa25`) ;
+  - outil de reprise d'une session dans un nouveau processus (`bench/smoke/continue_session.py`, #31).
+- **A/B 1** (`bench/smoke/ab/ya03-ab1-20261114.md`) : `editTool: native` reste le défaut. Edits au premier essai 98,8 % et 99,6 %, au-dessus du critère du CDC (95 %).
+- **A/B 2** (`bench/smoke/ab/ya03-ab2-20261114.md`) : `shellTool: kernel` reste le défaut.
+- Les deux verdicts sont provisoires : une seule famille de modèles (Codex). Configuration retenue : `bench/smoke/settings/default.json`. Nouvelle baseline `gpt-6.1-terra` depuis les bras A de l'A/B 2 (`bench/smoke/ab/ya03-plan.md`, « Baseline du 14/11/2026 »).
+- **Variante bash natif** : gardée en réglage, pas par défaut. Ce qu'il faudrait reprendre si elle revient est noté dans `docs/tickets/10-ya03-shell-natif.md`.
+
+**Reste ouvert** :
+- **`isError` toujours à `false`** (voir plus haut). Le défaut vient de l'amont et n'a pas de correctif. Le banc ne lit plus ce champ, mais l'ACP affiche une cellule en erreur ou un patch refusé comme réussi.
+- **Reprise d'une session écrite sans signatures.** Les sessions écrites avant #30 n'ont ni `textSignature` ni `thinkingSignature` : sans id d'item, un texte est rejoué en `msg_<index>` (`crates/pa-ai/src/providers/openai_responses_shared.rs:227-234`), et le raisonnement n'est pas rejoué. Personne n'a encore vérifié que le backend accepte le corps complet d'une telle session à la reprise, ni ce qu'il en garde en cache. La reprise vérifiée le 14/11 (`ya03-plan.md`, « Binaire et chauffe ») portait sur une session écrite avec signatures.
+- **Pas de test automatique de reprise dans un nouveau processus.**
+  - `crates/pa-core/tests/prefix_stability.rs` (`codex_websocket_apply_patch_replays_as_custom_and_continues`) teste la reprise dans le même processus, sur la connexion déjà ouverte (suite de conversation).
+  - La reprise dans un nouveau processus, en corps complet sur une nouvelle connexion, n'a été vérifiée qu'à la main (`bench/smoke/continue_session.py`, chauffe du 14/11), contre le vrai backend.
+- **Hors périmètre de YA-03** (déjà décidé, groupé avec YA-09) : `timeout=` et `cwd=` de `bash()`, shell principal persistant. Le critère du CDC qui en dépend (un `cd` visible dans l'appel séquentiel suivant) passe avec eux.
