@@ -89,4 +89,34 @@ Le rapport dit que la résolution ne se tranche pas à 10 tâches. La condition 
 - `crates/pa-core/src/prompts/layers/bash-over-subprocess.md` (règle `glm-5.3*` de `model_prompts.toml`) parle de `bash()` ; laissé tel quel (décision du 13/11/2026). Sans effet sur la variante `shellTool: "native"`, réservée à la famille Codex.
 - Réglages `editTool` et `shellTool` : figés dans l'en-tête du fichier de session (champ `yaTools`) depuis la correction 1 de la PR #26 ; à la reprise, les tools de la session sont gardés et un avertissement signale des réglages différents. Forks et session matérialisée reprennent le champ de la source ; le démon (mode ACP, TUI) l'écrit dans le fichier durable du worker et le relit à chaque build (dernier tour de la PR #26). Reste ouvert : une grosse session fenêtrée créée avant ce champ ne le garde qu'en mémoire (`docs/fork-changes.md`, « Tools natifs (YA-03, PR 2) »).
 - `scripts/ci_pr_crates.py` ne connaît pas `ya-apply-patch` (dont dépend désormais `pa-core`) : une PR qui le touche lance la sélection complète (sans danger).
+- **`isError` toujours à `false` sur les résultats d'outil (constat de l'A/B 1, 14/11/2026, lecture seule, pas de correctif).**
+  - *Origine : l'amont, pas nos PR.*
+    - Les deux outils calculent bien l'échec :
+      - `python_repl` : `is_error` vaut vrai sur `Error` ou `Aborted` (`crates/pa-core/src/tools/ipython.rs:511`), comme en amont (`c83ac68b3:crates/pa-core/src/tools/ipython.rs:505`) ;
+      - `apply_patch` : `is_error: !outcome.applied` (`crates/pa-core/src/tools/ya_apply_patch.rs:69`).
+    - Le pont vers la boucle d'agent jette cette valeur (`crates/pa-core/src/session_engine/tool_bridge.rs:112-113`, `let _ = is_error;`). Ces lignes sont identiques à `c83ac68b3`, et aucun commit du fork ne touche ce fichier.
+    - `AgentToolResult` n'a pas de champ `is_error` (`crates/pa-agent/src/types.rs:479-486`).
+    - La boucle met `is_error: false` sur tout résultat `Ok` (`crates/pa-agent/src/agent_loop/tool_call.rs:196-199`). Elle ne met `true` que sur une erreur Rust, un abandon ou un échec du flux de mises à jour (`tool_call.rs:191-194`, `:214-217`).
+    - Le crochet `after_tool_call`, qui pourrait corriger la valeur, n'est pas branché dans pa-core.
+  - *Ce que voit le modèle : l'échec, dans le texte.*
+    - `python_repl` : stdout, stderr puis le traceback (`crates/pa-core/src/tools/ipython.rs:259-263`).
+    - `apply_patch` : `apply_patch verification failed: …` ou `Exit code: 1 …` (`ya_apply_patch.rs:100-104`, `:125-129`).
+  - *Ce que voit l'ACP : `Completed`.* Le statut de l'appel ne dépend que de `isError` (`crates/pa-daemon/src/acp/wire_events.rs:169-181`, valeur reçue de `ToolExecutionEnd`, `crates/pa-daemon/src/agent_engine/turn/run_once.rs:312-318`). Une cellule en erreur ou un patch refusé s'affiche donc comme réussi dans l'extension.
+  - *Providers qui portent le champ dans la requête* :
+    - Anthropic : `is_error` (`crates/pa-ai/src/providers/anthropic/convert.rs:229`) ;
+    - Google : `error` au lieu de `output` (`crates/pa-ai/src/providers/google_shared.rs:345-349`) ;
+    - Bedrock : `status` (`crates/pa-ai/src/providers/bedrock/convert.rs:306`) ;
+    - Mistral : préfixe `[tool error] ` (`crates/pa-ai/src/providers/mistral/convert.rs:276`) ;
+    - aucun champ chez OpenAI Responses et Codex : `function_call_output` et `custom_tool_call_output` ne portent que `call_id` et `output` (`crates/pa-ai/src/providers/openai_responses_shared.rs:357-361`, `crates/pa-ai/src/providers/ya_freeform.rs:193-198`). Chat Completions n'en a pas non plus.
+  - *Effet d'un correctif.*
+    - Préfixe : inchangé, car `isError` ne figure ni dans le prompt système ni dans les définitions de tools. C'est une déduction.
+    - Requêtes : les résultats en échec écrits après le correctif changeraient d'octets chez Anthropic, Google, Bedrock et Mistral, mais pas chez Codex et Responses. Les sessions existantes gardent `false`, donc leur historique ne change pas (déduction).
+    - Autres lecteurs de `isError`, qui changeraient de comportement :
+      - statut ACP ;
+      - télémétrie (`crates/pa-core/src/session_engine/telemetry.rs:897-914`) ;
+      - résumé de compaction (`crates/pa-core/src/session_engine/compaction_utils.rs:273-277`) ;
+      - cartes de la TUI et export HTML.
+    - Le masquage lit déjà `details.status` en premier (`crates/pa-core/src/session_engine/masking.rs:316`).
+    - Un correctif toucherait des fichiers d'amont (`tool_bridge.rs`, `AgentToolResult`), à lister dans `docs/fork-changes.md`.
+  - *Côté banc* : `bench/smoke/metrics.py` ne lit plus `isError` pour les échecs (commit `fe3dbfa25`).
 - Rejeu des appels libres (ticket `ya-03-suite`, après la chauffe du 14/11/2026) : la marque `yaFreeformItemId` de `ToolCall.rest` se perdait dans la boucle de l'agent (`pa_agent::types::ToolCall` sans `rest`) ; un appel est désormais libre quand le tool qu'il nomme est déclaré libre dans les tools de la requête (`pa_ai::ya_freeform::FreeformReplay`). Défaut upstream des signatures de texte et de raisonnement (suite WebSocket cassée après un message avec texte) : points ouverts du ticket 03 (YA-04).

@@ -50,6 +50,17 @@ EDIT_FAILURE = re.compile(
     r"^(?:ValueError: (?:string not found in |found \d+ occurrences in )"
     r"|FileNotFoundError: .+ not found$)")
 OUTSIDE_WORKSPACE_MARKER = "[outside-workspace]"
+# Échecs, lus hors de `isError` : le flag reste à `false` dans les sessions de l'A/B 1 de
+# YA-03 (ab-20261114T120431Z), y compris sur les échecs.
+# - `python_repl` : `details.status == "error"`, exception dans `details.error`
+#   (`ename`, `evalue`, `traceback`).
+# - `apply_patch` : texte de Codex (`crates/pa-core/src/tools/ya_apply_patch.rs:9-17`) ;
+#   appliqué si et seulement si le résultat commence par `Exit code: 0` ; sinon
+#   `Exit code: 1` (refus du workspace, échec de la crate) ou
+#   `apply_patch verification failed: ...`.
+# - `edit()` : l'exception remonte du skill, dont le fichier figure dans le traceback.
+PATCH_APPLIED = re.compile(r"^Exit code: 0\n")
+EDIT_SKILL_FRAME = "skills/edit/src/edit/__init__.py"
 
 
 def read_ndjson(paths: list[Path]) -> list[dict]:
@@ -381,17 +392,18 @@ def cell_errors(entries: list[dict]) -> dict:
         if message.get("role") != "toolResult" or message.get("toolName") != "python_repl":
             continue
         cells += 1
-        if not message.get("isError"):
+        if not cell_failed(message):
             continue
         errors += 1
-        text = "".join(part.get("text", "") for part in message.get("content") or []
-                       if isinstance(part, dict))
-        kind = "kernel_startup" if text.startswith("kernel startup failed") else "other"
-        for line in reversed(text.splitlines()):
-            found = ERROR_LINE.match(line.strip())
-            if found:
-                kind = found.group(1)
-                break
+        text = result_text(message)
+        kind = (cell_exception(message) or {}).get("ename") or (
+            "kernel_startup" if text.startswith("kernel startup failed") else "other")
+        if kind == "other":
+            for line in reversed(text.splitlines()):
+                found = ERROR_LINE.match(line.strip())
+                if found:
+                    kind = found.group(1)
+                    break
         if kind == "SyntaxError":
             syntax += 1
         else:
@@ -404,17 +416,51 @@ def result_text(message: dict) -> str:
                    if isinstance(part, dict))
 
 
+def cell_exception(message: dict) -> dict | None:
+    """Exception d'une cellule `python_repl` (`details.error`), `None` sans exception."""
+    details = message.get("details") or {}
+    error = details.get("error")
+    return error if isinstance(error, dict) else None
+
+
+def cell_failed(message: dict) -> bool:
+    """Cellule `python_repl` en échec : `details.status == "error"` (ou `isError`)."""
+    return bool(message.get("isError")) or (message.get("details") or {}).get("status") == "error"
+
+
+def patch_applied(message: dict) -> bool:
+    """Résultat d'`apply_patch` appliqué : texte en `Exit code: 0`, sans `isError`."""
+    return not message.get("isError") and bool(PATCH_APPLIED.match(result_text(message)))
+
+
+def edit_failure(message: dict, code: str) -> bool:
+    """Cellule arrêtée par un échec d'`edit()` : appel d'`edit()` dans le code, exception du
+    skill (`EDIT_FAILURE`) levée depuis son fichier (traceback)."""
+    if not cell_failed(message) or not EDIT_CALL.search(code):
+        return False
+    error = cell_exception(message)
+    if error is not None:
+        line = f"{error.get('ename')}: {error.get('evalue')}"
+        trace = "".join(str(frame) for frame in error.get("traceback") or [])
+    else:
+        text = result_text(message)
+        line = next((ln.strip() for ln in reversed(text.splitlines())
+                     if ERROR_LINE.match(ln.strip())), "")
+        trace = text
+    return bool(EDIT_FAILURE.match(line)) and EDIT_SKILL_FRAME in trace
+
+
 def edit_attempts(entries: list[dict]) -> dict:
     """Edits de la session (YA-03) : appels du tool `apply_patch` et appels de `edit()` dans
     les cellules `python_repl`.
 
-    - `apply_patch` : un appel = un essai, appliqué si le résultat n'est pas en erreur ; les
-      refus du contrôle de workspace (marqueur `[outside-workspace]`) sont comptés à part, et
-      aussi comme essais ratés.
+    - `apply_patch` : un appel = un essai, appliqué si le résultat commence par
+      `Exit code: 0` (`patch_applied`) ; les refus du contrôle de workspace (marqueur
+      `[outside-workspace]`) sont comptés à part, et aussi comme essais ratés.
     - `edit()` : chaque edit appliqué émet un diff (`details.diffs` du résultat de la cellule) ;
-      une cellule qui contient un appel d'`edit()` et finit sur une erreur du skill (`old_str`
-      absent ou ambigu, fichier introuvable) compte un essai raté (la cellule s'arrête à la
-      première erreur).
+      une cellule qui contient un appel d'`edit()` et s'arrête sur une erreur levée par le
+      skill (`old_str` absent ou ambigu, fichier introuvable : `edit_failure`) compte un
+      essai raté (la cellule s'arrête à la première erreur).
 
     `first_try_rate` : essais appliqués / essais, `null` sans essai.
     """
@@ -436,17 +482,13 @@ def edit_attempts(entries: list[dict]) -> dict:
         text = result_text(message)
         if message.get("toolName") == "apply_patch":
             patch["calls"] += 1
-            if not message.get("isError"):
+            if patch_applied(message):
                 patch["applied"] += 1
             elif OUTSIDE_WORKSPACE_MARKER in text:
                 patch["refused_outside_workspace"] += 1
         elif message.get("toolName") == "python_repl":
             edit["applied"] += len((message.get("details") or {}).get("diffs") or [])
-            if message.get("isError") and EDIT_CALL.search(codes.get(message.get("toolCallId"), "")):
-                for line in reversed(text.splitlines()):
-                    if ERROR_LINE.match(line.strip()):
-                        edit["failed"] += bool(EDIT_FAILURE.match(line.strip()))
-                        break
+            edit["failed"] += edit_failure(message, codes.get(message.get("toolCallId"), ""))
     attempts = patch["calls"] + edit["applied"] + edit["failed"]
     applied = patch["applied"] + edit["applied"]
     return {"apply_patch": patch, "edit": edit, "attempts": attempts, "applied": applied,

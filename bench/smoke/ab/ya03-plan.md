@@ -49,6 +49,32 @@ Graine : **2290879124** (tirée de `os.urandom` le 13/11/2026 à 18:08Z, avant l
 
 **Filet de régression (pas un verdict)** : le bras `kernel` (B), dont le prompt et les tools sont ceux de `main` à `read()`, `bash(env=)` et la note de troncature près, est aussi comparé à la baseline avec `compare.py` (effet de la PR 1, non entrelacé) : `python3 -I bench/smoke/compare.py <run A> <run B> --baseline bench/smoke/baseline/gpt-6.1-terra.json --out <fichier>.md`, avec en A un run des bras B de l'A/B `rlm.spawn` du 12/11 (source de la baseline, `ab-20261112T185001Z`) et en B un run des bras `kernel` de cet A/B. Les alertes de `compare.py` (seuils de la baseline) servent de filet ; elles ne changent pas le verdict.
 
+### Résultats de l'A/B 1 (14/11/2026)
+
+Le rapport complet est dans `bench/smoke/ab/ya03-ab1-20261114.md`, avec les mesures d'appoint dans `ya03-ab1-20261114-mesures.py`. Le run est `bench/smoke/runs/ab-20261114T120431Z` (lancé par Yusuf) : 60 bras, aucune unité écartée, aucun incident.
+
+**Verdict : `editTool: native`**, validé par Yusuf le 14/11/2026. Aucune des deux conditions n'est remplie :
+1. résolution : 24 tâches dans les deux bras (8 par passe), sans écart ;
+2. coût à cache théorique des tâches stables, B / A − 1 : **+2,5 %, IC 95 % [−8,8 ; +16,5]**. La borne haute n'est pas sous 0.
+
+**Affichés sans décider** :
+- **Coût par tâche résolue** (théorique) : A 0,0542 $, B 0,0548 $, soit +1,0 % [−7,2 ; +11,3]. Les échecs touchent les mêmes tâches dans les deux bras.
+- **Edits au premier essai** : A 80/81 (98,8 %), B 269/270 (99,6 %). Le critère du CDC (au moins 95 %) est tenu dans les deux bras.
+- **Patchs refusés hors workspace** : 0 et 0.
+- **Cellules en erreur d'appel** (SyntaxError) : 0 et 0. Toutes causes confondues : 1/309 dans A, 3/360 dans B.
+- **Tours par session** : 14,3 pour A, 13,1 pour B (−8,4 %).
+- **Tokens d'input envoyés** : −8,0 % pour B. L'input non caché augmente de 6,5 %.
+- **Taux de cache** : 91,8 % pour A, 90,5 % pour B.
+- **Ruptures** : 0 requête en corps complet après la première, dans les deux bras (`proxy.ndjson`).
+
+**Métriques d'édition corrigées avant ce verdict.** `metrics.py` lisait les échecs dans `isError`, qui vaut toujours `false`. Il les lit maintenant dans `details.status` pour `python_repl` et dans le texte pour `apply_patch`, et ne compte un échec d'`edit()` que s'il est levé par le skill (commit `fe3dbfa25`). Les rapports des bras ont été recalculés par `run.py --rereport`. La cause de `isError` toujours à `false` est notée dans `docs/tickets/09-ya03-base.md`, aux points ouverts.
+
+**Filet de régression : bras `kernel` contre la baseline.** `compare.py` ne prend qu'un rapport de chaque côté. La comparaison est donc faite dans le script de mesures, avec les mêmes seuils (2 × CV de la tâche et au moins 5 % ; agrégat 2 × `aggregate.cv`).
+- **Résolution** : pas de régression, les 8 tâches stables sont à 3/3.
+- **Coût agrégé** (rapporté) des tâches stables : −13,1 %, pour un seuil de ±12,1 %. C'est une baisse.
+- **Alertes** : coût en baisse sur `node-tough-cookie-630` et `py-langextract-584`, tokens en hausse sur `node-koa-2029` (avec un coût en baisse).
+- **Réserve** : la comparaison n'est pas entrelacée (12/11 contre 14/11, binaires `69cc894` et `80e20ea`). Elle sert de filet et ne change pas le verdict.
+
 ## A/B 2 : `shellTool`
 
 | Bras | Réglages | Exécution |
