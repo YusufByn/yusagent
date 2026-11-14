@@ -135,3 +135,21 @@ Le rapport complet est dans `bench/smoke/ab/ya03-ab2-20261114.md`, avec les mesu
 ## Après les deux A/B
 
 Nouvelle baseline `gpt-6.1-terra` depuis les bras de la configuration retenue (les 30 bras du bras retenu de l'A/B 2) : `python3 -I bench/smoke/baseline.py <runs> --out bench/smoke/baseline/gpt-6.1-terra.json`, comme le 12/11 (`bench/smoke/ab/rlm-spawn-20261112.md`). L'ancienne reste dans l'historique git.
+
+### Baseline du 14/11/2026
+
+Écrite par la même procédure que la baseline `4024960` du 12/11 :
+
+`python3 -I bench/smoke/baseline.py <les 30 bras A de bench/smoke/runs/ab-20261114T140538Z, dans l'ordre des passes de ab.json> --out bench/smoke/baseline/gpt-6.1-terra.json`
+
+La commande complète est dans le champ `command` du fichier.
+
+- **Source** : bras A de l'A/B 2 (`default.json`), binaire `80e20ea`, sha256 `099f54d354c3…`, code du banc à `67c05e592`. L'en-tête donne le même modèle, le même effort, le même catalogue (`models_bundled_sha256`) et la même version de prix que l'ancienne baseline.
+- **En-tête** : `rlmMaxDepth` n'est plus un réglage explicite, puisque 0 est devenu le défaut le 12/11. `settings_non_default` ne garde que `cacheRetention: short`.
+- **Tâches stables** : les 8 mêmes qu'avant, à savoir `node-koa-2029`, `node-testsprite-356`, `node-tough-cookie-630`, `py-graphiti-2030`, `py-langextract-584`, `py-shortuuid-118`, `py-tldextract-368` et `py-tldextract-383`. `node-filesize-376` (1/3) et `node-little-coder-102` (0/3) restent non stables.
+- **Agrégat** (coût rapporté des tâches stables) : coût moyen **0,3377 $** (passes : 0,3551, 0,3357 et 0,3222 $).
+- **CV** : 0,0672 en indépendance, 0,0490 par passes ; la valeur retenue est **0,0672**. Seuil de l'alerte agrégée de `compare.py` : **±13,4 %**.
+- **Écart avec l'ancienne baseline** (`4024960` : 0,3953 $, CV 0,0605, seuil 12,1 %) : **−14,6 %** sur le coût moyen des tâches stables.
+  - Par tâche : de −35,9 % (`node-koa-2029`) à +18,8 % (`py-shortuuid-118`).
+  - Les deux baselines diffèrent de date, de binaire (`69cc894` contre `80e20ea`) et de code (PR 1 et 2 de YA-03, #28, #30). L'écart n'est pas un effet isolé.
+- L'ancienne baseline reste dans l'historique git (`4024960`). Les commandes de mesures de l'A/B 1 la relisent par `git show`.

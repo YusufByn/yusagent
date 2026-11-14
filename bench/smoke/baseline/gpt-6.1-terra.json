@@ -1,186 +1,186 @@
 {
-  "written": "2026-11-12T21:49:55+00:00",
-  "command": "python3 -I bench/smoke/baseline.py bench/smoke/runs/ab-20261112T185001Z/arms/20261112T185231Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T185524Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T185739Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T185939Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T190803Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T191104Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T191733Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T192004Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T192034Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T192304Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T192758Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T193035Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T193329Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T193933Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T194128Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T194810Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T195253Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T195347Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T195529Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T200053Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T200228Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T200518Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T200808Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T201014Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T201733Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T202256Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T202646Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T202915Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T203109Z-69cc894-gpt-6.1-terra bench/smoke/runs/ab-20261112T185001Z/arms/20261112T203518Z-69cc894-gpt-6.1-terra",
+  "written": "2026-11-14T15:41:56+00:00",
+  "command": "python3 -I bench/smoke/baseline.py bench/smoke/runs/ab-20261114T140538Z/arms/20261114T140538Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T140744Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T141123Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T141550Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T141859Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T142315Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T142559Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T142739Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T143009Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T143115Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T143500Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T143751Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T143840Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T144629Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T144818Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T145049Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T145609Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T145736Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T145930Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T150056Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T150355Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T150652Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T150736Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T151320Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T151610Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T151734Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T152250Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T152343Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T152547Z-80e20ea-gpt-6.1-terra bench/smoke/runs/ab-20261114T140538Z/arms/20261114T152657Z-80e20ea-gpt-6.1-terra",
   "excluded": {},
   "runs": [
     {
-      "run": "20261112T185231Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T140538Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T185524Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T140744Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T185739Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T141123Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T185939Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T141550Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T190803Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T141859Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T191104Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T142315Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T191733Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T142559Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T192004Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T142739Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T192034Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T143009Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T192304Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T143115Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T192758Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T143500Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T193035Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T143751Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T193329Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T143840Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T193933Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T144629Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T194128Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T144818Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T194810Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T145049Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T195253Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T145609Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T195347Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T145736Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T195529Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T145930Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T200053Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T150056Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T200228Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T150355Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T200518Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T150652Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T200808Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T150736Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T201014Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T151320Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T201733Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T151610Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T202256Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T151734Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T202646Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T152250Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T202915Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T152343Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T203109Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T152547Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     },
     {
-      "run": "20261112T203518Z-69cc894-gpt-6.1-terra",
-      "commit": "34e56fe2adb0d496d228bf21721749c682cfc3a4",
-      "binary_sha256": "5b90b27752c5b249196134210d0d1cbd6a97d16ce5a67ee2b7a8142f84314b39",
+      "run": "20261114T152657Z-80e20ea-gpt-6.1-terra",
+      "commit": "67c05e592d55fbcccc1d2d018a7e6f5b9e110be2",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
       "runs_per_task": 1
     }
   ],
@@ -190,7 +190,6 @@
     "model": "gpt-6.1-terra",
     "effort": "high",
     "settings_non_default": {
-      "rlmMaxDepth": 0,
       "cacheRetention": "short"
     },
     "models_bundled_sha256": "f057223709acfc535ffc0395766889208e5104423ce3612ad10c242a2d7bec9d",
@@ -201,351 +200,351 @@
       "task_tree": "94694314914de5793bf86b1a4f837d0a5807ca81695b2d677b09a5ea844a496c",
       "runs": 3,
       "from_runs": [
-        "20261112T185231Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T192758Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T200228Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T140538Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T143500Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T150355Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 0.3333333333333333,
       "stable": false,
       "cost": {
-        "mean": 0.049186466666666664,
-        "stdev": 0.010684194274409902,
-        "cv": 0.21721816992499093,
+        "mean": 0.0486248,
+        "stdev": 0.004351188063046691,
+        "cv": 0.08948495547635549,
         "values": [
-          0.044249199999999995,
-          0.0614464,
-          0.0418638
+          0.0532834,
+          0.0479252,
+          0.0446658
         ]
       },
       "tokens": {
-        "mean": 140052.33333333334,
-        "stdev": 47489.493388889015,
-        "cv": 0.3390839142669693,
+        "mean": 210313.33333333334,
+        "stdev": 38548.637645620285,
+        "cv": 0.18329145867572327,
         "values": [
-          138422,
-          188336,
-          93399
+          166109,
+          227890,
+          236941
         ]
       },
-      "turns_mean": 7,
-      "context_peak_max": 28765,
-      "server_misses": 0,
-      "cache_avoidable_rate_mean": 0.8098907718352797
+      "turns_mean": 10.333333333333334,
+      "context_peak_max": 27583,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.937113655184629
     },
     "node-koa-2029": {
       "task_tree": "b4d28a49ffe517c7091360acd388fdb3ba5700c2d150465e1d11141cb0777b17",
       "runs": 3,
       "from_runs": [
-        "20261112T185524Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T193035Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T200518Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T140744Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T143751Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T150652Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 1.0,
       "stable": true,
       "cost": {
-        "mean": 0.051458000000000004,
-        "stdev": 0.007026555716707862,
-        "cv": 0.13654933570499944,
+        "mean": 0.03300273333333333,
+        "stdev": 0.005257325541882804,
+        "cv": 0.15929970068790678,
         "values": [
-          0.0481048,
-          0.046736200000000006,
-          0.059532999999999996
+          0.02981,
+          0.0390706,
+          0.0301276
         ]
       },
       "tokens": {
-        "mean": 126466,
-        "stdev": 12074.059756353701,
-        "cv": 0.09547277336480715,
+        "mean": 139561.66666666666,
+        "stdev": 6193.426542176256,
+        "cv": 0.04437770549823559,
         "values": [
-          118944,
-          120061,
-          140393
+          141778,
+          132565,
+          144342
         ]
       },
-      "turns_mean": 8,
-      "context_peak_max": 31449,
-      "server_misses": 0,
-      "cache_avoidable_rate_mean": 0.6567827998509497
+      "turns_mean": 10.666666666666666,
+      "context_peak_max": 23284,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.8716956480641719
     },
     "node-little-coder-102": {
       "task_tree": "1608d823ff0f379901a283107d6e93468c500de18c9dd42e89282db601e9ccee",
       "runs": 3,
       "from_runs": [
-        "20261112T185739Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T193329Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T200808Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T141123Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T143840Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T150736Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 0.0,
       "stable": false,
       "cost": {
-        "mean": 0.11034586666666667,
-        "stdev": 0.003207237723233702,
-        "cv": 0.02906531816839267,
+        "mean": 0.08943146666666667,
+        "stdev": 0.012935652141787565,
+        "cv": 0.14464318459633407,
         "values": [
-          0.11379159999999999,
-          0.10979839999999999,
-          0.1074476
+          0.0941178,
+          0.0993708,
+          0.0748058
         ]
       },
       "tokens": {
-        "mean": 505372,
-        "stdev": 94485.20241815646,
-        "cv": 0.18696168845554653,
+        "mean": 543902.6666666666,
+        "stdev": 131373.6107151407,
+        "cv": 0.24153882443759678,
         "values": [
-          553786,
-          396492,
-          565838
+          581001,
+          652738,
+          397969
         ]
       },
-      "turns_mean": 13.666666666666666,
-      "context_peak_max": 51515,
+      "turns_mean": 15.333333333333334,
+      "context_peak_max": 48240,
       "server_misses": 0,
-      "cache_avoidable_rate_mean": 0.8816592663112709
+      "cache_avoidable_rate_mean": 0.9309726963494472
     },
     "node-testsprite-356": {
       "task_tree": "d2c99a63045c373e1e943c362641a0ade00101bb62bf00652240282a803a5dc1",
       "runs": 3,
       "from_runs": [
-        "20261112T185939Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T193933Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T201014Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T141550Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T144629Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T151320Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 1.0,
       "stable": true,
       "cost": {
-        "mean": 0.06993313333333333,
-        "stdev": 0.010456508737304884,
-        "cv": 0.1495215249038589,
+        "mean": 0.0563496,
+        "stdev": 0.0075261087714701535,
+        "cv": 0.13356099726475704,
         "values": [
-          0.07231,
-          0.0584928,
-          0.0789966
+          0.0547236,
+          0.0497694,
+          0.0645558
         ]
       },
       "tokens": {
-        "mean": 333967,
-        "stdev": 60292.11607664803,
-        "cv": 0.18053315470285397,
+        "mean": 306001.3333333333,
+        "stdev": 88326.18282442265,
+        "cv": 0.28864639857045066,
         "values": [
-          357938,
-          265376,
-          378587
+          244778,
+          265971,
+          407255
         ]
       },
-      "turns_mean": 17,
-      "context_peak_max": 26215,
+      "turns_mean": 14,
+      "context_peak_max": 35922,
       "server_misses": 1,
-      "cache_avoidable_rate_mean": 0.9036222166094294
+      "cache_avoidable_rate_mean": 0.9395673945444221
     },
     "node-tough-cookie-630": {
       "task_tree": "37a312dafcb92c0541c169ab3e67caa8ca9b45bab77644a9de190714285b30cd",
       "runs": 3,
       "from_runs": [
-        "20261112T190803Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T194128Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T201733Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T141859Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T144818Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T151610Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 1.0,
       "stable": true,
       "cost": {
-        "mean": 0.0603322,
-        "stdev": 0.004027965496376555,
-        "cv": 0.06676311316969305,
+        "mean": 0.04537946666666667,
+        "stdev": 0.0039726556676023825,
+        "cv": 0.0875430224154768,
         "values": [
-          0.06416240000000001,
-          0.056132,
-          0.0607022
+          0.0496896,
+          0.0418646,
+          0.0445842
         ]
       },
       "tokens": {
-        "mean": 261022.33333333334,
-        "stdev": 75062.45250678486,
-        "cv": 0.2875709965052219,
+        "mean": 292694.6666666667,
+        "stdev": 25929.396644220888,
+        "cv": 0.08858855181584296,
         "values": [
-          346232,
-          232160,
-          204675
+          320672,
+          269471,
+          287941
         ]
       },
-      "turns_mean": 14,
-      "context_peak_max": 27627,
+      "turns_mean": 15.666666666666666,
+      "context_peak_max": 26703,
       "server_misses": 0,
-      "cache_avoidable_rate_mean": 0.8560389556405582
+      "cache_avoidable_rate_mean": 0.9339874121893552
     },
     "py-graphiti-2030": {
       "task_tree": "5713dad5dbe7e9e5a544f8709fcb280a96f3aa61e642784fc491c6d7756fdb37",
       "runs": 3,
       "from_runs": [
-        "20261112T191104Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T194810Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T202256Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T142315Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T145049Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T151734Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 1.0,
       "stable": true,
       "cost": {
-        "mean": 0.08176006666666667,
-        "stdev": 0.01749421079595571,
-        "cv": 0.21397011413015452,
+        "mean": 0.07931393333333334,
+        "stdev": 0.018844351116802438,
+        "cv": 0.2375919378201195,
         "values": [
-          0.0854324,
-          0.09712660000000001,
-          0.0627212
+          0.099421,
+          0.0764638,
+          0.062057
         ]
       },
       "tokens": {
-        "mean": 442469.6666666667,
-        "stdev": 112515.7644614004,
-        "cv": 0.25429034561631053,
+        "mean": 566532.3333333334,
+        "stdev": 132419.04428492652,
+        "cv": 0.23373607558425882,
         "values": [
-          476338,
-          534161,
-          316910
+          710589,
+          538895,
+          450113
         ]
       },
-      "turns_mean": 19.666666666666668,
-      "context_peak_max": 32823,
-      "server_misses": 0,
-      "cache_avoidable_rate_mean": 0.9207691341538744
+      "turns_mean": 22.333333333333332,
+      "context_peak_max": 34864,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.9589753208179622
     },
     "py-langextract-584": {
       "task_tree": "447d54b5b4765ddfa101cef923c1ed3b4828300661c8b16eb038ed426d0b75f9",
       "runs": 3,
       "from_runs": [
-        "20261112T191733Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T195253Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T202646Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T142559Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T145609Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T152250Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 1.0,
       "stable": true,
       "cost": {
-        "mean": 0.03498406666666667,
-        "stdev": 0.004232342374304486,
-        "cv": 0.12097914215150761,
+        "mean": 0.025626466666666667,
+        "stdev": 0.0010297524038978155,
+        "cv": 0.04018315975012092,
         "values": [
-          0.0301714,
-          0.0366546,
-          0.0381262
+          0.024478200000000002,
+          0.0259332,
+          0.026468
         ]
       },
       "tokens": {
-        "mean": 127832.33333333333,
-        "stdev": 24276.1120720212,
-        "cv": 0.18990588248686066,
+        "mean": 145688.33333333334,
+        "stdev": 20741.489105976296,
+        "cv": 0.14236890924216966,
         "values": [
-          108529,
-          119881,
-          155087
+          151447,
+          162942,
+          122676
         ]
       },
-      "turns_mean": 9.666666666666666,
-      "context_peak_max": 18722,
+      "turns_mean": 10.666666666666666,
+      "context_peak_max": 17110,
       "server_misses": 0,
-      "cache_avoidable_rate_mean": 0.8316740314112684
+      "cache_avoidable_rate_mean": 0.9150968558191805
     },
     "py-shortuuid-118": {
       "task_tree": "0aefe875a7530838dc9c344e97a3f1b6d0cef1fe76e66fce8359d2721374fc6e",
       "runs": 3,
       "from_runs": [
-        "20261112T192004Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T195347Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T202915Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T142739Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T145736Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T152343Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 1.0,
       "stable": true,
       "cost": {
-        "mean": 0.018209,
-        "stdev": 0.00721067763528505,
-        "cv": 0.3959952570314158,
+        "mean": 0.02163673333333333,
+        "stdev": 0.006036454993896113,
+        "cv": 0.27899105197162144,
         "values": [
-          0.019551,
-          0.0104216,
-          0.0246544
+          0.027587399999999998,
+          0.0218048,
+          0.015518
         ]
       },
       "tokens": {
-        "mean": 60465,
-        "stdev": 22348.283849101255,
-        "cv": 0.36960694367156627,
+        "mean": 76650.33333333333,
+        "stdev": 5714.410059956613,
+        "cv": 0.0745516661370024,
         "values": [
-          64695,
-          36304,
-          80396
+          70297,
+          78284,
+          81370
         ]
       },
-      "turns_mean": 5,
-      "context_peak_max": 22749,
-      "server_misses": 0,
-      "cache_avoidable_rate_mean": 0.8017591413071672
+      "turns_mean": 6.666666666666667,
+      "context_peak_max": 14152,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.8561631778400103
     },
     "py-tldextract-368": {
       "task_tree": "0b793bff19ed1781a163d7463a3be5a80eb46f50bbbb517ce88817f3f43aca73",
       "runs": 3,
       "from_runs": [
-        "20261112T192034Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T195529Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T203109Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T143009Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T145930Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T152547Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 1.0,
       "stable": true,
       "cost": {
-        "mean": 0.03658446666666667,
-        "stdev": 0.0034543563761333792,
-        "cv": 0.09442139494904155,
+        "mean": 0.029933733333333334,
+        "stdev": 0.003220043504882088,
+        "cv": 0.10757239897291199,
         "values": [
-          0.0405726,
-          0.034651,
-          0.0345298
+          0.0263986,
+          0.0307034,
+          0.0326992
         ]
       },
       "tokens": {
-        "mean": 170237,
-        "stdev": 10801.76115270098,
-        "cv": 0.06345131289144533,
+        "mean": 179455.33333333334,
+        "stdev": 14152.082685362368,
+        "cv": 0.07886131006803383,
         "values": [
-          165347,
-          182619,
-          162745
+          191381,
+          163817,
+          183168
         ]
       },
-      "turns_mean": 15.666666666666666,
-      "context_peak_max": 14520,
-      "server_misses": 1,
-      "cache_avoidable_rate_mean": 0.943125421766468
+      "turns_mean": 16,
+      "context_peak_max": 15033,
+      "server_misses": 0,
+      "cache_avoidable_rate_mean": 0.9544038341383027
     },
     "py-tldextract-383": {
       "task_tree": "0984288d1aa3c6880c8947ee17693beadf22fb5520a20ece8e262c71900f54bf",
       "runs": 3,
       "from_runs": [
-        "20261112T192304Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T200053Z-69cc894-gpt-6.1-terra/run-1",
-        "20261112T203518Z-69cc894-gpt-6.1-terra/run-1"
+        "20261114T143115Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T150056Z-80e20ea-gpt-6.1-terra/run-1",
+        "20261114T152657Z-80e20ea-gpt-6.1-terra/run-1"
       ],
       "resolved_rate": 1.0,
       "stable": true,
       "cost": {
-        "mean": 0.0420856,
-        "stdev": 0.0029057697362316927,
-        "cv": 0.06904427491188656,
+        "mean": 0.046409,
+        "stdev": 0.0035349470887129255,
+        "cv": 0.07616943025518597,
         "values": [
-          0.0428596,
-          0.0388712,
-          0.044526
+          0.043005800000000004,
+          0.0500624,
+          0.0461588
         ]
       },
       "tokens": {
-        "mean": 236074.66666666666,
-        "stdev": 18239.26098649102,
-        "cv": 0.0772605601610127,
+        "mean": 325107.6666666667,
+        "stdev": 42782.48789321787,
+        "cv": 0.1315948292818416,
         "values": [
-          224946,
-          257124,
-          226154
+          281953,
+          367508,
+          325862
         ]
       },
-      "turns_mean": 17,
-      "context_peak_max": 18229,
+      "turns_mean": 19.333333333333332,
+      "context_peak_max": 21394,
       "server_misses": 0,
-      "cache_avoidable_rate_mean": 0.9286733940284402
+      "cache_avoidable_rate_mean": 0.9572024537721489
     }
   },
   "aggregate": {
@@ -559,14 +558,14 @@
       "py-tldextract-368",
       "py-tldextract-383"
     ],
-    "cost_mean": 0.39534653333333336,
-    "cv_independent": 0.06045623807408613,
-    "cv_passes": 0.03562824751395891,
+    "cost_mean": 0.3376516666666667,
+    "cv_independent": 0.06724516232868674,
+    "cv_passes": 0.049049835911973844,
     "passes": [
-      0.40316420000000003,
-      0.37908600000000003,
-      0.4037894
+      0.3551142,
+      0.3356722,
+      0.32216859999999997
     ],
-    "cv": 0.06045623807408613
+    "cv": 0.06724516232868674
   }
 }
