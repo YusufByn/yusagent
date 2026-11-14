@@ -822,6 +822,8 @@ mod tests {
 
     // yusAgent (YA-03): freeform `custom_tool_call` on both transports.
     mod ya_freeform;
+    // yusAgent (YA-04): signatures and continuation on done items with `output_index`.
+    mod ya_signatures;
 
     /// The user-facing text for a failed codex stream is the verbatim error message; the
     /// raw-`fetch` connection failure surfaces the runtime's own refused-connect text.
