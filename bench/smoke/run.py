@@ -465,12 +465,14 @@ class Access:
     """Reverse proxy (et serveur de capture en mode capture) pour une session d'agent."""
 
     def __init__(self, out: Path, capture: bool, scenario: str, connect_port: int,
-                 server_args: list[str] | None = None):
+                 server_args: list[str] | None = None, log_bodies: bool = False):
         self.capture = (Capture(out, scenario, connect_port, server_args or []) if capture
                         else None)
         upstream = ("127.0.0.1", self.capture.port, False) if self.capture else None
         self.log_path = out / "proxy.ndjson"
-        self.proxy = proxies.ReverseProxy(self.log_path, upstream)
+        # `--log-bodies` : corps des requêtes dans `proxy-bodies.ndjson` (jamais d'en-tête).
+        self.proxy = proxies.ReverseProxy(self.log_path, upstream,
+                                          out / "proxy-bodies.ndjson" if log_bodies else None)
         proxies.serve(self.proxy)
 
     @property
@@ -881,7 +883,7 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
              effort: str, source: dict, settings: dict, connect: proxies.ConnectProxy,
              capture: bool, capture_fail: set[str], server_args: list[str],
              prices: dict, capture_spawn: bool = False,
-             idle_timeout: int = IDLE_TIMEOUT_S) -> dict:
+             idle_timeout: int = IDLE_TIMEOUT_S, log_bodies: bool = False) -> dict:
     workspace = restore(task, cache)
     prompt = (task["dir"] / "prompt.md").read_text()
     # Seules les tâches d'exemple ont un scénario de capture qui les résout. Avec
@@ -890,7 +892,7 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     scenario = ("spawn" if capture_spawn else
                 f"smoke-{task['id'] if solvable else 'fail'}")
     access = Access(out, capture, scenario, connect.port,
-                    server_args + read_probe_args(hidden_targets(task, cache)))
+                    server_args + read_probe_args(hidden_targets(task, cache)), log_bodies)
     try:
         session = agent_session(binary, cache, cache.agent, out, model, effort, prompt,
                                 workspace, access, connect, source, settings, capture,
@@ -1501,6 +1503,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ab", default=None, metavar="JSON",
                         help="A/B (tools/ab.py) : objet JSON noté dans l'en-tête du rapport "
                              "(bras, passe, graine, écart de réglages)")
+    parser.add_argument("--log-bodies", action="store_true",
+                        help="écrit le corps de chaque requête de la tâche (JSON envoyé au "
+                             "modèle, sans en-tête) dans proxy-bodies.ndjson ; désactivé par "
+                             "défaut, refusé avec --ab")
     parser.add_argument("--record-hosts", action="store_true",
                         help="run de chauffe réel, proxy CONNECT en enregistrement : écrit "
                              f"{HOSTS.relative_to(REPO)}")
@@ -1535,6 +1541,8 @@ def main() -> None:
     if args.idle_timeout < 0:
         fail("--idle-timeout doit valoir 0 ou plus")
     ab_note = json.loads(args.ab) if args.ab else None
+    if args.log_bodies and ab_note is not None:
+        fail("--log-bodies est refusé pendant un A/B (--ab)")
     started = time.monotonic()
     if args.capture_spawn and not args.capture:
         fail("--capture-spawn demande --capture")
@@ -1613,7 +1621,8 @@ def main() -> None:
                                       sources[model], settings, connect, args.capture,
                                       capture_fail, task_args, prices,
                                       capture_spawn=args.capture_spawn,
-                                      idle_timeout=args.idle_timeout)
+                                      idle_timeout=args.idle_timeout,
+                                      log_bodies=args.log_bodies)
                     print(f"  {task['id']} run {index} : {result['status']}")
                     results.append(result)
             timing["tasks"] = round(time.monotonic() - mark, 2)
