@@ -7,11 +7,20 @@ Règles fixées et versionnées avant tout run réel (ticket 09, `docs/tickets/0
 - `gpt-6.1-terra`, provider `openai-codex`, effort `high`.
 - Les 10 tâches du banc (`bench/smoke/tasks/`, sans les exemples).
 - 3 passes entrelacées par tâche (`tools/ab.py`) : à chaque passe, chaque tâche lance ses deux bras dos à dos, dans un ordre tiré au sort.
-- Binaire : celui du dernier commit de la PR 2 (artefact de `ya-build-macos-arm64.yml`, installé par `tools/install-bin.sh`). Son SHA complet est noté ici avant le premier run.
+- Binaire : artefact de `ya-build-macos-arm64.yml`, installé par `tools/install-bin.sh`. SHA complet noté avant le premier run, dans « Binaire et chauffe » ci-dessous (`main` à `80e20ea5f`, qui contient la PR 2).
 - `DO_NOT_TRACK=1 PI_OFFLINE=1`, `PI_CACHE_RETENTION=short` (fixé par le runner), garde-fou d'inactivité 300 s.
 - **Avant tout** : run de chauffe d'une tâche sur le défaut (`bench/smoke/settings/default.json`), pour vérifier que le backend de l'abonnement accepte le tool libre `apply_patch`. Il ne compte dans aucun A/B.
 - Statistiques : `python3 -I bench/smoke/tools/ab_stats.py --plan <ab.json> --baseline bench/smoke/baseline/gpt-6.1-terra.json`. Tâches stables : `aggregate.tasks` de la baseline.
 - **Paires écartées** : règle d'écart du README (« A/B : erreurs provider ») : une erreur provider (quota, surcharge, flux bloqué, statut `stalled`) sur un bras écarte la tâche de cette passe, ses deux bras. `ab_stats.py` l'applique et liste les unités écartées avec leur cause.
+
+### Binaire et chauffe (14/11/2026)
+
+- **Binaire** : `main` à `80e20ea5f353ff3855e30d19c0df7cc7d1cc9632` (merge de la PR #30 : PR 2 de YA-03, rejeu des appels libres #28, correctifs upstream du flux Responses `c12acadaa` et `42a07c13c`). Ce n'est plus le dernier commit de la PR 2 : sans #28 et #30, le tour après `apply_patch` et celui après un texte repartaient en corps complet. Build `ya-build-macos-arm64.yml` 43588586252, installé par `tools/install-bin.sh` dans `~/.cache/yusagent-bin/80e20ea5f353ff3855e30d19c0df7cc7d1cc9632/`. sha256 de l'exécutable (manifeste et `shasum`) : `099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e`. `--version` : `0.10.2-continuous.80e20ea5f353ff3855e30d19c0df7cc7d1cc9632`.
+- **Run de chauffe** : `bench/smoke/runs/20261114T112415Z-80e20ea-gpt-6.1-terra`, `py-shortuuid-118`, défaut (`editTool` native, `shellTool` kernel), `gpt-6.1-terra`, effort `high` : résolue. Il ne compte dans aucun A/B.
+  - Suite de conversation : requête 1 en corps complet, requêtes 2 à 6 avec `previous_response_id` (`proxy.ndjson`, champ `continuation`). La 2 suit un texte et un `python_repl`, la 5 suit un raisonnement et un `apply_patch`.
+  - Session : textes avec `textSignature` (id d'item et `phase`), raisonnement du tour 4 (135 tokens de raisonnement, seul tour qui a raisonné) avec `thinkingSignature` (item complet, `encrypted_content`), `apply_patch` en `call_…|ctc_…`.
+  - Reprise dans un nouveau processus (`continue_session.py`, `continue-1` puis `continue-2` avec `--log-bodies`) : corps complet accepté par le backend. Dans le corps de `continue-2` : `apply_patch` déclaré `custom`, l'appel rejoué en `custom_tool_call` (`id` `ctc_…`, `call_id`, `name`, `input`), sa sortie en `custom_tool_call_output`, après l'item `reasoning` et avant l'appel suivant ; `reasoning.effort` `high`.
+  - **Cache après reprise (observation, mécanisme inconnu)** : un corps complet sur une nouvelle connexion obtient le niveau de cache de l'avant-dernière requête, pas de la dernière. `continue-1` : 11 776 tokens en cache sur 12 827, soit la longueur de la requête 5 arrondie à 128 (et non celle de la requête 6, 12 672). `continue-2` : 12 672 sur 12 846, soit la longueur de la requête 6 (et non celle de `continue-1`, 12 800). Deux observations. Le corps complet correspond à la chaîne au moins jusqu'à la fin de l'appel qui suit `apply_patch`. Sans effet sur l'A/B : chaque tâche est une session en un seul processus, en suite de conversation.
 
 ### Métriques d'édition (affichées dans les deux A/B, sans décider)
 
