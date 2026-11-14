@@ -115,6 +115,31 @@ python3 -I -m unittest discover -s bench/smoke/tests -v
 
 Résultats : premier corps identique entre config livrée et config du banc (`apps`, `plugins`, `tool_suggest` coupés) ; différent si `image_generation` est coupé (tool imbriqué retiré) ; AGENTS.md chargé des deux côtés ; effort `high` ; WebSocket direct vers le reverse proxy (aucun CONNECT vers 127.0.0.1 : `NO_PROXY` respecté) ; prewarm puis 5 appels en suite de conversation sur les tâches d'exemple, 0 requête non appariée ; 120 bras de YA-03 recalculés, 0 écart.
 
+## Quota de l'abonnement (ajouté le 14/11/2026, avant l'A/B)
+
+Les deux bras consomment le même quota ChatGPT : fenêtre de 5 h (`primary`) et fenêtre hebdomadaire (`secondary`).
+
+**Relevés aux chauffes du 14/11** (`rate_limits` des événements `token_count` des fichiers de session de Codex ; valeurs entières observées) :
+
+| Lancement | Début | Fin | 5 h : utilisé, fenêtre, remise | Semaine : utilisé, fenêtre, remise |
+|---|---|---|---|---|
+| Codex, chauffe + py-shortuuid-118 (112 004 tokens) | 19:16:12Z | 19:16:53Z | 8 % → 8 %, 300 min, 20:17:53Z | 1 % → 1 %, 10 080 min, 21/11 15:17:53Z |
+
+Consommation d'un lancement Codex : moins d'un point de la fenêtre de 5 h, non résolue plus finement. Bras yusAgent : quota non lu. Le backend l'envoie sur WebSocket (événement `codex.rate_limits`, `codex-api/src/endpoint/responses_websocket.rs:976` et `codex-api/src/rate_limits.rs:137` au tag) ; le reverse proxy le relaie sans le noter. Par les tokens : 112 125 tokens à sa chauffe, autant que Codex.
+
+**Estimation pour 60 lancements (estimation, pas une mesure)** :
+- A/B de YA-03 sur `gpt-6.1-terra` (60 lancements chacun, 87 et 84 min) : 16,0 et 16,4 M tokens de tâche. La fenêtre de 5 h close à 15:17:53Z en a porté 30,5 M (111 lancements) sans aucune erreur de quota (0 fichier de `out.jsonl`, `err.log` ou `proxy.ndjson` des deux A/B avec `usage_limit_reached`, `rate_limit_exceeded` ou un statut 429). La fenêtre suivante était à 8 % après 9 lancements terra (1,9 M tokens) et un usage hors banc non mesuré.
+- Volume Luna : py-shortuuid-118 fait 112 k tokens sur Luna (les deux bras) contre 63 k et 79 k (médianes terra des deux A/B), soit × 1,58 sur une seule tâche ; A/B YA-14 ≈ 16,2 M × 1,58 ≈ 26 M tokens.
+- Si un token Luna ne pèse pas plus qu'un token Terra (hypothèse non vérifiée) : au plus environ 85 % d'une fenêtre de 5 h (moins de 3,3 % par million de tokens Terra, d'après la fenêtre close à 15:17:53Z) et au plus environ 14 % de la semaine (au plus 0,52 % par million, d'après 1 % pour 1,9 M).
+- Conclusion : l'A/B tient probablement dans une fenêtre de 5 h s'il part en début de fenêtre, sans marge garantie.
+
+`ab.py` ne reprend pas un A/B interrompu, et `ab_stats.py` ne lit qu'un `ab.json` : pas de découpage par passes. Un A/B interrompu reste jugeable sur ses unités valides : un lancement en échec ou un bras absent écarte l'unité (`ab_stats.py`, `units_from_plan`), et la règle de verdict ne juge que les tâches à au moins 2 passes valides.
+
+**Règle** :
+1. Avant de lancer : quota relevé sur l'abonnement, fenêtre de 5 h utilisée à **10 % au plus** et semaine à **70 % au plus** ; sinon attendre la remise. Aucun autre usage du compte (Codex, ChatGPT) pendant l'A/B.
+2. Pendant : le dernier relevé de Codex est dans chaque rapport du bras B (`codex.rate_limits`, et ligne « Quota » d'`ab_stats.py`).
+3. Erreur de quota en cours (`usage_limit_reached`, 429, chauffe refusée) : ne rien relancer dans cet A/B (`ab.py` s'arrête seul après 2 lancements de suite en échec ; sinon l'arrêter). Les unités touchées sont écartées. L'A/B est jugé par la règle de verdict sur ses unités valides. Si la règle ne donne ni verdict de résolution ni population de coût d'au moins 5 tâches, un A/B complet est relancé après la remise (nouvel `ab.json`, nouvelle graine) ; l'A/B interrompu est gardé et cité comme incident.
+
 ## Commandes du run réel (Yusuf)
 
 Login une fois, CODEX_HOME dédié (ne pas copier `~/.codex/auth.json` : le rafraîchissement fait tourner le jeton, l'autre copie serait refusée, `codex-rs/login/src/auth/manager.rs:235, 3742-3795`) :
