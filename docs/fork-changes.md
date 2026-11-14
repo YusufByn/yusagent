@@ -318,6 +318,8 @@ Compaction : le seuil part de l'usage réel du dernier appel, plus une estimatio
 |---|---|---|---|
 | 41702752565 | `aa4b128b7` | 1 | échec du shard 5 |
 | 41702752565 | `aa4b128b7` | 2 | réussi, aucun changement de code |
+| 43583710607 | `fe8fa8b1e` | 1 | échec du shard 5 (même symptôme, `clipboard_auth_commands_e2e.rs:989`) |
+| 43583710607 | `fe8fa8b1e` | 2 | réussi, aucun changement de code |
 
 Symptôme : `the team picker mounted` échoue à `clipboard_auth_commands_e2e.rs:989`. Le rendu ne montre que l'écran d'accueil : le sélecteur d'équipe n'apparaît pas pendant les attentes fixes du plan headless (`WaitMs(400)` après `/login`, `:975-979`). Hypothèse : délai trop court sur un runner chargé (même tentative : le shard 6 est tombé sur « No space left on device »). Le test ne touche à rien de ce que modifient les tickets du fork (login headless sur le provider factice).
 
