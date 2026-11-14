@@ -7,8 +7,8 @@ Harness d'agent de code minimaliste, cache-first, piloté depuis VS Code. Versio
 | Date | Décision | Statut | Tickets touchés |
 |---|---|---|---|
 | 24/10/2026 | Priorité à la capacité maximale du modèle, coût minimal à qualité égale | Validé | YA-00, YA-12, YA-17 |
-| 28/10/2026 | Pas de tool `bash` séparé : le kernel IPython est l'outil d'exécution unique, bash est une fonction async du kernel (`await bash(...)`) | Validé ; confirmé par l'A/B 2 du 14/11/2026, provisoire (famille Codex) | YA-03, YA-11, YA-12, YA-14, YA-17 |
-| 28/10/2026 | Le tool `edit` reste séparé, au format natif de chaque famille | Validé ; confirmé par l'A/B 1 du 14/11/2026 pour la famille Codex, provisoire | YA-03, YA-14, YA-17 |
+| 28/10/2026 | Pas de tool `bash` séparé : le kernel IPython est l'outil d'exécution unique, bash est une fonction async du kernel (`await bash(...)`) | Validé ; confirmé provisoirement pour la famille Codex (A/B du 14/11) ; 2e famille à mesurer (YA-14) | YA-03, YA-11, YA-12, YA-14, YA-17 |
+| 28/10/2026 | Le tool `edit` reste séparé, au format natif de chaque famille | Validé ; confirmé provisoirement pour la famille Codex (A/B du 14/11) ; 2e famille à mesurer (YA-14) | YA-03, YA-14, YA-17 |
 | 28/10/2026 | Sandbox du kernel : P1 en usage perso avec auto-approve des cellules verrouillé hors sandbox ou conteneur ; obligatoire et bloquant pour la publication publique | Validé ; étendu aux testeurs le 08/11/2026 | YA-11, YA-16 |
 | 28/10/2026 | Kernel dans le venv du harness ; le code du projet s'exécute via `bash()` dans son propre environnement (ex. `uv run pytest`), rien n'est installé dans l'environnement de l'utilisateur | Validé | YA-03, YA-07 |
 | 28/10/2026 | Crash du kernel : redémarrage auto, helpers rechargés, observation « kernel redémarré, variables perdues » en fin de contexte, aucune cellule rejouée | Validé | YA-01, YA-03 |
