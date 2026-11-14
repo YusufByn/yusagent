@@ -167,6 +167,10 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `bench/smoke/settings/edit-kernel.json`, `bash-native.json`, `bash-native-edit-kernel.json` | ajout | Réglages des bras des A/B YA-03. | YA-03 |
 | `bench/smoke/tools/sizes.py` | ajout | Estimation de la taille des changements de prompt (tiktoken) ; la capture fait foi. | YA-03 |
 | `bench/tools/capture/run.py` | modif. (fichier du fork) | Cas `codex-default`, `codex-edit-kernel`, `codex-shell-native` : provider intégré `openai` surchargé vers le serveur local (`models.json`), modèle `gpt-6.1-terra`, clé factice ; provider et modèle passés à `write_models_json` et `agent_cmd`. Les cas existants ne changent pas. | YA-03 |
+| `crates/pa-ai/src/providers/openai_responses_stream.rs`, `.changes/fix-responses-reasoning-replay.md`, `.changes/fix-responses-fn-call-args.md` | cherry-pick upstream | `c12acadaa` (#3976) puis `42a07c13c` (#4014), `git cherry-pick -x`, sans conflit ni retouche. Voir « Correctifs upstream repris (YA-04) ». | YA-04 |
+| `crates/pa-ai/src/providers/openai_codex_responses/mod.rs` | modif. (2 lignes ; 1 ligne + 2 de commentaire) | Déclare le module de tests `tests/ya_signatures.rs` dans `mod tests`. Helper de test upstream `codex_response_events` : le `done` porte `output_index` (voir « Tests upstream touchés (YA-04) »). | YA-04 |
+| `crates/pa-ai/src/providers/openai_codex_responses/tests/ya_signatures.rs` | ajout | Tour réel sur le WebSocket Codex scripté (raisonnement, texte, appel `python_repl`, chaque `done` avec `output_index`) : item de raisonnement et signature de texte enregistrés, rejeu dans l'ordre du flux, tour suivant en suite de conversation avec le seul `function_call_output`. | YA-04 |
+| `crates/pa-core/tests/prefix_stability.rs` | modif. (fichier du fork) | Reprise sur WebSocket Codex (`codex_websocket_apply_patch_replays_as_custom_and_continues`) : la première requête après reprise doit partir en suite de conversation (`previous_response_id` = `resp_2`, seul le nouveau prompt). La forme en corps complet n'est plus acceptée. | YA-04 |
 
 
 
@@ -577,6 +581,21 @@ Même règle : aucun test supprimé ni affaibli. Chaque modification porte un co
 | `crates/pa-daemon/tests/queue_delivery_e2e.rs` | mock du provider (3 tests : `multi_item_queue_delivers_every_item_in_lane_order`, `queue_pickup_projection_reaches_clients_before_the_delivered_turn_starts`, `queue_delivery_projects_the_active_action_phases_around_the_turn`) | setup | le texte du prompt est la dernière partie texte qui n'est pas le bloc `<environment>` (le mock prenait la dernière partie, devenue le bloc sur le premier message) |
 | `scripts/check_custom_ca.py` | check de cycle de vie, `request_contract` | setup | le texte d'un message utilisateur exclut la partie `<environment>` avant la comparaison exacte au prompt de fixture |
 | `scripts/check_observe_selectors.py` | check de cycle de vie, `child_task` | setup | même exclusion pour la tâche `[task from parent]` de l'enfant, qui porte désormais le bloc |
+
+## Correctifs upstream repris (YA-04)
+
+Défaut de notre base de fork (`c83ac68b3`) : au `response.output_item.done`, `ResponsesStreamProcessor` retirait le slot de l'item avant de le relire, donc ni la signature de texte ni l'item de raisonnement n'étaient enregistrés quand l'événement porte `output_index` (cas réel). Un texte se rejouait en `msg_<index>`, la base de la suite WebSocket ne correspondait plus et le tour suivant repartait en corps complet. Constaté dans la chauffe du 14/11 (requête 2), détail au ticket 03 (points ouverts).
+
+- `c12acadaa` (#3976, « Preserve Responses reasoning when finalizing streamed items ») : `content_index` lu avant `self.slots.remove(&index)` (`openai_responses_stream.rs:539-549`). Ajoute le test upstream `completed_reasoning_is_preserved_for_replay`.
+- `42a07c13c` (#4014) : les arguments accumulés sont lus en même temps que `content_index` et repris quand le `done` arrive avec des arguments vides. Ajoute le test upstream `function_call_done_keeps_accumulated_arguments`.
+- Les deux commits s'appliquent sans conflit sur `main` (`b661396d5`) : nos modifications du fichier (YA-03 : `custom_tool_call`, YA-13 : usage) sont dans d'autres blocs. Entre `c83ac68b3` et `42a07c13c`, aucun autre commit upstream ne touche ce fichier. Notre branche `custom_tool_call` du `done` (`:755-792`) retrouve son bloc par l'id, sans passer par le slot, et ne change pas.
+- Effet sur les requêtes (2e tour et suivants) : les items de raisonnement sont rejoués tels que reçus (`encrypted_content` compris), avant le texte et les appels du même tour. Un texte est rejoué sous son id d'item (`msg_...`) avec sa `phase`. La première requête d'une session ne change pas.
+
+## Tests upstream touchés (YA-04)
+
+| Fichier | Test(s) | Nature | Modification |
+|---|---|---|---|
+| `crates/pa-ai/src/providers/openai_codex_responses/mod.rs` | helper `codex_response_events` (`recovers_stale_chain_after_metadata_events`, `retry_failure_surfaces_no_stale_response_id`, `reused_connection_follow_up_ignores_the_first_requests_cancelled_signal`, et le 2e tour de `ya_freeform.rs`) | renfort | le `done` du message porte `output_index: 0` comme le vrai backend ; commentaire de contournement retiré. Aucune assertion modifiée |
 
 ## Usage (T04, YA-13)
 
