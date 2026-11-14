@@ -1,0 +1,569 @@
+{
+  "written": "2026-11-14T22:49:43+00:00",
+  "command": "python3 -I bench/smoke/baseline.py bench/smoke/runs/ab-20261114T201248Z/arms/20261114T201414Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T201649Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T201949Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T202304Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T203217Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T203622Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T204127Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T204321Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T204533Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T205006Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T205444Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T205628Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T205722Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T210503Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T211011Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T211155Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T211732Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T211954Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T212153Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T212408Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T212843Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T213253Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T213712Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T214255Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T215212Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T215416Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T220002Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T220258Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T220508Z-80e20ea-gpt-6-luna bench/smoke/runs/ab-20261114T201248Z/arms/20261114T220721Z-80e20ea-gpt-6-luna",
+  "excluded": {},
+  "runs": [
+    {
+      "run": "20261114T201414Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T201649Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T201949Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T202304Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T203217Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T203622Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T204127Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T204321Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T204533Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T205006Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T205444Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T205628Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T205722Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T210503Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T211011Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T211155Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T211732Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T211954Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T212153Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T212408Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T212843Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T213253Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T213712Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T214255Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T215212Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T215416Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T220002Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T220258Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T220508Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    },
+    {
+      "run": "20261114T220721Z-80e20ea-gpt-6-luna",
+      "commit": "11ed7c38a51f9db191a9521d81ccc9765e278baf",
+      "binary_sha256": "099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e",
+      "runs_per_task": 1
+    }
+  ],
+  "header": {
+    "mode": "réel",
+    "provider": "openai-codex",
+    "model": "gpt-6-luna",
+    "effort": "high",
+    "settings_non_default": {
+      "cacheRetention": "short"
+    },
+    "models_bundled_sha256": "f057223709acfc535ffc0395766889208e5104423ce3612ad10c242a2d7bec9d",
+    "prices_version": "2026-11-04"
+  },
+  "per_task": {
+    "node-filesize-376": {
+      "task_tree": "94694314914de5793bf86b1a4f837d0a5807ca81695b2d677b09a5ea844a496c",
+      "runs": 3,
+      "from_runs": [
+        "20261114T201414Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T205444Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T212843Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 0.0,
+      "stable": false,
+      "cost": {
+        "mean": 0.00774456,
+        "stdev": 0.002280913524708905,
+        "cv": 0.29451815528692465,
+        "values": [
+          0.0095712,
+          0.00518804,
+          0.00847444
+        ]
+      },
+      "tokens": {
+        "mean": 327696,
+        "stdev": 111918.08223875175,
+        "cv": 0.34153020555256014,
+        "values": [
+          417020,
+          202154,
+          363914
+        ]
+      },
+      "turns_mean": 15,
+      "context_peak_max": 37628,
+      "server_misses": 0,
+      "cache_avoidable_rate_mean": 0.9297451596643592
+    },
+    "node-koa-2029": {
+      "task_tree": "b4d28a49ffe517c7091360acd388fdb3ba5700c2d150465e1d11141cb0777b17",
+      "runs": 3,
+      "from_runs": [
+        "20261114T201649Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T205628Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T213253Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.003439713333333333,
+        "stdev": 0.0017076383797904441,
+        "cv": 0.4964478764094036,
+        "values": [
+          0.0016919,
+          0.00510412,
+          0.00352312
+        ]
+      },
+      "tokens": {
+        "mean": 106107,
+        "stdev": 34552.044932246776,
+        "cv": 0.3256339820393261,
+        "values": [
+          72227,
+          141294,
+          104800
+        ]
+      },
+      "turns_mean": 10.333333333333334,
+      "context_peak_max": 23450,
+      "server_misses": 2,
+      "cache_avoidable_rate_mean": 0.9357634471013294
+    },
+    "node-little-coder-102": {
+      "task_tree": "1608d823ff0f379901a283107d6e93468c500de18c9dd42e89282db601e9ccee",
+      "runs": 3,
+      "from_runs": [
+        "20261114T201949Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T205722Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T213712Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 0.0,
+      "stable": false,
+      "cost": {
+        "mean": 0.01532648,
+        "stdev": 0.0017615752237131407,
+        "cv": 0.11493671239013399,
+        "values": [
+          0.01678972,
+          0.0133712,
+          0.01581852
+        ]
+      },
+      "tokens": {
+        "mean": 780721.3333333334,
+        "stdev": 117101.1412469295,
+        "cv": 0.14999095867786735,
+        "values": [
+          839422,
+          645880,
+          856862
+        ]
+      },
+      "turns_mean": 23.333333333333332,
+      "context_peak_max": 44196,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.9501924129494951
+    },
+    "node-testsprite-356": {
+      "task_tree": "d2c99a63045c373e1e943c362641a0ade00101bb62bf00652240282a803a5dc1",
+      "runs": 3,
+      "from_runs": [
+        "20261114T202304Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T210503Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T214255Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 0.3333333333333333,
+      "stable": false,
+      "cost": {
+        "mean": 0.022112680000000003,
+        "stdev": 0.006200118098133293,
+        "cv": 0.2803874563432968,
+        "values": [
+          0.022271620000000002,
+          0.01583462,
+          0.0282318
+        ]
+      },
+      "tokens": {
+        "mean": 1411432.6666666667,
+        "stdev": 456164.0383177233,
+        "cv": 0.3231922068199191,
+        "values": [
+          1447397,
+          938351,
+          1848550
+        ]
+      },
+      "turns_mean": 52,
+      "context_peak_max": 44499,
+      "server_misses": 0,
+      "cache_avoidable_rate_mean": 0.9704999953833984
+    },
+    "node-tough-cookie-630": {
+      "task_tree": "37a312dafcb92c0541c169ab3e67caa8ca9b45bab77644a9de190714285b30cd",
+      "runs": 3,
+      "from_runs": [
+        "20261114T203217Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T211011Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T215212Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.00671794,
+        "stdev": 0.0007332795164192163,
+        "cv": 0.10915243607701412,
+        "values": [
+          0.00625846,
+          0.0063317600000000005,
+          0.0075636
+        ]
+      },
+      "tokens": {
+        "mean": 359685,
+        "stdev": 38413.38229055078,
+        "cv": 0.10679728732238146,
+        "values": [
+          345527,
+          330360,
+          403168
+        ]
+      },
+      "turns_mean": 21,
+      "context_peak_max": 26586,
+      "server_misses": 0,
+      "cache_avoidable_rate_mean": 0.9450773379326874
+    },
+    "py-graphiti-2030": {
+      "task_tree": "5713dad5dbe7e9e5a544f8709fcb280a96f3aa61e642784fc491c6d7756fdb37",
+      "runs": 3,
+      "from_runs": [
+        "20261114T203622Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T211155Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T215416Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 0.3333333333333333,
+      "stable": false,
+      "cost": {
+        "mean": 0.0143241,
+        "stdev": 0.004637591010686474,
+        "cv": 0.32376142380229644,
+        "values": [
+          0.01862902,
+          0.0149299,
+          0.00941338
+        ]
+      },
+      "tokens": {
+        "mean": 771949,
+        "stdev": 321744.9467077921,
+        "cv": 0.416795600108028,
+        "values": [
+          1127475,
+          687571,
+          500801
+        ]
+      },
+      "turns_mean": 31.333333333333332,
+      "context_peak_max": 39568,
+      "server_misses": 1,
+      "cache_avoidable_rate_mean": 0.9605548516727161
+    },
+    "py-langextract-584": {
+      "task_tree": "447d54b5b4765ddfa101cef923c1ed3b4828300661c8b16eb038ed426d0b75f9",
+      "runs": 3,
+      "from_runs": [
+        "20261114T204127Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T211732Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T220002Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.0057588733333333334,
+        "stdev": 0.0007389860324345338,
+        "cv": 0.12832128606773785,
+        "values": [
+          0.00556152,
+          0.0051386,
+          0.006576500000000001
+        ]
+      },
+      "tokens": {
+        "mean": 258545,
+        "stdev": 16297.582428078098,
+        "cv": 0.06303576718976618,
+        "values": [
+          244244,
+          255102,
+          276289
+        ]
+      },
+      "turns_mean": 18.666666666666668,
+      "context_peak_max": 19250,
+      "server_misses": 2,
+      "cache_avoidable_rate_mean": 0.9364995155248864
+    },
+    "py-shortuuid-118": {
+      "task_tree": "0aefe875a7530838dc9c344e97a3f1b6d0cef1fe76e66fce8359d2721374fc6e",
+      "runs": 3,
+      "from_runs": [
+        "20261114T204321Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T211954Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T220258Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.0028904066666666666,
+        "stdev": 0.00027440767506273103,
+        "cv": 0.09493739349113425,
+        "values": [
+          0.00266352,
+          0.0028123,
+          0.0031954
+        ]
+      },
+      "tokens": {
+        "mean": 103399,
+        "stdev": 15525.83450253158,
+        "cv": 0.15015459049441077,
+        "values": [
+          108328,
+          86007,
+          115862
+        ]
+      },
+      "turns_mean": 10,
+      "context_peak_max": 13674,
+      "server_misses": 0,
+      "cache_avoidable_rate_mean": 0.920935400429313
+    },
+    "py-tldextract-368": {
+      "task_tree": "0b793bff19ed1781a163d7463a3be5a80eb46f50bbbb517ce88817f3f43aca73",
+      "runs": 3,
+      "from_runs": [
+        "20261114T204533Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T212153Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T220508Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.006837393333333334,
+        "stdev": 0.0014960245896820455,
+        "cv": 0.21880042828437232,
+        "values": [
+          0.00847852,
+          0.00648386,
+          0.0055498000000000006
+        ]
+      },
+      "tokens": {
+        "mean": 312727,
+        "stdev": 55873.82982219852,
+        "cv": 0.17866647210569767,
+        "values": [
+          377110,
+          276929,
+          284142
+        ]
+      },
+      "turns_mean": 25,
+      "context_peak_max": 19645,
+      "server_misses": 2,
+      "cache_avoidable_rate_mean": 0.9581854747701336
+    },
+    "py-tldextract-383": {
+      "task_tree": "0984288d1aa3c6880c8947ee17693beadf22fb5520a20ece8e262c71900f54bf",
+      "runs": 3,
+      "from_runs": [
+        "20261114T205006Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T212408Z-80e20ea-gpt-6-luna/run-1",
+        "20261114T220721Z-80e20ea-gpt-6-luna/run-1"
+      ],
+      "resolved_rate": 1.0,
+      "stable": true,
+      "cost": {
+        "mean": 0.009718786666666668,
+        "stdev": 0.0009914409820727266,
+        "cv": 0.10201283514876958,
+        "values": [
+          0.010120220000000001,
+          0.01044656,
+          0.008589580000000001
+        ]
+      },
+      "tokens": {
+        "mean": 491015.3333333333,
+        "stdev": 105034.11718262469,
+        "cv": 0.21391209205135078,
+        "values": [
+          587915,
+          505732,
+          379399
+        ]
+      },
+      "turns_mean": 29,
+      "context_peak_max": 24483,
+      "server_misses": 2,
+      "cache_avoidable_rate_mean": 0.9534000159285728
+    }
+  },
+  "aggregate": {
+    "tasks": [
+      "node-koa-2029",
+      "node-tough-cookie-630",
+      "py-langextract-584",
+      "py-shortuuid-118",
+      "py-tldextract-368",
+      "py-tldextract-383"
+    ],
+    "cost_mean": 0.035363113333333335,
+    "cv_independent": 0.07638305969018745,
+    "cv_passes": 0.023578527510292064,
+    "passes": [
+      0.03477414,
+      0.0363172,
+      0.034998
+    ],
+    "cv": 0.07638305969018745
+  }
+}
