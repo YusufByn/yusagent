@@ -63,6 +63,7 @@ SANDBOX_AGENT = HERE / "sandbox-agent.sb"
 SANDBOX_TASK = HERE / "sandbox-task.sb"
 sys.path.insert(0, str(HERE))
 
+import codex_arm  # noqa: E402
 import metrics  # noqa: E402
 import proxies  # noqa: E402
 
@@ -243,6 +244,10 @@ class Cache:
         # la sonde utilisent leurs propres dossiers, avec un identifiant factice.
         self.agent = root / ("capture-agent" if capture else "agent")
         self.probe_agent = root / "probe-agent"
+        # Bras Codex CLI (YA-14) : CODEX_HOME dédié, login fait une fois par Yusuf (README) ;
+        # mode capture et sonde avec un identifiant factice.
+        self.codex_home = root / ("capture-codex-home" if capture else "codex-home")
+        self.probe_codex_home = root / "probe-codex-home"
         self.uv_cache = root / "uv-cache"
         self.uv_python = root / "uv-python"
         self.npm_cache = root / "npm-cache"
@@ -332,14 +337,20 @@ def agent_profile(cache: "Cache", workspace: Path, binary: Path | None,
 
 def run_process(cmd: list[str], env: dict, cwd: Path, out: Path, err: Path, timeout: int,
                 sandboxed: bool, profile: list[str] | None = None,
-                idle: tuple | None = None) -> dict:
+                idle: tuple | None = None, check=None) -> dict:
     """Lance `cmd` ; sous sandbox, profil réseau du banc de capture sauf `profile` donné.
 
     `idle` : (fonction qui rend les secondes d'inactivité du reverse proxy, limite en s).
     Au-delà de la limite, le processus est arrêté et le résultat porte `stalled`.
+    `check(argv, env)` : contrôle de la commande finale avant lancement, obligatoire pour
+    Codex CLI (`codex_guard`) : sans lui, un lancement de `codex` est refusé.
     """
     if sandboxed:
         cmd = ["/usr/bin/sandbox-exec", *(profile or ["-f", str(SANDBOX)]), *cmd]
+    if codex_arm.is_codex(cmd):
+        if check is None:
+            raise codex_arm.LaunchRefused("lancement de Codex refusé : sans garde-fou")
+        check(cmd, env)
     started = time.monotonic()
     timed_out = stalled = False
     code = None
@@ -465,14 +476,17 @@ class Access:
     """Reverse proxy (et serveur de capture en mode capture) pour une session d'agent."""
 
     def __init__(self, out: Path, capture: bool, scenario: str, connect_port: int,
-                 server_args: list[str] | None = None, log_bodies: bool = False):
+                 server_args: list[str] | None = None, log_bodies: bool = False,
+                 codex: bool = False):
         self.capture = (Capture(out, scenario, connect_port, server_args or []) if capture
                         else None)
         upstream = ("127.0.0.1", self.capture.port, False) if self.capture else None
         self.log_path = out / "proxy.ndjson"
         # `--log-bodies` : corps des requêtes dans `proxy-bodies.ndjson` (jamais d'en-tête).
+        # Bras Codex CLI : chemin des réponses seul (ni `/models`, ni recherche web).
         self.proxy = proxies.ReverseProxy(self.log_path, upstream,
-                                          out / "proxy-bodies.ndjson" if log_bodies else None)
+                                          out / "proxy-bodies.ndjson" if log_bodies else None,
+                                          {codex_arm.RESPONSES_PATH} if codex else None)
         proxies.serve(self.proxy)
 
     @property
@@ -773,7 +787,12 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
                   source: dict, settings: dict, capture: bool, timeout: int,
                   idle_timeout: int | None = None) -> dict:
     """Une session d'agent sous sandbox, avec ses journaux copiés dans `out`. Avec
-    `idle_timeout`, garde-fou d'inactivité sur le reverse proxy (`run_process`)."""
+    `idle_timeout`, garde-fou d'inactivité sur le reverse proxy (`run_process`). Bras Codex
+    CLI (réglage `harness: codex`) : `codex_session`, `agent_dir` est son CODEX_HOME."""
+    codex = codex_arm.settings_of(settings)
+    if codex is not None:
+        return codex_session(binary, cache, agent_dir, out, model, effort, prompt, cwd, access,
+                             connect, codex, timeout, idle_timeout, capture)
     out.mkdir(parents=True, exist_ok=True)
     write_agent_config(agent_dir, access.port, source, settings)
     before = session_files(agent_dir)
@@ -791,6 +810,57 @@ def agent_session(binary: Path, cache: Cache, agent_dir: Path, out: Path, model:
             handle.write(json.dumps(entry) + "\n")
     return {"process": process, **session_logs(copied),
             "proxy_log": proxies.read_log(access.log_path), "connect": connect_entries}
+
+
+def codex_guard(cache: Cache):
+    """Garde-fou de tout lancement de Codex (`codex_arm.check_launch`) : profil de la phase
+    agent, CODEX_HOME du banc sous `cache.root`."""
+    return lambda argv, env: codex_arm.check_launch(argv, env, SANDBOX_AGENT, cache.root)
+
+
+def codex_version(binary: Path, cache: Cache) -> str | None:
+    """`codex --version` sous le garde-fou (profil de la phase agent, CODEX_HOME de la sonde) :
+    sans CODEX_HOME, Codex écrit dans `~/.codex` avant même de lire `--version`."""
+    home = cache.probe_codex_home
+    home.mkdir(parents=True, exist_ok=True)
+    project = work_dir(cache, "codex-version")
+    out, err = cache.tmp / "codex-version.out", cache.tmp / "codex-version.err"
+    result = run_process([str(binary), "--version"],
+                         codex_arm.env(tool_path(), cache.home, cache.tmp, home, None), project,
+                         out, err, 30, sandboxed=True,
+                         profile=agent_profile(cache, project, binary, home),
+                         check=codex_guard(cache))
+    return (out.read_text().strip() or None) if result["exit"] == 0 else None
+
+
+def codex_session(binary: Path, cache: Cache, codex_home: Path, out: Path, model: str,
+                  effort: str, prompt: str, cwd: Path, access: Access,
+                  connect: proxies.ConnectProxy, codex: dict, timeout: int,
+                  idle_timeout: int | None, capture: bool) -> dict:
+    """Une session `codex exec` (YA-14) : même profil sandbox que yusAgent (`AGENT_DIR` =
+    CODEX_HOME, `BIN_DIR` = dossier de Codex), mêmes proxys et garde-fou ; config écrite
+    avant la session et copiée dans `out` ; fichiers de session copiés dans `sessions/`,
+    masqués au ramassage (ids de `session_meta`, valeurs de `secret_values`)."""
+    out.mkdir(parents=True, exist_ok=True)
+    config = codex_arm.write_config(codex_home, access.port, binary, codex)
+    (out / "codex-config.toml").write_text(config)
+    before = codex_arm.rollouts(codex_home)
+    connect_before = len(proxies.read_log(connect.log.path))
+    env = codex_arm.env(tool_path(), cache.home, cache.tmp, codex_home, connect.port)
+    process = run_process(codex_arm.cmd(binary, model, effort, prompt), env, cwd,
+                          out / "out.jsonl", out / "err.log", timeout, sandboxed=True,
+                          profile=agent_profile(cache, cwd, binary, codex_home),
+                          idle=(access.proxy.idle_seconds, idle_timeout)
+                          if idle_timeout is not None else None, check=codex_guard(cache))
+    codex_arm.copy_rollouts(codex_home, before, out / "sessions",
+                            secret_values(cache, capture, codex=True))
+    connect_entries = proxies.read_log(connect.log.path)[connect_before:]
+    with (out / "connect.ndjson").open("w") as handle:
+        for entry in connect_entries:
+            handle.write(json.dumps(entry) + "\n")
+    proxy_log = proxies.read_log(access.log_path)
+    return {"process": process, **codex_arm.session(out, proxy_log), "proxy_log": proxy_log,
+            "connect": connect_entries}
 
 
 def session_logs(copied: dict) -> dict:
@@ -827,21 +897,32 @@ def hidden_targets(task: dict, cache: Cache) -> list[Path]:
 
 
 def probe(binary: Path, cache: Cache, out: Path, connect: proxies.ConnectProxy,
-          tasks: list[dict]) -> dict:
-    """Sonde réseau sous sandbox, contre le serveur de capture (aucun modèle réel)."""
-    write_fake_auth(cache.probe_agent)
+          tasks: list[dict], settings: dict | None = None, model: str = DEFAULT_MODELS[0]) -> dict:
+    """Sonde réseau sous sandbox, contre le serveur de capture (aucun modèle réel). Bras
+    Codex CLI : mêmes mesures par le shell de Codex (pas de kernel, `kernel_proxy_vars` nul)."""
+    settings = settings or {}
+    codex = codex_arm.settings_of(settings)
+    agent_dir = cache.probe_codex_home if codex is not None else cache.probe_agent
+    if codex is not None:
+        codex_arm.write_fake_auth(agent_dir)
+    else:
+        write_fake_auth(agent_dir)
     project = work_dir(cache, "probe")
     targets = (hidden_targets(tasks[0], cache) if tasks else
                [HERE / "README.md"] + [Path.home() / t for t in HOME_TARGETS
                                        if (Path.home() / t).exists()])
-    access = Access(out, True, "smoke-probe", connect.port, read_probe_args(targets))
+    access = Access(out, True, "smoke-probe", connect.port, read_probe_args(targets),
+                    codex=codex is not None)
     try:
-        session = agent_session(binary, cache, cache.probe_agent, out, DEFAULT_MODELS[0],
+        session = agent_session(binary, cache, agent_dir, out,
+                                model if codex is not None else DEFAULT_MODELS[0],
                                 DEFAULT_EFFORT, PROBE_PROMPT, project, access, connect,
-                                {"source": "bundled"}, {}, True, 240)
+                                {"source": "bundled"}, settings if codex is not None else {},
+                                True, 240)
     finally:
         access.stop()
-    markers = metrics.kernel_markers(session["entries"])
+    markers = (session["codex"]["markers"] if codex is not None
+               else metrics.kernel_markers(session["entries"]))
     connects = metrics.connect_summary(session["connect"])
     direct = metrics.last_marker(markers, "SMOKE_CURL_DIRECT")
     via_proxy = metrics.last_marker(markers, "SMOKE_CURL_PROXY")
@@ -859,17 +940,23 @@ def warmup(binary: Path, cache: Cache, out: Path, model: str, effort: str, sourc
            settings: dict, connect: proxies.ConnectProxy, capture: bool,
            server_args: list[str]) -> dict:
     """Run de chauffe : le modèle doit répondre. Un id faux échoue ici, pas au run mesuré."""
+    codex = codex_arm.settings_of(settings)
     project = work_dir(cache, "warmup")
-    access = Access(out, capture, "smoke-warmup", connect.port, server_args)
+    access = Access(out, capture, "smoke-warmup", connect.port, server_args,
+                    codex=codex is not None)
     try:
-        session = agent_session(binary, cache, cache.agent, out, model, effort, WARMUP_PROMPT,
-                                project, access, connect, source, settings, capture, 300)
+        session = agent_session(binary, cache,
+                                cache.codex_home if codex is not None else cache.agent, out,
+                                model, effort, WARMUP_PROMPT, project, access, connect, source,
+                                settings, capture, 300)
     finally:
         access.stop()
-    final = metrics.final_assistant(session["entries"])
+    final = (session["codex"]["final"] if codex is not None
+             else metrics.final_assistant(session["entries"]))
     ok_records = [r for r in session["records"]
                   if r.get("stopReason") not in ("error", "aborted") and r.get("model") == model]
-    transports = metrics.match_transports(session["records"], session["proxy_log"])
+    transports = (metrics.match_transports_in_order if codex is not None
+                  else metrics.match_transports)(session["records"], session["proxy_log"])
     result = {"exit": session["process"]["exit"], "stop_reason": final["stop_reason"],
               "error": final["error"], "calls": len(session["records"]),
               "transports": transports["requests"], "connect": metrics.connect_summary(
@@ -891,17 +978,27 @@ def run_task(task: dict, index: int, binary: Path, cache: Cache, out: Path, mode
     solvable = "exemple" in task.get("tags", []) and task["id"] not in capture_fail
     scenario = ("spawn" if capture_spawn else
                 f"smoke-{task['id'] if solvable else 'fail'}")
+    codex = codex_arm.settings_of(settings)
     access = Access(out, capture, scenario, connect.port,
-                    server_args + read_probe_args(hidden_targets(task, cache)), log_bodies)
+                    server_args + read_probe_args(hidden_targets(task, cache)), log_bodies,
+                    codex=codex is not None)
     try:
-        session = agent_session(binary, cache, cache.agent, out, model, effort, prompt,
-                                workspace, access, connect, source, settings, capture,
-                                int(task.get("timeout_s", 1800)), idle_timeout)
+        session = agent_session(binary, cache,
+                                cache.codex_home if codex is not None else cache.agent, out,
+                                model, effort, prompt, workspace, access, connect, source,
+                                settings, capture, int(task.get("timeout_s", 1800)), idle_timeout)
     finally:
         access.stop()
     graded = run_tests(task, workspace, out / "grading", cache, sandboxed=True)
     return task_result(task, index, session["process"], session, graded, model, effort,
                        prices, {"tree": tree_hash(task["dir"]), "source": "run"})
+
+
+def first_prompt(records: list[dict]) -> int | None:
+    """Taille du premier prompt de la session principale (premier appel `main`), en tokens :
+    prompt système, définitions de tools et énoncé (YA-14, affiché sans décider)."""
+    main = sorted((r for r in records if r.get("kind") == "main"), key=lambda r: r.get("seq", 0))
+    return metrics.prompt_size(main[0]) if main else None
 
 
 def task_result(task: dict, index: int, process: dict, session: dict, graded: dict,
@@ -913,11 +1010,14 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
     entries = session["entries"]
     records = session["records"] + session["sub_records"]
     all_entries = entries + session["sub_entries"]
-    final = metrics.final_assistant(entries)
+    # Bras Codex CLI (YA-14) : statut, edits, sondes et appels d'outils depuis sa sortie
+    # `--json` et ses fichiers de session (`codex_arm.session`).
+    codex = session.get("codex")
+    final = codex["final"] if codex else metrics.final_assistant(entries)
     resolved = graded["junit"] and all(s == "passed" for s in graded["tests"].values())
     if process.get("stalled"):
         status = "stalled"
-    elif not entries:
+    elif (not codex["events"]["thread_id"]) if codex else not entries:
         status = "harness_error"
     elif process["timeout"]:
         status = "timeout"
@@ -927,10 +1027,18 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
         status = "harness_error"
     else:
         status = "resolved" if resolved else "failed"
-    transports = metrics.match_transports(records, session["proxy_log"])
+    transports = (metrics.match_transports_in_order if codex
+                  else metrics.match_transports)(records, session["proxy_log"])
     misses = metrics.server_misses(records, transports["per_request"])
     calls = metrics.calls(records)
     anomalies = []
+    if codex and codex.get("compactions"):
+        anomalies.append(f"compaction Codex ({codex['compactions']}) : incident (plan YA-14)")
+    if codex and codex["events"]["errors"]:
+        anomalies.append(f"erreurs dans la sortie --json de Codex : {codex['events']['errors']}")
+    if codex and transports.get("refused"):
+        anomalies.append(f"{transports['refused']} requête(s) refusée(s) par le reverse proxy "
+                         "(chemin hors cible)")
     if process.get("stalled"):
         anomalies.append(f"flux bloqué : aucun octet par le reverse proxy pendant "
                          f"{process.get('idle_timeout_s')} s, tâche arrêtée à "
@@ -946,7 +1054,7 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
     if any(m != model for m in calls["models"]):
         anomalies.append(f"modèle journalisé {calls['models']} au lieu de {model}")
     connects = metrics.connect_summary(session["connect"])
-    markers = metrics.kernel_markers(all_entries)
+    markers = codex["markers"] if codex else metrics.kernel_markers(all_entries)
     isolated = metrics.isolation(markers)
     if isolated and isolated["readable"]:
         anomalies.append(f"lecture hors workspace réussie : {isolated['readable']}")
@@ -963,11 +1071,19 @@ def task_result(task: dict, index: int, process: dict, session: dict, graded: di
         "server_misses": misses,
         "subagents": metrics.subagent_share(session["sub_records"], records, misses, prices,
                                             model, CACHE_WRITE_PRICE),
-        "cost": metrics.costs(prices, model, records, CACHE_WRITE_PRICE),
-        "cells": metrics.cell_errors(all_entries),
-        "edits": metrics.edit_attempts(all_entries),
+        "cost": metrics.costs(prices, model, records, CACHE_WRITE_PRICE,
+                              transports["per_request"]),
+        "cells": codex_arm.cells(codex) if codex else metrics.cell_errors(all_entries),
+        "edits": codex["edits"] if codex else metrics.edit_attempts(all_entries),
         "transports": {k: v for k, v in transports.items() if k != "per_request"},
-        "transport_failures_in_session": metrics.session_transport_failures(all_entries),
+        "transport_failures_in_session": (len(codex["events"]["errors"]) if codex else
+                                          metrics.session_transport_failures(all_entries)),
+        "harness": "codex" if codex else "yusagent",
+        "codex": ({k: v for k, v in codex.items() if k not in ("markers", "final")}
+                  if codex else None),
+        "first_prompt": first_prompt(records),
+        "compactions": (codex.get("compactions") if codex else
+                        sum(1 for r in records if "compaction" in str(r.get("kind")))),
         "per_request": transports["per_request"],
         "context_peak": metrics.context_peak(records),
         "isolation": isolated,
@@ -1237,6 +1353,19 @@ def write_report(run_dir: Path, report: dict) -> None:
         lines.append(f"| {r['task']} | {r['run']} | {s.get('sessions')} | {s.get('calls')} | "
                      f"{fmt(s.get('cost'))} | {fmt(pct(s.get('cost_share')), 1)} | "
                      f"{fmt(s.get('cache_session_rate'))} | {s.get('server_misses')} |")
+    if h.get("harness") == "codex":
+        lines += ["", "## Bras Codex CLI : requêtes en corps complet", "",
+                  "Requêtes de génération (prewarm exclu) parties sans `previous_response_id` "
+                  "(WebSocket) ou en SSE, lues au reverse proxy. Biais contre Codex : un corps "
+                  "complet rejoue ses items sans leur `encrypted_content` (provider personnalisé, "
+                  "plan YA-14, écart 1). « Hors premier » : sauf la première requête de "
+                  "génération de sa session.", "",
+                  "| Tâche | Run | Requêtes de génération | Corps complet | Dont hors premier |",
+                  "|---|---|---|---|---|"]
+        for r in report["results"]:
+            f = (r.get("codex") or {}).get("full_bodies") or {}
+            lines.append(f"| {r['task']} | {r['run']} | {f.get('generation_requests')} | "
+                         f"{f.get('full_body')} | {f.get('after_first')} |")
     lines += ["", "## Version des tâches", "",
               "Empreinte du dossier de la tâche (`task.toml`, `prompt.md`, `hidden/`, fichiers) : "
               "`baseline.py` refuse de mélanger deux versions d'une tâche.", ""]
@@ -1359,8 +1488,9 @@ def scan_secrets(run_dir: Path, values: list[str]) -> dict:
     return {"values_checked": len(values), "files_with_hits": hits}
 
 
-def auth_values(agent_dir: Path) -> list[str]:
-    """Valeurs de `auth.json` à rechercher dans le run (jamais écrites nulle part)."""
+def auth_values(agent_dir: Path, skip: tuple[str, ...] = ()) -> list[str]:
+    """Valeurs de `auth.json` à rechercher dans le run (jamais écrites nulle part). `skip` :
+    clés dont la valeur n'est pas un secret (date du dernier rafraîchissement de Codex)."""
     path = agent_dir / "auth.json"
     if not path.exists():
         return []
@@ -1368,8 +1498,9 @@ def auth_values(agent_dir: Path) -> list[str]:
 
     def walk(value):
         if isinstance(value, dict):
-            for item in value.values():
-                walk(item)
+            for key, item in value.items():
+                if key not in skip:
+                    walk(item)
         elif isinstance(value, str) and len(value) >= 16:
             values.append(value)
 
@@ -1377,10 +1508,51 @@ def auth_values(agent_dir: Path) -> list[str]:
     return values
 
 
-def secret_values(cache: Cache, capture: bool) -> list[str]:
-    """Valeurs factices du mode capture et, en run réel, celles de `auth.json`."""
+# Identifiants personnels des claims des jetons (YA-14) : absents d'`auth.json` en clair, mais
+# Codex écrit l'id utilisateur dans `session_meta` (`creator_user_id`).
+CLAIM_KEYS = ("chatgpt_account_id", "chatgpt_user_id", "chatgpt_account_user_id", "user_id",
+              "poid", "sub", "email", "name", "session_id", "sid")
+
+
+def jwt_claims(token: str) -> dict:
+    """Claims d'un JWT (charge utile décodée, signature non vérifiée) ; `{}` sinon."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def claim_values(tokens: list[str]) -> list[str]:
+    """Valeurs des claims `CLAIM_KEYS` (8 caractères au moins) des JWT de `tokens`."""
+    found: list[str] = []
+
+    def walk(value: dict) -> None:
+        for key, item in value.items():
+            if isinstance(item, dict):
+                walk(item)
+            elif key in CLAIM_KEYS and isinstance(item, str) and len(item) >= 8:
+                found.append(item)
+
+    for token in tokens:
+        if token.count(".") == 2:
+            walk(jwt_claims(token))
+    return found
+
+
+def secret_values(cache: Cache, capture: bool, codex: bool = False) -> list[str]:
+    """Valeurs factices du mode capture et, en run réel, celles de `auth.json` et les ids des
+    claims de ses jetons (`claim_values`) ; bras Codex CLI (YA-14) : identifiant factice de
+    Codex et `auth.json` de son CODEX_HOME."""
     values = list(FAKE_SECRETS.values()) + [FAKE_ACCESS, FAKE_REFRESH]
-    return values if capture else values + auth_values(cache.agent)
+    if codex:
+        values += list(codex_arm.FAKE_VALUES)
+    if capture:
+        return values
+    real = auth_values(cache.agent)
+    real += auth_values(cache.codex_home, skip=("last_refresh",)) if codex else []
+    return list(dict.fromkeys(values + real + claim_values(real)))
 
 
 REPORT_FILES = ("report.json", "report.md", "tasks.csv")
@@ -1417,6 +1589,16 @@ def rereport(run_dir: Path, cache_root: Path) -> None:
     for prev in old["results"]:
         out = run_dir / "tasks" / prev["task"] / f"run-{prev['run']}"
         sessions = out / "sessions"
+        if header.get("harness") == "codex":
+            proxy_log = proxies.read_log(out / "proxy.ndjson")
+            session = {**codex_arm.session(out, proxy_log), "proxy_log": proxy_log,
+                       "connect": proxies.read_log(out / "connect.ndjson")}
+            graded = {"tests": prev["tests"], "junit": (out / "grading" / "junit.xml").exists()}
+            results.append(task_result(tasks[prev["task"]], prev["run"], prev["agent"], session,
+                                       graded, header["model"], header["effort"], prices,
+                                       prev.get("task_version")))
+            print(f"  {prev['task']} run {prev['run']} : {results[-1]['status']} (Codex)")
+            continue
         main_files = sorted(p for p in sessions.iterdir()
                             if p.is_file() and SESSION_FILE.match(p.name))
         if (sessions / "subagents").is_dir():
@@ -1451,7 +1633,8 @@ def rereport(run_dir: Path, cache_root: Path) -> None:
               "results": results, "totals": totals(results), "per_task": aggregate(results),
               "notes": report_notes(prices, header["effort"])}
     write_report(run_dir, report)
-    report["secret_scan"] = scan_secrets(run_dir, secret_values(cache, capture))
+    report["secret_scan"] = scan_secrets(run_dir, secret_values(
+        cache, capture, header.get("harness") == "codex"))
     write_report(run_dir, report)
     if report["secret_scan"]["files_with_hits"]:
         print(f"ATTENTION : valeurs secrètes trouvées dans "
@@ -1549,18 +1732,35 @@ def main() -> None:
     if args.record_hosts and args.capture:
         fail("--record-hosts est un run réel, incompatible avec --capture")
     models = [args.model] if args.model else list(DEFAULT_MODELS)
-    bundled, bundled_ids = catalog(binary)
-    sources = {model: model_source(model, bundled_ids) for model in models}
     settings = json.loads(args.settings.read_text())
+    try:
+        codex = codex_arm.settings_of(settings)
+        codex_manifest = (codex_arm.check_install(binary, codex["version"]) if codex is not None
+                          else None)
+    except ValueError as error:
+        fail(str(error))
+    if codex is not None:
+        # Bras Codex CLI (YA-14) : modèle de la liste fermée, présent au catalogue figé de Codex.
+        bundled, bundled_ids = codex_arm.catalog(binary), codex_arm.catalog_ids(binary)
+        for model in models:
+            if model not in MODELS or model not in bundled_ids:
+                fail(f"MODEL={model} refusé : liste fermée {', '.join(MODELS)}, et présent "
+                     f"au catalogue de Codex ({bundled})")
+        sources = {model: {"source": "codex-catalog"} for model in models}
+    else:
+        bundled, bundled_ids = catalog(binary)
+        sources = {model: model_source(model, bundled_ids) for model in models}
     cache = Cache(args.cache.expanduser().resolve(), binary, args.capture)
+    login_dir = cache.codex_home if codex is not None else cache.agent
+    hosts_file = codex_arm.HOSTS if codex is not None else HOSTS
     if args.capture:
-        write_fake_auth(cache.agent)
-    elif not (cache.agent / "auth.json").exists():
-        fail(f"aucun login dans {cache.agent} (README : login dans le dossier agent dédié)")
-    if not args.capture and not args.record_hosts and not HOSTS.exists():
-        fail(f"{HOSTS.relative_to(REPO)} absent : l'établir par un run de chauffe "
+        (codex_arm.write_fake_auth if codex is not None else write_fake_auth)(login_dir)
+    elif not (login_dir / "auth.json").exists():
+        fail(f"aucun login dans {login_dir} (README : login dans le dossier dédié)")
+    if not args.capture and not args.record_hosts and not hosts_file.exists():
+        fail(f"{hosts_file.relative_to(REPO)} absent : l'établir par un run de chauffe "
              "(--record-hosts, README)")
-    hosts = proxies.load_hosts(HOSTS)
+    hosts = proxies.load_hosts(hosts_file)
     tasks = [] if args.record_hosts else load_tasks(
         [t for t in args.tasks.split(",") if t] or None, args.capture)
     capture_fail = {t for t in args.capture_fail.split(",") if t}
@@ -1571,15 +1771,17 @@ def main() -> None:
         task_args += ["--server-miss-at-turn", str(args.capture_server_miss_at_turn)]
     prices = json.loads(PRICES.read_text())
 
-    prepare_kernel(binary, cache)
+    if codex is None:
+        prepare_kernel(binary, cache)
     for task in tasks:
         prepare_task(task, cache)
     prepare_s = round(time.monotonic() - started, 2)
 
     manifest = binary_manifest(binary)
     short = (manifest or {}).get("commit") or git("rev-parse", "HEAD") or "nocommit"
+    label = f"codex{codex['version']}" if codex is not None else short[:7]
     for model in models:
-        run_dir = args.out / f"{utc_stamp()}-{short[:7]}-{model}"
+        run_dir = args.out / f"{utc_stamp()}-{label}-{model}"
         run_dir.mkdir(parents=True)
         print(f"run : {model} -> {run_dir}")
         connect = proxies.ConnectProxy(run_dir / "connect.ndjson", hosts,
@@ -1590,7 +1792,8 @@ def main() -> None:
             # En enregistrement, le proxy CONNECT accepte tout hôte : pas de sonde.
             mark = time.monotonic()
             probe_result = None if args.record_hosts else probe(binary, cache,
-                                                                run_dir / "probe", connect, tasks)
+                                                                run_dir / "probe", connect, tasks,
+                                                                settings, model)
             timing["probe"] = round(time.monotonic() - mark, 2)
             mark = time.monotonic()
             warm = warmup(binary, cache, run_dir / "warmup", model, args.effort, sources[model],
@@ -1599,13 +1802,13 @@ def main() -> None:
                 accepted = sorted({e["host"] for e in proxies.read_log(connect.log.path)
                                    if e.get("event") == "connect" and e.get("accepted")
                                    and e.get("host") != "example.com"})
-                HOSTS.parent.mkdir(parents=True, exist_ok=True)
-                HOSTS.write_text(
+                hosts_file.parent.mkdir(parents=True, exist_ok=True)
+                hosts_file.write_text(
                     f"# Établi par --record-hosts le {datetime.now(timezone.utc).isoformat()}\n"
                     f"# binaire {cache.binary_sha}, modèle {model}, run {run_dir.name}\n"
                     + "".join(f"{host}\n" for host in accepted))
                 print(f"hôtes CONNECT observés au run de chauffe : {accepted or 'aucun'}"
-                      f" -> {HOSTS.relative_to(REPO)} (warmup ok : {warm['ok']})")
+                      f" -> {hosts_file.relative_to(REPO)} (warmup ok : {warm['ok']})")
                 return
             if not warm["ok"]:
                 fail(f"préparation en échec : le run de chauffe de {model} n'a pas abouti "
@@ -1633,7 +1836,16 @@ def main() -> None:
             "started": run_dir.name.split("-")[0], "mode": "capture" if args.capture else "réel",
             "commit": git("rev-parse", "HEAD"), "commit_dirty": bool(git("status", "--porcelain")),
             "binary": str(binary), "binary_sha256": cache.binary_sha,
-            "binary_manifest": manifest, "binary_version": version_of([str(binary), "--version"]),
+            "binary_manifest": manifest,
+            "binary_version": (codex_version(binary, cache) if codex is not None
+                               else version_of([str(binary), "--version"])),
+            "harness": "codex" if codex is not None else "yusagent",
+            "codex": ({"version": codex["version"],
+                       "feature_cuts": codex.get("featureCuts") or [],
+                       "manifest_sha256": codex_manifest["sha256"],
+                       "tag_commit": codex_manifest.get("tag_commit"),
+                       "config_template_sha256": sha256(codex_arm.TEMPLATE)}
+                      if codex is not None else None),
             "models_bundled_sha256": sha256(bundled), "provider": PROVIDER, "model": model,
             "model_source": sources[model].get("source"),
             "model_fiche_source": sources[model].get("fiche_source"),
@@ -1653,7 +1865,7 @@ def main() -> None:
         report = {"header": header, "probe": probe_result, "warmup": warm, "results": results,
                   "totals": totals(results), "per_task": aggregate(results), "notes": notes}
         write_report(run_dir, report)
-        scan = scan_secrets(run_dir, secret_values(cache, args.capture))
+        scan = scan_secrets(run_dir, secret_values(cache, args.capture, codex is not None))
         report["secret_scan"] = scan
         write_report(run_dir, report)
         if scan["files_with_hits"]:

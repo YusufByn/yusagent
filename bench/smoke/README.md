@@ -39,11 +39,12 @@ python3 -I bench/smoke/baseline.py <run> [<run> ...] [--exclude <run>:<tâche>[,
 python3 -I bench/smoke/metrics.py <run> [<run> ...]    # miss serveur et taux évitable, runs déjà faits
 python3 -I bench/smoke/run.py --rereport <run>         # rapport recalculé depuis les journaux du run
 python3 -I bench/smoke/continue_session.py --binary <dossier>/prime-agent --task <id> --out <run>/tasks/<id>/continue-1 "<prompt>"   # appel réel : --continue de la dernière session de la tâche, nouveau processus, mêmes sandbox et proxies
-# --log-bodies (run.py, continue_session.py) : corps JSON de chaque requête de la tâche dans proxy-bodies.ndjson, jamais les en-têtes ; désactivé par défaut, refusé avec --ab (jamais pendant un A/B)
+# --log-bodies (run.py, continue_session.py) : corps JSON de chaque requête de la tâche dans proxy-bodies.ndjson, jamais les en-têtes ; désactivé par défaut, refusé avec --ab (jamais pendant un A/B) ; `client_metadata.x-codex-installation-id` (Codex) y est remplacé par `<masqué>`
+# continue_session.py : scan de secrets de son dossier --out (secret-scan.json, mêmes valeurs que run.py), le scan de run.py étant fait avant la reprise
 python3 -I bench/smoke/metrics.py --theory-check <run> [<run> ...]   # validation du cache théorique
 python3 -I bench/smoke/metrics.py --since-prev <run> [<run> ...] [--exclude <run>:<tâche>]   # p99 et maximum de sincePrevMs
 python3 -I bench/smoke/tools/ab.py <dossier du binaire> <sha de référence> --a <réglages A> --b <réglages B> [--tasks ...] [--passes 3] [--seed N]
-python3 -I bench/smoke/tools/ab_stats.py --plan bench/smoke/runs/ab-<horodatage>/ab.json [--baseline bench/smoke/baseline/<modèle>.json]
+python3 -I bench/smoke/tools/ab_stats.py --plan bench/smoke/runs/ab-<horodatage>/ab.json [--baseline bench/smoke/baseline/<modèle>.json] [--verdict ya14-codex]
 python3 -I -m unittest discover -s bench/smoke/tests -v   # tests sans modèle
 ```
 
@@ -76,7 +77,7 @@ Variables fixées pour le binaire : `DO_NOT_TRACK=1`, `PI_OFFLINE=1`, `PI_SKIP_V
 
 - **Reverse proxy** (`proxies.py`) : `baseUrl` du provider vers `http://127.0.0.1:<port>/backend-api`. Cible amont fixe, `chatgpt.com:443` en TLS ; seuls les chemins sous `/backend-api/codex/` passent. WebSocket et SSE passent par le même port : le banc mesure le transport par défaut du harness (WebSocket, avec continuation `previous_response_id`). En mode capture, la cible est le serveur de capture (127.0.0.1 seulement).
 - **Proxy CONNECT** : `HTTPS_PROXY` du harness, pour le rafraîchissement du jeton (le client HTTP du harness respecte `HTTPS_PROXY`, le client WebSocket non : il ouvre une connexion directe, d'où le reverse proxy). Liste blanche `hosts/openai-codex.txt`, port 443.
-- **Journaux** : `proxy.ndjson` et `connect.ndjson`, jamais d'en-tête ni de corps. Par requête : transport, chemin, statut, octets, id de session (`prompt_cache_key`) pour l'appariement avec le journal d'usage.
+- **Journaux** : `proxy.ndjson` et `connect.ndjson`, jamais d'en-tête ni de corps. Par requête : transport, chemin, statut, octets, id de session (`prompt_cache_key`) pour l'appariement avec le journal d'usage, champ `generate` (YA-14). Par réponse (YA-14) : fin (`event: response`, type, id, statut, compteurs d'usage) ou erreur (`event: response_error`, statut, type, code), jamais de texte.
 - Le kernel n'a pas `HTTPS_PROXY` (filtrage T02) : vérifié par la sonde.
 
 ## Rapport
@@ -189,6 +190,21 @@ Une erreur provider sur un bras écarte la paire entière ; en A/B entrelacé pa
 
 `tools/ab_stats.py` l'applique automatiquement et liste les unités écartées avec leur cause. Erreur provider : statut `stalled` ; `timeout` sans activité des journaux de la tâche (dernière requête de `proxy.ndjson` ou fin d'appel du `.usage.ndjson`) pendant au moins 300 s avant l'arrêt (`--stall-gap`) ; réponse en `stopReason` `error`, session principale ou sous-agent ; requête proxy à statut autre que 101 ou 200 ; lancement de `run.py` en échec. Les autres incidents (`timeout` d'une tâche longue, `agent_error` ou `harness_error` sans erreur provider) sont listés sans écarter l'unité.
 
+### Bras Codex CLI (YA-14)
+
+Comparaison yusAgent contre Codex CLI (décision du 14/11/2026). Plan, règle de verdict, mesures et écarts avec Codex tel que livré : `ab/ya14-codex-plan.md`, fixé avant le run.
+
+- **Installation** : `bash bench/smoke/tools/install-codex.sh 0.169.0` (archives de la release et catalogue du tag, sha256 épinglés dans le script) → `~/.cache/yusagent-bin/codex-0.169.0/` (`codex`, `codex-code-mode-host`, `models.json`, `manifest.json`). Aucune compilation.
+- **Réglage** (règle 5) : `settings/codex-<version>.json`, `"harness": "codex"`, `codex.featureCuts` (parmi `apps`, `plugins`, `tool_suggest`, `image_generation`, coupés seulement si le premier corps reste identique : `tools/codex_first_body.py`). `run.py --binary <dossier>/codex --settings settings/codex-0.169.0.json` ; `tools/ab.py ... --b settings/codex-0.169.0.json --codex-dir <dossier>`.
+- **Login** (une fois, par Yusuf) : CODEX_HOME dédié `~/.cache/yusagent-smoke/codex-home`, `codex login --device-auth` (commandes dans le plan). Mode capture et sonde : identifiant factice (`codex_arm.py`), dossiers `capture-codex-home` et `probe-codex-home`. `config.toml` de ce dossier est remplacé en entier avant chaque session (sonde, chauffe, tâche) depuis `codex/config.toml.in`, qui garde `cli_auth_credentials_store = "file"` (identifiants dans `auth.json`, jamais le trousseau ; refus sinon) : la ligne écrite par le `printf` du login est la même clé, et l'entrée `[projects."<workspace>"]` qu'ajoute `--trust` pendant une session ne passe pas à la suivante.
+- **Lancement** (`codex_arm.py`) : `codex exec --json --skip-git-repo-check --trust -s danger-full-access -m <modèle> -c model_reasoning_effort=<effort>` sous `sandbox-agent.sb` (`AGENT_DIR` = CODEX_HOME, `BIN_DIR` = dossier de Codex) ; config écrite avant chaque session depuis `codex/config.toml.in` (copiée dans le run, `codex-config.toml`) : provider personnalisé vers le reverse proxy, catalogue figé, recherche web et analytics coupés. Reverse proxy limité au chemin `/backend-api/codex/responses`. Hôtes CONNECT : `hosts/codex.txt`.
+- **Garde-fou** (`codex_arm.check_launch`, appelé par `run_process` pour tout lancement de `codex`, `--version` compris) : refus hors `sandbox-exec -f sandbox-agent.sb`, sans CODEX_HOME, avec un CODEX_HOME hors des trois dossiers du banc ou dans `~/.codex`, avec un `AGENT_DIR` du profil différent, ou avec le vrai `HOME`. Sans CODEX_HOME, Codex lit `~/.codex/.env` et y crée `tmp/arg0-macos` avant même de lire ses arguments (`arg0/src/lib.rs:134, 322-352` au tag). `tools/install-codex.sh` lance `--version` avec un CODEX_HOME dédié (`~/.cache/yusagent-bin/.codex-version-home`), réseau coupé.
+- **Mesures** : usage par réponse lu dans le fichier de session de Codex (`token_usage_record`), converti au format du journal du harness dans `sessions/<thread>.usage.ndjson` ; prewarm (`generate: false`) lu au reverse proxy (appel `prewarm`, annexe) ; statut, erreurs et edits (`file_change`) lus dans la sortie `--json` ; sondes `SMOKE_*` dans les sorties d'outils ; requêtes de génération en corps complet (sans `previous_response_id`, ou SSE), au total et hors première requête de la session, lues au reverse proxy (`codex.full_bodies`, section du rapport et ligne d'`ab_stats.py` : biais contre Codex, `encrypted_content` retiré des items rejoués). Appariement au proxy par ordre (`metrics.match_transports_in_order`). `--rereport` relit ces journaux.
+- **Masquage au ramassage** (`codex_arm.copy_rollouts`) : dans les copies des fichiers de session (les originaux de CODEX_HOME ne changent pas), `creator_account_id` et `creator_user_id` de `session_meta` (écrits par Codex, `core/src/session/session.rs:1222` au tag), puis toute valeur de `secret_values` (valeurs d'`auth.json` et ids des claims de ses jetons : compte, utilisateur, e-mail, nom, `sub`), remplacés par `<masqué>`. Aucune mesure ne lit ces champs (`--rereport` du run de chauffe du 14/11 identique avant et après masquage).
+- **Serveur de capture** : reconnaît Codex (tools en item `additional_tools`, tool libre `exec`), répond au prewarm sans sortie et joue les scénarios du banc par `tools.exec_command` et `tools.apply_patch` (`bench/tools/capture/server.py`, `codex_cells`).
+
+Communs aux deux bras depuis YA-14 (sans effet sur les 120 bras des A/B de YA-03, `ab/ya14-codex-rereport-check.py`) : le reverse proxy note `generate` et la fin de chaque réponse (`event: response`, compteurs d'usage seuls, ou `response_error`) ; le coût à cache théorique compte en rupture un appel de boucle dont la requête WebSocket part en corps complet ; `ab_stats.py` écarte aussi une unité sur erreur ou réponse en échec lue au proxy.
+
 ### Code des tâches
 
 `setup` et `test` exécutent le code de dépôts tiers. Ils tournent sous `sandbox-task.sb` : écriture limitée au dossier de la tâche dans le cache, aux caches uv et npm, aux Pythons gérés par uv et au `HOME`/`TMPDIR` du banc ; lecture du contenu de `$HOME` refusée sauf ces dossiers et la toolchain Node (le login du banc et `bench/smoke/` restent illisibles) ; réseau limité à localhost. `setup` passe par un proxy CONNECT à liste blanche (`hosts/setup.txt` : PyPI, npm, GitHub), `test` n'a pas de proxy.
@@ -206,12 +222,16 @@ Une erreur provider sur un bras écarte la paire entière ; en A/B entrelacé pa
 | `tools/discovered.json`, `tools/candidates.csv` | PR découvertes, candidats validés (Linux, écarts macOS) |
 | `tools/make_task.py` | Construction d'une tâche depuis un candidat |
 | `tools/install-bin.sh` | Installation du binaire d'un run CI dans `~/.cache/yusagent-bin/<sha>/`, sommes et version vérifiées ; dossier existant laissé tel quel s'il passe les contrôles, sinon erreur ; `--force` le remplace après vérification de la nouvelle copie |
-| `tools/ab.py` | A/B entrelacé par tâche (YA-14) : contrôles, ordre des bras tiré au sort à graine notée, un appel à `run.py` par bras, surcoût par lancement |
+| `tools/ab.py` | A/B entrelacé par tâche (YA-14) : contrôles, ordre des bras tiré au sort à graine notée, un appel à `run.py` par bras, surcoût par lancement ; bras Codex CLI (`--codex-dir`) |
+| `codex_arm.py`, `codex/config.toml.in` | Bras Codex CLI (YA-14) : réglage, config, lancement, conversion de l'usage, sortie `--json` |
+| `tools/install-codex.sh` | Installation épinglée de Codex CLI (sha256 vérifiés) |
+| `tools/codex_first_body.py` | Premier corps de Codex comparé entre deux runs `--capture` (coupures de fonctions), ou décrit (`--show`) |
+| `hosts/codex.txt` | Hôtes autorisés au proxy CONNECT pour Codex CLI |
 | `tools/compare_capture_prompts.py` | Comparaison des requêtes capturées de deux runs `--capture` (YA-06) : instructions, tools et input requête par requête, caractères et tokens (o200k_base, estimation), mentions des sous-agents ; usage : `python3 -I bench/smoke/tools/compare_capture_prompts.py <run X> <run Y>` |
 | `metrics.py` | Mesures depuis le journal d'usage, la session et les journaux des proxys ; cache théorique et sa validation (`--theory-check`) |
 | `compare.py` | Comparaison appariée de deux runs ; alertes au-delà du bruit de la baseline |
 | `baseline.py` | Baseline : bruit par tâche sur plusieurs runs de `main` (`baseline/<modèle>.json`, versionné) |
-| `tools/ab_stats.py` | Statistiques d'un A/B apparié (entrelacé ou par passes) : coût à cache théorique (décision), rapporté et pessimiste, écarts appariés par tâche, IC par bootstrap sur les tâches, écart automatique sur erreur provider, mesures par bras, invalidations et incidents |
+| `tools/ab_stats.py` | Statistiques d'un A/B apparié (entrelacé ou par passes) : coût à cache théorique (décision), rapporté et pessimiste, écarts appariés par tâche, IC par bootstrap sur les tâches, écart automatique sur erreur provider, mesures par bras, invalidations et incidents ; `--verdict ya14-codex` (règle de `ab/ya14-codex-plan.md`) |
 | `tests/test_bench.py` | Tests sans modèle : cache théorique, garde-fou d'inactivité, plan de l'A/B, écart sur erreur provider |
 | `ab/` | Rapports d'A/B (versionnés) |
 | `prices.json` | Tarifs API (source, date) |

@@ -10,7 +10,10 @@ la session par son cwd. C'est un appel réel au modèle.
 
 Sortie dans `--out` : `proxy.ndjson` (requêtes, champ `continuation`), `connect.ndjson`,
 `out.jsonl`, `err.log`, `sessions/` (session et journal d'usage agrandis) ; avec `--log-bodies`,
-`proxy-bodies.ndjson` (corps JSON des requêtes, jamais les en-têtes).
+`proxy-bodies.ndjson` (corps JSON des requêtes, jamais les en-têtes) ; `secret-scan.json` :
+recherche dans tout `--out` des mêmes valeurs que `run.py` (`run.secret_values`, `auth.json`
+des deux dossiers de login et ids des claims de leurs jetons), noms de fichiers et comptes
+seuls, jamais les valeurs.
 """
 import argparse
 import json
@@ -21,6 +24,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import proxies  # noqa: E402
 import run as R  # noqa: E402
+
+
+def secret_scan(out: Path, cache: "R.Cache") -> dict:
+    """Scan de secrets de la reprise (YA-14), écrit dans `out/secret-scan.json` : le scan de
+    `run.py` est fait avant la reprise et ne voit pas ce dossier."""
+    scan = R.scan_secrets(out, R.secret_values(cache, False, codex=True))
+    (out / "secret-scan.json").write_text(json.dumps(scan, indent=2, ensure_ascii=False) + "\n")
+    return scan
 
 
 def main() -> None:
@@ -70,10 +81,14 @@ def main() -> None:
         access.stop()
         connect.shutdown()
         connect.server_close()
+    scan = secret_scan(args.out, cache)
     print(json.dumps({"process": session["process"], "workspace": str(workspace),
                       "usage_records": len(session["records"]),
-                      "session_entries": len(session["entries"])},
+                      "session_entries": len(session["entries"]), "secret_scan": scan},
                      default=str, indent=2, ensure_ascii=False))
+    if scan["files_with_hits"]:
+        print(f"ATTENTION : valeurs secrètes trouvées dans {sorted(scan['files_with_hits'])}",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

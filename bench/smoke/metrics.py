@@ -220,7 +220,7 @@ THEORY_PARTIAL_GAP = 0.05  # écart au-delà duquel un appel est compté en miss
 THEORY_MIN_CALLS = 30
 
 
-def theoretical_cache(records: list[dict]) -> list[dict]:
+def theoretical_cache(records: list[dict], per_request: list[dict] | None = None) -> list[dict]:
     """`cacheRead` théorique de chaque appel : préfixe commun avec la requête précédente de
     la même session (chaque sous-agent a sa session), si le serveur ne ratait jamais.
 
@@ -240,7 +240,16 @@ def theoretical_cache(records: list[dict]) -> list[dict]:
     Même règle partout où le théorique n'est pas calculable : premier appel de boucle d'une
     session (pas de requête précédente, base « premier ») et appels annexes (préfixe propre,
     base « annexe ») gardent le `cacheRead` rapporté.
+
+    Rupture sur corps complet (YA-14, comparaison contre Codex CLI, commune aux deux bras) :
+    avec `per_request` (appariement au reverse proxy, `match_transports`), un appel de boucle
+    qui n'est pas le premier de sa session et dont la requête WebSocket part en corps complet
+    (`continuation` à `false`, sans `previous_response_id`) est une rupture : le harness n'a
+    pas prolongé la réponse précédente, le préfixe commun n'est pas connu sans le corps. En
+    SSE (`continuation` inconnue), rien ne change.
     """
+    full_body = {(p.get("session"), p.get("seq")) for p in per_request or []
+                 if p.get("transport") == "websocket" and p.get("continuation") is False}
     by_session: dict[str, list[dict]] = {}
     for r in records:
         by_session.setdefault(r.get("sessionId") or "", []).append(r)
@@ -257,7 +266,8 @@ def theoretical_cache(records: list[dict]) -> list[dict]:
                 basis, theo = "premier", reported
             elif "invalidation" in r:
                 basis, theo = "invalidation", reported
-            elif annex_since or prompt < prev[0]:
+            elif (annex_since or prompt < prev[0]
+                  or (r.get("sessionId"), r.get("seq")) in full_body):
                 basis, theo = "rupture", reported
             else:
                 basis, theo = "continuation", min(prompt, prev[0] + prev[1])
@@ -316,9 +326,10 @@ def theory_verdict(check: dict) -> str:
     return "conforme" if check["valid"] else "NON CONFORME"
 
 
-def theory_summary(prices: dict, model: str, records: list[dict]) -> dict:
+def theory_summary(prices: dict, model: str, records: list[dict],
+                   per_request: list[dict] | None = None) -> dict:
     """Coût à cache théorique d'un run de tâche, tokens théoriques et écarts de validation."""
-    calls = theoretical_cache(records)
+    calls = theoretical_cache(records, per_request)
     per_call = [theoretical_request_cost(prices, model, c) for c in calls]
     read = sum(c["theoretical"] for c in calls)
     return {"total": sum(per_call) if per_call and None not in per_call else None,
@@ -327,11 +338,14 @@ def theory_summary(prices: dict, model: str, records: list[dict]) -> dict:
             "check_gaps": [round(g, 6) for g in theory_gaps(calls)]}
 
 
-def costs(prices: dict, model: str, records: list[dict], write_key: str) -> dict:
+def costs(prices: dict, model: str, records: list[dict], write_key: str,
+          transports: list[dict] | None = None) -> dict:
+    """`transports` : `per_request` de l'appariement au proxy (ruptures sur corps complet du
+    coût à cache théorique) ; sans lui, la règle d'avant YA-14 (Codex CLI)."""
     per_request = [request_cost(prices, model, r, write_key) for r in records]
     known = [c for c in per_request if c is not None]
     pessimistic = [pessimistic_request_cost(prices, model, r, write_key) for r in records]
-    theory = theory_summary(prices, model, records)
+    theory = theory_summary(prices, model, records, transports)
     invalidated = [r for r in records if "invalidation" in r]
     invalidation_cost = None
     if invalidated and model in prices.get("models", {}):
@@ -572,6 +586,44 @@ def match_transports(records: list[dict], proxy_log: list[dict]) -> dict:
         expected = "websocket" if record.get("kind") in LOOP_KINDS else "sse"
         per_request.append({"session": record.get("sessionId"), "seq": record.get("seq"),
                             "kind": record.get("kind"), "transport": transport,
+                            "expected": expected,
+                            "continuation": best.get("continuation") if best else None})
+    counts: dict[str, int] = {}
+    for q in requests:
+        counts[q["transport"]] = counts.get(q["transport"], 0) + 1
+    return {"requests": counts,
+            "unmatched_usage": sum(1 for p in per_request if p["transport"] is None),
+            "unmatched_proxy": sum(1 for q in requests if not q["matched"]),
+            "loop_on_sse": sum(1 for p in per_request
+                               if p["expected"] == "websocket" and p["transport"] == "sse"),
+            "refused": sum(1 for e in proxy_log if e.get("event") == "refused"),
+            "upstream_errors": sum(1 for e in proxy_log if e.get("event") == "upstream_error"),
+            "per_request": per_request}
+
+
+def match_transports_in_order(records: list[dict], proxy_log: list[dict]) -> dict:
+    """Appariement par ordre (YA-14, bras Codex CLI) : même sortie que `match_transports`.
+
+    Le journal d'usage converti depuis Codex (`codex_arm.py`) porte l'heure de fin de chaque
+    appel, pas son début : l'appariement au plus proche dans le temps pourrait prendre la
+    requête suivante. Ici, par session (`prompt_cache_key` = id du thread), le k-ième appel
+    de boucle prend la k-ième requête de génération et le k-ième appel `prewarm` la k-ième
+    requête `generate: false`. Une requête de génération se fait sur WebSocket, prewarm compris.
+    """
+    requests = [dict(e, matched=False) for e in proxy_log if e.get("event") == "request"]
+    queues: dict[tuple, list[dict]] = {}
+    for q in sorted(requests, key=lambda q: q.get("ts", 0)):
+        queues.setdefault((q.get("session"), q.get("generate") is False), []).append(q)
+    per_request = []
+    for record in sorted(records, key=lambda r: (r.get("sessionId") or "", r.get("seq", 0))):
+        queue = queues.get((record.get("sessionId"), record.get("kind") == "prewarm")) or []
+        best = queue.pop(0) if queue else None
+        if best is not None:
+            best["matched"] = True
+        expected = ("websocket" if record.get("kind") in LOOP_KINDS | {"prewarm"} else "sse")
+        per_request.append({"session": record.get("sessionId"), "seq": record.get("seq"),
+                            "kind": record.get("kind"),
+                            "transport": best["transport"] if best else None,
                             "expected": expected,
                             "continuation": best.get("continuation") if best else None})
     counts: dict[str, int] = {}

@@ -1,0 +1,5 @@
+# Bras Codex CLI (YA-14). Hôte du rafraîchissement du jeton ChatGPT de Codex 0.169.0 :
+# POST https://auth.openai.com/oauth/token (codex-rs/login/src/auth/manager.rs:241, 1895 au
+# tag rust-v0.169.0), lu dans le code, pas encore observé. À confirmer au run de chauffe :
+# tout autre hôte vu y est refusé et listé dans connect.ndjson.
+auth.openai.com

@@ -207,6 +207,100 @@ SCENARIOS: dict[str, list[str]] = {
     ],
     "smoke-fail": ["print('SMOKE_NOOP')", NET_PROBE, READ_PROBE],
 }
+# Codex CLI (YA-14) : Codex 0.169.0 envoie ses tools dans un item d'entrée `additional_tools`
+# (Responses Lite, pas de champ `tools`) et, pour gpt-6-luna (`tool_mode: code_mode_only`), un
+# seul tool de premier niveau qui exécute du code : `exec`, tool libre en JavaScript, qui
+# appelle les tools imbriqués (`tools.exec_command`, `tools.apply_patch`). Les scénarios Codex
+# rejouent les sondes des scénarios du harness par le shell de Codex et corrigent les tâches
+# d'exemple par `apply_patch`. Une ligne `SMOKE_*` par mesure, comme dans les cellules.
+CODEX_TOOL = "exec"
+CODEX_EXAMPLE_PATCHES = {
+    "py-example-001": ("textstats/__init__.py",
+                       "*** Begin Patch\n*** Update File: textstats/__init__.py\n@@\n"
+                       "-    return text.split(' ')\n+    return text.split()\n*** End Patch\n",
+                       "text.split()"),
+    "node-example-001": ("src/slug.js",
+                         "*** Begin Patch\n*** Update File: src/slug.js\n@@\n"
+                         "-  return title.toLowerCase().trim().replace(/[^a-z0-9]/g, '-');\n"
+                         "+  return title.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-')"
+                         ".replace(/^-+|-+$/g, '');\n*** End Patch\n",
+                         "+/g"),
+}
+
+
+def codex_js(commands: list[str], prelude: str = "") -> str:
+    """Code `exec` qui lance chaque commande shell par `tools.exec_command` et rend sa sortie."""
+    lines = ["const show = (r) => text(typeof r === 'string' ? r : "
+             "(r && (r.output ?? r.stdout)) ?? JSON.stringify(r));"]
+    if prelude:
+        lines.append(prelude)
+    lines += [f"show(await tools.exec_command({{cmd: {json.dumps(c)}, yield_time_ms: 20000}}));"
+              for c in commands]
+    return "\n".join(lines)
+
+
+def codex_net_probe(port: int) -> str:
+    return codex_js([
+        "printf 'SMOKE_BASH_PROXY_VARS [%s]\\n' \"$(env | cut -d= -f1 | grep -i proxy | sort"
+        " | sed \"s/.*/'&'/\" | paste -sd, - | sed 's/,/, /g')\"",
+        "curl -sS -m 5 -o /dev/null https://example.com; echo \"SMOKE_CURL_DIRECT $?\"",
+        f"curl -sS -m 5 -o /dev/null -x http://127.0.0.1:{port} https://example.com;"
+        " echo \"SMOKE_CURL_PROXY $?\"",
+    ])
+
+
+def codex_read_probe(paths: tuple[str, ...]) -> str:
+    commands = []
+    for p in paths:
+        q = "'" + p.replace("'", "'\\''") + "'"
+        commands.append(f"if [ -d {q} ]; then ls {q} > /dev/null 2>&1; else cat {q} > /dev/null 2>&1;"
+                        f" fi; c=$?; [ $c = 0 ] && echo \"SMOKE_READ_BASH {p} ok\""
+                        f" || echo \"SMOKE_READ_BASH {p} exit=$c\"")
+    return codex_js(commands or ["true"])
+
+
+def codex_patch(task: str) -> str:
+    path, patch, mark = CODEX_EXAMPLE_PATCHES[task]
+    return codex_js([f"grep -c {json.dumps(mark)} {path} | sed 's/^/SMOKE_EDIT /'"],
+                    prelude=f"text(JSON.stringify(await tools.apply_patch({json.dumps(patch)})));")
+
+
+def codex_cells(scenario: str, port: int, paths: tuple[str, ...]) -> list[str]:
+    """Code `exec` de chaque tour d'un scénario du smoke bench pour Codex ; [] ailleurs (réponse
+    texte au premier tour)."""
+    net, read = codex_net_probe(port), codex_read_probe(paths)
+    if scenario == "smoke-probe":
+        return [net, read]
+    if scenario == "smoke-fail":
+        return [codex_js(["echo SMOKE_NOOP"]), net, read]
+    for task, (path, _, _) in CODEX_EXAMPLE_PATCHES.items():
+        if scenario == f"smoke-{task}":
+            return [codex_js([f"cat {path}"]), net, codex_patch(task), read]
+    return []
+
+
+def codex_tools(body: dict) -> list[dict]:
+    """Tools d'une requête Codex : items `additional_tools` de l'entrée, espaces de noms
+    (`namespace`) mis à plat."""
+    found: list[dict] = []
+
+    def flatten(tools):
+        for tool in tools or []:
+            if isinstance(tool, dict) and tool.get("type") == "namespace":
+                flatten(tool.get("tools"))
+            elif isinstance(tool, dict):
+                found.append(tool)
+
+    for item in body.get("input") or []:
+        if isinstance(item, dict) and item.get("type") == "additional_tools":
+            flatten(item.get("tools"))
+    return found
+
+
+def is_codex(tools: list[dict] | None) -> bool:
+    return any(t.get("type") == "custom" and t.get("name") == CODEX_TOOL for t in tools or [])
+
+
 CHILD_MARKER = "YA_CHILD_TASK"
 # L'enfant relève aussi ce que voit son propre kernel (YA-02).
 CHILD_CELLS = [
@@ -235,7 +329,9 @@ def count_tool_results_responses(body: dict) -> int:
     items = body.get("input")
     if not isinstance(items, list):
         return 0
-    return sum(1 for item in items if item.get("type") == "function_call_output")
+    # `custom_tool_call_output` : tools libres (`apply_patch` de yusAgent, `exec` de Codex).
+    return sum(1 for item in items
+               if item.get("type") in ("function_call_output", "custom_tool_call_output"))
 
 
 def first_user_text(body: dict) -> str:
@@ -339,15 +435,21 @@ def ws_read_message(rfile, wfile) -> bytes | None:
 class Plan:
     """Réponse à renvoyer : un tool call (code) ou un texte."""
 
-    def __init__(self, kind: str, text: str = "", tool_name: str = "", code: str = ""):
+    def __init__(self, kind: str, text: str = "", tool_name: str = "", code: str = "",
+                 freeform: bool = False):
         self.kind = kind
         self.text = text
         self.tool_name = tool_name
         self.code = code
+        # Tool libre (`custom_tool_call`, entrée en texte) : `exec` de Codex.
+        self.freeform = freeform
 
     def describe(self) -> dict:
         if self.kind == "tool":
-            return {"kind": "tool", "tool": self.tool_name, "code": self.code}
+            return {"kind": "tool", "tool": self.tool_name, "code": self.code,
+                    "freeform": self.freeform}
+        if self.kind == "prewarm":
+            return {"kind": "prewarm"}
         return {"kind": self.kind, "text": self.text}
 
 
@@ -362,6 +464,7 @@ class CaptureState:
         self.cells = [cell.replace(CONNECT_PROXY_PORT, str(connect_proxy_port or 9))
                       .replace(READ_PROBE_PATHS, repr(list(read_probe_paths)))
                       for cell in SCENARIOS[scenario]]
+        self.codex_cells = codex_cells(scenario, connect_proxy_port or 9, read_probe_paths)
         self.reject_models = set(reject_models)
         self.no_websocket = False
         self.inflate_from_turn = inflate_from_turn
@@ -382,6 +485,11 @@ class CaptureState:
             # d'annoncer un usage gonflé pour ne pas la redéclencher en boucle.
             self.inflate_from_turn = None
             return Plan("aux", text=AUX_TEXT)
+        if is_codex(tools):
+            if turn < len(self.codex_cells):
+                return Plan("tool", tool_name=CODEX_TOOL, code=self.codex_cells[turn],
+                            freeform=True)
+            return Plan("final", text=FINAL_TEXT)
         cells, final = (CHILD_CELLS, CHILD_FINAL_TEXT) if child else (self.cells, FINAL_TEXT)
         if turn < len(cells):
             code = reread_cell(body or {}) if cells[turn] == REREAD else cells[turn]
@@ -612,6 +720,9 @@ def anthropic_json(plan: Plan, model: str, seq: int, split: dict) -> dict:
 
 def responses_item(plan: Plan, seq: int, done: bool) -> dict:
     status = "completed" if done else "in_progress"
+    if plan.kind == "tool" and plan.freeform:
+        return {"type": "custom_tool_call", "id": f"ctc_cap_{seq}", "call_id": f"call_cap_{seq}",
+                "name": plan.tool_name, "input": plan.code if done else "", "status": status}
     if plan.kind == "tool":
         return {"type": "function_call", "id": f"fc_cap_{seq}", "call_id": f"call_cap_{seq}",
                 "name": plan.tool_name,
@@ -623,15 +734,46 @@ def responses_item(plan: Plan, seq: int, done: bool) -> dict:
 
 
 def responses_object(plan: Plan, model: str, seq: int, split: dict | None, done: bool) -> dict:
+    output = [] if plan.kind == "prewarm" else [responses_item(plan, seq, done=True)]
     obj = {"id": f"resp_cap_{seq}", "object": "response", "model": model,
            "status": "completed" if done else "in_progress",
-           "output": [responses_item(plan, seq, done=True)] if done else []}
+           "output": output if done else []}
     if done:
         obj["usage"] = responses_usage(split)
     return obj
 
 
 def responses_events(plan: Plan, model: str, seq: int, split: dict) -> list[bytes]:
+    if plan.kind == "prewarm":
+        # Prewarm Codex (`generate: false`) : réponse sans sortie, avec son usage.
+        return [sse("response.created", {"type": "response.created",
+                                         "response": responses_object(plan, model, seq, None,
+                                                                      done=False)}),
+                sse("response.completed", {"type": "response.completed",
+                                           "response": responses_object(plan, model, seq, split,
+                                                                        done=True)})]
+    if plan.kind == "tool" and plan.freeform:
+        item_id = f"ctc_cap_{seq}"
+        return [
+            sse("response.created", {"type": "response.created",
+                                     "response": responses_object(plan, model, seq, None,
+                                                                  done=False)}),
+            sse("response.output_item.added", {"type": "response.output_item.added",
+                                               "output_index": 0,
+                                               "item": responses_item(plan, seq, done=False)}),
+            sse("response.custom_tool_call_input.delta", {
+                "type": "response.custom_tool_call_input.delta", "item_id": item_id,
+                "output_index": 0, "delta": plan.code}),
+            sse("response.custom_tool_call_input.done", {
+                "type": "response.custom_tool_call_input.done", "item_id": item_id,
+                "output_index": 0, "input": plan.code}),
+            sse("response.output_item.done", {"type": "response.output_item.done",
+                                              "output_index": 0,
+                                              "item": responses_item(plan, seq, done=True)}),
+            sse("response.completed", {"type": "response.completed",
+                                       "response": responses_object(plan, model, seq, split,
+                                                                    done=True)}),
+        ]
     item_id = f"fc_cap_{seq}" if plan.kind == "tool" else f"msg_cap_{seq}"
     events = [
         sse("response.created", {"type": "response.created",
@@ -735,7 +877,7 @@ def make_handler(state: CaptureState):
             else:
                 turn = count_tool_results_responses(body)
             child = CHILD_MARKER in first_user_text(body)
-            plan = state.plan(body.get("tools"), turn, child, body)
+            plan = state.plan(body.get("tools") or codex_tools(body), turn, child, body)
             input_tokens = state.input_tokens(len(raw), turn)
             split = state.server_miss(state.usage.split(body, input_tokens), turn, child)
             model = body.get("model", "capture-model")
@@ -812,7 +954,10 @@ def make_handler(state: CaptureState):
                     continue
                 turn = count_tool_results_responses(body)
                 child = CHILD_MARKER in first_user_text(body)
-                plan = state.plan(body.get("tools"), turn, child, body)
+                prewarm = body.get("generate") is False
+                meta["generate"] = body.get("generate")
+                plan = (Plan("prewarm") if prewarm else
+                        state.plan(body.get("tools") or codex_tools(body), turn, child, body))
                 full = json.dumps(body).encode()
                 input_tokens = state.input_tokens(len(full), turn)
                 split = state.server_miss(state.usage.split(body, input_tokens), turn, child)
@@ -825,7 +970,7 @@ def make_handler(state: CaptureState):
                 for event in events:
                     ws_send_text(self.wfile, sse_data(event))
                 last.update(id=f"resp_cap_{seq}", input=list(body.get("input") or []),
-                            output=[responses_item(plan, seq, done=True)])
+                            output=[] if prewarm else [responses_item(plan, seq, done=True)])
 
         def write_meta(self, seq: int, meta: dict) -> None:
             (state.out_dir / f"{seq:04d}.meta.json").write_text(

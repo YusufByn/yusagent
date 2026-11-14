@@ -3,8 +3,11 @@
     python3 -I -m unittest discover -s bench/smoke/tests -v
 
 Couvre le coût à cache théorique (`metrics.py`), le garde-fou d'inactivité (`run.py`,
-`proxies.py`), le plan de l'A/B entrelacé (`tools/ab.py`) et l'écart sur erreur provider
-d'`tools/ab_stats.py`. Bibliothèque standard uniquement.
+`proxies.py`), le plan de l'A/B entrelacé (`tools/ab.py`), l'écart sur erreur provider
+d'`tools/ab_stats.py` et, pour la comparaison contre Codex CLI (YA-14) : la fin de réponse lue
+au proxy, la rupture sur corps complet, l'appariement par ordre, le bras Codex (`codex_arm.py`),
+les scénarios Codex du serveur de capture et la règle de verdict. Bibliothèque standard
+uniquement.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from pathlib import Path
 SMOKE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SMOKE))
 
+import codex_arm  # noqa: E402
 import metrics  # noqa: E402
 import proxies  # noqa: E402
 
@@ -445,7 +449,7 @@ class BodyLog(unittest.TestCase):
         mask = b"\x01\x02\x03\x04"
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(message))
         counter.feed(bytes([0x81, 0x80 | len(message)]) + mask + masked)
-        self.assertEqual(seen, [("s2", True, len(message), message)])
+        self.assertEqual(seen, [("s2", True, len(message), message, None)])
 
     def test_refused_during_ab(self):
         argv = sys.argv
@@ -457,6 +461,436 @@ class BodyLog(unittest.TestCase):
             sys.argv = argv
         self.assertEqual(stop.exception.code,
                          "smoke : --log-bodies est refusé pendant un A/B (--ab)")
+
+
+capture_server = load("capture_server", SMOKE.parents[1] / "bench" / "tools" / "capture" / "server.py")
+
+
+def ws_frame(message: bytes, masked: bool) -> bytes:
+    """Trame texte WebSocket (longueur < 126), masquée côté client."""
+    if not masked:
+        return bytes([0x81, len(message)]) + message
+    mask = b"\x01\x02\x03\x04"
+    return (bytes([0x81, 0x80 | len(message)]) + mask
+            + bytes(b ^ mask[i % 4] for i, b in enumerate(message)))
+
+
+class ResponseOutcome(unittest.TestCase):
+    """YA-14 : `generate` et fin de chaque réponse au reverse proxy, des nombres seulement."""
+
+    def test_generate_is_noted(self):
+        seen = []
+        counter = proxies.FrameCounter(lambda *args: seen.append(args))
+        message = json.dumps({"type": "response.create", "prompt_cache_key": "s",
+                              "generate": False, "input": []}).encode()
+        counter.feed(ws_frame(message, masked=True))
+        self.assertEqual(seen[0][4], False)
+
+    def test_websocket_completed_usage_without_text(self):
+        seen = []
+        watcher = proxies.ResponseWatcher(seen.append, websocket=True)
+        event = {"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed", "output": [{"type": "message",
+                                                               "content": "SECRET-TEXT"}],
+            "usage": {"input_tokens": 100, "output_tokens": 7,
+                      "input_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 30},
+                      "output_tokens_details": {"reasoning_tokens": 2}}}}
+        data = ws_frame(json.dumps({"type": "response.output_text.delta"}).encode(), False)
+        raw = json.dumps(event).encode()
+        data += bytes([0x81, 126]) + len(raw).to_bytes(2, "big") + raw
+        watcher.feed(data[:7])
+        watcher.feed(data[7:])
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["usage"], {"input_tokens": 100, "cached_tokens": 60,
+                                            "cache_write_tokens": 30, "output_tokens": 7,
+                                            "reasoning_tokens": 2})
+        self.assertNotIn("SECRET-TEXT", json.dumps(seen))
+
+    def test_sse_error_and_completed(self):
+        seen = []
+        watcher = proxies.ResponseWatcher(seen.append, websocket=False)
+        stream = (b"event: error\ndata: " + json.dumps({"type": "error", "status": 429,
+                  "error": {"type": "rate_limit", "code": "usage_limit_reached",
+                            "message": "SECRET-TEXT"}}).encode() + b"\n\n"
+                  + b"event: response.completed\ndata: " + json.dumps(
+                      {"type": "response.completed", "response": {"id": "r", "usage": {}}}).encode()
+                  + b"\n\n")
+        for i in range(0, len(stream), 9):
+            watcher.feed(stream[i:i + 9])
+        self.assertEqual([o["event"] for o in seen], ["response_error", "response"])
+        self.assertEqual((seen[0]["status"], seen[0]["error_code"]), (429, "usage_limit_reached"))
+        self.assertNotIn("SECRET-TEXT", json.dumps(seen))
+
+
+class FullBodyRupture(unittest.TestCase):
+    """YA-14 : un appel de boucle en corps complet sur WebSocket, hors premier, est une rupture."""
+
+    def test_rupture_only_with_websocket_full_body(self):
+        records = [rec(1, 1000, 0, 50), rec(2, 100, 900, 50), rec(3, 100, 1000, 50)]
+        per_request = [{"session": "s", "seq": 1, "transport": "websocket", "continuation": False},
+                       {"session": "s", "seq": 2, "transport": "websocket", "continuation": False},
+                       {"session": "s", "seq": 3, "transport": "sse", "continuation": None}]
+        bases = [c["basis"] for c in metrics.theoretical_cache(records, per_request)]
+        self.assertEqual(bases, ["premier", "rupture", "continuation"])
+        self.assertEqual([c["basis"] for c in metrics.theoretical_cache(records)],
+                         ["premier", "continuation", "continuation"])
+
+    def test_in_order_matching(self):
+        records = [rec(1, 0, 0, 0, kind="prewarm", session="t"), rec(2, 10, 0, 1, session="t"),
+                   rec(3, 10, 5, 1, session="t")]
+        log = [{"event": "request", "ts": 1, "transport": "websocket", "session": "t",
+                "generate": False, "continuation": False},
+               {"event": "request", "ts": 2, "transport": "websocket", "session": "t",
+                "continuation": True},
+               {"event": "request", "ts": 3, "transport": "websocket", "session": "t",
+                "continuation": True}]
+        m = metrics.match_transports_in_order(records, log)
+        self.assertEqual([(p["kind"], p["continuation"]) for p in m["per_request"]],
+                         [("prewarm", False), ("main", True), ("main", True)])
+        self.assertEqual((m["unmatched_usage"], m["unmatched_proxy"], m["loop_on_sse"]), (0, 0, 0))
+
+
+class CodexArm(unittest.TestCase):
+    """YA-14 : réglage, config, conversion de l'usage et sortie `--json` du bras Codex."""
+
+    def test_settings(self):
+        self.assertIsNone(codex_arm.settings_of({}))
+        self.assertEqual(codex_arm.settings_of({"harness": "codex", "codex": {"version": "1"}}),
+                         {"version": "1"})
+        with self.assertRaises(ValueError):
+            codex_arm.settings_of({"harness": "codex", "codex": {"version": "1",
+                                                                  "featureCuts": ["memories"]}})
+
+    def test_config_is_valid_toml(self):
+        import tomllib
+        text = codex_arm.config_text(4321, Path("/x/codex"), {"version": "1",
+                                                              "featureCuts": ["apps", "plugins"]})
+        self.assertNotIn("{{", text)
+        conf = tomllib.loads(text)
+        self.assertEqual(conf["model_providers"]["ya_bench"]["base_url"],
+                         "http://127.0.0.1:4321/backend-api/codex")
+        self.assertNotEqual(conf["model_providers"]["ya_bench"]["name"], "OpenAI")
+        self.assertEqual(conf["web_search"], "disabled")
+        self.assertEqual(conf["features"], {"unbounded_connection_retries": False,
+                                            "apps": False, "plugins": False})
+        self.assertEqual(conf["model_catalog_json"], "/x/models.json")
+
+    def test_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-x.jsonl"
+            rows = [{"timestamp": "2026-11-14T10:00:00.000Z", "type": "session_meta",
+                     "payload": {"id": "th"}},
+                    {"timestamp": "2026-11-14T10:00:00.500Z", "type": "turn_context",
+                     "payload": {"model": "gpt-6-luna", "effort": "high"}}]
+            for i, (inp, read, write) in enumerate(((1000, 0, 900), (1100, 1000, 50)), 1):
+                rows.append({"timestamp": f"2026-11-14T10:00:0{i}.000Z",
+                             "type": "token_usage_record", "payload": {
+                                 "response_id": f"r{i}", "usage": {
+                                     "input_tokens": inp, "cached_input_tokens": read,
+                                     "cache_write_input_tokens": write, "output_tokens": 20,
+                                     "reasoning_output_tokens": 5}}})
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            prewarm = {"event": "response", "generate": False, "session": "th", "ts": 1794650400100,
+                       "response_id": "r0", "usage": {"input_tokens": 3, "cached_tokens": 0,
+                                                      "cache_write_tokens": 0, "output_tokens": 0,
+                                                      "reasoning_tokens": 0}}
+            out = codex_arm.records([path], [prewarm], "th")
+        self.assertEqual([(r["seq"], r["kind"]) for r in out],
+                         [(1, "prewarm"), (2, "main"), (3, "main")])
+        self.assertEqual((out[1]["input"], out[1]["cacheRead"], out[1]["cacheWrite"]), (100, 0, 900))
+        self.assertEqual((out[2]["input"], out[2]["cacheRead"], out[2]["output"]), (50, 1000, 20))
+        self.assertEqual((out[0]["model"], out[0]["effort"]), ("gpt-6-luna", "high"))
+
+    def test_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.jsonl"
+            rows = [{"type": "thread.started", "thread_id": "th"},
+                    {"type": "error", "message": "Reconnecting... 1/5"},
+                    {"type": "item.completed", "item": {"type": "file_change", "status": "completed"}},
+                    {"type": "item.completed", "item": {"type": "file_change", "status": "failed"}},
+                    {"type": "turn.completed", "usage": {}}]
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            ev = codex_arm.events(path)
+        self.assertEqual((ev["thread_id"], ev["status"], ev["errors"]),
+                         ("th", "completed", ["Reconnecting... 1/5"]))
+        self.assertEqual(codex_arm.edits(ev)["first_try_rate"], 0.5)
+        self.assertEqual(codex_arm.final(ev)["stop_reason"], "stop")
+
+
+class CodexLaunchGuard(unittest.TestCase):
+    """YA-14 : Codex ne se lance que sous sandbox-exec, avec un CODEX_HOME du banc (jamais
+    `~/.codex`). Un faux `codex` (script) note son lancement : il ne doit jamais tourner."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        self.cache = run.Cache(self.root / "cache", None, True)
+        self.marker = self.root / "launched"
+        self.binary = self.root / "bin" / "codex"
+        self.binary.parent.mkdir()
+        self.binary.write_text(f"#!/bin/sh\ntouch {self.marker}\n")
+        self.binary.chmod(0o755)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def launch(self, codex_home, sandboxed=True, check=True, agent_dir=None, home=None):
+        env = codex_arm.env("/usr/bin:/bin", home or self.cache.home, self.cache.tmp,
+                            codex_home, None)
+        if codex_home is None:
+            del env["CODEX_HOME"]
+        work = self.root / "work"
+        work.mkdir(exist_ok=True)
+        profile = run.agent_profile(self.cache, work, self.binary,
+                                    agent_dir or codex_home or self.cache.codex_home)
+        return run.run_process([str(self.binary), "--version"], env, work, self.root / "out",
+                               self.root / "err", 10, sandboxed=sandboxed, profile=profile,
+                               check=run.codex_guard(self.cache) if check else None)
+
+    def assertRefused(self, pattern, **kwargs):
+        with self.assertRaisesRegex(codex_arm.LaunchRefused, pattern):
+            self.launch(**kwargs)
+        self.assertFalse(self.marker.exists())
+
+    def test_refusals(self):
+        bench = self.cache.codex_home
+        self.assertRefused("sans garde-fou", codex_home=bench, check=False)
+        self.assertRefused("hors /usr/bin/sandbox-exec", codex_home=bench, sandboxed=False)
+        self.assertRefused("CODEX_HOME absent", codex_home=None)
+        self.assertRefused(r"CODEX_HOME dans ~/\.codex", codex_home=Path.home() / ".codex")
+        self.assertRefused("hors du banc", codex_home=self.root / "elsewhere")
+        self.assertRefused("AGENT_DIR du profil", codex_home=bench,
+                           agent_dir=self.cache.probe_codex_home)
+        self.assertRefused("HOME absent ou réel", codex_home=bench, home=Path.home())
+
+    def test_accepted_launch_runs(self):
+        for home in (self.cache.codex_home, self.cache.probe_codex_home):
+            home.mkdir(parents=True, exist_ok=True)
+            # Lever l'exception est le seul effet du garde-fou : il ne lance rien lui-même.
+            codex_arm.check_launch(
+                ["/usr/bin/sandbox-exec", "-f", str(run.SANDBOX_AGENT), "-D",
+                 f"AGENT_DIR={home.resolve()}", str(self.binary)],
+                {"HOME": str(self.cache.home), "CODEX_HOME": str(home)},
+                run.SANDBOX_AGENT, self.cache.root)
+
+    def test_other_programs_untouched(self):
+        self.assertFalse(codex_arm.is_codex(["/usr/bin/sandbox-exec", "-f", "p", "-D", "A=codex",
+                                             "/x/prime-agent", "codex"]))
+        self.assertTrue(codex_arm.is_codex(["/usr/bin/sandbox-exec", "-f", "p", "-D", "A=b",
+                                            "/x/codex", "exec"]))
+
+
+class CodexConfig(unittest.TestCase):
+    """YA-14 : la config du banc remplace celle du login et garde `auth.json` (pas de trousseau)."""
+
+    def test_rewrite_keeps_file_store(self):
+        import tomllib
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            # Config laissée par le login du plan, puis par `--trust` pendant une session.
+            (home / "config.toml").write_text(
+                'cli_auth_credentials_store = "file"\n\n[projects."/w"]\ntrust_level = "trusted"\n')
+            text = codex_arm.write_config(home, 4321, Path("/x/codex"), {"version": "1"})
+            written = (home / "config.toml").read_text()
+        self.assertEqual(written, text)
+        conf = tomllib.loads(written)
+        self.assertEqual(conf["cli_auth_credentials_store"], "file")
+        self.assertNotIn("projects", conf)
+        self.assertEqual(written.count("cli_auth_credentials_store"), 1)
+
+    def test_refuses_template_without_file_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / "config.toml.in"
+            template.write_text(codex_arm.TEMPLATE.read_text().replace(
+                'cli_auth_credentials_store = "file"', 'cli_auth_credentials_store = "auto"'))
+            saved, codex_arm.TEMPLATE = codex_arm.TEMPLATE, template
+            try:
+                with self.assertRaisesRegex(ValueError, "cli_auth_credentials_store"):
+                    codex_arm.write_config(Path(tmp) / "home", 1, Path("/x/codex"),
+                                           {"version": "1"})
+            finally:
+                codex_arm.TEMPLATE = saved
+            self.assertFalse((Path(tmp) / "home" / "config.toml").exists())
+
+
+class CodexFullBodies(unittest.TestCase):
+    """YA-14 : requêtes de génération en corps complet, lues au reverse proxy (biais contre
+    Codex : `encrypted_content` retiré des items rejoués)."""
+
+    def test_full_bodies(self):
+        def req(ts, session, transport="websocket", continuation=True, generate=None):
+            return {"event": "request", "ts": ts, "session": session, "transport": transport,
+                    "continuation": continuation, "generate": generate}
+        log = [req(1, "a", continuation=False, generate=False),  # prewarm : exclu
+               req(2, "a"), req(3, "a", continuation=False), req(4, "a"),
+               req(5, "b", continuation=False), req(6, "b", transport="sse", continuation=None),
+               {"event": "response", "ts": 7, "session": "a"}]
+        self.assertEqual(codex_arm.full_bodies(log),
+                         {"generation_requests": 5, "full_body": 3, "after_first": 2})
+
+
+def fake_jwt(claims: dict) -> str:
+    return ".".join([codex_arm.b64({"alg": "none"}), codex_arm.b64(claims), "sig"])
+
+
+class SecretMasking(unittest.TestCase):
+    """YA-14 : ids de compte masqués au ramassage des sessions Codex, id d'installation masqué
+    dans le journal des corps, ids des claims recherchés, scan de la reprise."""
+
+    ACCOUNT = "11111111-2222-3333-4444-555555555555"
+    USER = "user-AbCdEfGhIjKlMnOpQrStUvWx"
+    REFRESH = "rt_secret-refresh-value-0123456789"
+
+    def real_cache(self, root: Path):
+        """Cache de run réel avec un `auth.json` par dossier de login (jetons factices)."""
+        cache = run.Cache(root, None, False)
+        claims = {"https://api.openai.com/auth": {"chatgpt_account_id": self.ACCOUNT,
+                                                  "chatgpt_user_id": self.USER},
+                  "email": "someone@example.org", "exp": 4102444800}
+        for home, data in ((cache.agent, {"openai-codex": {"access": fake_jwt(claims),
+                                                           "refresh": self.REFRESH,
+                                                           "accountId": self.ACCOUNT}}),
+                           (cache.codex_home, {"tokens": {"id_token": fake_jwt(claims),
+                                                          "account_id": self.ACCOUNT},
+                                               "last_refresh": "2026-11-14T00:00:00Z"})):
+            home.mkdir(parents=True, exist_ok=True)
+            (home / "auth.json").write_text(json.dumps(data))
+        return cache
+
+    def test_secret_values_include_claim_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            values = run.secret_values(self.real_cache(Path(tmp)), False, codex=True)
+        for value in (self.ACCOUNT, self.USER, self.REFRESH, "someone@example.org"):
+            self.assertIn(value, values)
+        self.assertEqual(len(values), len(set(values)))
+        self.assertNotIn("2026-11-14T00:00:00Z", values)
+
+    def test_rollout_masked_at_copy(self):
+        lines = [{"timestamp": "t0", "type": "session_meta",
+                  "payload": {"id": "th", "creator_account_id": self.ACCOUNT,
+                              "creator_user_id": self.USER, "cwd": "/w"}},
+                 {"timestamp": "t1", "type": "response_item",
+                  "payload": {"type": "function_call_output", "output": f"x {self.REFRESH} y"}},
+                 {"timestamp": "2026-11-14T10:00:01.000Z", "type": "token_usage_record",
+                  "payload": {"response_id": "r1", "usage": {"input_tokens": 10,
+                                                             "cached_input_tokens": 4,
+                                                             "output_tokens": 2}}}]
+        text = "".join(json.dumps(line) + "\n" for line in lines)
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "codex-home"
+            source = home / "sessions" / "2026" / "11" / "14" / "rollout-x.jsonl"
+            source.parent.mkdir(parents=True)
+            source.write_text(text)
+            [copy] = codex_arm.copy_rollouts(home, {}, Path(tmp) / "out", [self.REFRESH, ""])
+            masked = copy.read_text()
+            self.assertEqual(source.read_text(), text)  # original inchangé
+            records = codex_arm.records([copy], [], "th")
+            scan = run.scan_secrets(Path(tmp) / "out", [self.ACCOUNT, self.USER, self.REFRESH])
+        for value in (self.ACCOUNT, self.USER, self.REFRESH):
+            self.assertNotIn(value, masked)
+        meta = json.loads(masked.splitlines()[0])["payload"]
+        self.assertEqual((meta["creator_account_id"], meta["creator_user_id"], meta["id"]),
+                         (codex_arm.MASK, codex_arm.MASK, "th"))
+        self.assertEqual(masked.splitlines()[2], text.splitlines()[2])
+        self.assertEqual([(r["input"], r["cacheRead"]) for r in records], [(6, 4)])
+        self.assertEqual(scan["files_with_hits"], {})
+        self.assertEqual(codex_arm.mask_text(text, [self.REFRESH])[1], 3)
+
+    def test_installation_id_masked_in_body_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            proxy = proxies.ReverseProxy(tmp / "proxy.ndjson", ("127.0.0.1", 9, False),
+                                         tmp / "proxy-bodies.ndjson")
+            try:
+                raw = json.dumps({"type": "response.create", "client_metadata": {
+                    proxies.INSTALLATION_ID: "inst-0123456789abcdef", "turn_id": "t1"}}).encode()
+                proxy.write_body("websocket", "/backend-api/codex/responses", "s", True, raw)
+            finally:
+                proxy.server_close()
+            text = (tmp / "proxy-bodies.ndjson").read_text()
+        entry = json.loads(text)
+        self.assertNotIn("inst-0123456789abcdef", text)
+        self.assertEqual(entry["body"]["client_metadata"],
+                         {proxies.INSTALLATION_ID: proxies.MASKED, "turn_id": "t1"})
+        self.assertEqual(entry["bytes_up"], len(raw))
+
+    def test_continue_session_scan(self):
+        continue_session = load("smoke_continue_session", SMOKE / "continue_session.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self.real_cache(Path(tmp) / "cache")
+            out = Path(tmp) / "continue-1"
+            (out / "sessions").mkdir(parents=True)
+            (out / "sessions" / "s.jsonl").write_text(f'{{"user": "{self.USER}"}}\n')
+            (out / "out.jsonl").write_text("{}\n")
+            scan = continue_session.secret_scan(out, cache)
+            written = json.loads((out / "secret-scan.json").read_text())
+        self.assertEqual(scan["files_with_hits"], {"sessions/s.jsonl": 1})
+        self.assertEqual(written, scan)
+        self.assertNotIn(self.USER, json.dumps(scan))
+
+
+class CaptureCodex(unittest.TestCase):
+    """YA-14 : le serveur de capture reconnaît Codex (`additional_tools`, tool libre `exec`)."""
+
+    def test_codex_plan(self):
+        body = {"input": [{"type": "additional_tools", "tools": [
+            {"type": "namespace", "name": "functions",
+             "tools": [{"type": "custom", "name": "exec"}, {"type": "function", "name": "wait"}]}]},
+            {"type": "message", "role": "user", "content": "x"}]}
+        tools = capture_server.codex_tools(body)
+        self.assertTrue(capture_server.is_codex(tools))
+        state = capture_server.CaptureState(Path(tempfile.gettempdir()), "smoke-py-example-001",
+                                            None, 0, connect_proxy_port=7, read_probe_paths=("/p",))
+        plan = state.plan(tools, 2, body=body)
+        self.assertEqual((plan.kind, plan.tool_name, plan.freeform), ("tool", "exec", True))
+        self.assertIn("tools.apply_patch", plan.code)
+        self.assertEqual(state.plan(tools, 4, body=body).kind, "final")
+        item = capture_server.responses_item(plan, 9, done=True)
+        self.assertEqual((item["type"], item["name"], item["input"]),
+                         ("custom_tool_call", "exec", plan.code))
+        body["input"].append({"type": "custom_tool_call_output", "call_id": "c", "output": "x"})
+        self.assertEqual(capture_server.count_tool_results_responses(body), 1)
+
+
+class Ya14Verdict(unittest.TestCase):
+    """Règle fixée avant le run (plan YA-14) : résolution d'abord, puis coût."""
+
+    def verdict(self, failing_b: set[str], tasks: int = 6, cost_b: float = 0.5) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            arms = []
+            for p in (1, 2, 3):
+                for t in range(tasks):
+                    task = f"t{t}"
+                    for side in "AB":
+                        status = "failed" if side == "B" and task in failing_b else "resolved"
+                        run_dir = write_arm(root, f"p{p}-{task}-{side}", task,
+                                            1.0 if side == "A" else cost_b, status=status)
+                        arms.append({"pass": p, "task": task, "order": "AB", "arm": side,
+                                     "exit": 0, "run_dir": str(run_dir)})
+            plan = root / "ab.json"
+            plan.write_text(json.dumps({"arms": arms, "seed": 1, "seed_source": "test",
+                                        "settings_diff": {}, "idle_timeout_s": 300,
+                                        "model": "gpt-6-luna"}))
+            return AbStats.run_stats(self, ["--plan", str(plan), "--draws", "200",
+                                            "--verdict", "ya14-codex"])
+
+    def test_cost_decides_without_resolution_gap(self):
+        text = self.verdict(set())
+        self.assertIn("**Verdict : pas de verdict de résolution ; coût : B (Codex CLI) moins cher.**",
+                      text)
+
+    def test_small_cost_gap_is_not_distinguishable(self):
+        text = self.verdict(set(), cost_b=0.95)
+        self.assertIn("coût : non distinguable", text)
+
+    def test_resolution_first(self):
+        text = self.verdict({"t0", "t1", "t2"})
+        self.assertIn("**Verdict : résolution : A (yusAgent) résout 3 tâche(s) de plus", text)
+
+    def test_too_few_common_tasks(self):
+        text = self.verdict({"t0", "t1"}, tasks=6)
+        self.assertIn("Moins de 5 tâches : **pas de verdict de coût**", text)
 
 
 if __name__ == "__main__":
