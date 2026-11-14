@@ -12,6 +12,8 @@ Règles fixées et versionnées **avant tout run réel** (journal du CDC, décis
 | Réglages | `settings/default.json` | `settings/codex-0.169.0.json` : `featureCuts` `apps`, `plugins`, `tool_suggest` ; config `codex/config.toml.in` |
 | Outils vus par le modèle | `python_repl`, `apply_patch` (libre) | `exec` (JavaScript, libre), `wait`, `request_user_input`, `request_user_input_async`, `sleep`, espace `collaboration` (multi-agent) ; imbriqués dans `exec` : `apply_patch`, `exec_command`, `write_stdin`, `view_image`, buts, ressources MCP, `clock__curr_time`, `image_gen__imagegen` |
 
+Binaire du bras A revérifié le 14/11/2026 contre `main` à jour (`4c4728121`, et `main` local `91e821f7a`) : `git diff --stat 80e20ea5f main -- crates/ Cargo.toml Cargo.lock` ne sort rien (aucune différence ; `git diff --quiet` : code 0).
+
 Version de Codex : dernière release stable au 14/11/2026 (GitHub, `latest` npm). Au tag, `models.json` met les 12 modèles en `tool_mode: code_mode_only` (`gpt-6-luna` : ligne 716), d'où `exec` et `wait` seuls au premier niveau (`codex-rs/code-mode-protocol/src/lib.rs:61-62`, `codex-rs/core/src/tools/mod.rs:66-76` au tag).
 
 ## Protocole
