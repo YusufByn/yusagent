@@ -93,6 +93,45 @@ Le rapport dit que **la résolution ne se tranche pas à 10 tâches**. Il note a
 
 **Affichés sans décider** : comme pour l'A/B 1.
 
+### Résultats de l'A/B 2 (14/11/2026)
+
+Le rapport complet est dans `bench/smoke/ab/ya03-ab2-20261114.md`, avec les mesures d'appoint dans `ya03-ab2-20261114-mesures.py`. Le run est `bench/smoke/runs/ab-20261114T140538Z` (lancé par Yusuf) : 60 bras, aucune unité écartée, aucun incident. Les deux bras utilisent `editTool: native` : A avec `default.json`, B avec `bash-native.json`.
+
+**Verdict : `shellTool: kernel`**, validé par Yusuf le 14/11/2026, **provisoire** (une seule famille de modèles). La configuration retenue est `bench/smoke/settings/default.json`. Aucune des deux conditions n'est remplie :
+1. résolution : 25 tâches dans les deux bras (A : 8, 9, 8 ; B : 9, 8, 8) ;
+2. coût à cache théorique des tâches stables, B / A − 1 : **−2,9 %, IC 95 % [−14,0 ; +10,7]**. La borne haute n'est pas sous 0.
+
+**Affichés sans décider** :
+- **Coût par tâche résolue** (B / A − 1) :
+  - théorique : A 0,0523 $, B 0,0500 $, soit −4,4 % [−19,7 ; +15,0] ;
+  - rapporté : −3,3 % [−18,8 ; +15,1] ;
+  - pessimiste : −3,1 % [−18,9 ; +15,3].
+  - Les résolutions ne tombent pas sur les mêmes tâches : A résout une fois `node-filesize-376`, B une fois `node-little-coder-102`.
+- **Usage du shell** : toutes les sessions s'en servent.
+  - A : 147 commandes `bash()` dans 116 cellules ; 42 cellules ont lu un code non nul ; 37 ont rendu la main avant la fin d'un `bash()`.
+  - B : 115 `exec_command` et 103 `write_stdin`, dont 50 sorties non nulles (surtout des tests en échec pendant le travail) et 0 erreur du tool.
+- **Edits au premier essai** : 75/75 et 71/71. **Patchs refusés hors workspace** : 0 et 0.
+- **Cellules en erreur d'appel** (SyntaxError) : 2 dans A, dont `files = !pwd` (shell en syntaxe IPython), et 0 dans B. Toutes causes confondues : 5/302 et 1/142.
+- **Tours par session** : 14,1 et 13,9 (−1,7 %).
+- **Tokens envoyés** : −4,2 % pour B ; input non caché −2,0 %.
+- **Taux de cache** : 91,9 % et 91,7 %. **Miss serveur** : 5 et 6.
+- **Ruptures** : 0 requête en corps complet après la première, dans les deux bras (423 et 416 requêtes).
+
+**Reproductibilité** : le bras A de cet A/B a la même configuration et le même binaire que le bras A de l'A/B 1, joué 2 h plus tôt.
+- Coût théorique des tâches stables, A2 / A1 − 1 : **+2,1 % [−4,4 ; +6,8]**. Par tâche stable, l'écart absolu a une médiane de 4,9 % et un maximum de 14,3 %.
+- Résolution : une tâche non stable gagne une résolution.
+- L'effet mesuré de B est donc du même ordre que le bruit entre deux runs identiques. **Le banc ne distingue pas un effet de moins de 10 % environ.** C'est une estimation tirée de ces deux runs, pas un calcul de puissance.
+
+**Biais prévus** :
+- **Schéma réduit** (sans `tty`, `shell` ni `login`). La description reprise de Codex annonce pourtant un PTY absent. Le modèle demande `yield_time_ms` à 1000 dans 99 `exec_command` sur 115, et une sonde `write_stdin` vide attend au moins 5 s : d'où 103 `write_stdin`. Ce point est noté dans `docs/tickets/10-ya03-shell-natif.md`.
+- **Règle « pas de boucles shell ni de heredocs » retirée** : B n'a écrit ni heredoc ni boucle shell.
+- **Octets contre caractères** : +4,1 % sur les sorties shell de B. Ses 17 sorties shell tronquées viennent d'un `max_output_tokens` demandé entre 500 et 3000.
+- **Format** : l'en-tête est celui de Codex, sans format maison.
+
+**Anomalies** : aucun bras au-delà de 2 fois la médiane de sa tâche.
+- **`node-testsprite-356`, passe 2, bras B** (×1,56, 218 s) : c'est le seul bras de la tâche qui lance la suite complète, puis la sonde 16 fois.
+- **Les deux résolutions inhabituelles sont de vrais correctifs.** Les 22 bras en échec sur `node-filesize-376` et `node-little-coder-102`, dans les deux A/B, réécrivent ou retirent un test existant qui passait déjà ; les deux bras résolus le laissent intact (ticket 09, points ouverts).
+
 ## Après les deux A/B
 
 Nouvelle baseline `gpt-6.1-terra` depuis les bras de la configuration retenue (les 30 bras du bras retenu de l'A/B 2) : `python3 -I bench/smoke/baseline.py <runs> --out bench/smoke/baseline/gpt-6.1-terra.json`, comme le 12/11 (`bench/smoke/ab/rlm-spawn-20261112.md`). L'ancienne reste dans l'historique git.
