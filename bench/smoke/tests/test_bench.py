@@ -287,6 +287,9 @@ class AbStats(unittest.TestCase):
 
 
 
+SKILL = "/x/skills/edit/src/edit/__init__.py"
+
+
 class EditAttempts(unittest.TestCase):
     """YA-03 : edits appliqués au premier essai et patchs refusés hors workspace."""
 
@@ -313,9 +316,15 @@ class EditAttempts(unittest.TestCase):
                             "await edit.run('b', 'x', 'y')"),
             self.result("c1", "python_repl", "", False, diffs=2),
             self.call("c2", "await edit(path='a', old_str='zz', new_str='y')"),
-            self.result("c2", "python_repl", "Traceback\nValueError: string not found in a", True),
+            self.result("c2", "python_repl", f"Traceback\n  File \"{SKILL}\", line 34\n"
+                        "ValueError: string not found in a", True),
             self.call("c3", "await edit(path='q', old_str='x', new_str='y')"),
-            self.result("c3", "python_repl", "FileNotFoundError: q not found", True),
+            self.result("c3", "python_repl", f"  File \"{SKILL}\", line 30\n"
+                        "FileNotFoundError: q not found", True),
+            # Message du skill levé hors du skill (pas de frame du skill) : pas un échec d'edit().
+            self.call("c6", "await edit(path='a', old_str='x', new_str='y')\n"
+                            "raise ValueError('string not found in a')"),
+            self.result("c6", "python_repl", "ValueError: string not found in a", True, diffs=1),
             # Une erreur sans rapport avec edit() ne compte pas.
             self.call("c4", "await edit(path='a', old_str='y', new_str='z')\n1/0"),
             self.result("c4", "python_repl", "ZeroDivisionError: division by zero", True, diffs=1),
@@ -326,14 +335,54 @@ class EditAttempts(unittest.TestCase):
         got = metrics.edit_attempts(entries)
         self.assertEqual(got["apply_patch"],
                          {"calls": 3, "applied": 1, "refused_outside_workspace": 1})
-        self.assertEqual(got["edit"], {"applied": 3, "failed": 2})
-        self.assertEqual(got["attempts"], 8)
-        self.assertEqual(got["applied"], 4)
-        self.assertAlmostEqual(got["first_try_rate"], 0.5)
+        self.assertEqual(got["edit"], {"applied": 4, "failed": 2})
+        self.assertEqual(got["attempts"], 9)
+        self.assertEqual(got["applied"], 5)
+        self.assertAlmostEqual(got["first_try_rate"], 5 / 9)
 
     def test_no_edit(self):
         self.assertIsNone(metrics.edit_attempts([])["first_try_rate"])
         self.assertEqual(ab_stats.first_try({"attempts": 0, "applied": 0}), "aucun edit")
+
+
+class RealFailures(unittest.TestCase):
+    """Échecs réels de l'A/B 1 de YA-03 (ab-20261114T120431Z), `isError` à `false` : cellule
+    `python_repl` en erreur (`details.status`), `edit()` arrêté par le skill, `apply_patch`
+    refusé par la vérification de Codex, `apply_patch` appliqué. Fixture tirée des sessions
+    (champ `source`), chemin du dossier personnel remplacé par `/Users/u`."""
+
+    FIXTURE = Path(__file__).resolve().parent / "fixtures" / "ya03-ab1-echecs.jsonl"
+
+    def entries(self, case: str | None = None) -> list[dict]:
+        rows = [json.loads(line) for line in self.FIXTURE.read_text().splitlines() if line]
+        return [r for r in rows if case is None or r["case"] == case]
+
+    def results(self, case: str) -> list[dict]:
+        return [r["message"] for r in self.entries(case) if r["message"]["role"] == "toolResult"]
+
+    def test_is_error_is_false_on_every_failure(self):
+        self.assertEqual({r["message"]["isError"] for r in self.entries()
+                          if r["message"]["role"] == "toolResult"}, {False})
+
+    def test_cell_failures(self):
+        for case in ("edit_failure", "cell_failure"):
+            self.assertTrue(metrics.cell_failed(self.results(case)[0]), case)
+        got = metrics.cell_errors(self.entries())
+        self.assertEqual(got, {"cells": 2, "errors": 2, "syntax_errors": 0,
+                               "by_type": {"ValueError": 1, "IndexError": 1}})
+
+    def test_patch_outcomes(self):
+        self.assertFalse(metrics.patch_applied(self.results("patch_failure")[0]))
+        self.assertTrue(metrics.patch_applied(self.results("patch_applied")[0]))
+
+    def test_edit_failure_from_the_skill_only(self):
+        got = metrics.edit_attempts(self.entries())
+        self.assertEqual(got["apply_patch"],
+                         {"calls": 2, "applied": 1, "refused_outside_workspace": 0})
+        # Six edits appliqués dans la cellule avant celui qui échoue (2 occurrences) ; la
+        # cellule IndexError n'appelle pas edit().
+        self.assertEqual(got["edit"], {"applied": 6, "failed": 1})
+        self.assertEqual((got["attempts"], got["applied"]), (9, 7))
 
 
 class BodyLog(unittest.TestCase):
