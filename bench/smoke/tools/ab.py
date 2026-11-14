@@ -24,6 +24,12 @@ par passe, graine notée ; tirée de `os.urandom` si absente). Chaque bras est u
 au modèle), puis la tâche. Le surcoût par lancement (durée de l'appel à `run.py` moins la
 durée de la tâche, `header.timing_s.tasks`) est mesuré, noté par bras et résumé dans `ab.md`.
 
+Bras Codex CLI (YA-14, comparaison yusAgent contre Codex CLI) : un fichier de réglages à
+`"harness": "codex"` (`settings/codex-<version>.json`) lance `run.py` avec `codex` du dossier
+`--codex-dir` (installé par `tools/install-codex.sh`) ; contrôles : version et sha256 de chaque
+fichier contre le manifeste de l'installation (`codex_arm.check_install`). Le dossier du binaire
+yusAgent reste le premier argument, avec ses contrôles.
+
 Sortie : `runs/ab-<horodatage UTC>/` : `ab.json` (plan, graine, réglages, bras et dossiers
 de run), `ab.md`, `log.txt`, et les runs dans `arms/`. Statistiques :
 `python3 -I bench/smoke/tools/ab_stats.py --plan runs/ab-<horodatage>/ab.json`.
@@ -53,6 +59,9 @@ HERE = Path(__file__).resolve().parent
 SMOKE = HERE.parent
 REPO = SMOKE.parents[1]
 RUN_PY = SMOKE / "run.py"
+sys.path.insert(0, str(SMOKE))
+
+import codex_arm  # noqa: E402
 # Sources livrées : ce que le binaire embarque (chemins de changelog-fragment.yml, plus Cargo.*).
 SHIPPED = ("crates", "prime-agent-runtime", "skills", "vendor", "install-rust.sh", "Cargo.toml",
            "Cargo.lock")
@@ -144,6 +153,21 @@ def rel(path: Path) -> str:
     return str(path.relative_to(REPO)) if path.is_relative_to(REPO) else str(path)
 
 
+def arm_binary(args, bin_dir: Path, settings: dict) -> Path:
+    """Binaire d'un bras : `prime-agent` du dossier yusAgent, ou `codex` de `--codex-dir`."""
+    codex = codex_arm.settings_of(settings)
+    if codex is None:
+        return bin_dir / "prime-agent"
+    if args.codex_dir is None:
+        fail("bras Codex CLI : --codex-dir requis (tools/install-codex.sh)")
+    binary = args.codex_dir.expanduser().resolve() / "codex"
+    try:
+        codex_arm.check_install(binary, codex["version"])
+    except ValueError as error:
+        fail(f"bras Codex CLI : {error}")
+    return binary
+
+
 def launch(args, binary: Path, settings: Path, task: str, out: Path, note: dict,
            log) -> dict:
     """Un bras : un appel à run.py ; durée, code, dossier de run, surcoût."""
@@ -193,6 +217,9 @@ def write_md(path: Path, ab: dict) -> None:
     o = ab.get("overhead") or {}
     lines = [f"# A/B entrelacé — {ab['started']}", "",
              f"- Binaire : `{ab['binary_sha']}` ; {ab['shipped_note'] or 'sans sha de référence'}",
+             "- Harness par bras : " + ", ".join(
+                 f"{side} {ab.get('harness', {}).get(side, 'yusagent')} (`{b['path']}`, sha256 "
+                 f"`{b['sha256'][:12]}`)" for side, b in (ab.get("binaries") or {}).items()),
              f"- Modèle {ab['model']}, effort {ab['effort']}, mode {ab['mode']}, garde-fou "
              f"d'inactivité {ab['idle_timeout_s']} s",
              f"- A : `{ab['settings']['A']['file']}` {json.dumps(ab['settings']['A']['value'])}",
@@ -240,6 +267,8 @@ def main() -> None:
     parser.add_argument("--effort", default="high")
     parser.add_argument("--idle-timeout", type=int, default=300)
     parser.add_argument("--out", type=Path, default=SMOKE / "runs")
+    parser.add_argument("--codex-dir", type=Path, default=None,
+                        help="bras Codex CLI : dossier installé par tools/install-codex.sh")
     parser.add_argument("--capture", action="store_true",
                         help="serveur de capture en amont (aucun modèle)")
     parser.add_argument("--dry-run", action="store_true", help="contrôles et plan seuls")
@@ -251,6 +280,8 @@ def main() -> None:
     note = check_ref(sha, args.ref)
     settings = {side: {"file": rel(path.resolve()), "value": json.loads(path.read_text())}
                 for side, path in (("A", args.a), ("B", args.b))}
+    binaries = {side: arm_binary(args, bin_dir, settings[side]["value"]) for side in ("A", "B")}
+    harness = {side: settings[side]["value"].get("harness", "yusagent") for side in ("A", "B")}
     diff = settings_diff(settings["A"]["value"], settings["B"]["value"])
     tasks = [t for t in args.tasks.split(",") if t] or bench_tasks()
     known = {p.name for p in (SMOKE / "tasks").iterdir() if p.is_dir()}
@@ -267,6 +298,8 @@ def main() -> None:
           "binary": str(bin_dir / "prime-agent"), "binary_sha": sha, "ref": args.ref,
           "shipped_note": note, "model": args.model, "effort": args.effort,
           "idle_timeout_s": args.idle_timeout, "settings": settings, "settings_diff": diff,
+          "harness": harness,
+          "binaries": {side: {"path": str(b), "sha256": sha256(b)} for side, b in binaries.items()},
           "tasks": tasks, "passes": args.passes, "seed": args.seed, "seed_source": seed_source,
           "commit": git("rev-parse", "HEAD").stdout.strip(),
           "commit_dirty": bool(git("status", "--porcelain").stdout.strip()),
@@ -288,12 +321,13 @@ def main() -> None:
                 header = {"dir": ab["dir"], "pass": unit["pass"], "task": unit["task"],
                           "arm": side, "position": position, "order": unit["order"],
                           "seed": args.seed, "settings_diff": diff, "ref": args.ref,
+                          "harness": harness[side],
                           "shipped_note": note}
                 line = (f"== passe {unit['pass']}, {unit['task']}, bras {side} ({position}/2, "
                         f"ordre {unit['order']})")
                 print(line, flush=True)
                 log.write(line + "\n")
-                result = launch(args, bin_dir / "prime-agent",
+                result = launch(args, binaries[side],
                                 args.a if side == "A" else args.b, unit["task"], arms_dir,
                                 header, log)
                 ab["arms"].append({**unit, "arm": side, "position": position, **result})

@@ -144,6 +144,20 @@ def incidents(run: Path, result: dict, stall_gap: float) -> list[tuple[str, bool
         for entry in read_ndjson(out / "proxy.ndjson"):
             if entry.get("event") == "request" and entry.get("status") not in ("101", "200"):
                 found.append((f"requête proxy statut {entry.get('status')}", True))
+            # YA-14 : fin de réponse lue au proxy (runs postérieurs à l'adaptateur Codex CLI).
+            elif entry.get("event") == "response_error":
+                found.append((f"erreur du serveur au proxy (statut {entry.get('status')}, "
+                              f"{entry.get('error_type')}, {entry.get('error_code')})", True))
+            elif entry.get("event") == "response" and entry.get("kind") == "response.failed":
+                found.append(("réponse en échec au proxy (`response.failed`)", True))
+    # Bras Codex CLI (YA-14) : erreurs de la sortie `--json`, relancées ou non, et tour en échec.
+    if result.get("harness") == "codex" and (out / "out.jsonl").exists():
+        for event in read_ndjson(out / "out.jsonl"):
+            if event.get("type") == "error":
+                found.append((f"Codex, erreur « {str(event.get('message'))[:120]} »", True))
+            elif event.get("type") == "turn.failed":
+                message = (event.get("error") or {}).get("message")
+                found.append((f"Codex, tour en échec « {str(message)[:120]} »", True))
     if status in ("agent_error", "harness_error") and not any(p for _, p in found):
         found.append((f"statut `{status}` sans erreur provider", False))
     return found
@@ -352,6 +366,9 @@ def main() -> None:
                         help=f"timeout classé « flux bloqué » au-delà (s, défaut {STALL_GAP_S})")
     parser.add_argument("--no-exclusion", action="store_true",
                         help="sensibilité : garde les unités touchées par une erreur provider")
+    parser.add_argument("--verdict", choices=["ya14-codex"], default=None,
+                        help="règle de verdict fixée avant le run (ya14-codex : "
+                             "bench/smoke/ab/ya14-codex-plan.md)")
     parser.add_argument("runs", type=Path, nargs="*", help="A1 B1 A2 B2 ... (passes complètes)")
     args = parser.parse_args()
     if bool(args.plan) == bool(args.runs):
@@ -483,7 +500,145 @@ def main() -> None:
                    f"{o.get('overhead_median_s')} s, total {o.get('overhead_total_s')} s sur "
                    f"{o.get('wall_total_s')} s ({(o.get('overhead_share') or 0) * 100:.1f} %)"
                    if o.get("measured") else "- aucun lancement mesuré")
+    if args.verdict == "ya14-codex":
+        out += ya14_codex_verdict(units, kept, args.draws, args.seed, ab)
     print("\n".join(out))
+
+
+# --- Verdict YA-14 : yusAgent contre Codex CLI ------------------------------------------
+
+YA14_MIN_RESOLVED_PASSES = 2   # tâche résolue pour un bras : au moins 2 passes valides résolues
+YA14_RESOLUTION_GAP = 3        # écart de tâches résolues qui fait un verdict de résolution
+YA14_MIN_COST_TASKS = 5        # tâches communes minimum pour un verdict de coût
+YA14_COST_THRESHOLD = 10.0     # |écart| en % au-delà duquel le coût peut décider
+
+
+def ya14_tables(kept: list[dict]) -> dict[str, dict]:
+    """Par tâche : passes valides, passes résolues par bras."""
+    rows: dict[str, dict] = {}
+    for u in kept:
+        row = rows.setdefault(u["task"], {"passes": 0, "A": 0, "B": 0, "units": []})
+        row["passes"] += 1
+        row["units"].append(u)
+        for side in ("A", "B"):
+            row[side] += bool(u["arms"][side]["result"]["resolved"])
+    return rows
+
+
+def ya14_codex_verdict(units: list[dict], kept: list[dict], draws: int, seed: int,
+                       ab: dict | None) -> list[str]:
+    """Règle fixée avant le run (`bench/smoke/ab/ya14-codex-plan.md`) : résolution d'abord
+    (tâche résolue pour un bras à au moins 2 passes valides ; écart de 3 tâches ou plus), puis
+    coût à cache théorique sur les tâches résolues à toutes leurs passes valides par les deux
+    bras (5 au moins), B/A − 1 avec IC bootstrap sur les tâches ; le coût décide seulement si
+    l'IC exclut 0 et |écart| > 10 %. A = yusAgent, B = Codex CLI. Vaut pour le modèle du run."""
+    rows = ya14_tables(kept)
+    judged = {t: r for t, r in rows.items() if r["passes"] >= YA14_MIN_RESOLVED_PASSES}
+    short = sorted(set(rows) - set(judged))
+    solved = {side: sorted(t for t, r in judged.items() if r[side] >= YA14_MIN_RESOLVED_PASSES)
+              for side in ("A", "B")}
+    gap = len(solved["B"]) - len(solved["A"])
+    model = (ab or {}).get("model")
+    lines = ["", "## Verdict YA-14 (yusAgent = A, Codex CLI = B)", "",
+             f"Règle fixée avant le run : `bench/smoke/ab/ya14-codex-plan.md`. Vaut pour "
+             f"`{model}` seulement.", "",
+             "### Résolution", "",
+             f"- Tâche résolue pour un bras : résolue à au moins {YA14_MIN_RESOLVED_PASSES} passes "
+             f"valides. Tâches jugées (au moins {YA14_MIN_RESOLVED_PASSES} passes valides) : "
+             f"{len(judged)} ; exclues (moins de passes valides) : {short or 'aucune'}",
+             f"- A résout {len(solved['A'])} tâche(s) : {', '.join(solved['A']) or 'aucune'}",
+             f"- B résout {len(solved['B'])} tâche(s) : {', '.join(solved['B']) or 'aucune'}",
+             "", "| Tâche | Passes valides | Résolue A | Résolue B |", "|---|---|---|---|"]
+    lines += [f"| {t} | {r['passes']} | {r['A']}/{r['passes']} | {r['B']}/{r['passes']} |"
+              for t, r in sorted(rows.items())]
+    if abs(gap) >= YA14_RESOLUTION_GAP:
+        resolution = (f"B (Codex CLI) résout {gap} tâche(s) de plus" if gap > 0 else
+                      f"A (yusAgent) résout {-gap} tâche(s) de plus")
+    else:
+        resolution = None
+    lines += ["", f"- Écart B − A : {gap:+d} tâche(s) ; seuil {YA14_RESOLUTION_GAP} (fixé avant "
+              "le run, pas un test) : " + (f"**{resolution}**" if resolution else
+                                          "pas de verdict de résolution")]
+    common = sorted(t for t, r in rows.items()
+                    if r["A"] == r["passes"] and r["B"] == r["passes"] and r["passes"] >= 1)
+    table = per_task([u for u in kept if u["task"] in common]) if common else {}
+    lines += ["", "### Coût à cache théorique", "",
+              f"- Tâches résolues à toutes leurs passes valides par les deux bras : {len(common)}"
+              f" ({', '.join(common) or 'aucune'})"]
+    cost_verdict = None
+    if len(common) < YA14_MIN_COST_TASKS:
+        lines.append(f"- Moins de {YA14_MIN_COST_TASKS} tâches : **pas de verdict de coût**")
+    else:
+        def ratio(sample):
+            return pct(sum(table[t]["A", DECISION] for t in sample),
+                       sum(table[t]["B", DECISION] for t in sample))
+        value = ratio(common)
+        lo, hi = bootstrap(common, ratio, draws, seed)
+        excludes = lo > 0 or hi < 0
+        decides = excludes and value is not None and abs(value) > YA14_COST_THRESHOLD
+        if decides:
+            cost_verdict = "B (Codex CLI) moins cher" if value < 0 else "A (yusAgent) moins cher"
+        lines.append(f"- B/A − 1 : {fmt_pct(value)} % [{lo:+.1f} ; {hi:+.1f}] (IC 95 %, bootstrap "
+                     f"sur les tâches, {draws} tirages, graine {seed}) ; IC qui exclut 0 : "
+                     f"{'oui' if excludes else 'non'} ; |écart| > {YA14_COST_THRESHOLD:g} % : "
+                     f"{'oui' if value is not None and abs(value) > YA14_COST_THRESHOLD else 'non'}"
+                     f" : **{cost_verdict or 'non distinguable'}**")
+        for m in MEASURES:
+            if m == DECISION:
+                continue
+            lines.append(f"- {m} (affiché, ne décide pas) : {fmt_pct(pct(sum(table[t]['A', m] for t in common), sum(table[t]['B', m] for t in common)))} %")
+    if resolution:
+        final = f"résolution : {resolution} (coût affiché ci-dessus, ne décide pas)"
+    elif len(common) < YA14_MIN_COST_TASKS:
+        final = "pas de verdict de résolution, pas de verdict de coût"
+    else:
+        final = f"pas de verdict de résolution ; coût : {cost_verdict or 'non distinguable'}"
+    lines += ["", f"**Verdict : {final}.**"]
+    lines += ya14_display(kept)
+    return lines
+
+
+def ya14_display(kept: list[dict]) -> list[str]:
+    """Affiché sans décider (plan YA-14) : par bras, sur les unités retenues."""
+    def collect(side, f):
+        return [v for u in kept for v in [f(u["arms"][side]["result"])] if v is not None]
+
+    def med(values):
+        return f"{statistics.median(values):.1f}" if values else "n/a"
+
+    rows = [
+        ("Coût rapporté par tâche résolue $",
+         lambda side: (lambda c, n: f"{c / n:.4f}" if n else "n/a")(
+             sum(cost(u["arms"][side]["result"], "rapporté") for u in kept),
+             sum(u["arms"][side]["result"]["resolved"] for u in kept))),
+        ("Premier prompt, tokens (médiane)",
+         lambda side: med(collect(side, lambda r: r.get("first_prompt")))),
+        ("Pic de contexte, tokens (médiane ; max)",
+         lambda side: (lambda v: f"{med(v)} ; {max(v) if v else 'n/a'}")(
+             collect(side, lambda r: r.get("context_peak")))),
+        ("Tours de la session principale (médiane)",
+         lambda side: med(collect(side, lambda r: r["calls"]["turns"]))),
+        ("Durée de la phase agent s (médiane)",
+         lambda side: med(collect(side, lambda r: (r.get("agent") or {}).get("seconds")))),
+        ("Ruptures du cache théorique (total)",
+         lambda side: str(sum(((r["cost"].get("theoretical") or {}).get("calls") or {})
+                              .get("rupture", 0) for r in collect(side, lambda r: r)))),
+        ("Compactions (total)",
+         lambda side: str(sum(collect(side, lambda r: r.get("compactions") or 0)))),
+        ("Appels prewarm (total)",
+         lambda side: str(sum((r["calls"].get("by_kind") or {}).get("prewarm", 0)
+                              for r in collect(side, lambda r: r)))),
+        ("Quota de l'abonnement, dernier relevé % (Codex seul)",
+         lambda side: (lambda v: f"{v[-1]}" if v else "n/a")(collect(
+             side, lambda r: ((r.get("codex") or {}).get("rate_limits") or {})
+             .get("primary_used_percent")))),
+    ]
+    lines = ["", "### Affiché sans décider", "", "| Mesure | A (yusAgent) | B (Codex CLI) |",
+             "|---|---|---|"]
+    lines += [f"| {label} | {f('A')} | {f('B')} |" for label, f in rows]
+    lines.append("- Edits au premier essai, cache, miss serveur, sous-agents, incidents : sections "
+                 "ci-dessus. Écarts de config avec chaque harness tel que livré : plan YA-14.")
+    return lines
 
 
 if __name__ == "__main__":
