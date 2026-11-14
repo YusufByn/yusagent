@@ -3,8 +3,11 @@
     python3 -I -m unittest discover -s bench/smoke/tests -v
 
 Couvre le coût à cache théorique (`metrics.py`), le garde-fou d'inactivité (`run.py`,
-`proxies.py`), le plan de l'A/B entrelacé (`tools/ab.py`) et l'écart sur erreur provider
-d'`tools/ab_stats.py`. Bibliothèque standard uniquement.
+`proxies.py`), le plan de l'A/B entrelacé (`tools/ab.py`), l'écart sur erreur provider
+d'`tools/ab_stats.py` et, pour la comparaison contre Codex CLI (YA-14) : la fin de réponse lue
+au proxy, la rupture sur corps complet, l'appariement par ordre, le bras Codex (`codex_arm.py`),
+les scénarios Codex du serveur de capture et la règle de verdict. Bibliothèque standard
+uniquement.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from pathlib import Path
 SMOKE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SMOKE))
 
+import codex_arm  # noqa: E402
 import metrics  # noqa: E402
 import proxies  # noqa: E402
 
@@ -445,7 +449,7 @@ class BodyLog(unittest.TestCase):
         mask = b"\x01\x02\x03\x04"
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(message))
         counter.feed(bytes([0x81, 0x80 | len(message)]) + mask + masked)
-        self.assertEqual(seen, [("s2", True, len(message), message)])
+        self.assertEqual(seen, [("s2", True, len(message), message, None)])
 
     def test_refused_during_ab(self):
         argv = sys.argv
@@ -457,6 +461,224 @@ class BodyLog(unittest.TestCase):
             sys.argv = argv
         self.assertEqual(stop.exception.code,
                          "smoke : --log-bodies est refusé pendant un A/B (--ab)")
+
+
+capture_server = load("capture_server", SMOKE.parents[1] / "bench" / "tools" / "capture" / "server.py")
+
+
+def ws_frame(message: bytes, masked: bool) -> bytes:
+    """Trame texte WebSocket (longueur < 126), masquée côté client."""
+    if not masked:
+        return bytes([0x81, len(message)]) + message
+    mask = b"\x01\x02\x03\x04"
+    return (bytes([0x81, 0x80 | len(message)]) + mask
+            + bytes(b ^ mask[i % 4] for i, b in enumerate(message)))
+
+
+class ResponseOutcome(unittest.TestCase):
+    """YA-14 : `generate` et fin de chaque réponse au reverse proxy, des nombres seulement."""
+
+    def test_generate_is_noted(self):
+        seen = []
+        counter = proxies.FrameCounter(lambda *args: seen.append(args))
+        message = json.dumps({"type": "response.create", "prompt_cache_key": "s",
+                              "generate": False, "input": []}).encode()
+        counter.feed(ws_frame(message, masked=True))
+        self.assertEqual(seen[0][4], False)
+
+    def test_websocket_completed_usage_without_text(self):
+        seen = []
+        watcher = proxies.ResponseWatcher(seen.append, websocket=True)
+        event = {"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed", "output": [{"type": "message",
+                                                               "content": "SECRET-TEXT"}],
+            "usage": {"input_tokens": 100, "output_tokens": 7,
+                      "input_tokens_details": {"cached_tokens": 60, "cache_write_tokens": 30},
+                      "output_tokens_details": {"reasoning_tokens": 2}}}}
+        data = ws_frame(json.dumps({"type": "response.output_text.delta"}).encode(), False)
+        raw = json.dumps(event).encode()
+        data += bytes([0x81, 126]) + len(raw).to_bytes(2, "big") + raw
+        watcher.feed(data[:7])
+        watcher.feed(data[7:])
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["usage"], {"input_tokens": 100, "cached_tokens": 60,
+                                            "cache_write_tokens": 30, "output_tokens": 7,
+                                            "reasoning_tokens": 2})
+        self.assertNotIn("SECRET-TEXT", json.dumps(seen))
+
+    def test_sse_error_and_completed(self):
+        seen = []
+        watcher = proxies.ResponseWatcher(seen.append, websocket=False)
+        stream = (b"event: error\ndata: " + json.dumps({"type": "error", "status": 429,
+                  "error": {"type": "rate_limit", "code": "usage_limit_reached",
+                            "message": "SECRET-TEXT"}}).encode() + b"\n\n"
+                  + b"event: response.completed\ndata: " + json.dumps(
+                      {"type": "response.completed", "response": {"id": "r", "usage": {}}}).encode()
+                  + b"\n\n")
+        for i in range(0, len(stream), 9):
+            watcher.feed(stream[i:i + 9])
+        self.assertEqual([o["event"] for o in seen], ["response_error", "response"])
+        self.assertEqual((seen[0]["status"], seen[0]["error_code"]), (429, "usage_limit_reached"))
+        self.assertNotIn("SECRET-TEXT", json.dumps(seen))
+
+
+class FullBodyRupture(unittest.TestCase):
+    """YA-14 : un appel de boucle en corps complet sur WebSocket, hors premier, est une rupture."""
+
+    def test_rupture_only_with_websocket_full_body(self):
+        records = [rec(1, 1000, 0, 50), rec(2, 100, 900, 50), rec(3, 100, 1000, 50)]
+        per_request = [{"session": "s", "seq": 1, "transport": "websocket", "continuation": False},
+                       {"session": "s", "seq": 2, "transport": "websocket", "continuation": False},
+                       {"session": "s", "seq": 3, "transport": "sse", "continuation": None}]
+        bases = [c["basis"] for c in metrics.theoretical_cache(records, per_request)]
+        self.assertEqual(bases, ["premier", "rupture", "continuation"])
+        self.assertEqual([c["basis"] for c in metrics.theoretical_cache(records)],
+                         ["premier", "continuation", "continuation"])
+
+    def test_in_order_matching(self):
+        records = [rec(1, 0, 0, 0, kind="prewarm", session="t"), rec(2, 10, 0, 1, session="t"),
+                   rec(3, 10, 5, 1, session="t")]
+        log = [{"event": "request", "ts": 1, "transport": "websocket", "session": "t",
+                "generate": False, "continuation": False},
+               {"event": "request", "ts": 2, "transport": "websocket", "session": "t",
+                "continuation": True},
+               {"event": "request", "ts": 3, "transport": "websocket", "session": "t",
+                "continuation": True}]
+        m = metrics.match_transports_in_order(records, log)
+        self.assertEqual([(p["kind"], p["continuation"]) for p in m["per_request"]],
+                         [("prewarm", False), ("main", True), ("main", True)])
+        self.assertEqual((m["unmatched_usage"], m["unmatched_proxy"], m["loop_on_sse"]), (0, 0, 0))
+
+
+class CodexArm(unittest.TestCase):
+    """YA-14 : réglage, config, conversion de l'usage et sortie `--json` du bras Codex."""
+
+    def test_settings(self):
+        self.assertIsNone(codex_arm.settings_of({}))
+        self.assertEqual(codex_arm.settings_of({"harness": "codex", "codex": {"version": "1"}}),
+                         {"version": "1"})
+        with self.assertRaises(ValueError):
+            codex_arm.settings_of({"harness": "codex", "codex": {"version": "1",
+                                                                  "featureCuts": ["memories"]}})
+
+    def test_config_is_valid_toml(self):
+        import tomllib
+        text = codex_arm.config_text(4321, Path("/x/codex"), {"version": "1",
+                                                              "featureCuts": ["apps", "plugins"]})
+        self.assertNotIn("{{", text)
+        conf = tomllib.loads(text)
+        self.assertEqual(conf["model_providers"]["ya_bench"]["base_url"],
+                         "http://127.0.0.1:4321/backend-api/codex")
+        self.assertNotEqual(conf["model_providers"]["ya_bench"]["name"], "OpenAI")
+        self.assertEqual(conf["web_search"], "disabled")
+        self.assertEqual(conf["features"], {"unbounded_connection_retries": False,
+                                            "apps": False, "plugins": False})
+        self.assertEqual(conf["model_catalog_json"], "/x/models.json")
+
+    def test_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout-x.jsonl"
+            rows = [{"timestamp": "2026-11-14T10:00:00.000Z", "type": "session_meta",
+                     "payload": {"id": "th"}},
+                    {"timestamp": "2026-11-14T10:00:00.500Z", "type": "turn_context",
+                     "payload": {"model": "gpt-6-luna", "effort": "high"}}]
+            for i, (inp, read, write) in enumerate(((1000, 0, 900), (1100, 1000, 50)), 1):
+                rows.append({"timestamp": f"2026-11-14T10:00:0{i}.000Z",
+                             "type": "token_usage_record", "payload": {
+                                 "response_id": f"r{i}", "usage": {
+                                     "input_tokens": inp, "cached_input_tokens": read,
+                                     "cache_write_input_tokens": write, "output_tokens": 20,
+                                     "reasoning_output_tokens": 5}}})
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            prewarm = {"event": "response", "generate": False, "session": "th", "ts": 1794650400100,
+                       "response_id": "r0", "usage": {"input_tokens": 3, "cached_tokens": 0,
+                                                      "cache_write_tokens": 0, "output_tokens": 0,
+                                                      "reasoning_tokens": 0}}
+            out = codex_arm.records([path], [prewarm], "th")
+        self.assertEqual([(r["seq"], r["kind"]) for r in out],
+                         [(1, "prewarm"), (2, "main"), (3, "main")])
+        self.assertEqual((out[1]["input"], out[1]["cacheRead"], out[1]["cacheWrite"]), (100, 0, 900))
+        self.assertEqual((out[2]["input"], out[2]["cacheRead"], out[2]["output"]), (50, 1000, 20))
+        self.assertEqual((out[0]["model"], out[0]["effort"]), ("gpt-6-luna", "high"))
+
+    def test_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.jsonl"
+            rows = [{"type": "thread.started", "thread_id": "th"},
+                    {"type": "error", "message": "Reconnecting... 1/5"},
+                    {"type": "item.completed", "item": {"type": "file_change", "status": "completed"}},
+                    {"type": "item.completed", "item": {"type": "file_change", "status": "failed"}},
+                    {"type": "turn.completed", "usage": {}}]
+            path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            ev = codex_arm.events(path)
+        self.assertEqual((ev["thread_id"], ev["status"], ev["errors"]),
+                         ("th", "completed", ["Reconnecting... 1/5"]))
+        self.assertEqual(codex_arm.edits(ev)["first_try_rate"], 0.5)
+        self.assertEqual(codex_arm.final(ev)["stop_reason"], "stop")
+
+
+class CaptureCodex(unittest.TestCase):
+    """YA-14 : le serveur de capture reconnaît Codex (`additional_tools`, tool libre `exec`)."""
+
+    def test_codex_plan(self):
+        body = {"input": [{"type": "additional_tools", "tools": [
+            {"type": "namespace", "name": "functions",
+             "tools": [{"type": "custom", "name": "exec"}, {"type": "function", "name": "wait"}]}]},
+            {"type": "message", "role": "user", "content": "x"}]}
+        tools = capture_server.codex_tools(body)
+        self.assertTrue(capture_server.is_codex(tools))
+        state = capture_server.CaptureState(Path(tempfile.gettempdir()), "smoke-py-example-001",
+                                            None, 0, connect_proxy_port=7, read_probe_paths=("/p",))
+        plan = state.plan(tools, 2, body=body)
+        self.assertEqual((plan.kind, plan.tool_name, plan.freeform), ("tool", "exec", True))
+        self.assertIn("tools.apply_patch", plan.code)
+        self.assertEqual(state.plan(tools, 4, body=body).kind, "final")
+        item = capture_server.responses_item(plan, 9, done=True)
+        self.assertEqual((item["type"], item["name"], item["input"]),
+                         ("custom_tool_call", "exec", plan.code))
+        body["input"].append({"type": "custom_tool_call_output", "call_id": "c", "output": "x"})
+        self.assertEqual(capture_server.count_tool_results_responses(body), 1)
+
+
+class Ya14Verdict(unittest.TestCase):
+    """Règle fixée avant le run (plan YA-14) : résolution d'abord, puis coût."""
+
+    def verdict(self, failing_b: set[str], tasks: int = 6, cost_b: float = 0.5) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            arms = []
+            for p in (1, 2, 3):
+                for t in range(tasks):
+                    task = f"t{t}"
+                    for side in "AB":
+                        status = "failed" if side == "B" and task in failing_b else "resolved"
+                        run_dir = write_arm(root, f"p{p}-{task}-{side}", task,
+                                            1.0 if side == "A" else cost_b, status=status)
+                        arms.append({"pass": p, "task": task, "order": "AB", "arm": side,
+                                     "exit": 0, "run_dir": str(run_dir)})
+            plan = root / "ab.json"
+            plan.write_text(json.dumps({"arms": arms, "seed": 1, "seed_source": "test",
+                                        "settings_diff": {}, "idle_timeout_s": 300,
+                                        "model": "gpt-6-luna"}))
+            return AbStats.run_stats(self, ["--plan", str(plan), "--draws", "200",
+                                            "--verdict", "ya14-codex"])
+
+    def test_cost_decides_without_resolution_gap(self):
+        text = self.verdict(set())
+        self.assertIn("**Verdict : pas de verdict de résolution ; coût : B (Codex CLI) moins cher.**",
+                      text)
+
+    def test_small_cost_gap_is_not_distinguishable(self):
+        text = self.verdict(set(), cost_b=0.95)
+        self.assertIn("coût : non distinguable", text)
+
+    def test_resolution_first(self):
+        text = self.verdict({"t0", "t1", "t2"})
+        self.assertIn("**Verdict : résolution : A (yusAgent) résout 3 tâche(s) de plus", text)
+
+    def test_too_few_common_tasks(self):
+        text = self.verdict({"t0", "t1"}, tasks=6)
+        self.assertIn("Moins de 5 tâches : **pas de verdict de coût**", text)
 
 
 if __name__ == "__main__":
