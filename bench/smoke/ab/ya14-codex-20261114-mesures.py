@@ -11,15 +11,21 @@ A = yusAgent (binaire 80e20ea, `settings/default.json`), B = Codex CLI 0.169.0.
 - quota : relevés `codex.rate_limits` des rapports du bras B, dans l'ordre des lancements ;
 - durée de la phase agent, sur les tâches de la population de coût (résolues à toutes les passes
   par les deux bras) : appels, temps modèle (requête → `response.completed` au reverse proxy),
-  temps entre deux appels, exécution des tools (A : `details.durationMs` de chaque résultat ;
-  B : `Wall time` de chaque sortie d'`exec`), bords (phase agent − premier appel → dernière fin),
-  tokens de sortie, TTFT de A (`ttftMs` du journal d'usage) ;
+  temps entre deux appels (fin d'une réponse → requête suivante, au proxy), exécution des tools
+  telle que la rapporte chaque harness (A : `details.durationMs` de chaque résultat ; B : `Wall
+  time` de chaque sortie d'`exec`, arrondi au dixième de seconde), bords (phase agent − premier
+  appel → dernière fin), tokens de sortie, TTFT de A (`ttftMs` du journal d'usage). L'exécution
+  des tools n'est pas une part du temps entre deux appels : chez B, le tool part dès que l'item
+  est écrit au rollout, avant que `response.completed` n'arrive au proxy. Pour B, elle est aussi
+  relue aux horodatages du rollout (appel → sortie, à la milliseconde), avec son chevauchement
+  du temps modèle (appel → `response.completed` suivant au proxy) ;
 - latence par appel : moindres carrés du temps modèle sur les tokens de sortie, par bras, appels
   avec et sans tokens de raisonnement ;
 - `bash()` du kernel (A) : cellules revenues avant la fin de la commande (`still running after`
   dans le stderr de la cellule, ou résultat `BashSnapshot`), tours de relève (cellule qui ne fait
   que lire un handle ou un instantané), notifications `async_bash_completion` ; `yield_time_ms`
-  des `exec_command` imbriqués dans `exec` (B) ;
+  des `exec_command` imbriqués dans `exec` (B) ; appels à `image_gen` et chemins des requêtes au
+  reverse proxy (B) ;
 - classification des appels de tools (heuristique, mêmes motifs pour les deux bras) : lecture et
   exploration, edit, test et vérification, relève ;
 - échecs de `py-graphiti-2030` et `node-testsprite-356` : tests en échec (`grading/junit.xml`) et
@@ -32,6 +38,7 @@ import statistics as st
 import sys
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 
 R = Path(sys.argv[1])
@@ -49,6 +56,11 @@ def jl(path):
 
 def text(m):
     return "".join(p.get("text", "") for p in m.get("content") or [] if isinstance(p, dict))
+
+
+def stamp(entry):
+    """Horodatage d'une ligne du rollout de Codex, en ms depuis l'époque."""
+    return datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00")).timestamp() * 1000
 
 
 def classify(code):
@@ -85,7 +97,7 @@ def load():
                  bad=sum(r.get("status") not in ("101", "200") for r in reqs),
                  quota_hits=sum(any(q in f.read_text(errors="ignore") for q in QUOTA) or '"status": "429"' in f.read_text(errors="ignore")
                                 for f in (run / "out.jsonl", run / "err.log", run / "proxy.ndjson") if f.exists()),
-                 rate=(res.get("codex") or {}).get("rate_limits"), tool=0.0, tools=0, ttft=[], stop_err=0,
+                 rate=(res.get("codex") or {}).get("rate_limits"), tool=0.0, tools=0, tool_ts=0.0, overlap=0.0, ttft=[], stop_err=0,
                  snap=0, poll=0, notif=0, kinds=Counter(), marks=[], calls_text=[])
         if a["arm"] == "A":
             sess = [f for f in (run / "sessions").glob("*.jsonl")]
@@ -121,8 +133,9 @@ def load():
                     if u.get("kind") == "main" and u.get("ttftMs") is not None:
                         x["ttft"].append(u["ttftMs"] / 1000)
         else:
+            completed = sorted(s["ts"] for _, s in gen)
             for f in (run / "sessions").glob("rollout-*.jsonl"):
-                turn = 0
+                turn, started = 0, None
                 for e in jl(f):
                     p = e.get("payload")
                     if not isinstance(p, dict):
@@ -136,10 +149,16 @@ def load():
                         kind = "relève" if "write_stdin" in code and "exec_command" not in code else classify(code)
                         x["kinds"][kind] += 1
                         x["calls_text"].append((turn + 1, code))
+                        started = stamp(e)
+                        after = [c for c in completed if c >= started]
+                        x["overlap"] += (after[0] - started) / 1000 if after else 0.0
                     elif p.get("type") in ("custom_tool_call_output", "function_call_output"):
                         x["tools"] += 1
                         mm = WALL.search(str(p.get("output")))
                         x["tool"] += float(mm.group(1)) if mm else 0.0
+                        if started is not None:
+                            x["tool_ts"] += (stamp(e) - started) / 1000
+                            started = None
         x["edge"] = x["agent"] - x["span"]
         rows.append(x)
     return rows
@@ -172,9 +191,13 @@ for arm in "AB":
     calls = [c for x in r for c in x["per_call"]]
     ttft = [t for x in r for t in x["ttft"]]
     print(f"{arm} ({n} lancements) : phase agent {m('agent'):.1f} s ; appels {m('calls'):.1f} ; temps modèle {m('model'):.1f} s ; "
-          f"entre appels {m('gaps'):.1f} s, dont tools {m('tool'):.1f} s ; bords {m('edge'):.1f} s ; tokens de sortie {m('out'):.0f} ; "
+          f"entre appels {m('gaps'):.1f} s ; exécution des tools rapportée {m('tool'):.2f} s ; bords {m('edge'):.1f} s ; tokens de sortie {m('out'):.0f} ; "
           f"temps modèle par appel : moyenne {m('model') / m('calls'):.2f} s, médiane {st.median(c[0] for c in calls):.2f} s ; "
           + (f"TTFT médian {st.median(ttft):.2f} s" if ttft else "TTFT non mesuré"))
+    if arm == "B":
+        print(f"   B : tools aux horodatages du rollout {m('tool_ts'):.2f} s, dont chevauchement du temps modèle "
+              f"{m('overlap'):.2f} s ; hors chevauchement {m('tool_ts') - m('overlap'):.2f} s ; "
+              f"entre appels {m('gaps'):.2f} s ; Wall time arrondi {m('tool'):.2f} s")
 
 
 def ols(pts):
@@ -212,6 +235,11 @@ for x in rows:
             yields.update(int(v) for v in re.findall(r"exec_command\(\{[^}]*?yield_time_ms:\s*(\d+)", code))
 print(f"B : exec_command imbriqués dans exec {nested} ; yield_time_ms demandé {sorted(yields.items())} "
       f"(les autres : défaut de Codex)")
+paths = Counter(r.get("path") for x in rows if x["arm"] == "B"
+               for r in jl(x["run"] / "tasks" / x["task"] / "run-1" / "proxy.ndjson") if r.get("event") == "request")
+b_calls = [c for x in rows if x["arm"] == "B" for _, c in x["calls_text"]]
+print(f"B : appels de tools {len(b_calls)}, dont avec image_gen {sum('image_gen' in c for c in b_calls)} ; "
+      f"requêtes au reverse proxy par chemin {dict(paths)}")
 
 print("\n## Classification des appels de tools (heuristique), moyenne par lancement")
 for lab, sel in (("tâches communes", common), ("toutes", tasks)):
