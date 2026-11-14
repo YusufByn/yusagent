@@ -1168,11 +1168,11 @@ mod tests {
                 "content_index": 0,
                 "delta": text,
             }),
-            // No `output_index` on the done item (the recorded-turn shape): the processor retires
-            // the slot keyed by the done event's own index before reading it back, so a done event
-            // carrying one would skip the item's text-signature capture.
+            // yusAgent (YA-04): `output_index` on the done item, as the real backend sends it
+            // (the upstream fixes `c12acadaa` and `42a07c13c` read the slot before retiring it).
             json!({
                 "type": "response.output_item.done",
+                "output_index": 0,
                 "item": { "type": "message", "id": message_id, "role": "assistant", "status": "completed", "content": [{ "type": "output_text", "text": text }] },
             }),
             json!({

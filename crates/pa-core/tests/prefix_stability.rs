@@ -1275,8 +1275,9 @@ async fn codex_ws_engine(
 /// - the turn after the call rides the connection's continuation (`previous_response_id`) and
 ///   sends only the call's result, as `custom_tool_call_output`: the next full request would
 ///   replay the call as the stream gave it (`custom_tool_call`), so the cached baseline matches;
-/// - after the resume, the history replays the first call as `custom_tool_call` (with its item
-///   id) and its result as `custom_tool_call_output`, never as a function call.
+/// - after the resume, the first request continues the last response with the new prompt only:
+///   the resumed history (the first call as `custom_tool_call` with its item id, its result as
+///   `custom_tool_call_output`, a text under its own item id) matches the cached baseline.
 #[tokio::test]
 async fn codex_websocket_apply_patch_replays_as_custom_and_continues() {
     const ADD: &str = "*** Begin Patch\n*** Add File: notes.txt\n+one\n*** End Patch\n";
@@ -1342,39 +1343,25 @@ async fn codex_websocket_apply_patch_replays_as_custom_and_continues() {
             "{input:#?}"
         );
     }
-    // The first request after the resume: a full request replays the first call as it was made;
-    // a continuation (cached connection) already proves the history converts as before.
+    // The first request after the resume (same process, connection still cached) continues the
+    // last response and sends only the new prompt. The provider sends the delta only when the
+    // resumed history converts to exactly the cached baseline (last full request plus the
+    // response's items): the first call as `custom_tool_call` with its item id, its result as
+    // `custom_tool_call_output`, and the text of `resp_2` under its own item id (text signature
+    // recorded from a done item carrying `output_index`).
     let after_resume = &requests[2];
-    if after_resume.get("previous_response_id").is_none() {
-        let input = after_resume["input"].as_array().expect("input");
-        let call = input
-            .iter()
-            .find(|item| item["type"] == "custom_tool_call")
-            .unwrap_or_else(|| panic!("no custom_tool_call after the resume: {input:#?}"));
-        assert_eq!(
-            call,
-            &json!({
-                "type": "custom_tool_call",
-                "id": "ctc_1",
-                "call_id": "call_1",
-                "name": "apply_patch",
-                "input": ADD,
-            })
-        );
-        assert!(
-            input.iter().any(
-                |item| item["type"] == "custom_tool_call_output" && item["call_id"] == "call_1"
-            ),
-            "{input:#?}"
-        );
-        assert!(
-            !input
-                .iter()
-                .any(|item| item["type"] == "function_call"
-                    || item["type"] == "function_call_output"),
-            "a freeform call never replays as a function call: {input:#?}"
-        );
-    }
+    assert_eq!(
+        after_resume.get("previous_response_id"),
+        Some(&json!("resp_2")),
+        "request 3: the resumed session continues the previous response: {after_resume:#}"
+    );
+    let input = after_resume["input"].as_array().expect("input");
+    assert_eq!(input.len(), 1, "request 3: {input:#?}");
+    assert_eq!(input[0]["role"], "user", "{input:#?}");
+    assert!(
+        input[0].to_string().contains("CODEX-WS-2"),
+        "request 3 sends the new prompt: {input:#?}"
+    );
 }
 
 /// The first request of a one-prompt session (a text answer: no kernel cell).
