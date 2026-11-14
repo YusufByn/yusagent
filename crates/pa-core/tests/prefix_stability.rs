@@ -506,10 +506,29 @@ async fn engine_for(
     variant: Variant,
     session: SessionManager,
 ) -> SessionEngine {
+    engine_with_model(
+        &model_json(api, server.port, variant),
+        "prefix-test-placeholder",
+        agent_dir,
+        cwd,
+        session,
+    )
+    .await
+}
+
+/// yusAgent (YA-03): the engine of `session` on the model `model` (`models.json` shape), with
+/// `api_key` as the provider credential (the loopback servers ignore it).
+async fn engine_with_model(
+    model: &Value,
+    api_key: &str,
+    agent_dir: &Path,
+    cwd: &Path,
+    session: SessionManager,
+) -> SessionEngine {
     let provider_model: pa_types::ai::Model =
-        serde_json::from_value(model_json(api, server.port, variant)).expect("provider model");
+        serde_json::from_value(model.clone()).expect("provider model");
     let loop_model: pa_agent::types::Model =
-        serde_json::from_value(model_json(api, server.port, variant)).expect("loop model");
+        serde_json::from_value(model.clone()).expect("loop model");
     create_session(SessionEngineConfig {
         on_late_sent_agent_message: None,
         semantic_edges: None,
@@ -520,11 +539,7 @@ async fn engine_for(
         agent_dir: agent_dir.to_path_buf(),
         model: Some(loop_model),
         thinking_level: None,
-        // A loopback-only placeholder: the server ignores it.
-        stream_fn: Some(real_stream_fn(
-            Some("prefix-test-placeholder".to_string()),
-            provider_model,
-        )),
+        stream_fn: Some(real_stream_fn(Some(api_key.to_string()), provider_model)),
         tools: Vec::new(),
         custom_system_prompt: None,
         prompt_guidelines: Vec::new(),
@@ -986,6 +1001,380 @@ async fn forked_session_keeps_the_tools_of_its_source_when_settings_change() {
         responses_system_prompt(&bodies[1]),
         "the fork's system prompt is the source's"
     );
+}
+
+// yusAgent (YA-03): Codex WebSocket
+
+/// The Codex model on the subscription route (`openai-codex`, WebSocket transport by
+/// default), served by the loopback WebSocket server at `port`.
+fn codex_ws_model_json(port: u16) -> Value {
+    json!({
+        "id": "gpt-6.1-terra", "name": "Codex WebSocket model", "api": "openai-codex-responses",
+        "provider": "openai-codex", "baseUrl": format!("http://127.0.0.1:{port}"),
+        "reasoning": false, "input": ["text"],
+        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+        "contextWindow": 200_000, "maxTokens": 32_000
+    })
+}
+
+/// A subscription access token shape (a JWT with the account claim the provider reads); unsigned,
+/// the loopback server ignores it.
+fn mock_codex_token() -> String {
+    use base64::Engine as _;
+    let encode =
+        |value: &Value| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string());
+    format!(
+        "{}.{}.sig",
+        encode(&json!({ "alg": "RS256", "typ": "JWT" })),
+        encode(&json!({ "https://api.openai.com/auth": { "chatgpt_account_id": "acct_test" } }))
+    )
+}
+
+/// A scripted Codex WebSocket endpoint: each `response.create` frame is recorded and answered
+/// by the next scripted turn, whatever the connection.
+struct CodexWsServer {
+    port: u16,
+    requests: Arc<Mutex<Vec<Value>>>,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl CodexWsServer {
+    async fn start(turns: Vec<Vec<Value>>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the websocket server");
+        let port = listener.local_addr().expect("server address").port();
+        let requests: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let turns = Arc::new(Mutex::new(std::collections::VecDeque::from(turns)));
+        let recorded = Arc::clone(&requests);
+        let task = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let recorded = Arc::clone(&recorded);
+                let turns = Arc::clone(&turns);
+                tokio::spawn(async move {
+                    if let Err(error) = serve_ws(socket, &turns, &recorded).await {
+                        eprintln!("websocket server: {error}");
+                    }
+                });
+            }
+        });
+        Self {
+            port,
+            requests,
+            _task: task,
+        }
+    }
+
+    fn requests(&self) -> Vec<Value> {
+        self.requests.lock().expect("requests").clone()
+    }
+}
+
+/// One connection: the HTTP upgrade, then one scripted turn per request frame.
+async fn serve_ws(
+    mut socket: TcpStream,
+    turns: &Mutex<std::collections::VecDeque<Vec<Value>>>,
+    recorded: &Mutex<Vec<Value>>,
+) -> std::io::Result<()> {
+    use sha1::Digest as _;
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        socket.read_exact(&mut byte).await?;
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&head).to_string();
+    let Some(key) = head.lines().find_map(|line| {
+        line.split_once(':')
+            .filter(|(name, _)| name.trim().eq_ignore_ascii_case("sec-websocket-key"))
+            .map(|(_, value)| value.trim().to_string())
+    }) else {
+        socket
+            .write_all(b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n")
+            .await?;
+        return Ok(());
+    };
+    let accept = {
+        use base64::Engine as _;
+        let digest = sha1::Sha1::digest(format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11"));
+        base64::engine::general_purpose::STANDARD.encode(digest)
+    };
+    socket
+        .write_all(
+            format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await?;
+    while let Some((opcode, payload)) = read_ws_frame(&mut socket).await? {
+        match opcode {
+            0x8 => {
+                socket.write_all(&[0x88, 0x02, 0x03, 0xE8]).await?;
+                break;
+            }
+            0x9 => write_ws_frame(&mut socket, 0xA, &payload).await?,
+            0x1 => {
+                let Ok(request) = serde_json::from_slice::<Value>(&payload) else {
+                    continue;
+                };
+                recorded.lock().expect("requests").push(request);
+                let events = turns.lock().expect("turns").pop_front().unwrap_or_default();
+                for event in events {
+                    write_ws_frame(&mut socket, 0x1, event.to_string().as_bytes()).await?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// One client frame (masked), `None` at end of stream.
+async fn read_ws_frame(socket: &mut TcpStream) -> std::io::Result<Option<(u8, Vec<u8>)>> {
+    let mut header = [0u8; 2];
+    if socket.read_exact(&mut header).await.is_err() {
+        return Ok(None);
+    }
+    let opcode = header[0] & 0x0F;
+    let masked = header[1] & 0x80 != 0;
+    let mut length = u64::from(header[1] & 0x7F);
+    if length == 126 {
+        let mut extended = [0u8; 2];
+        socket.read_exact(&mut extended).await?;
+        length = u64::from(u16::from_be_bytes(extended));
+    } else if length == 127 {
+        let mut extended = [0u8; 8];
+        socket.read_exact(&mut extended).await?;
+        length = u64::from_be_bytes(extended);
+    }
+    let mut mask = [0u8; 4];
+    if masked {
+        socket.read_exact(&mut mask).await?;
+    }
+    let mut payload = vec![0u8; length as usize];
+    socket.read_exact(&mut payload).await?;
+    if masked {
+        for (index, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[index % 4];
+        }
+    }
+    Ok(Some((opcode, payload)))
+}
+
+/// One server frame (unmasked).
+async fn write_ws_frame(socket: &mut TcpStream, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
+    let mut frame = vec![0x80 | opcode];
+    let length = payload.len();
+    if length < 126 {
+        frame.push(length as u8);
+    } else if length < 65_536 {
+        frame.push(126);
+        frame.extend_from_slice(&(length as u16).to_be_bytes());
+    } else {
+        frame.push(127);
+        frame.extend_from_slice(&(length as u64).to_be_bytes());
+    }
+    frame.extend_from_slice(payload);
+    socket.write_all(&frame).await
+}
+
+fn ws_completed(response_id: &str) -> Value {
+    json!({
+        "type": "response.completed",
+        "response": {
+            "id": response_id,
+            "status": "completed",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_tokens_details": { "cached_tokens": 0 },
+                "output_tokens_details": { "reasoning_tokens": 0 },
+            },
+        },
+    })
+}
+
+/// A turn whose only output is one `apply_patch` call, its input streamed then repeated whole
+/// on the done item (openai/codex `69231e1`, `codex-api/src/sse/responses.rs`).
+fn ws_apply_patch_turn(response_id: &str, call_id: &str, item_id: &str, patch: &str) -> Vec<Value> {
+    let item = |input: &str, status: &str| {
+        json!({
+            "type": "custom_tool_call", "id": item_id, "call_id": call_id,
+            "name": "apply_patch", "input": input, "status": status,
+        })
+    };
+    vec![
+        json!({ "type": "response.created", "response": { "id": response_id } }),
+        json!({
+            "type": "response.output_item.added", "output_index": 0,
+            "item": item("", "in_progress"),
+        }),
+        json!({
+            "type": "response.custom_tool_call_input.delta",
+            "output_index": 0, "item_id": item_id, "delta": patch,
+        }),
+        json!({
+            "type": "response.output_item.done", "output_index": 0,
+            "item": item(patch, "completed"),
+        }),
+        ws_completed(response_id),
+    ]
+}
+
+/// A turn whose only output is a text message.
+fn ws_text_turn(response_id: &str, message_id: &str, text: &str) -> Vec<Value> {
+    let item = |content: Value, status: &str| {
+        json!({
+            "type": "message", "id": message_id, "role": "assistant",
+            "status": status, "content": content,
+        })
+    };
+    vec![
+        json!({ "type": "response.created", "response": { "id": response_id } }),
+        json!({
+            "type": "response.output_item.added", "output_index": 0,
+            "item": item(json!([]), "in_progress"),
+        }),
+        json!({
+            "type": "response.content_part.added", "output_index": 0, "content_index": 0,
+            "part": { "type": "output_text", "text": "" },
+        }),
+        json!({
+            "type": "response.output_text.delta", "output_index": 0, "content_index": 0,
+            "delta": text,
+        }),
+        json!({
+            "type": "response.output_item.done", "output_index": 0,
+            "item": item(json!([{ "type": "output_text", "text": text }]), "completed"),
+        }),
+        ws_completed(response_id),
+    ]
+}
+
+async fn codex_ws_engine(
+    port: u16,
+    agent_dir: &Path,
+    cwd: &Path,
+    session: SessionManager,
+) -> SessionEngine {
+    engine_with_model(
+        &codex_ws_model_json(port),
+        &mock_codex_token(),
+        agent_dir,
+        cwd,
+        session,
+    )
+    .await
+}
+
+/// yusAgent (YA-03): `apply_patch` through the agent loop on the Codex WebSocket. A session
+/// makes a real `apply_patch` call, then is resumed and makes another. Each time:
+/// - `apply_patch` goes out as a `custom` tool;
+/// - the turn after the call rides the connection's continuation (`previous_response_id`) and
+///   sends only the call's result, as `custom_tool_call_output`: the next full request would
+///   replay the call as the stream gave it (`custom_tool_call`), so the cached baseline matches;
+/// - after the resume, the history replays the first call as `custom_tool_call` (with its item
+///   id) and its result as `custom_tool_call_output`, never as a function call.
+#[tokio::test]
+async fn codex_websocket_apply_patch_replays_as_custom_and_continues() {
+    const ADD: &str = "*** Begin Patch\n*** Add File: notes.txt\n+one\n*** End Patch\n";
+    const UPDATE: &str =
+        "*** Begin Patch\n*** Update File: notes.txt\n@@\n-one\n+two\n*** End Patch\n";
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = CodexWsServer::start(vec![
+        ws_apply_patch_turn("resp_1", "call_1", "ctc_1", ADD),
+        ws_text_turn("resp_2", "msg_2", "Added."),
+        ws_apply_patch_turn("resp_3", "call_3", "ctc_3", UPDATE),
+        ws_text_turn("resp_4", "msg_4", "Updated."),
+    ])
+    .await;
+
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let engine = codex_ws_engine(server.port, &agent_dir, &cwd, session).await;
+    run_prompt(&engine, "CODEX-WS-1: create notes.txt").await;
+    drop(engine);
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("notes.txt")).expect("notes.txt"),
+        "one\n"
+    );
+
+    let resumed = SessionManager::open(&cwd, &sessions, &path);
+    let engine = codex_ws_engine(server.port, &agent_dir, &cwd, resumed).await;
+    run_prompt(&engine, "CODEX-WS-2: update notes.txt").await;
+    drop(engine);
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("notes.txt")).expect("notes.txt"),
+        "two\n"
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4, "two turns per session: {requests:#?}");
+    for (index, request) in requests.iter().enumerate() {
+        let apply_patch = request["tools"]
+            .as_array()
+            .and_then(|tools| tools.iter().find(|tool| tool["name"] == "apply_patch"))
+            .unwrap_or_else(|| panic!("request {}: no apply_patch tool", index + 1));
+        assert_eq!(apply_patch["type"], "custom", "request {}", index + 1);
+    }
+    for (index, response_id, call_id) in [(1, "resp_1", "call_1"), (3, "resp_3", "call_3")] {
+        let request = &requests[index];
+        assert_eq!(
+            request.get("previous_response_id"),
+            Some(&json!(response_id)),
+            "request {}: the turn after apply_patch continues the previous response: {request:#}",
+            index + 1
+        );
+        let input = request["input"].as_array().expect("input");
+        assert_eq!(input.len(), 1, "request {}: {input:#?}", index + 1);
+        assert_eq!(input[0]["type"], "custom_tool_call_output");
+        assert_eq!(input[0]["call_id"], call_id);
+        assert!(
+            input[0]["output"]
+                .as_str()
+                .is_some_and(|output| output.starts_with("Exit code: 0\n")),
+            "{input:#?}"
+        );
+    }
+    // The first request after the resume: a full request replays the first call as it was made;
+    // a continuation (cached connection) already proves the history converts as before.
+    let after_resume = &requests[2];
+    if after_resume.get("previous_response_id").is_none() {
+        let input = after_resume["input"].as_array().expect("input");
+        let call = input
+            .iter()
+            .find(|item| item["type"] == "custom_tool_call")
+            .unwrap_or_else(|| panic!("no custom_tool_call after the resume: {input:#?}"));
+        assert_eq!(
+            call,
+            &json!({
+                "type": "custom_tool_call",
+                "id": "ctc_1",
+                "call_id": "call_1",
+                "name": "apply_patch",
+                "input": ADD,
+            })
+        );
+        assert!(
+            input.iter().any(
+                |item| item["type"] == "custom_tool_call_output" && item["call_id"] == "call_1"
+            ),
+            "{input:#?}"
+        );
+        assert!(
+            !input
+                .iter()
+                .any(|item| item["type"] == "function_call"
+                    || item["type"] == "function_call_output"),
+            "a freeform call never replays as a function call: {input:#?}"
+        );
+    }
 }
 
 /// The first request of a one-prompt session (a text answer: no kernel cell).

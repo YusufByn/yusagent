@@ -4,7 +4,7 @@
 //! and `codex-rs/protocol/src/models.rs`.
 
 use super::*;
-use crate::providers::ya_freeform::{freeform_tool_parameters, FREEFORM_CALL_KEY};
+use crate::providers::ya_freeform::freeform_tool_parameters;
 use crate::types::{AssistantContent, Tool};
 
 const PATCH: &str = "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch\n";
@@ -116,7 +116,6 @@ fn assert_freeform_call(message: &AssistantMessage) {
     assert_eq!(call.id, "call_p|ctc_1");
     assert_eq!(call.name, "apply_patch");
     assert_eq!(call.arguments.get("input"), Some(&json!(PATCH)));
-    assert_eq!(call.rest.get(FREEFORM_CALL_KEY), Some(&json!("ctc_1")));
 }
 
 /// SSE: the events arrive as `data:` frames, one of them split across two network chunks.
