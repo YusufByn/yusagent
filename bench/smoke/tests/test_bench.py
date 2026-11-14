@@ -713,6 +713,22 @@ class CodexConfig(unittest.TestCase):
             self.assertFalse((Path(tmp) / "home" / "config.toml").exists())
 
 
+class CodexFullBodies(unittest.TestCase):
+    """YA-14 : requêtes de génération en corps complet, lues au reverse proxy (biais contre
+    Codex : `encrypted_content` retiré des items rejoués)."""
+
+    def test_full_bodies(self):
+        def req(ts, session, transport="websocket", continuation=True, generate=None):
+            return {"event": "request", "ts": ts, "session": session, "transport": transport,
+                    "continuation": continuation, "generate": generate}
+        log = [req(1, "a", continuation=False, generate=False),  # prewarm : exclu
+               req(2, "a"), req(3, "a", continuation=False), req(4, "a"),
+               req(5, "b", continuation=False), req(6, "b", transport="sse", continuation=None),
+               {"event": "response", "ts": 7, "session": "a"}]
+        self.assertEqual(codex_arm.full_bodies(log),
+                         {"generation_requests": 5, "full_body": 3, "after_first": 2})
+
+
 class CaptureCodex(unittest.TestCase):
     """YA-14 : le serveur de capture reconnaît Codex (`additional_tools`, tool libre `exec`)."""
 

@@ -628,6 +628,10 @@ def ya14_display(kept: list[dict]) -> list[str]:
         ("Appels prewarm (total)",
          lambda side: str(sum((r["calls"].get("by_kind") or {}).get("prewarm", 0)
                               for r in collect(side, lambda r: r)))),
+        ("Requêtes en corps complet, hors premier (total ; Codex seul)",
+         lambda side: (lambda v: str(sum(v)) if v else "n/a")(collect(
+             side, lambda r: ((r.get("codex") or {}).get("full_bodies") or {})
+             .get("after_first")))),
         ("Quota de l'abonnement, dernier relevé % (Codex seul)",
          lambda side: (lambda v: f"{v[-1]}" if v else "n/a")(collect(
              side, lambda r: ((r.get("codex") or {}).get("rate_limits") or {})

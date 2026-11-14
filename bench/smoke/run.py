@@ -1351,6 +1351,19 @@ def write_report(run_dir: Path, report: dict) -> None:
         lines.append(f"| {r['task']} | {r['run']} | {s.get('sessions')} | {s.get('calls')} | "
                      f"{fmt(s.get('cost'))} | {fmt(pct(s.get('cost_share')), 1)} | "
                      f"{fmt(s.get('cache_session_rate'))} | {s.get('server_misses')} |")
+    if h.get("harness") == "codex":
+        lines += ["", "## Bras Codex CLI : requêtes en corps complet", "",
+                  "Requêtes de génération (prewarm exclu) parties sans `previous_response_id` "
+                  "(WebSocket) ou en SSE, lues au reverse proxy. Biais contre Codex : un corps "
+                  "complet rejoue ses items sans leur `encrypted_content` (provider personnalisé, "
+                  "plan YA-14, écart 1). « Hors premier » : sauf la première requête de "
+                  "génération de sa session.", "",
+                  "| Tâche | Run | Requêtes de génération | Corps complet | Dont hors premier |",
+                  "|---|---|---|---|---|"]
+        for r in report["results"]:
+            f = (r.get("codex") or {}).get("full_bodies") or {}
+            lines.append(f"| {r['task']} | {r['run']} | {f.get('generation_requests')} | "
+                         f"{f.get('full_body')} | {f.get('after_first')} |")
     lines += ["", "## Version des tâches", "",
               "Empreinte du dossier de la tâche (`task.toml`, `prompt.md`, `hidden/`, fichiers) : "
               "`baseline.py` refuse de mélanger deux versions d'une tâche.", ""]

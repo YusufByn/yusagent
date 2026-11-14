@@ -430,6 +430,26 @@ def edits(ev: dict) -> dict:
             "first_try_rate": done / attempts if attempts else None, "source": "file_change"}
 
 
+def full_bodies(proxy_log: list[dict]) -> dict:
+    """Requêtes de génération (`generate` différent de `false`, prewarm exclu) parties en
+    corps complet, lues au reverse proxy : WebSocket sans `previous_response_id`, ou SSE (Codex
+    n'en met que sur WebSocket, `core/src/client.rs:2356-2392` au tag). Biais contre Codex :
+    avec un provider dont le nom n'est pas « OpenAI », un corps complet rejoue ses items sans
+    leur `encrypted_content` (hors raisonnement et compaction, `core/src/client.rs:1231-1249`).
+    `after_first` : hors première requête de génération de sa session (rien à rejouer avant)."""
+    gens = sorted((e for e in proxy_log if e.get("event") == "request"
+                   and e.get("transport") in ("websocket", "sse") and e.get("generate") is not False),
+                  key=lambda e: e.get("ts") or 0)
+    seen: set = set()
+    full = after_first = 0
+    for e in gens:
+        is_full = e.get("transport") == "sse" or e.get("continuation") is False
+        full += is_full
+        after_first += is_full and e.get("session") in seen
+        seen.add(e.get("session"))
+    return {"generation_requests": len(gens), "full_body": full, "after_first": after_first}
+
+
 def final(ev: dict) -> dict:
     """Dernier état de la session principale, au format de `metrics.final_assistant`."""
     stop = {"completed": "stop", "failed": "error"}.get(ev["status"])
@@ -457,7 +477,8 @@ def session(out: Path, proxy_log: list[dict]) -> dict:
     subs = [r for r in recs if r["sessionId"] != ev["thread_id"]]
     return {"records": main, "sub_records": subs, "entries": [], "sub_entries": [],
             "codex": {"events": ev, "final": final(ev), "markers": markers(paths),
-                      "edits": edits(ev), "rollouts": [p.name for p in paths],
+                      "edits": edits(ev), "full_bodies": full_bodies(proxy_log),
+                      "rollouts": [p.name for p in paths],
                       "threads": sorted({r["sessionId"] for r in recs}), **counts}}
 
 
