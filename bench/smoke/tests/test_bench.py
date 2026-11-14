@@ -814,6 +814,20 @@ class SecretMasking(unittest.TestCase):
                          {proxies.INSTALLATION_ID: proxies.MASKED, "turn_id": "t1"})
         self.assertEqual(entry["bytes_up"], len(raw))
 
+    def test_continue_session_scan(self):
+        continue_session = load("smoke_continue_session", SMOKE / "continue_session.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self.real_cache(Path(tmp) / "cache")
+            out = Path(tmp) / "continue-1"
+            (out / "sessions").mkdir(parents=True)
+            (out / "sessions" / "s.jsonl").write_text(f'{{"user": "{self.USER}"}}\n')
+            (out / "out.jsonl").write_text("{}\n")
+            scan = continue_session.secret_scan(out, cache)
+            written = json.loads((out / "secret-scan.json").read_text())
+        self.assertEqual(scan["files_with_hits"], {"sessions/s.jsonl": 1})
+        self.assertEqual(written, scan)
+        self.assertNotIn(self.USER, json.dumps(scan))
+
 
 class CaptureCodex(unittest.TestCase):
     """YA-14 : le serveur de capture reconnaît Codex (`additional_tools`, tool libre `exec`)."""
