@@ -83,13 +83,14 @@ const CODEX_SHELL_NATIVE: Variant = Variant {
     tools: &["python_repl", "apply_patch", "exec_command", "write_stdin"],
     ..CODEX_DEFAULT
 };
-/// yusAgent (YA-09): the arms of the `reasoningSummary` A/B, on a reasoning model.
+/// yusAgent (YA-09): `reasoningSummary` on a reasoning model, unset (the default, `"off"`
+/// since 15/11/2026) and set to `"auto"`.
 const CODEX_REASONING: Variant = Variant {
     reasoning: true,
     ..CODEX_DEFAULT
 };
-const CODEX_REASONING_SUMMARY_OFF: Variant = Variant {
-    settings: Some(r#"{"reasoningSummary": "off"}"#),
+const CODEX_REASONING_SUMMARY_AUTO: Variant = Variant {
+    settings: Some(r#"{"reasoningSummary": "auto"}"#),
     reasoning: true,
     ..CODEX_DEFAULT
 };
@@ -924,30 +925,11 @@ async fn codex_shell_native_prefix_is_stable_across_requests() {
 }
 
 /// yusAgent (YA-09): a reasoning model at effort high, default settings: every request carries
-/// `reasoning: {effort, summary: "auto"}`, as on `main`, and the prefix is stable.
+/// `reasoning: {effort}` without `summary` (the default `"off"`), and the prefix is stable.
 #[tokio::test]
-async fn codex_reasoning_summary_auto_prefix_is_stable_across_requests() {
+async fn codex_reasoning_summary_default_prefix_is_stable_across_requests() {
     let bodies = prefix_scenario(Api::OpenAiResponses, CODEX_REASONING).await;
     for (index, body) in bodies.iter().enumerate() {
-        let request = request_object(Api::OpenAiResponses, index + 1, body);
-        assert_eq!(
-            request.get("reasoning"),
-            Some(&json!({"effort": "high", "summary": "auto"})),
-            "request {}",
-            index + 1
-        );
-    }
-}
-
-/// yusAgent (YA-09): `reasoningSummary: "off"`: every request carries `reasoning: {effort}`
-/// without `summary`, the prefix is stable, and the tools and every other parameter are those
-/// of the default arm, byte for byte. The system prompt is left out of the comparison: the
-/// two arms run in different temp dirs.
-#[tokio::test]
-async fn codex_reasoning_summary_off_prefix_is_stable_across_requests() {
-    let off = prefix_scenario(Api::OpenAiResponses, CODEX_REASONING_SUMMARY_OFF).await;
-    let Some(off_first) = off.first() else { return };
-    for (index, body) in off.iter().enumerate() {
         let request = request_object(Api::OpenAiResponses, index + 1, body);
         assert_eq!(
             request.get("reasoning"),
@@ -956,24 +938,45 @@ async fn codex_reasoning_summary_off_prefix_is_stable_across_requests() {
             index + 1
         );
     }
-    let auto = prefix_scenario(Api::OpenAiResponses, CODEX_REASONING).await;
-    let auto_first = auto.first().expect("the default arm ran");
-    let (mut fixed_off, _) = split_request(
-        Api::OpenAiResponses,
-        &request_object(Api::OpenAiResponses, 1, off_first),
-    );
+}
+
+/// yusAgent (YA-09): `reasoningSummary: "auto"` set explicitly: every request carries
+/// `reasoning: {effort, summary: "auto"}`, as upstream, the prefix is stable, and the tools and
+/// every other parameter are those of the default arm, byte for byte. The system prompt is
+/// left out of the comparison: the two arms run in different temp dirs.
+#[tokio::test]
+async fn codex_reasoning_summary_auto_prefix_is_stable_across_requests() {
+    let auto = prefix_scenario(Api::OpenAiResponses, CODEX_REASONING_SUMMARY_AUTO).await;
+    let Some(auto_first) = auto.first() else {
+        return;
+    };
+    for (index, body) in auto.iter().enumerate() {
+        let request = request_object(Api::OpenAiResponses, index + 1, body);
+        assert_eq!(
+            request.get("reasoning"),
+            Some(&json!({"effort": "high", "summary": "auto"})),
+            "request {}",
+            index + 1
+        );
+    }
+    let default = prefix_scenario(Api::OpenAiResponses, CODEX_REASONING).await;
+    let default_first = default.first().expect("the default arm ran");
     let (mut fixed_auto, _) = split_request(
         Api::OpenAiResponses,
         &request_object(Api::OpenAiResponses, 1, auto_first),
     );
+    let (mut fixed_default, _) = split_request(
+        Api::OpenAiResponses,
+        &request_object(Api::OpenAiResponses, 1, default_first),
+    );
     // The prompt cache key is the session id: one per session.
     for key in ["reasoning", "prompt_cache_key", "input[0] (system)"] {
-        fixed_off.remove(key);
         fixed_auto.remove(key);
+        fixed_default.remove(key);
     }
     assert_eq!(
-        Value::Object(fixed_off).to_string(),
         Value::Object(fixed_auto).to_string(),
+        Value::Object(fixed_default).to_string(),
         "only `reasoning` differs between the arms"
     );
 }
@@ -1024,6 +1027,64 @@ async fn resumed_session_keeps_its_tools_when_settings_change() {
     }
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
+}
+
+/// yusAgent (YA-09): a session from before 15/11/2026 (header with `yaTools`, without
+/// `yaRequest`) was sent with `summary: "auto"` and keeps it when resumed with the default
+/// settings (`"off"`); the field is then written as `"auto"`.
+#[tokio::test]
+async fn resumed_legacy_session_keeps_summary_auto() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_REASONING, session).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(
+        header.rest.get("yaRequest"),
+        Some(&json!({"reasoningSummary": "off"})),
+        "{header:?}"
+    );
+
+    // The header as a binary from before 15/11/2026 wrote it: `yaTools` only.
+    let text = std::fs::read_to_string(&path).expect("session file");
+    let (first, rest) = text.split_once('\n').expect("header line");
+    let mut first: Value = serde_json::from_str(first).expect("header json");
+    first
+        .as_object_mut()
+        .expect("header object")
+        .remove("yaRequest");
+    assert!(first.get("yaTools").is_some(), "{first}");
+    std::fs::write(&path, format!("{first}\n{rest}")).expect("rewrite header");
+
+    let resumed = SessionManager::open(&cwd, &sessions, &path);
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_REASONING, resumed).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2, "one request per prompt");
+    assert_eq!(
+        request_object(api, 1, &bodies[0]).get("reasoning"),
+        Some(&json!({"effort": "high"}))
+    );
+    assert_eq!(
+        request_object(api, 2, &bodies[1]).get("reasoning"),
+        Some(&json!({"effort": "high", "summary": "auto"}))
+    );
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(
+        header.rest.get("yaRequest"),
+        Some(&json!({"reasoningSummary": "auto"})),
+        "{header:?}"
+    );
 }
 
 /// yusAgent (YA-03): a fork keeps the frozen tools of its source. A Codex session created with
@@ -1478,30 +1539,35 @@ async fn codex_ws_reasoning_requests(settings: Option<&str>) -> Option<Vec<Value
     Some(requests)
 }
 
-/// yusAgent (YA-09): on the Codex WebSocket (the bench route), `reasoningSummary` unset sends
-/// `summary: "auto"` and `"off"` sends no `summary`, in the full request and in the
-/// continuation.
+/// yusAgent (YA-09): on the Codex WebSocket (the bench route), `reasoningSummary` unset (the
+/// default) and `"off"` send no `summary`, and `"auto"` sends `summary: "auto"`, in the full
+/// request and in the continuation.
 #[tokio::test]
 async fn codex_websocket_reasoning_summary_follows_the_setting() {
-    let Some(auto) = codex_ws_reasoning_requests(None).await else {
+    let Some(default) = codex_ws_reasoning_requests(None).await else {
         return;
     };
     let off = codex_ws_reasoning_requests(Some(r#"{"reasoningSummary": "off"}"#))
         .await
         .expect("fixture");
+    let auto = codex_ws_reasoning_requests(Some(r#"{"reasoningSummary": "auto"}"#))
+        .await
+        .expect("fixture");
+    for (arm, requests) in [("default", &default), ("off", &off)] {
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(
+                request["reasoning"],
+                json!({"effort": "high"}),
+                "{arm}, request {}",
+                index + 1
+            );
+        }
+    }
     for (index, request) in auto.iter().enumerate() {
         assert_eq!(
             request["reasoning"],
             json!({"effort": "high", "summary": "auto"}),
             "auto, request {}",
-            index + 1
-        );
-    }
-    for (index, request) in off.iter().enumerate() {
-        assert_eq!(
-            request["reasoning"],
-            json!({"effort": "high"}),
-            "off, request {}",
             index + 1
         );
     }
