@@ -59,9 +59,11 @@ Une passe du bras A sur le même binaire vérifie que son corps garde `summary: 
    - IC qui exclut 0 **et** |écart| > 10 %, avec B moins cher : **B retenu**. Le seuil de 10 % vient de la sensibilité du banc (journal du CDC, constat du 14/11/2026).
    - Sinon : coût **non distinguable**, on passe à la latence.
 3. **Latence**, si le coût n'a pas tranché : B est retenu seulement si les **deux** conditions sont remplies.
-   - **Latence fixe par appel avec raisonnement** : la borne haute de l'IC 95 % de B − A est sous 0.
-   - **Durée de la phase agent** : la borne haute de l'IC 95 % de B/A − 1 est sous 0.
+   - **Durée de la phase agent**, appariée par tâche : l'IC 95 % de B/A − 1 exclut 0 **et** |écart| > 10 %, avec B plus court. Même seuil que le coût, pour la même raison (sensibilité du banc).
+   - **Latence fixe par appel avec raisonnement** (mécanisme) : la borne haute de l'IC 95 % de B − A est sous 0.
    - Sinon : **A gardé**.
+
+   Ligne « condition remplie » de `ya09-summary-mesures.py`, population « toutes ».
 
 Verdicts possibles : A gardé (résolution, coût ou latence) ; B retenu (résolution, coût ou latence).
 
@@ -72,10 +74,23 @@ Méthode de `ya14-codex-20261114-mesures.py` (`load`, `ols`), appliquée aux deu
 - **Appels** : requêtes de génération lues au reverse proxy (`tasks/<tâche>/run-1/proxy.ndjson`), chaque `request` appariée à sa `response` dans l'ordre, prewarm exclu (`generate: false`). Temps modèle = horodatage de la réponse − horodatage de la requête. Tokens de sortie et de raisonnement lus dans l'usage de la réponse.
 - **Appel avec raisonnement** : `reasoning_tokens` > 0.
 - **Latence fixe** d'un bras : ordonnée à l'origine des moindres carrés du temps modèle sur les tokens de sortie, sur ses appels avec raisonnement des paires valides. Différence B − A, en secondes.
-- **Phase agent** : `results[0].agent.seconds` de `report.json`. Moyenne par tâche sur les passes valides de chaque bras, puis écart B/A − 1 sur la somme des moyennes par tâche.
+- **Phase agent** : `agent.seconds` du résultat de la tâche (`report.json`). Moyenne par tâche sur les passes valides de chaque bras, puis écart B/A − 1 sur la somme des moyennes par tâche, appariée par tâche (mêmes tâches dans les deux bras). L'écart moyen par tâche en secondes est affiché sans décider.
 - **Population** : toutes les tâches avec au moins une paire valide. La latence par appel ne dépend pas de la résolution. Le sous-ensemble « résolues par les deux bras » est affiché sans décider.
-- **IC 95 %** : bootstrap sur les tâches, 10 000 tirages, graine 0. À chaque tirage, on tire les tâches avec remise, on prend tous les appels (ou toutes les durées) des tâches tirées dans chaque bras, et on refait l'ajustement.
-- Le script de mesure (`bench/smoke/ab/ya09-summary-mesures.py`, bibliothèque standard, lecture seule) sera écrit et versionné **avant le run**, selon cette méthode.
+- **IC 95 %** : bootstrap sur les tâches (`ab_stats.bootstrap`), 10 000 tirages, graine 0. À chaque tirage, on tire les tâches avec remise, on prend tous les appels (ou toutes les durées) des tâches tirées dans chaque bras, et on refait l'ajustement.
+- **Paires écartées** : `ab_stats.units_from_plan`, même règle d'écart qu'`ab_stats.py`.
+- **Script** : `bench/smoke/ab/ya09-summary-mesures.py` (bibliothèque standard, lecture seule), versionné avant le run :
+
+  ```bash
+  python3 -I bench/smoke/ab/ya09-summary-mesures.py bench/smoke/runs/ab-<horodatage>
+  ```
+
+- **Validation sur le run YA-14** (`python3 -I bench/smoke/ab/ya09-summary-mesures.py bench/smoke/runs/ab-20261114T201248Z`, A = yusAgent, B = Codex CLI). Sur la population « communes », celle du rapport YA-14, le script retrouve les chiffres du rapport :
+  - avec raisonnement, A : 191 appels, 3,62 s + 14,3 ms/token ; B : 100 appels, 0,73 s + 18,1 ms/token ;
+  - sans raisonnement, A : 64 appels, 0,84 s + 17,6 ms/token ; B : 35 appels, 0,79 s + 18,3 ms/token ;
+  - phase agent : 83,0 s contre 44,2 s ;
+  - temps modèle médian par appel : 4,26 s contre 2,89 s.
+
+  Sur la population « toutes » (10 tâches), latence fixe B − A −2,56 s [−2,91 ; −2,13], phase agent −34,9 % [−49,3 ; −18,5].
 
 ### Affiché sans décider
 
