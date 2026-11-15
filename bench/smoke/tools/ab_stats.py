@@ -23,7 +23,8 @@ sans activité des journaux (`proxy.ndjson`, `.usage.ndjson`) pendant au moins
 `--stall-gap` secondes avant l'arrêt (flux bloqué), réponse en `stopReason` `error` (session
 principale ou sous-agent), requête proxy à statut autre que 101 ou 200 (429…), lancement de
 `run.py` en échec (A/B entrelacé). Les autres incidents (`timeout` d'une tâche longue,
-`agent_error` ou `harness_error` sans erreur provider) sont listés sans écarter l'unité.
+`agent_error` ou `harness_error` sans erreur provider, anomalies de `report.json` comme une
+bascule SSE) sont listés sans écarter l'unité.
 
 Publie, en Markdown sur la sortie standard :
   - unités retenues et écartées (avec la cause) ;
@@ -160,6 +161,9 @@ def incidents(run: Path, result: dict, stall_gap: float) -> list[tuple[str, bool
                 found.append((f"Codex, tour en échec « {str(message)[:120]} »", True))
     if status in ("agent_error", "harness_error") and not any(p for _, p in found):
         found.append((f"statut `{status}` sans erreur provider", False))
+    # Anomalies du rapport (`run.py`, ex. bascule SSE) : reprises sans écarter l'unité. Celles
+    # qui recoupent une erreur provider (flux bloqué, erreur Codex) l'écartent déjà ci-dessus.
+    found += [(f"anomalie du rapport : {a}", False) for a in result.get("anomalies") or []]
     return found
 
 
@@ -489,8 +493,8 @@ def main() -> None:
 
     out += ["", "## Incidents", "",
             "Écartants (erreur provider) : section « Unités écartées ». Non écartants :", ""]
-    notes = [f"- passe {u['pass']}, {u['task']} : " + "; ".join(u["notes"])
-             for u in units if u["notes"]]
+    notes = [f"- passe {u['pass']}, {u['task']}{' (unité écartée)' if u['causes'] else ''} : "
+             + "; ".join(u["notes"]) for u in units if u["notes"]]
     out += notes or ["- aucun"]
 
     if ab is not None:

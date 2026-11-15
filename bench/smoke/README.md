@@ -233,7 +233,7 @@ Communs aux deux bras depuis YA-14 (sans effet sur les 120 bras des A/B de YA-03
 | `baseline.py` | Baseline : bruit par tâche sur plusieurs runs de `main` (`baseline/<modèle>.json`, versionné) |
 | `tools/ab_stats.py` | Statistiques d'un A/B apparié (entrelacé ou par passes) : coût à cache théorique (décision), rapporté et pessimiste, écarts appariés par tâche, IC par bootstrap sur les tâches, écart automatique sur erreur provider, mesures par bras, invalidations et incidents ; `--verdict ya14-codex` (règle de `ab/ya14-codex-plan.md`) |
 | `tools/check_warmup.py` | Contrôles d'une chauffe lancée avec `--log-bodies` (tâche ou reprise) : `reasoning` des corps, corps complets, WebSocket et suite de conversation au proxy, `reasoning_tokens`, champs `yaRequest` et `yaTools` de l'en-tête de session, blocs de raisonnement et `encrypted_content`, statut et ruptures du rapport (YA-09) |
-| `tests/test_bench.py` | Tests sans modèle : cache théorique, garde-fou d'inactivité, plan de l'A/B, écart sur erreur provider |
+| `tests/test_bench.py` | Tests sans modèle : cache théorique, garde-fou d'inactivité, plan de l'A/B, écart sur erreur provider, anomalies du rapport en incidents non écartants |
 | `ab/` | Rapports d'A/B (versionnés) |
 | `prices.json` | Tarifs API (source, date) |
 | `models/openai-codex.json` | Fiches des modèles absents du catalogue (`gpt-6.1-terra`) |
