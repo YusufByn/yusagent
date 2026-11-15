@@ -95,6 +95,13 @@ const CODEX_REASONING_SUMMARY_AUTO: Variant = Variant {
     ..CODEX_DEFAULT
 };
 
+/// yusAgent (YA-09, lever `bash()`): `bashWaitSeconds: 30`, the B arm of the A/B
+/// (`bench/smoke/ab/ya09-bash-plan.md`).
+const CODEX_BASH_WAIT_30: Variant = Variant {
+    settings: Some(r#"{"bashWaitSeconds": 30}"#),
+    ..CODEX_DEFAULT
+};
+
 /// Process env is shared by the tests of this binary: one scenario at a time.
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -978,6 +985,80 @@ async fn codex_reasoning_summary_auto_prefix_is_stable_across_requests() {
         Value::Object(fixed_auto).to_string(),
         Value::Object(fixed_default).to_string(),
         "only `reasoning` differs between the arms"
+    );
+}
+
+/// yusAgent (YA-09, lever `bash()`): two sessions of one project, the default settings then
+/// `bashWaitSeconds: 30`. Each prefix is stable across its requests; the system prompts differ
+/// only by the window of the `await bash(cmd)` line, and the tools and every other parameter are
+/// identical. The header of the second session freezes the window; the first one's `yaRequest`
+/// is the one written before this setting.
+#[tokio::test]
+async fn codex_bash_wait_changes_only_the_await_line() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let mut headers = Vec::new();
+    for variant in [CODEX_DEFAULT, CODEX_BASH_WAIT_30] {
+        std::fs::write(
+            agent_dir.join("settings.json"),
+            variant.settings.unwrap_or("{}"),
+        )
+        .expect("settings.json");
+        let mut session = SessionManager::in_memory(&cwd);
+        let path = session.materialize_session_file(Some(sessions.clone()));
+        let engine = engine_for(api, &server, &agent_dir, &cwd, variant, session).await;
+        for prompt in PROMPTS {
+            run_prompt(&engine, prompt).await;
+        }
+        drop(engine);
+        let header = pa_core::session::manager::read_session_header(&path).expect("header");
+        headers.push(header.rest.get("yaRequest").cloned());
+    }
+    assert_eq!(
+        headers,
+        [
+            Some(json!({"reasoningSummary": "off"})),
+            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30})),
+        ]
+    );
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2 * EXPECTED_REQUESTS, "two sessions");
+    let (default, waited) = bodies.split_at(EXPECTED_REQUESTS);
+    assert_prefix_stable(api, default);
+    assert_prefix_stable(api, waited);
+    let upstream_line = "`await bash(cmd)` waits at most 1 second.";
+    let waited_line = "`await bash(cmd)` waits at most 30 seconds.";
+    let (default_prompt, waited_prompt) = (
+        responses_system_prompt(&default[0]),
+        responses_system_prompt(&waited[0]),
+    );
+    assert_eq!(
+        default_prompt.matches(upstream_line).count(),
+        1,
+        "{default_prompt}"
+    );
+    assert!(!waited_prompt.contains(upstream_line), "{waited_prompt}");
+    assert_eq!(
+        waited_prompt.replacen(waited_line, upstream_line, 1),
+        default_prompt,
+        "only the window differs"
+    );
+    let (mut fixed_default, _) = split_request(api, &request_object(api, 1, &default[0]));
+    let (mut fixed_waited, _) = split_request(api, &request_object(api, 1, &waited[0]));
+    // The prompt cache key is the session id: one per session.
+    for key in ["prompt_cache_key", "input[0] (system)"] {
+        fixed_default.remove(key);
+        fixed_waited.remove(key);
+    }
+    assert_eq!(
+        Value::Object(fixed_waited).to_string(),
+        Value::Object(fixed_default).to_string(),
+        "tools and parameters are identical"
     );
 }
 

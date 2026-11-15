@@ -286,6 +286,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let ya_shell_tool = settings.settings().shell_tool;
     // yusAgent (YA-09): `reasoningSummary`, captured before the move too.
     let ya_reasoning_summary = settings.settings().reasoning_summary;
+    let ya_bash_wait_seconds = settings.settings().bash_wait_seconds;
     // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
     let cache_retention =
         super::cache_retention::resolve_from_env(settings.settings().cache_retention);
@@ -333,6 +334,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let ya_request = super::ya_request::freeze_session_request(
         &mut *wiring.session.lock().await,
         ya_reasoning_summary,
+        ya_bash_wait_seconds,
     );
     let stream_fn = super::ya_request::scoped_stream_fn(stream_fn, ya_request);
     // yusAgent (YA-03): the native tools of the model's family, frozen for the session in its
@@ -579,6 +581,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         on_unavailable_skills,
         on_bootstrap_result,
         ya_tools.native_shell,
+        ya_request.bash_wait_seconds,
     );
     let mut tools = config.tools.clone();
     if !tools.iter().any(|tool| tool.name() == PYTHON_TOOL_NAME) {
@@ -720,6 +723,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             append_system_prompt: Some(resources.append_system_prompt.join("\n\n")),
             // yusAgent (YA-03): the prompt documents the session's native tools.
             ya_tool_choice: ya_tools,
+            // yusAgent (YA-09): the `await bash(cmd)` window of the session.
+            ya_bash_wait_seconds: Some(ya_request.bash_wait_seconds),
             ..Default::default()
         },
     );

@@ -137,6 +137,9 @@ pub struct IpythonKernelProvisionerOptions {
     /// yusAgent (YA-03): `shellTool: "native"`, shell commands go through `exec_command` and
     /// the bootstrap leaves `bash` out of the namespace (`bootstrap::ya_native_shell`).
     pub ya_native_shell: bool,
+    /// yusAgent (YA-09): `bashWaitSeconds`, the `await bash(cmd)` window; `None` or 1 keeps the
+    /// upstream bootstrap (`bootstrap::ya_bash_wait`).
+    pub ya_bash_wait_seconds: Option<std::num::NonZeroU32>,
 }
 
 /// Why and how long one startup failed, published through the shared startup
@@ -1072,6 +1075,11 @@ async fn start_kernel_impl(
     } else {
         bootstrap_code
     };
+    // yusAgent (YA-09): the `await bash(cmd)` window of the session.
+    let bootstrap_code = crate::kernel::bootstrap::ya_bash_wait::bash_wait_bootstrap_code(
+        &bootstrap_code,
+        options.ya_bash_wait_seconds,
+    );
     let mut env = options.env.clone();
     if let Some(shell_path) = &options.shell_path {
         env.insert(

@@ -16,6 +16,9 @@ pub mod rlm_off;
 // yusAgent (YA-03): prompt text of the session's native tools (`apply_patch`, `exec_command`).
 pub mod ya_tools_prompt;
 
+// yusAgent (YA-09): the `await bash(cmd)` window of the session (`bashWaitSeconds`).
+pub mod ya_bash_wait;
+
 pub mod system_prompt;
 
 pub use system_prompt::{

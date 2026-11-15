@@ -73,6 +73,7 @@ const KNOWN_FIELDS: &[&str] = &[
     "shellTool",
     // yusAgent (YA-09): request settings frozen per session.
     "reasoningSummary",
+    "bashWaitSeconds",
 ];
 
 /// Extract each known field independently; ignore fields whose JSON type does not match the Rust
