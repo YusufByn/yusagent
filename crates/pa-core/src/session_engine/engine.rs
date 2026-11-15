@@ -284,6 +284,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     // yusAgent (YA-03): `editTool` and `shellTool`, captured before the move too.
     let ya_edit_tool = settings.settings().edit_tool;
     let ya_shell_tool = settings.settings().shell_tool;
+    // yusAgent (YA-09): `reasoningSummary`, captured before the move too.
+    let ya_reasoning_summary = settings.settings().reasoning_summary;
     // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
     let cache_retention =
         super::cache_retention::resolve_from_env(settings.settings().cache_retention);
@@ -326,6 +328,13 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         .stream_fn
         .ok_or_else(|| anyhow::anyhow!("a provider stream_fn is required"))?;
     let stream_fn = super::cache_retention::scoped_stream_fn(stream_fn, cache_retention);
+    // yusAgent (YA-09): the request settings, frozen for the session in its header before the
+    // tools are (`ya_request`); `"auto"` leaves `stream_fn` as is.
+    let ya_request = super::ya_request::freeze_session_request(
+        &mut *wiring.session.lock().await,
+        ya_reasoning_summary,
+    );
+    let stream_fn = super::ya_request::scoped_stream_fn(stream_fn, ya_request);
     // yusAgent (YA-03): the native tools of the model's family, frozen for the session in its
     // header (`ya_tool_family`); an explicit native setting outside the Codex family fails here.
     let ya_family = super::ya_tool_family::tool_family(&model.provider, &model.api, &model.id);
