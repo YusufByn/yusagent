@@ -187,6 +187,27 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/tests/prefix_stability.rs` | modif. (fichier du fork) | Scénarios `reasoningSummary` : absent = corps sans `summary`, `"auto"` explicite = `summary: "auto"` (préfixe stable, seul `reasoning` diffère entre les deux) ; WebSocket Codex : absent, `"off"` et `"auto"` ; reprise d'une session à l'en-tête sans `yaRequest` (`resumed_legacy_session_keeps_summary_auto`). | YA-09 |
 | `crates/pa-daemon/src/agent_engine/ya_frozen_tools.rs` | modif. (fichier du fork) | Tests : un build sans réglage gèle `"off"` ; un en-tête durable avec `yaTools` sans `yaRequest` reste `"auto"`, réglages par défaut compris. | YA-09 |
 | `.changes/ya-09-summary-off.md` | ajout | Fragment de changelog du défaut `"off"`. | YA-09 |
+| `crates/pa-core/src/session_engine/ya_request.rs` | modif. (fichier du fork) | Réglage `bashWaitSeconds` (fenêtre de `await bash(cmd)`, secondes entières, au moins 1 ; absent = 1 s comme upstream), figé dans `yaRequest`, écrit seulement s'il ne vaut pas 1 ; avertissement de reprise sur les deux réglages ; tests (défaut, en-tête, gel, valeurs refusées au chargement). Voir « Fenêtre de `bash()` (YA-09) ». | YA-09 |
+| `crates/pa-core/src/settings/types.rs` | modif. (3 lignes) | Champ `bash_wait_seconds` (`bashWaitSeconds`, `NonZeroU32`). | YA-09 |
+| `crates/pa-core/src/settings/load.rs` | modif. (1 ligne) | `bashWaitSeconds` dans `KNOWN_FIELDS`. | YA-09 |
+| `crates/pa-core/src/session_engine/engine.rs` | modif. (5 lignes) | Lit `bashWaitSeconds`, le passe au gel (`freeze_session_request`), au provisionneur du kernel et aux options du prompt. | YA-09 |
+| `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (3 lignes) | `kernel_provisioner` prend la fenêtre et la met dans les options du provisionneur. | YA-09 |
+| `crates/pa-core/src/kernel/provisioner.rs` | modif. (8 lignes) | Champ `ya_bash_wait_seconds` des options ; le code de bootstrap passe par `bootstrap::ya_bash_wait` après la transformation `ya_native_shell`. | YA-09 |
+| `crates/pa-core/src/kernel/bootstrap/ya_bash_wait.rs` | ajout | Ligne de bootstrap qui pose `_YIELD_AFTER_SECONDS` du module `rlm.bash` après `_set_completion_notices_wired(True)`, si la fenêtre ne vaut pas 1 ; tests (repère épinglé au bootstrap upstream, défaut identique, sans gestionnaire ou en shell natif rien n'est posé). | YA-09 |
+| `crates/pa-core/src/kernel/bootstrap/mod.rs` | modif. (1 ligne) | Déclare `ya_bash_wait`. | YA-09 |
+| `crates/pa-core/src/prompts/ya_bash_wait.rs` | ajout | Fenêtre de la ligne `await bash(cmd)` du prompt ; 1 s ou absent : ligne upstream octet pour octet ; tests. | YA-09 |
+| `crates/pa-core/src/prompts/mod.rs` | modif. (3 lignes) | Déclare `ya_bash_wait`. | YA-09 |
+| `crates/pa-core/src/prompts/system_prompt.rs` | modif. (8 lignes) | Champ `ya_bash_wait_seconds` des options ; la ligne `await bash(cmd)` passe par `ya_bash_wait::bash_await_line` (texte upstream inchangé dans le source). | YA-09 |
+| `crates/pa-core/tests/prefix_stability.rs` | modif. (fichier du fork) | Scénario `codex_bash_wait_changes_only_the_await_line` : deux sessions d'un même projet (défaut puis 30 s), préfixes stables, prompts qui ne diffèrent que par la fenêtre, tools et paramètres identiques, en-têtes `yaRequest`. | YA-09 |
+| `crates/pa-core/tests/ya_bash_wait_kernel.rs` | ajout | Vrai kernel avec le gestionnaire `bash.completed` : instantané après 1 s par défaut, résultat complet à 30 s, rien de posé sans gestionnaire. | YA-09 |
+| `prime-agent-runtime/test/test_ya_bash_wait.py` | ajout | Tests du runtime : la ligne du bootstrap pose la fenêtre ; commande dans et au-delà de la fenêtre ; annulation d'un `await` dans une fenêtre de 30 s en moins de 1 s (SIGTERM respecté ou ignoré). Aucun fichier du runtime modifié. | YA-09 |
+| `bench/smoke/settings/bash-wait-30.json` | ajout | Réglage du bras B de l'A/B `bashWaitSeconds`. | YA-09 |
+| `bench/smoke/ab/ya09-bash-plan.md` | ajout | Plan et règle de verdict de l'A/B `bashWaitSeconds`, graine. | YA-09 |
+| `bench/smoke/ab/ya09-bash-mesures.py` | ajout | Mesures de la règle 3 du plan (appels de la session principale, garde-fou de durée) et affichages (médiane par lancement, relèves, notifications, silences WebSocket, bascules), validées sur l'A/B `reasoningSummary`. | YA-09 |
+| `bench/smoke/ab/ya09-bash-durees.py` | ajout | Durées des commandes du run YA-14 (Codex et yusAgent), couverture par fenêtre, compte 59 + 11 = 70 cellules. | YA-09 |
+| `bench/smoke/ab/ya09-bash-count.py` | ajout | Tokens du prompt système et des tools (yusAgent depuis un corps capturé, Unharnessed depuis un clone), tokenizer `o200k_base` supposé ; tiktoken installé par `uv run --with`, pas de dépendance du dépôt. | YA-09 |
+| `bench/smoke/tools/check_warmup.py` | modif. (fichier du fork) | Contrôles de `bash()` : fenêtre de la ligne du prompt, cellules revenues avant la fin, attentes complètes de plus de 1 s, notifications, plus long silence WebSocket, mentions de 1011. | YA-09 |
+| `.changes/ya-09-bash-wait.md` | ajout | Fragment de changelog du réglage `bashWaitSeconds`. | YA-09 |
 
 
 
@@ -645,3 +666,43 @@ Défaut de notre base de fork (`c83ac68b3`) : au `response.output_item.done`, `R
 - **Figé par session** : champ `yaRequest` de l'en-tête (`{"reasoningSummary": "auto" | "off"}`), séparé de `yaTools` ; il accueillera d'autres réglages de requête. Hérité au fork (`INHERITED_HEADER_KEYS`). **Le démon copie désormais tous les champs hérités** (`ya_sync_frozen_tools`), et plus seulement `yaTools`. Un en-tête qui a `yaTools` sans `yaRequest` vient d'une session créée avant ce champ (binaire antérieur au 15/11/2026) : `"auto"`, ce qu'elle envoyait, **même avec le défaut `"off"`**. **Un `yaRequest` illisible** (valeur hors `"auto"`/`"off"`, objet sans `reasoningSummary`, ou qui n'est pas un objet) **est réécrit en `"auto"`** dans l'en-tête de la session. Côté démon, le fichier durable n'est écrit que si le champ y manque : il garde la valeur illisible, que chaque build relit en `"auto"`. **Écart accepté** (décision de Yusuf du 15/11/2026) : une session d'avant YA-03 (aucun des deux champs) prend les réglages courants, comme pour ses tools, donc `"off"` par défaut, alors qu'elle a été envoyée en `"auto"`. Au gel, rien ne la distingue d'une session neuve : le démon gèle sur une copie en mémoire sans historique (`crates/pa-daemon/src/agent_engine/lifecycle.rs:1076-1086`).
 - **Préfixe** : prompt système et tools inchangés. **Par défaut (`"off"`), le corps change par rapport à upstream** : `reasoning` vaut `{"effort": …}` sans `summary` à chaque requête de la session. En `"auto"`, le corps est celui d'upstream octet pour octet (le `stream_fn` n'est pas enveloppé).
 - **Effets produit en `"off"`, donc par défaut** : les blocs de raisonnement gardent leur signature (rejeu intact) avec un texte vide ; rien n'est affiché comme raisonnement dans la TUI ni par ACP (`agent_thought_chunk`). **Écart avec YA-10** (« raisonnement visible ») inscrit au journal du CDC (15/11/2026) : seul `"auto"` le rend ; un interrupteur dans l'extension viendra avec YA-10. Piste notée, non décidée : un défaut par modèle lu dans `default_reasoning_summary` du catalogue de Codex.
+
+## Fenêtre de `bash()` (YA-09)
+
+- **Réglage** : `bashWaitSeconds` dans `settings.json`, secondes entières, au moins 1 ; **absent : 1 s, comme upstream** (`prime-agent-runtime/src/rlm/bash.py`, `_YIELD_AFTER_SECONDS`, upstream #3523 et #3828). Upstream n'a pas de réglage équivalent. Plan de l'A/B : `bench/smoke/ab/ya09-bash-plan.md`.
+- **Runtime Python non modifié** : le bootstrap du kernel pose la globale du module `rlm.bash` après l'appel `_set_completion_notices_wired(True)` (`kernel/bootstrap/ya_bash_wait.rs`). Un changement upstream de cette ligne de bootstrap fait échouer le test `the_marker_matches_the_upstream_bootstrap`. Si upstream renomme la globale, la ligne posée n'a plus d'effet : le test `ya_bash_wait_kernel.rs` le détecte (résultat attendu à 30 s).
+- **Figé par session** dans `yaRequest`, à côté de `reasoningSummary`, écrit seulement s'il ne vaut pas 1 : l'en-tête d'une session par défaut ne change pas. Un `yaRequest` sans le champ vaut 1 s. Une valeur illisible dans l'en-tête rend tout `yaRequest` illisible, réécrit en `"auto"` et 1 s (règle existante).
+- **Préfixe** : à 1 s (défaut), prompt, tools et corps identiques à upstream pour cette ligne. **Avec une autre valeur, le prompt système change** : la fenêtre de la ligne `await bash(cmd)` (« waits at most 30 seconds. »), stable dans la session. Tools et corps inchangés.
+
+## Code repris d'Unharnessed
+
+Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. **Aucun code n'en est repris à ce jour** : le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2026 Unharnessed
+Copyright (c) 2025-2026 Prime Intellect Ltd.
+Portions Copyright (c) 2025 Mario Zechner
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+| Fichier yusAgent | Source Unharnessed (commit, fichier) | Ticket |
+|---|---|---|
+| — | — | — |
