@@ -35,7 +35,11 @@ python3 -I bench/smoke/tools/ab_stats.py --plan <ab.json> --baseline bench/smoke
 
 ### Binaire et chauffe
 
-À remplir avant le premier run. **Pas de chauffe sans l'accord de Yusuf.**
+- **Binaire** : branche `ya-09-summary` à `7086711263ebfcd44b33fe7e3381630337243bbe` (dernier commit de code ; CI `ci.yml` verte, run 43723001064). Build `ya-build-macos-arm64.yml` 43722995206, artefact `prime-agent-aarch64-apple-darwin-7086711263ebfcd44b33fe7e3381630337243bbe`, version `v0.10.2`.
+  - sha256 de l'archive `prime-agent-0.10.2-darwin-arm64.tar.gz` : `49001dcfe185bf72814d80eb43dac7c7c5c3d89ea1029a4be661ef0f7d873611` (manifeste, `SHA256SUMS` et `shasum -a 256`).
+  - sha256 de l'exécutable `prime-agent` : `04c27dd29b2252e89dce47afb6c01bc3c70b9d7bc1ae6a4cae4d1178d57c393f` (manifeste, `executableSha256`, et `shasum -a 256` sur l'exécutable extrait).
+  - Les commits suivants de la branche ne touchent que `bench/` : `git diff --quiet 7086711 HEAD -- crates prime-agent-runtime skills vendor install-rust.sh Cargo.toml Cargo.lock` doit sortir avec le code 0 avant le run.
+- **Pas de chauffe sans l'accord de Yusuf.**
 
 Chauffe prévue : une tâche (`py-shortuuid-118`), bras B, `gpt-6-luna`, effort high. Elle ne compte dans aucun A/B. Elle vérifie au vrai backend :
 - le corps sans `summary` est accepté sur le WebSocket ;
