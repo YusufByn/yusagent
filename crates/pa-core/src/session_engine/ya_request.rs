@@ -19,8 +19,9 @@
 //! (kept by forks, `session::manager::ya_header::INHERITED_HEADER_KEYS`), and read back on
 //! every resume; settings changed in between give a warning. A session from before this field
 //! is `"auto"`, what it was sent with: it is recognized by the frozen tools of YA-03 in its
-//! header (written to every session since YA-03). A session from before YA-03 (neither field)
-//! is frozen with the current settings, as its tools are. Listed in `docs/fork-changes.md`.
+//! header (written to every session since YA-03). An unreadable `yaRequest` is rewritten as
+//! `"auto"` too. A session from before YA-03 (neither field) is frozen with the current
+//! settings, as its tools are. Listed in `docs/fork-changes.md`.
 
 use std::sync::Arc;
 
@@ -133,16 +134,20 @@ fn warning(frozen: FrozenRequest, current: FrozenRequest) -> Option<String> {
 
 /// The request settings of the session `manager` holds: the frozen ones of its header, or the
 /// current settings written to a header that has none. A header that already has the frozen
-/// tools of YA-03 is from before this field: `"auto"`. Prints the resume warning to stderr.
-/// Call it before the tools are frozen in a new session.
+/// tools of YA-03 is from before this field, and an unreadable field is rewritten: both
+/// `"auto"`. Prints the resume warning to stderr. Call it before the tools are frozen in a new
+/// session.
 pub fn freeze_session_request(
     manager: &mut SessionManager,
     reasoning_summary: Option<ReasoningSummarySetting>,
 ) -> FrozenRequest {
-    let frozen = FrozenRequest::from_header_value(manager.ya_header_field(REQUEST_HEADER_KEY));
-    let legacy = manager
-        .ya_header_field(super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY)
-        .is_some();
+    let field = manager.ya_header_field(REQUEST_HEADER_KEY);
+    let frozen = FrozenRequest::from_header_value(field);
+    let unreadable = field.is_some() && frozen.is_none();
+    let legacy = unreadable
+        || manager
+            .ya_header_field(super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY)
+            .is_some();
     let request = session_request(frozen, legacy, reasoning_summary);
     if let Some(to_write) = request.to_write {
         if let Ok(value) = serde_json::to_value(to_write) {
@@ -385,5 +390,22 @@ mod tests {
             legacy.ya_header_field(REQUEST_HEADER_KEY),
             Some(&json!({"reasoningSummary": "auto"}))
         );
+    }
+
+    /// An unreadable `yaRequest` (here without the frozen tools) is rewritten as `"auto"`,
+    /// whatever the settings say.
+    #[test]
+    fn an_unreadable_field_is_rewritten_as_auto() {
+        let dir = tempfile::tempdir().unwrap();
+        for bad in [json!("off"), json!({"reasoningSummary": "none"}), json!(1)] {
+            let mut manager = SessionManager::in_memory(dir.path());
+            manager.ya_set_header_field(REQUEST_HEADER_KEY, bad);
+            let frozen = freeze_session_request(&mut manager, Some(ReasoningSummarySetting::Off));
+            assert_eq!(frozen, FrozenRequest::default());
+            assert_eq!(
+                manager.ya_header_field(REQUEST_HEADER_KEY),
+                Some(&json!({"reasoningSummary": "auto"}))
+            );
+        }
     }
 }
