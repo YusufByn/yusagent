@@ -28,7 +28,13 @@ Affiché sans décider (par bras, par lancement) :
   connexion, temps entre la fin d'une réponse et la requête suivante, ou la fermeture de la
   connexion ; maximum par lancement, maximum du bras, nombre de silences de plus de 60 s ;
 - lancements avec une bascule SSE (`transports.loop_on_sse` > 0) ou un échec de transport
-  (`transport_failures_in_session` > 0), dont la fermeture `1011` du constat du 15/11.
+  (`transport_failures_in_session` > 0) ;
+- **bascules 1011** : diagnostics `provider_transport_failure` de code 1011 (`WebSocket closed
+  1011 keepalive ping timeout`, constat du 15/11) portés par les messages de `out.jsonl`, comptés
+  une fois par horodatage ;
+- **requêtes en SSE** : entrées `per_request` du résultat de transport `sse`, et **taux de cache de
+  ces requêtes** : somme de `cacheRead` / somme de (`input` + `cacheRead`) de leurs lignes du
+  journal d'usage (`sessions/*.usage.ndjson`, jointure par session et `seq`).
 
 Bibliothèque standard, lecture seule."""
 from __future__ import annotations
@@ -110,6 +116,36 @@ def silences(task_run: Path) -> list[float]:
     return gaps
 
 
+def fallbacks_1011(task_run: Path) -> int:
+    """Bascules sur fermeture 1011 du WebSocket, une par horodatage de diagnostic."""
+    seen = set()
+    out = task_run / "out.jsonl"
+    if not out.exists():
+        return 0
+    for line in out.read_text(errors="ignore").splitlines():
+        if "1011" not in line:
+            continue
+        message = (json.loads(line).get("message") or {})
+        for diag in message.get("diagnostics") or []:
+            if (diag.get("type") == "provider_transport_failure"
+                    and (diag.get("error") or {}).get("code") == 1011):
+                seen.add(diag.get("timestamp"))
+    return len(seen)
+
+
+def sse_requests(task_run: Path, result: dict) -> tuple[int, int, int]:
+    """(requêtes en SSE, somme d'input, somme de cacheRead) de ces requêtes."""
+    sse = {(r.get("session"), r.get("seq")) for r in result.get("per_request") or []
+           if r.get("transport") == "sse"}
+    fresh = cached = 0
+    for journal in (task_run / "sessions").glob("*.usage.ndjson"):
+        for row in jl(journal):
+            if (row.get("sessionId"), row.get("seq")) in sse:
+                fresh += row.get("input") or 0
+                cached += row.get("cacheRead") or 0
+    return len(sse), fresh, cached
+
+
 def load(plan: Path) -> tuple[dict, list[dict], list[dict]]:
     units, ab = ab_stats.units_from_plan(plan, ab_stats.STALL_GAP_S)
     rows = []
@@ -118,14 +154,17 @@ def load(plan: Path) -> tuple[dict, list[dict], list[dict]]:
             arm = unit["arms"][side]
             result = arm["result"]
             task_run = ab_stats.task_dir(arm["run"], result)
+            sse, sse_input, sse_cached = sse_requests(task_run, result)
             rows.append({
                 "pass": unit["pass"], "task": unit["task"], "arm": side,
                 "ok": result["status"] == "resolved",
                 "calls": (result["calls"].get("by_kind") or {}).get("main", result["calls"]["total"]),
                 "agent": result["agent"]["seconds"],
-                "sse": (result.get("transports") or {}).get("loop_on_sse", 0) > 0,
+                "loop_on_sse": (result.get("transports") or {}).get("loop_on_sse", 0) > 0,
                 "transport_failures": result.get("transport_failures_in_session") or 0,
                 "silences": silences(task_run),
+                "fallbacks_1011": fallbacks_1011(task_run),
+                "sse": sse, "sse_input": sse_input, "sse_cached": sse_cached,
                 **session_counts(task_run),
             })
     return ab, units, rows
@@ -168,8 +207,14 @@ def section(rows: list[dict], tasks: list[str], title: str) -> tuple[dict, dict]
               f"médiane des maxima par lancement "
               f"{st.median(max(x['silences'], default=0) for x in r):.1f} s ; silences de plus de "
               f"{LONG_SILENCE_S:g} s : {sum(g > LONG_SILENCE_S for g in gaps)}")
-        print(f"  - lancements avec bascule SSE : {sum(x['sse'] for x in r)} ; avec un échec de "
+        print(f"  - lancements avec bascule SSE : {sum(x['loop_on_sse'] for x in r)} ; avec un échec de "
               f"transport : {sum(x['transport_failures'] > 0 for x in r)}")
+        sse_input = sum(x["sse_input"] for x in r)
+        sse_cached = sum(x["sse_cached"] for x in r)
+        rate = (f"{sse_cached / (sse_input + sse_cached):.3f} ({sse_cached} en cache sur "
+                f"{sse_input + sse_cached})" if sse_input + sse_cached else "sans objet")
+        print(f"  - **bascules 1011 : {sum(x['fallbacks_1011'] for x in r)}** ; **requêtes en SSE : "
+              f"{sum(x['sse'] for x in r)}** ; **taux de cache des requêtes SSE : {rate}**")
     calls = paired(rows, tasks, "calls", "appels de la session principale", "appels")
     duration = paired(rows, tasks, "agent", "phase agent", "s")
     return calls, duration

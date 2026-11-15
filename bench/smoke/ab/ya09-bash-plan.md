@@ -116,7 +116,8 @@ python3 -I bench/smoke/ab/ya09-bash-mesures.py bench/smoke/runs/ab-<horodatage>
 - **Binaire** : branche `ya-09-bash` à `8755b2e5909e81666cf14fce143e631f1b0e4212` (CI `ci.yml` en brouillon, jobs lourds sautés : les tests Rust restent à passer). Build `ya-build-macos-arm64.yml` 43754394374, version `v0.10.2`.
   - sha256 de l'archive `prime-agent-0.10.2-darwin-arm64.tar.gz` : `045480e66374ae4f4962b21890cd1dd563fe867b3643df22cf3b3aca764d3e90` (`SHA256SUMS`, vérifié par `install-bin.sh`).
   - sha256 de l'exécutable `prime-agent` : `26b92178d5070e13188ac5efcbd5687c6ab7bc12b70373dc6b1867c6695ed2f0` (manifeste, `executableSha256`, et `shasum -a 256`).
-  - Avant le run : `git diff --quiet 8755b2e59 HEAD -- crates prime-agent-runtime skills vendor install-rust.sh Cargo.toml Cargo.lock` doit sortir avec le code 0. Si un commit de code suit (correction demandée par la CI au passage en prêt), le binaire et ces sommes sont à refaire.
+  - **Binaire de la chauffe, pas celui de l'A/B** : un commit de code suit (`prime-agent prompt` affiche la fenêtre réglée, `crates/pa-cli/src/prompt_command.rs`, hors chemin d'une session). L'A/B tourne sur le build de `main` après merge ; son SHA et ses sommes sont notés ci-dessous. Contrôle avant le run : `git diff 8755b2e59 <SHA de main> -- crates prime-agent-runtime skills vendor install-rust.sh Cargo.toml Cargo.lock` ne doit montrer que ce fichier.
+- **Binaire de l'A/B** : à noter après le merge (build de `main`).
 - **Chauffe** (accord de Yusuf du 15/11/2026), hors A/B : `node-testsprite-356`, bras B, `gpt-6-luna`, effort high, `--log-bodies`.
 
   ```bash
@@ -175,14 +176,15 @@ Script `bench/smoke/ab/ya09-bash-mesures.py` (bibliothèque standard, lecture se
 - **IC 95 %** : bootstrap sur les tâches (`ab_stats.bootstrap`, 10 000 tirages, graine 0).
 - **Population** : toutes les tâches avec au moins une paire valide. Le sous-ensemble « résolues par les deux bras » est affiché sans décider.
 - **Paires écartées** : `ab_stats.units_from_plan`.
-- **Validation** sur l'A/B `reasoningSummary` (`python3 -I bench/smoke/ab/ya09-bash-mesures.py bench/smoke/runs/ab-20261115T153500Z`, A = `auto`, B = `off`) : le script retrouve les chiffres du rapport `ya09-summary-20261115.md` (29 paires retenues, 22,4 contre 24,3 appels par lancement, phase agent −26,1 % [−41,7 ; −8,1]). Il retrouve aussi le silence de 77,2 s du constat 1011, dans le bras B.
+- **Validation** sur l'A/B `reasoningSummary` (`python3 -I bench/smoke/ab/ya09-bash-mesures.py bench/smoke/runs/ab-20261115T153500Z`, A = `auto`, B = `off`) : le script retrouve les chiffres du rapport `ya09-summary-20261115.md` (29 paires retenues, 22,4 contre 24,3 appels par lancement, phase agent −26,1 % [−41,7 ; −8,1]). Il retrouve aussi le constat 1011 dans le bras B : silence de 77,2 s, 1 bascule 1011, 1 requête en SSE, 27 776 tokens en cache sur 28 079 (taux 0,989).
 
 ### Affiché sans décider
 
 - **Durée de la phase agent par lancement : moyenne et médiane**, par bras.
 - Par lancement : cellules revenues avant la fin de leur commande (règle à 70 ci-dessus), tours de relève, notifications `[bash-done]`. Mécanisme attendu : les trois baissent en B.
 - Silence sans requête sur le WebSocket (fin d'une réponse → requête suivante ou fermeture) : maximum, médiane des maxima par lancement, nombre de silences de plus de 60 s.
-- Lancements avec bascule SSE ou échec de transport (dont 1011).
+- Lancements avec bascule SSE ou échec de transport.
+- **Par bras : nombre de bascules 1011** (diagnostics `provider_transport_failure` de code 1011, un par horodatage), **nombre de requêtes en SSE** et **taux de cache de ces requêtes** (`cacheRead` / (`input` + `cacheRead`) du journal d'usage).
 - Sorties d'`ab_stats.py` : coût rapporté et pessimiste, taux de cache, miss serveur, edits au premier essai, cellules en erreur.
 
 ## Ce que le banc peut détecter
