@@ -10,6 +10,10 @@
 //! turn settles while the command keeps running. Its `[bash-done ...]`
 //! notice then wakes the idle session. Everything is asserted by transcript
 //! event ORDER, not wall-clock caps.
+//!
+//! yusAgent (YA-09): the default window is 30 s (`bashWaitSeconds`); the
+//! agent dir's `settings.json` sets it back to the upstream 1 s, the window
+//! this test asserts.
 
 // 64-bit-only targets; the narrowing casts sit at bounded OS boundaries.
 #![allow(
@@ -336,6 +340,9 @@ fn a_bounded_bash_await_degrades_and_the_notice_wakes_the_session() {
         .to_string(),
     )
     .expect("write models.json");
+    // yusAgent (YA-09): the upstream 1 s window (the default is 30 s).
+    std::fs::write(agent_dir.join("settings.json"), r#"{"bashWaitSeconds": 1}"#)
+        .expect("settings.json");
 
     let supervisor = spawn_daemon(&socket, &agent_dir, Some(&kernel_python));
     let mut client = Client::connect(&socket);

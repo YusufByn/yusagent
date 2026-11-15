@@ -1,7 +1,8 @@
 //! yusAgent (YA-09, lever `bash()`): the `await bash(cmd)` line of the system prompt names the
 //! session's window (`bashWaitSeconds`, `session_engine::ya_request`).
 //!
-//! Unset or 1: the upstream line, byte for byte. Another value replaces only the window in it
+//! `None` (no value given to the builder) or 1: the upstream line, byte for byte. A session always
+//! passes its resolved value, 30 by default. Another value replaces only the window in it
 //! (`waits at most 30 seconds.`). The value is frozen per session, so the prompt stays stable
 //! within a session; two sessions with different values have different prompts.
 

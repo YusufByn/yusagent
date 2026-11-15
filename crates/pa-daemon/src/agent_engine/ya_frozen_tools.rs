@@ -255,7 +255,7 @@ mod tests {
                 (
                     store.path,
                     REQUEST_KEY.to_string(),
-                    json!({"reasoningSummary": "off"})
+                    json!({"reasoningSummary": "off", "bashWaitSeconds": 30})
                 ),
             ]
         );
@@ -286,10 +286,11 @@ mod tests {
         engine
     }
 
-    /// yusAgent (YA-09): a new session freezes `reasoningSummary` from the settings (`"off"`
-    /// when unset, the default since 15/11/2026); a durable header that has it keeps it over
-    /// the settings; a header frozen by YA-03 without it (a session from before the field) is
-    /// `"auto"`, with the default settings too.
+    /// yusAgent (YA-09): a new session freezes `reasoningSummary` and `bashWaitSeconds` from the
+    /// settings (`"off"` and 30 when unset, the defaults since 15/11/2026); a durable header
+    /// that has the field keeps it over the settings (here a header from before
+    /// `bashWaitSeconds`: 1 second kept); a header frozen by YA-03 without it (a session from
+    /// before the field) is `"auto"` and 1 second, with the default settings too.
     #[test]
     fn a_build_freezes_the_request_settings() {
         let _faux = FAUX_TEST_LOCK
@@ -300,11 +301,17 @@ mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(dir.path(), None, "{}");
-        assert_eq!(built_request(&engine), Some(off.clone()));
+        assert_eq!(
+            built_request(&engine),
+            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
+        );
 
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(dir.path(), None, r#"{"reasoningSummary": "auto"}"#);
-        assert_eq!(built_request(&engine), Some(auto.clone()));
+        assert_eq!(
+            built_request(&engine),
+            Some(json!({"reasoningSummary": "auto", "bashWaitSeconds": 30}))
+        );
 
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(

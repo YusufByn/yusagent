@@ -209,6 +209,10 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `bench/smoke/tools/check_warmup.py` | modif. (fichier du fork) | Contrôles de `bash()` : fenêtre de la ligne du prompt, cellules revenues avant la fin, attentes complètes de plus de 1 s, notifications, plus long silence WebSocket, mentions de 1011. | YA-09 |
 | `.changes/ya-09-bash-wait.md` | ajout | Fragment de changelog du réglage `bashWaitSeconds`. | YA-09 |
 | `crates/pa-cli/src/prompt_command.rs` | modif. (2 lignes + test) | `prime-agent prompt` affiche la fenêtre `await bash(cmd)` des réglages courants (`bashWaitSeconds`) ; test `shows_the_bash_wait_of_the_settings`. Les autres réglages de session (`yaTools`, démon) restent ignorés par cette commande, comme avant. | YA-09 |
+| `crates/pa-core/src/session_engine/ya_request.rs` | modif. (fichier du fork) | **Défaut de `bashWaitSeconds` à 30 s** (décision de Yusuf du 15/11/2026, journal du CDC). Un `yaRequest` sans le champ (toute session créée avant) vaut 1 s : son prompt ne change pas à la reprise. 1 n'est pas écrit dans l'en-tête, toute autre valeur l'est (30 par défaut). `resolve_bash_wait_seconds` pour `prime-agent prompt`. Tests mis à jour. | YA-09 |
+| `crates/pa-core/tests/prefix_stability.rs` | modif. (fichier du fork) | Défaut à 30 s : `codex_bash_wait_changes_only_the_await_line` compare le défaut (30 s) à `bashWaitSeconds: 1` ; nouveau scénario `resumed_session_from_before_bash_wait_keeps_one_second` (en-tête sans le champ, reprise avec le défaut : ligne à 1 s, préfixe stable, en-tête inchangé) ; en-tête attendu de `resumed_legacy_session_keeps_summary_auto`. | YA-09 |
+| `crates/pa-daemon/src/agent_engine/ya_frozen_tools.rs` | modif. (fichier du fork) | Tests : en-tête `yaRequest` d'une nouvelle session avec `bashWaitSeconds: 30`. | YA-09 |
+| `crates/pa-daemon/tests/autobg_headless_e2e.rs` | modif. (test upstream, 4 lignes + commentaire) | Le test vérifie la dégradation de `await bash()` à 1 s : le `settings.json` de son dossier d'agent remet `bashWaitSeconds: 1` (défaut du fork : 30 s). | YA-09 |
 
 
 
@@ -670,11 +674,11 @@ Défaut de notre base de fork (`c83ac68b3`) : au `response.output_item.done`, `R
 
 ## Fenêtre de `bash()` (YA-09)
 
-- **Réglage** : `bashWaitSeconds` dans `settings.json`, secondes entières, au moins 1 ; **absent : 1 s, comme upstream** (`prime-agent-runtime/src/rlm/bash.py`, `_YIELD_AFTER_SECONDS`, upstream #3523 et #3828). Upstream n'a pas de réglage équivalent. Plan de l'A/B : `bench/smoke/ab/ya09-bash-plan.md`.
+- **Réglage** : `bashWaitSeconds` dans `settings.json`, secondes entières, au moins 1. **Absent : 30 s** (décision de Yusuf du 15/11/2026, choix d'Unharnessed repris sans A/B, journal du CDC) ; upstream attend 1 s (`prime-agent-runtime/src/rlm/bash.py`, `_YIELD_AFTER_SECONDS`, upstream #3523 et #3828) et n'a pas de réglage équivalent ; `1` remet le comportement d'upstream. Plan d'A/B préparé puis non exécuté : `bench/smoke/ab/ya09-bash-plan.md`.
 - **Runtime Python non modifié** : le bootstrap du kernel pose la globale du module `rlm.bash` après l'appel `_set_completion_notices_wired(True)` (`kernel/bootstrap/ya_bash_wait.rs`). Un changement upstream de cette ligne de bootstrap fait échouer le test `the_marker_matches_the_upstream_bootstrap`. Si upstream renomme la globale, la ligne posée n'a plus d'effet : le test `ya_bash_wait_kernel.rs` le détecte (résultat attendu à 30 s).
-- **Figé par session** dans `yaRequest`, à côté de `reasoningSummary`, écrit seulement s'il ne vaut pas 1 : l'en-tête d'une session par défaut ne change pas. Un `yaRequest` sans le champ vaut 1 s. Une valeur illisible dans l'en-tête rend tout `yaRequest` illisible, réécrit en `"auto"` et 1 s (règle existante).
+- **Figé par session** dans `yaRequest`, à côté de `reasoningSummary`, écrit sauf s'il vaut 1 (30 par défaut). **Un `yaRequest` sans le champ vaut 1 s** : toute session créée avant le réglage garde la ligne à 1 s et son préfixe à la reprise. Un en-tête avec `yaTools` sans `yaRequest` (avant le 15/11) vaut `"auto"` et 1 s. **Écart accepté** (comme pour `reasoningSummary`) : une session d'avant YA-03 (aucun des deux champs) prend les réglages courants, donc 30 s, et son prompt change à la reprise. Une valeur illisible dans l'en-tête rend tout `yaRequest` illisible, réécrit en `"auto"` et 1 s (règle existante).
 - **`prime-agent prompt`** affiche la fenêtre des réglages courants (pas la valeur figée d'une session).
-- **Préfixe** : à 1 s (défaut), prompt, tools et corps identiques à upstream pour cette ligne. **Avec une autre valeur, le prompt système change** : la fenêtre de la ligne `await bash(cmd)` (« waits at most 30 seconds. »), stable dans la session. Tools et corps inchangés.
+- **Préfixe** : **par défaut (30 s), le prompt système diffère d'upstream** par la fenêtre de la ligne `await bash(cmd)` (« waits at most 30 seconds. »), stable dans la session. À 1 s (réglage ou session ancienne), ligne d'upstream octet pour octet. Tools et corps de requête inchangés. Le bootstrap du kernel gagne une ligne par défaut.
 
 ## Code repris d'Unharnessed
 

@@ -20,12 +20,13 @@
 //!
 //! `bashWaitSeconds` in `settings.json` (lever `bash()` of YA-09, `bench/smoke/ab/ya09-bash-plan.md`):
 //! how long `await bash(cmd)` waits before it returns a snapshot of a command still running, in
-//! whole seconds, at least 1. Unset is 1 second, as upstream (`prime-agent-runtime/src/rlm/bash.py`,
-//! `_YIELD_AFTER_SECONDS`). Another value changes the `await bash(cmd)` line of the system prompt
-//! (`prompts::ya_bash_wait`) and the kernel bootstrap (`kernel::bootstrap::ya_bash_wait`); the
-//! request body is left as is. The header stores it only when it is not 1, so the `yaRequest` of
-//! a default session is the one written before this field, and a `yaRequest` without it is 1
-//! second, what such a session ran with.
+//! whole seconds, at least 1. **Unset is 30 seconds** (decision of Yusuf, CDC journal of
+//! 15/11/2026, taken from Unharnessed without an A/B); upstream waits 1 second
+//! (`prime-agent-runtime/src/rlm/bash.py`, `_YIELD_AFTER_SECONDS`). A value other than 1 changes
+//! the `await bash(cmd)` line of the system prompt (`prompts::ya_bash_wait`) and the kernel
+//! bootstrap (`kernel::bootstrap::ya_bash_wait`); the request body is left as is. The header
+//! stores it unless it is 1: a `yaRequest` without it is 1 second, what every session created
+//! before this field ran with, so its prompt does not change when it is resumed.
 //!
 //! Frozen for the session at creation in the session header, field [`REQUEST_HEADER_KEY`]
 //! (kept by forks, `session::manager::ya_header::INHERITED_HEADER_KEYS`), and read back on
@@ -68,30 +69,39 @@ pub const RESPONSES_APIS: &[&str] = &[
 /// (`SessionManager::ya_set_header_field`).
 pub const REQUEST_HEADER_KEY: &str = "yaRequest";
 
-/// The `await bash(cmd)` window of upstream, in seconds: the value of an unset
-/// `bashWaitSeconds`.
-pub const DEFAULT_BASH_WAIT_SECONDS: NonZeroU32 = NonZeroU32::MIN;
+/// The `await bash(cmd)` window of an unset `bashWaitSeconds`, in seconds.
+pub const DEFAULT_BASH_WAIT_SECONDS: NonZeroU32 = NonZeroU32::new(30).expect("30 is not zero");
 
-fn default_bash_wait_seconds() -> NonZeroU32 {
-    DEFAULT_BASH_WAIT_SECONDS
+/// The `await bash(cmd)` window of upstream, in seconds: the value of a `yaRequest` without the
+/// field (every session created before it).
+pub const LEGACY_BASH_WAIT_SECONDS: NonZeroU32 = NonZeroU32::MIN;
+
+/// The window of the setting `bashWaitSeconds`: its value, or [`DEFAULT_BASH_WAIT_SECONDS`].
+#[must_use]
+pub fn resolve_bash_wait_seconds(setting: Option<NonZeroU32>) -> NonZeroU32 {
+    setting.unwrap_or(DEFAULT_BASH_WAIT_SECONDS)
+}
+
+fn legacy_bash_wait_seconds() -> NonZeroU32 {
+    LEGACY_BASH_WAIT_SECONDS
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
-fn is_default_bash_wait_seconds(seconds: &NonZeroU32) -> bool {
-    *seconds == DEFAULT_BASH_WAIT_SECONDS
+fn is_legacy_bash_wait_seconds(seconds: &NonZeroU32) -> bool {
+    *seconds == LEGACY_BASH_WAIT_SECONDS
 }
 
 /// The effective request settings of a session, written to its header at creation and read
 /// back on every resume: an unset setting is stored as the value it resolved to, except
-/// `bashWaitSeconds` at its default (1), left out.
+/// `bashWaitSeconds` at 1 (the value of a header without it), left out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrozenRequest {
     pub reasoning_summary: ReasoningSummarySetting,
     /// `await bash(cmd)` window, in seconds (`bashWaitSeconds`).
     #[serde(
-        default = "default_bash_wait_seconds",
-        skip_serializing_if = "is_default_bash_wait_seconds"
+        default = "legacy_bash_wait_seconds",
+        skip_serializing_if = "is_legacy_bash_wait_seconds"
     )]
     pub bash_wait_seconds: NonZeroU32,
 }
@@ -100,7 +110,7 @@ impl FrozenRequest {
     /// The settings a session created before the field was sent with: `"auto"`, 1 second.
     pub const LEGACY: FrozenRequest = FrozenRequest {
         reasoning_summary: ReasoningSummarySetting::Auto,
-        bash_wait_seconds: DEFAULT_BASH_WAIT_SECONDS,
+        bash_wait_seconds: LEGACY_BASH_WAIT_SECONDS,
     };
 
     /// The request settings of the current settings.
@@ -111,7 +121,7 @@ impl FrozenRequest {
     ) -> Self {
         FrozenRequest {
             reasoning_summary: reasoning_summary.unwrap_or_default(),
-            bash_wait_seconds: bash_wait_seconds.unwrap_or(DEFAULT_BASH_WAIT_SECONDS),
+            bash_wait_seconds: resolve_bash_wait_seconds(bash_wait_seconds),
         }
     }
 
@@ -357,32 +367,47 @@ mod tests {
         assert_eq!(wrapped(codex_body(), &model("anthropic-messages")), None);
     }
 
+    /// `"off"` and 1 second: a `yaRequest` written before `bashWaitSeconds`.
     const OFF: FrozenRequest = FrozenRequest {
         reasoning_summary: ReasoningSummarySetting::Off,
-        bash_wait_seconds: DEFAULT_BASH_WAIT_SECONDS,
+        bash_wait_seconds: LEGACY_BASH_WAIT_SECONDS,
     };
 
     fn seconds(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("non-zero")
     }
 
-    fn off_wait_30() -> FrozenRequest {
+    /// The default settings: `"off"`, 30 seconds.
+    fn default_request() -> FrozenRequest {
         FrozenRequest {
             reasoning_summary: ReasoningSummarySetting::Off,
             bash_wait_seconds: seconds(30),
         }
     }
 
-    /// Since the CDC decision of 15/11/2026, an unset setting is `"off"`.
+    /// `reasoningSummary: "auto"` set, `bashWaitSeconds` unset.
+    fn auto_request() -> FrozenRequest {
+        FrozenRequest {
+            reasoning_summary: ReasoningSummarySetting::Auto,
+            bash_wait_seconds: seconds(30),
+        }
+    }
+
+    /// Since the CDC decisions of 15/11/2026, unset settings are `"off"` and 30 seconds.
     #[test]
-    fn the_default_is_off() {
+    fn the_default_is_off_and_thirty_seconds() {
         assert_eq!(
             ReasoningSummarySetting::default(),
             ReasoningSummarySetting::Off
         );
-        assert_eq!(FrozenRequest::of(None, None), OFF);
+        assert_eq!(DEFAULT_BASH_WAIT_SECONDS.get(), 30);
+        assert_eq!(FrozenRequest::of(None, None), default_request());
         assert_eq!(
             FrozenRequest::of(Some(ReasoningSummarySetting::Auto), None),
+            auto_request()
+        );
+        assert_eq!(
+            FrozenRequest::of(Some(ReasoningSummarySetting::Auto), Some(seconds(1))),
             FrozenRequest::LEGACY
         );
     }
@@ -390,20 +415,20 @@ mod tests {
     #[test]
     fn a_new_session_freezes_the_current_settings() {
         let request = session_request(None, false, Some(ReasoningSummarySetting::Auto), None);
-        assert_eq!(request.frozen, FrozenRequest::LEGACY);
+        assert_eq!(request.frozen, auto_request());
         assert_eq!(request.to_write, Some(request.frozen));
         assert_eq!(request.warning, None);
-        // Unset: the default, `"off"`, written as such.
+        // Unset: the defaults, written as such.
         let unset = session_request(None, false, None, None);
-        assert_eq!(unset.frozen, OFF);
-        assert_eq!(unset.to_write, Some(OFF));
+        assert_eq!(unset.frozen, default_request());
+        assert_eq!(unset.to_write, Some(default_request()));
         assert_eq!(unset.warning, None);
     }
 
-    /// A session from before the field was sent with `"auto"` and keeps it, the default
-    /// (`"off"`) included.
+    /// A session from before the field was sent with `"auto"` and 1 second and keeps them,
+    /// the defaults included.
     #[test]
-    fn a_legacy_session_is_auto() {
+    fn a_legacy_session_is_auto_and_one_second() {
         let request = session_request(None, true, Some(ReasoningSummarySetting::Off), None);
         assert_eq!(request.frozen, FrozenRequest::LEGACY);
         assert_eq!(request.to_write, Some(FrozenRequest::LEGACY));
@@ -411,7 +436,12 @@ mod tests {
         let request = session_request(None, true, None, None);
         assert_eq!(request.frozen, FrozenRequest::LEGACY);
         assert!(request.warning.is_some());
-        let request = session_request(None, true, Some(ReasoningSummarySetting::Auto), None);
+        let request = session_request(
+            None,
+            true,
+            Some(ReasoningSummarySetting::Auto),
+            Some(seconds(1)),
+        );
         assert_eq!(request.warning, None);
     }
 
@@ -423,8 +453,10 @@ mod tests {
         let warning = request.warning.expect("warning");
         assert!(warning.contains("reasoningSummary \"auto\""), "{warning}");
         assert!(warning.contains("reasoningSummary \"off\""), "{warning}");
-        let same = session_request(Some(OFF), true, None, None);
-        assert_eq!(same.frozen, OFF);
+        assert!(warning.contains("bashWaitSeconds 1"), "{warning}");
+        assert!(warning.contains("bashWaitSeconds 30"), "{warning}");
+        let same = session_request(Some(default_request()), true, None, None);
+        assert_eq!(same.frozen, default_request());
         assert_eq!(same.warning, None);
     }
 
@@ -433,6 +465,10 @@ mod tests {
         for (frozen, value) in [
             (OFF, json!({"reasoningSummary": "off"})),
             (FrozenRequest::LEGACY, json!({"reasoningSummary": "auto"})),
+            (
+                default_request(),
+                json!({"reasoningSummary": "off", "bashWaitSeconds": 30}),
+            ),
         ] {
             assert_eq!(serde_json::to_value(frozen).unwrap(), value);
             assert_eq!(FrozenRequest::from_header_value(Some(&value)), Some(frozen));
@@ -446,30 +482,34 @@ mod tests {
     #[test]
     fn freeze_writes_new_sessions_and_reads_legacy_ones_as_auto() {
         let dir = tempfile::tempdir().unwrap();
-        // A new session with the default settings: `"off"`.
+        // A new session with the default settings: `"off"`, 30 seconds.
         let mut manager = SessionManager::in_memory(dir.path());
         let frozen = freeze_session_request(&mut manager, None, None);
-        assert_eq!(frozen, OFF);
+        assert_eq!(frozen, default_request());
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "off"}))
+            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
         );
         // A resume keeps it whatever the settings say.
-        let again = freeze_session_request(&mut manager, Some(ReasoningSummarySetting::Auto), None);
-        assert_eq!(again, OFF);
+        let again = freeze_session_request(
+            &mut manager,
+            Some(ReasoningSummarySetting::Auto),
+            Some(seconds(1)),
+        );
+        assert_eq!(again, default_request());
 
         // `"auto"` set explicitly.
         let mut manager = SessionManager::in_memory(dir.path());
         let frozen =
             freeze_session_request(&mut manager, Some(ReasoningSummarySetting::Auto), None);
-        assert_eq!(frozen, FrozenRequest::LEGACY);
+        assert_eq!(frozen, auto_request());
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "auto"}))
+            Some(&json!({"reasoningSummary": "auto", "bashWaitSeconds": 30}))
         );
 
-        // A header frozen by YA-03 but without the request field (before 15/11/2026): auto,
-        // with the default settings too.
+        // A header frozen by YA-03 but without the request field (before 15/11/2026): auto and
+        // 1 second, with the default settings too.
         let mut legacy = SessionManager::in_memory(dir.path());
         legacy.ya_set_header_field(
             super::super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY,
@@ -483,8 +523,8 @@ mod tests {
         );
     }
 
-    /// An unreadable `yaRequest` (here without the frozen tools) is rewritten as `"auto"`,
-    /// whatever the settings say.
+    /// An unreadable `yaRequest` (here without the frozen tools) is rewritten as `"auto"` and
+    /// 1 second, whatever the settings say.
     #[test]
     fn an_unreadable_field_is_rewritten_as_auto() {
         let dir = tempfile::tempdir().unwrap();
@@ -493,6 +533,7 @@ mod tests {
             json!({"reasoningSummary": "none"}),
             json!({}),
             json!(1),
+            json!({"reasoningSummary": "off", "bashWaitSeconds": 0}),
         ] {
             for setting in [None, Some(ReasoningSummarySetting::Off)] {
                 let mut manager = SessionManager::in_memory(dir.path());
@@ -507,33 +548,18 @@ mod tests {
         }
     }
 
-    /// `bashWaitSeconds`: unset is 1 second, left out of the header; another value is written
-    /// and read back.
+    /// `bashWaitSeconds` in the header: written unless it is 1; a `yaRequest` without it is
+    /// 1 second; a value that is not a positive integer makes the field unreadable.
     #[test]
-    fn bash_wait_defaults_to_one_second_and_is_written_only_when_set() {
-        assert_eq!(FrozenRequest::of(None, None).bash_wait_seconds.get(), 1);
-        assert_eq!(FrozenRequest::of(None, Some(seconds(30))), off_wait_30());
-        assert_eq!(
-            serde_json::to_value(off_wait_30()).unwrap(),
-            json!({"reasoningSummary": "off", "bashWaitSeconds": 30})
-        );
-        assert_eq!(
-            FrozenRequest::from_header_value(Some(
-                &json!({"reasoningSummary": "off", "bashWaitSeconds": 30})
-            )),
-            Some(off_wait_30())
-        );
-        // Set to 1 explicitly: the default, written as before this field.
+    fn bash_wait_in_the_header() {
         assert_eq!(
             serde_json::to_value(FrozenRequest::of(None, Some(seconds(1)))).unwrap(),
             json!({"reasoningSummary": "off"})
         );
-        // A `yaRequest` written before this field: 1 second, what the session ran with.
         assert_eq!(
             FrozenRequest::from_header_value(Some(&json!({"reasoningSummary": "off"}))),
             Some(OFF)
         );
-        // Not a positive integer: unreadable, rewritten as `"auto"` and 1 second by the freeze.
         for bad in [json!(0), json!(-1), json!(1.5), json!("30")] {
             assert_eq!(
                 FrozenRequest::from_header_value(Some(
@@ -544,40 +570,24 @@ mod tests {
         }
     }
 
+    /// A session created before `bashWaitSeconds` (`yaRequest` without it) keeps 1 second at
+    /// resume, with the default settings (30) or another value, and its header is left as is.
     #[test]
-    fn bash_wait_is_frozen_and_a_change_warns() {
+    fn a_session_from_before_the_field_keeps_one_second() {
         let dir = tempfile::tempdir().unwrap();
-        let mut manager = SessionManager::in_memory(dir.path());
-        let frozen = freeze_session_request(&mut manager, None, Some(seconds(30)));
-        assert_eq!(frozen, off_wait_30());
-        assert_eq!(
-            manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
-        );
-        // A resume keeps it whatever the settings say.
-        assert_eq!(
-            freeze_session_request(&mut manager, None, None),
-            off_wait_30()
-        );
-        let request = session_request(Some(off_wait_30()), false, None, None);
-        let warning = request.warning.expect("warning");
-        assert!(warning.contains("bashWaitSeconds 30"), "{warning}");
-        assert!(warning.contains("bashWaitSeconds 1"), "{warning}");
-        // A header from before the field resumed with the setting: 1 second kept.
-        let mut manager = SessionManager::in_memory(dir.path());
-        manager.ya_set_header_field(REQUEST_HEADER_KEY, json!({"reasoningSummary": "off"}));
-        assert_eq!(
-            freeze_session_request(&mut manager, None, Some(seconds(30))),
-            OFF
-        );
-        assert_eq!(
-            manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "off"}))
-        );
+        for setting in [None, Some(seconds(45))] {
+            let mut manager = SessionManager::in_memory(dir.path());
+            manager.ya_set_header_field(REQUEST_HEADER_KEY, json!({"reasoningSummary": "off"}));
+            assert_eq!(freeze_session_request(&mut manager, None, setting), OFF);
+            assert_eq!(
+                manager.ya_header_field(REQUEST_HEADER_KEY),
+                Some(&json!({"reasoningSummary": "off"}))
+            );
+        }
     }
 
     /// `bashWaitSeconds` in `settings.json`: a positive integer; anything else is dropped at
-    /// load (a wrongly typed field is unset), so the session runs with 1 second.
+    /// load (a wrongly typed field is unset), so the session runs with the default.
     #[test]
     fn the_setting_loads_positive_integers_only() {
         let load = |value: Value| {
@@ -589,5 +599,7 @@ mod tests {
         for bad in [json!(0), json!(-5), json!(1.5), json!("30"), json!(null)] {
             assert_eq!(load(bad.clone()), None, "{bad}");
         }
+        assert_eq!(resolve_bash_wait_seconds(None), DEFAULT_BASH_WAIT_SECONDS);
+        assert_eq!(resolve_bash_wait_seconds(Some(seconds(1))).get(), 1);
     }
 }
