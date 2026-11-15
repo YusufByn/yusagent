@@ -54,6 +54,9 @@ struct Variant {
     settings: Option<&'static str>,
     /// Tool names of every request, in order.
     tools: &'static [&'static str],
+    /// yusAgent (YA-09): a reasoning model, run at effort high (the requests carry
+    /// `reasoning`).
+    reasoning: bool,
 }
 
 const OTHER_FAMILY: Variant = Variant {
@@ -61,12 +64,14 @@ const OTHER_FAMILY: Variant = Variant {
     model_id: "prefix-model",
     settings: None,
     tools: &["python_repl"],
+    reasoning: false,
 };
 const CODEX_DEFAULT: Variant = Variant {
     provider: "openai",
     model_id: "gpt-6.1-terra",
     settings: None,
     tools: &["python_repl", "apply_patch"],
+    reasoning: false,
 };
 const CODEX_EDIT_KERNEL: Variant = Variant {
     settings: Some(r#"{"editTool": "kernel"}"#),
@@ -76,6 +81,16 @@ const CODEX_EDIT_KERNEL: Variant = Variant {
 const CODEX_SHELL_NATIVE: Variant = Variant {
     settings: Some(r#"{"shellTool": "native"}"#),
     tools: &["python_repl", "apply_patch", "exec_command", "write_stdin"],
+    ..CODEX_DEFAULT
+};
+/// yusAgent (YA-09): the arms of the `reasoningSummary` A/B, on a reasoning model.
+const CODEX_REASONING: Variant = Variant {
+    reasoning: true,
+    ..CODEX_DEFAULT
+};
+const CODEX_REASONING_SUMMARY_OFF: Variant = Variant {
+    settings: Some(r#"{"reasoningSummary": "off"}"#),
+    reasoning: true,
     ..CODEX_DEFAULT
 };
 
@@ -474,7 +489,7 @@ fn responses_events(reply: &Reply, seq: usize) -> String {
 fn model_json(api: Api, port: u16, variant: Variant) -> Value {
     json!({
         "id": variant.model_id, "name": "Prefix model", "api": api.name(),
-        "provider": variant.provider, "baseUrl": api.base_url(port), "reasoning": false,
+        "provider": variant.provider, "baseUrl": api.base_url(port), "reasoning": variant.reasoning,
         "input": ["text"],
         "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
         "contextWindow": 200_000, "maxTokens": 32_000
@@ -512,18 +527,23 @@ async fn engine_for(
         agent_dir,
         cwd,
         session,
+        variant
+            .reasoning
+            .then_some(pa_agent::types::ThinkingLevel::High),
     )
     .await
 }
 
 /// yusAgent (YA-03): the engine of `session` on the model `model` (`models.json` shape), with
-/// `api_key` as the provider credential (the loopback servers ignore it).
+/// `api_key` as the provider credential (the loopback servers ignore it), at `thinking_level`
+/// (`None`: the engine default).
 async fn engine_with_model(
     model: &Value,
     api_key: &str,
     agent_dir: &Path,
     cwd: &Path,
     session: SessionManager,
+    thinking_level: Option<pa_agent::types::ThinkingLevel>,
 ) -> SessionEngine {
     let provider_model: pa_types::ai::Model =
         serde_json::from_value(model.clone()).expect("provider model");
@@ -538,7 +558,7 @@ async fn engine_with_model(
         cwd: cwd.to_path_buf(),
         agent_dir: agent_dir.to_path_buf(),
         model: Some(loop_model),
-        thinking_level: None,
+        thinking_level,
         stream_fn: Some(real_stream_fn(Some(api_key.to_string()), provider_model)),
         tools: Vec::new(),
         custom_system_prompt: None,
@@ -903,6 +923,61 @@ async fn codex_shell_native_prefix_is_stable_across_requests() {
     );
 }
 
+/// yusAgent (YA-09): a reasoning model at effort high, default settings: every request carries
+/// `reasoning: {effort, summary: "auto"}`, as on `main`, and the prefix is stable.
+#[tokio::test]
+async fn codex_reasoning_summary_auto_prefix_is_stable_across_requests() {
+    let bodies = prefix_scenario(Api::OpenAiResponses, CODEX_REASONING).await;
+    for (index, body) in bodies.iter().enumerate() {
+        let request = request_object(Api::OpenAiResponses, index + 1, body);
+        assert_eq!(
+            request.get("reasoning"),
+            Some(&json!({"effort": "high", "summary": "auto"})),
+            "request {}",
+            index + 1
+        );
+    }
+}
+
+/// yusAgent (YA-09): `reasoningSummary: "off"`: every request carries `reasoning: {effort}`
+/// without `summary`, the prefix is stable, and the tools and every other parameter are those
+/// of the default arm, byte for byte. The system prompt is left out of the comparison: the
+/// two arms run in different temp dirs.
+#[tokio::test]
+async fn codex_reasoning_summary_off_prefix_is_stable_across_requests() {
+    let off = prefix_scenario(Api::OpenAiResponses, CODEX_REASONING_SUMMARY_OFF).await;
+    let Some(off_first) = off.first() else { return };
+    for (index, body) in off.iter().enumerate() {
+        let request = request_object(Api::OpenAiResponses, index + 1, body);
+        assert_eq!(
+            request.get("reasoning"),
+            Some(&json!({"effort": "high"})),
+            "request {}",
+            index + 1
+        );
+    }
+    let auto = prefix_scenario(Api::OpenAiResponses, CODEX_REASONING).await;
+    let auto_first = auto.first().expect("the default arm ran");
+    let (mut fixed_off, _) = split_request(
+        Api::OpenAiResponses,
+        &request_object(Api::OpenAiResponses, 1, off_first),
+    );
+    let (mut fixed_auto, _) = split_request(
+        Api::OpenAiResponses,
+        &request_object(Api::OpenAiResponses, 1, auto_first),
+    );
+    // The prompt cache key is the session id: one per session.
+    for key in ["reasoning", "prompt_cache_key", "input[0] (system)"] {
+        fixed_off.remove(key);
+        fixed_auto.remove(key);
+    }
+    assert_eq!(
+        Value::Object(fixed_off).to_string(),
+        Value::Object(fixed_auto).to_string(),
+        "only `reasoning` differs between the arms"
+    );
+}
+
 /// yusAgent (YA-03): `editTool` and `shellTool` are frozen in the session header at creation.
 /// A Codex session created with the default settings, resumed after the settings changed to
 /// `editTool: "kernel"` and `shellTool: "native"`, keeps its tools and its prefix: the request
@@ -1007,11 +1082,11 @@ async fn forked_session_keeps_the_tools_of_its_source_when_settings_change() {
 
 /// The Codex model on the subscription route (`openai-codex`, WebSocket transport by
 /// default), served by the loopback WebSocket server at `port`.
-fn codex_ws_model_json(port: u16) -> Value {
+fn codex_ws_model_json(port: u16, reasoning: bool) -> Value {
     json!({
         "id": "gpt-6.1-terra", "name": "Codex WebSocket model", "api": "openai-codex-responses",
         "provider": "openai-codex", "baseUrl": format!("http://127.0.0.1:{port}"),
-        "reasoning": false, "input": ["text"],
+        "reasoning": reasoning, "input": ["text"],
         "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
         "contextWindow": 200_000, "maxTokens": 32_000
     })
@@ -1260,11 +1335,12 @@ async fn codex_ws_engine(
     session: SessionManager,
 ) -> SessionEngine {
     engine_with_model(
-        &codex_ws_model_json(port),
+        &codex_ws_model_json(port, false),
         &mock_codex_token(),
         agent_dir,
         cwd,
         session,
+        None,
     )
     .await
 }
@@ -1362,6 +1438,73 @@ async fn codex_websocket_apply_patch_replays_as_custom_and_continues() {
         input[0].to_string().contains("CODEX-WS-2"),
         "request 3 sends the new prompt: {input:#?}"
     );
+}
+
+/// yusAgent (YA-09): the request frames of a two-prompt session on the Codex WebSocket, on a
+/// reasoning model at effort high, with `settings` in the agent dir.
+async fn codex_ws_reasoning_requests(settings: Option<&str>) -> Option<Vec<Value>> {
+    let fixture = Fixture::new().await?;
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    if let Some(settings) = settings {
+        std::fs::write(agent_dir.join("settings.json"), settings).expect("settings.json");
+    }
+    let server = CodexWsServer::start(vec![
+        ws_text_turn("resp_1", "msg_1", "One."),
+        ws_text_turn("resp_2", "msg_2", "Two."),
+    ])
+    .await;
+    let mut session = SessionManager::in_memory(&cwd);
+    session.materialize_session_file(Some(agent_dir.join("sessions")));
+    let engine = engine_with_model(
+        &codex_ws_model_json(server.port, true),
+        &mock_codex_token(),
+        &agent_dir,
+        &cwd,
+        session,
+        Some(pa_agent::types::ThinkingLevel::High),
+    )
+    .await;
+    run_prompt(&engine, "CODEX-WS-REASONING-1: answer.").await;
+    run_prompt(&engine, "CODEX-WS-REASONING-2: answer.").await;
+    drop(engine);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:#?}");
+    assert_eq!(
+        requests[1].get("previous_response_id"),
+        Some(&json!("resp_1")),
+        "the second request continues the first: {:#}",
+        requests[1]
+    );
+    Some(requests)
+}
+
+/// yusAgent (YA-09): on the Codex WebSocket (the bench route), `reasoningSummary` unset sends
+/// `summary: "auto"` and `"off"` sends no `summary`, in the full request and in the
+/// continuation.
+#[tokio::test]
+async fn codex_websocket_reasoning_summary_follows_the_setting() {
+    let Some(auto) = codex_ws_reasoning_requests(None).await else {
+        return;
+    };
+    let off = codex_ws_reasoning_requests(Some(r#"{"reasoningSummary": "off"}"#))
+        .await
+        .expect("fixture");
+    for (index, request) in auto.iter().enumerate() {
+        assert_eq!(
+            request["reasoning"],
+            json!({"effort": "high", "summary": "auto"}),
+            "auto, request {}",
+            index + 1
+        );
+    }
+    for (index, request) in off.iter().enumerate() {
+        assert_eq!(
+            request["reasoning"],
+            json!({"effort": "high"}),
+            "off, request {}",
+            index + 1
+        );
+    }
 }
 
 /// The first request of a one-prompt session (a text answer: no kernel cell).
