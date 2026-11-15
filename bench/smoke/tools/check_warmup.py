@@ -13,6 +13,10 @@ Lit le dossier d'une tâche (`run.py`) ou d'une reprise (`continue_session.py`),
   `reasoning_tokens` par réponse ;
 - sessions (`sessions/*.jsonl`) : champs `yaRequest` et `yaTools` de l'en-tête, blocs de
   raisonnement (texte vide, signature, `encrypted_content`, résumé) ;
+- `bash()` (levier YA-09) : fenêtre annoncée par la ligne `await bash(cmd)` des instructions,
+  cellules revenues avant la fin de leur commande, `await bash(...)` rendus complets après plus
+  de 1 s, notifications `[bash-done]`, plus long silence sans requête sur le WebSocket (fin d'une
+  réponse → requête suivante ou fermeture), fermetures `1011` dans les journaux ;
 - `err.log` : taille et occurrences de `Warning` et `error` ;
 - avec `report.json` : statut, appels en continuation et en invalidation, miss serveur,
   compactions, taux de cache de la session.
@@ -52,6 +56,49 @@ for f in sorted(glob.glob(str(d / "sessions" / "*.jsonl"))):
     print(f"  blocs de raisonnement {len(th)} ; texte vide {sum(not c.get('thinking') for c in th)} ; signés {len(sig)} ; "
           f"type reasoning {sum(s.get('type') == 'reasoning' for s in sig)} ; avec encrypted_content {sum(bool(s.get('encrypted_content')) for s in sig)} ; "
           f"summary non vide {sum(bool(s.get('summary')) for s in sig)}")
+import re
+windows = Counter(m.group(1) for b in bodies
+                  for m in [re.search(r"`await bash\(cmd\)` waits at most (\d+) seconds?\.", b.get("instructions") or "")] if m)
+print(f"bash() : fenêtre de la ligne `await bash(cmd)` : {dict(windows) or 'absente'} (en secondes, par corps)")
+snapshots = long_awaits = notices = 0
+longest = 0.0
+for f in sorted(glob.glob(str(d / "sessions" / "*.jsonl"))):
+    calls = {}
+    for e in jl(f):
+        m = e.get("message") or {}
+        if e.get("type") == "custom_message" and e.get("customType") == "async_bash_completion":
+            notices += 1
+        if e.get("type") != "message":
+            continue
+        if m.get("role") == "assistant":
+            for c in m.get("content") or []:
+                if c.get("type") == "toolCall":
+                    calls[c.get("id")] = (c.get("arguments") or {}).get("code") or ""
+        elif m.get("role") == "toolResult":
+            det = m.get("details") or {}
+            body = "".join(p.get("text", "") for p in m.get("content") or [] if isinstance(p, dict))
+            snapshot = ("still running after" in (det.get("stderr") or "") or "still running after" in body
+                        or "BashSnapshot running" in body)
+            snapshots += snapshot
+            seconds = (det.get("durationMs") or 0) / 1000
+            if not snapshot and seconds > 1 and "await bash(" in calls.get(m.get("toolCallId"), ""):
+                long_awaits += 1
+                longest = max(longest, seconds)
+print(f"  cellules revenues avant la fin : {snapshots} ; cellules `await bash(...)` rendues complètes après plus de 1 s : "
+      f"{long_awaits} (la plus longue {longest:.1f} s) ; notifications [bash-done] : {notices}")
+gaps, last = [], None
+for x in log:
+    if x.get("transport") != "websocket":
+        continue
+    if x.get("event") == "ws_open":
+        last = None
+    elif x.get("event") in ("request", "ws_close") and last is not None:
+        gaps.append((x["ts"] - last) / 1000)
+        last = None
+    elif x.get("event") == "response":
+        last = x["ts"]
+closes = sum(len(re.findall(r"\b1011\b", (d / f).read_text(errors="ignore"))) for f in ("out.jsonl", "err.log") if (d / f).exists())
+print(f"  plus long silence sans requête sur le WebSocket : {max(gaps, default=0):.1f} s ; mentions de 1011 dans out.jsonl et err.log : {closes}")
 for f in ("err.log",):
     p = d / f
     if p.exists():

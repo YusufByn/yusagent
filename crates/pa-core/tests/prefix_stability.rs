@@ -95,6 +95,13 @@ const CODEX_REASONING_SUMMARY_AUTO: Variant = Variant {
     ..CODEX_DEFAULT
 };
 
+/// yusAgent (YA-09, lever `bash()`): `bashWaitSeconds: 1`, the upstream window (the default is
+/// 30 seconds since 15/11/2026).
+const CODEX_BASH_WAIT_1: Variant = Variant {
+    settings: Some(r#"{"bashWaitSeconds": 1}"#),
+    ..CODEX_DEFAULT
+};
+
 /// Process env is shared by the tests of this binary: one scenario at a time.
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -981,6 +988,130 @@ async fn codex_reasoning_summary_auto_prefix_is_stable_across_requests() {
     );
 }
 
+/// yusAgent (YA-09, lever `bash()`): two sessions of one project, the default settings
+/// (`bashWaitSeconds` 30 since 15/11/2026) then `bashWaitSeconds: 1`. Each prefix is stable
+/// across its requests; the default prompt has the 30-second line, and the two prompts differ
+/// only by that window; the tools and every other parameter are identical. The header of the
+/// default session freezes 30; the one set to 1 is written without the field, as before it.
+#[tokio::test]
+async fn codex_bash_wait_changes_only_the_await_line() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let mut headers = Vec::new();
+    for variant in [CODEX_DEFAULT, CODEX_BASH_WAIT_1] {
+        std::fs::write(
+            agent_dir.join("settings.json"),
+            variant.settings.unwrap_or("{}"),
+        )
+        .expect("settings.json");
+        let mut session = SessionManager::in_memory(&cwd);
+        let path = session.materialize_session_file(Some(sessions.clone()));
+        let engine = engine_for(api, &server, &agent_dir, &cwd, variant, session).await;
+        for prompt in PROMPTS {
+            run_prompt(&engine, prompt).await;
+        }
+        drop(engine);
+        let header = pa_core::session::manager::read_session_header(&path).expect("header");
+        headers.push(header.rest.get("yaRequest").cloned());
+    }
+    assert_eq!(
+        headers,
+        [
+            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30})),
+            Some(json!({"reasoningSummary": "off"})),
+        ]
+    );
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2 * EXPECTED_REQUESTS, "two sessions");
+    let (default, upstream) = bodies.split_at(EXPECTED_REQUESTS);
+    assert_prefix_stable(api, default);
+    assert_prefix_stable(api, upstream);
+    let upstream_line = "`await bash(cmd)` waits at most 1 second.";
+    let default_line = "`await bash(cmd)` waits at most 30 seconds.";
+    let (default_prompt, upstream_prompt) = (
+        responses_system_prompt(&default[0]),
+        responses_system_prompt(&upstream[0]),
+    );
+    assert_eq!(
+        default_prompt.matches(default_line).count(),
+        1,
+        "{default_prompt}"
+    );
+    assert!(!default_prompt.contains(upstream_line), "{default_prompt}");
+    assert_eq!(
+        upstream_prompt.matches(upstream_line).count(),
+        1,
+        "{upstream_prompt}"
+    );
+    assert_eq!(
+        default_prompt.replacen(default_line, upstream_line, 1),
+        upstream_prompt,
+        "only the window differs"
+    );
+    let (mut fixed_default, _) = split_request(api, &request_object(api, 1, &default[0]));
+    let (mut fixed_upstream, _) = split_request(api, &request_object(api, 1, &upstream[0]));
+    // The prompt cache key is the session id: one per session.
+    for key in ["prompt_cache_key", "input[0] (system)"] {
+        fixed_default.remove(key);
+        fixed_upstream.remove(key);
+    }
+    assert_eq!(
+        Value::Object(fixed_default).to_string(),
+        Value::Object(fixed_upstream).to_string(),
+        "tools and parameters are identical"
+    );
+}
+
+/// yusAgent (YA-09, lever `bash()`): a session created before `bashWaitSeconds` existed (its
+/// `yaRequest` has no field, as the one written with a window of 1) keeps the 1-second line when
+/// resumed with the default settings (30): the request after the resume extends the one before
+/// it, and the header is left as is.
+#[tokio::test]
+async fn resumed_session_from_before_bash_wait_keeps_one_second() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    std::fs::write(agent_dir.join("settings.json"), r#"{"bashWaitSeconds": 1}"#)
+        .expect("settings.json");
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+    let before = json!({"reasoningSummary": "off"});
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
+
+    std::fs::write(agent_dir.join("settings.json"), "{}").expect("settings.json");
+    let resumed = SessionManager::open(&cwd, &sessions, &path);
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, resumed).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2, "one request per prompt");
+    assert_prefix_stable(api, &bodies);
+    for (index, body) in bodies.iter().enumerate() {
+        let prompt = responses_system_prompt(body);
+        assert!(
+            prompt.contains("`await bash(cmd)` waits at most 1 second."),
+            "request {}: {prompt}",
+            index + 1
+        );
+    }
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
+}
+
 /// yusAgent (YA-03): `editTool` and `shellTool` are frozen in the session header at creation.
 /// A Codex session created with the default settings, resumed after the settings changed to
 /// `editTool: "kernel"` and `shellTool: "native"`, keeps its tools and its prefix: the request
@@ -1049,7 +1180,7 @@ async fn resumed_legacy_session_keeps_summary_auto() {
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(
         header.rest.get("yaRequest"),
-        Some(&json!({"reasoningSummary": "off"})),
+        Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30})),
         "{header:?}"
     );
 

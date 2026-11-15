@@ -103,6 +103,9 @@ pub struct BuildSystemPromptOptions<'a> {
     /// yusAgent (YA-03): the session's native tools (`apply_patch`, `exec_command`); the
     /// layers document them (`super::ya_tools_prompt`).
     pub ya_tool_choice: crate::session_engine::ya_tool_family::ToolChoice,
+    /// yusAgent (YA-09): the session's `await bash(cmd)` window (`bashWaitSeconds`); `None` or 1
+    /// keeps the upstream line (`super::ya_bash_wait`).
+    pub ya_bash_wait_seconds: Option<std::num::NonZeroU32>,
     /// Enabled user-configured generic MCP servers.
     pub generic_mcp_servers: Vec<String>,
 }
@@ -339,10 +342,11 @@ fn session_role_section(options: &BuildSystemPromptOptions, has_ipython: bool) -
     if has_ipython {
         // yusAgent (YA-03): no `await bash(cmd)` contract without `bash()`.
         if super::ya_tools_prompt::has_bash_await_line(options.ya_tool_choice) {
-            lines.push(
-            "`await bash(cmd)` waits at most 1 second. If the command is still running, it returns a snapshot: `r.running` is True, `r.exit_code` is None, `r.output` is the output so far, and `r.handle` is the live handle. A completed result has `r.running` False and an integer `r.exit_code`. The command keeps running after a snapshot; end the turn and collect the final result on the `[bash-done]` notification."
-                .to_string(),
-            );
+            // yusAgent (YA-09): the window of the session (`bashWaitSeconds`).
+            lines.push(super::ya_bash_wait::bash_await_line(
+            "`await bash(cmd)` waits at most 1 second. If the command is still running, it returns a snapshot: `r.running` is True, `r.exit_code` is None, `r.output` is the output so far, and `r.handle` is the live handle. A completed result has `r.running` False and an integer `r.exit_code`. The command keeps running after a snapshot; end the turn and collect the final result on the `[bash-done]` notification.",
+                options.ya_bash_wait_seconds,
+            ));
         }
     } else {
         lines.push(

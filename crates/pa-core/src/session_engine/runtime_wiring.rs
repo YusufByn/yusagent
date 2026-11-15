@@ -266,6 +266,7 @@ pub fn kernel_provisioner(
     on_unavailable_skills: Option<crate::kernel::provisioner::UnavailableSkillsCallback>,
     on_bootstrap_result: Option<crate::kernel::provisioner::KernelBootstrapResultHandler>,
     ya_native_shell: bool,
+    ya_bash_wait_seconds: std::num::NonZeroU32,
 ) -> Arc<KernelProvisioner> {
     let mut env = HashMap::with_capacity(3);
     env.insert(
@@ -319,6 +320,8 @@ pub fn kernel_provisioner(
             on_bootstrap_result,
             // yusAgent (YA-03): `shellTool: "native"`, no `bash` in the namespace.
             ya_native_shell,
+            // yusAgent (YA-09): the `await bash(cmd)` window (`bashWaitSeconds`).
+            ya_bash_wait_seconds: Some(ya_bash_wait_seconds),
         },
     ))
 }
