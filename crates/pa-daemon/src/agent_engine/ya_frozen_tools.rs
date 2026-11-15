@@ -304,7 +304,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(
             dir.path(),
-            Some(json!({ REQUEST_KEY: off.clone() })),
+            Some(json!({ REQUEST_KEY: off })),
             r#"{"reasoningSummary": "auto"}"#,
         );
         assert_eq!(built_request(&engine), Some(off));
