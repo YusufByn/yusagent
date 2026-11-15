@@ -208,6 +208,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `bench/smoke/ab/ya09-bash-count.py` | ajout | Tokens du prompt système et des tools (yusAgent depuis un corps capturé, Unharnessed depuis un clone), tokenizer `o200k_base` supposé ; tiktoken installé par `uv run --with`, pas de dépendance du dépôt. | YA-09 |
 | `bench/smoke/tools/check_warmup.py` | modif. (fichier du fork) | Contrôles de `bash()` : fenêtre de la ligne du prompt, cellules revenues avant la fin, attentes complètes de plus de 1 s, notifications, plus long silence WebSocket, mentions de 1011. | YA-09 |
 | `.changes/ya-09-bash-wait.md` | ajout | Fragment de changelog du réglage `bashWaitSeconds`. | YA-09 |
+| `crates/pa-cli/src/prompt_command.rs` | modif. (2 lignes + test) | `prime-agent prompt` affiche la fenêtre `await bash(cmd)` des réglages courants (`bashWaitSeconds`) ; test `shows_the_bash_wait_of_the_settings`. Les autres réglages de session (`yaTools`, démon) restent ignorés par cette commande, comme avant. | YA-09 |
 
 
 
@@ -672,6 +673,7 @@ Défaut de notre base de fork (`c83ac68b3`) : au `response.output_item.done`, `R
 - **Réglage** : `bashWaitSeconds` dans `settings.json`, secondes entières, au moins 1 ; **absent : 1 s, comme upstream** (`prime-agent-runtime/src/rlm/bash.py`, `_YIELD_AFTER_SECONDS`, upstream #3523 et #3828). Upstream n'a pas de réglage équivalent. Plan de l'A/B : `bench/smoke/ab/ya09-bash-plan.md`.
 - **Runtime Python non modifié** : le bootstrap du kernel pose la globale du module `rlm.bash` après l'appel `_set_completion_notices_wired(True)` (`kernel/bootstrap/ya_bash_wait.rs`). Un changement upstream de cette ligne de bootstrap fait échouer le test `the_marker_matches_the_upstream_bootstrap`. Si upstream renomme la globale, la ligne posée n'a plus d'effet : le test `ya_bash_wait_kernel.rs` le détecte (résultat attendu à 30 s).
 - **Figé par session** dans `yaRequest`, à côté de `reasoningSummary`, écrit seulement s'il ne vaut pas 1 : l'en-tête d'une session par défaut ne change pas. Un `yaRequest` sans le champ vaut 1 s. Une valeur illisible dans l'en-tête rend tout `yaRequest` illisible, réécrit en `"auto"` et 1 s (règle existante).
+- **`prime-agent prompt`** affiche la fenêtre des réglages courants (pas la valeur figée d'une session).
 - **Préfixe** : à 1 s (défaut), prompt, tools et corps identiques à upstream pour cette ligne. **Avec une autre valeur, le prompt système change** : la fenêtre de la ligne `await bash(cmd)` (« waits at most 30 seconds. »), stable dans la session. Tools et corps inchangés.
 
 ## Code repris d'Unharnessed

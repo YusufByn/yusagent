@@ -123,6 +123,8 @@ fn assemble_breakdown(
             generic_mcp_servers: generic_servers,
             rlm_depth: Some(0),
             model_prompt_extras: model_prompts.extras.as_deref(),
+            // yusAgent (YA-09): the `await bash(cmd)` window of the current settings.
+            ya_bash_wait_seconds: settings.settings().bash_wait_seconds,
             ..Default::default()
         },
     );
@@ -216,6 +218,32 @@ mod tests {
     #[test]
     fn help_request_prints_usage() {
         assert_eq!(run_prompt_command(&["--help".to_string()]), 0);
+    }
+
+    /// yusAgent (YA-09): the dump shows the `await bash(cmd)` window of the settings.
+    #[test]
+    fn shows_the_bash_wait_of_the_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let (default, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
+        let project = dir.path().join(".prime/agent");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("settings.json"), r#"{"bashWaitSeconds": 30}"#).unwrap();
+        let (waited, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
+        assert!(
+            waited
+                .assembled
+                .contains("`await bash(cmd)` waits at most 30 seconds."),
+            "{}",
+            waited.assembled
+        );
+        assert_eq!(
+            waited.assembled.replacen(
+                "`await bash(cmd)` waits at most 30 seconds.",
+                "`await bash(cmd)` waits at most 1 second.",
+                1
+            ),
+            default.assembled
+        );
     }
 
     #[test]
