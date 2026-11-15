@@ -113,7 +113,10 @@ python3 -I bench/smoke/ab/ya09-bash-mesures.py bench/smoke/runs/ab-<horodatage>
 
 ### Binaire et chauffe
 
-- **Binaire** : à noter avant le run.
+- **Binaire** : branche `ya-09-bash` à `8755b2e5909e81666cf14fce143e631f1b0e4212` (CI `ci.yml` en brouillon, jobs lourds sautés : les tests Rust restent à passer). Build `ya-build-macos-arm64.yml` 43754394374, version `v0.10.2`.
+  - sha256 de l'archive `prime-agent-0.10.2-darwin-arm64.tar.gz` : `045480e66374ae4f4962b21890cd1dd563fe867b3643df22cf3b3aca764d3e90` (`SHA256SUMS`, vérifié par `install-bin.sh`).
+  - sha256 de l'exécutable `prime-agent` : `26b92178d5070e13188ac5efcbd5687c6ab7bc12b70373dc6b1867c6695ed2f0` (manifeste, `executableSha256`, et `shasum -a 256`).
+  - Avant le run : `git diff --quiet 8755b2e59 HEAD -- crates prime-agent-runtime skills vendor install-rust.sh Cargo.toml Cargo.lock` doit sortir avec le code 0. Si un commit de code suit (correction demandée par la CI au passage en prêt), le binaire et ces sommes sont à refaire.
 - **Chauffe** (accord de Yusuf du 15/11/2026), hors A/B : `node-testsprite-356`, bras B, `gpt-6-luna`, effort high, `--log-bodies`.
 
   ```bash
@@ -124,7 +127,24 @@ python3 -I bench/smoke/ab/ya09-bash-mesures.py bench/smoke/runs/ab-<horodatage>
 
   Points vérifiés : en-tête `yaRequest {"reasoningSummary": "off", "bashWaitSeconds": 30}` ; ligne `await bash(cmd)` à 30 s dans chaque corps ; au moins une attente réelle de plus de 1 s rendue complète ; plus long silence sans requête sur le WebSocket ; aucune mention de 1011.
 
-  Résultats : à noter après la chauffe.
+  **Chauffe du 15/11/2026** sur `8755b2e`, run `bench/smoke/runs/20261115T195452Z-8755b2e-gpt-6-luna` (non versionné), tâche **résolue**, 40 appels, phase agent 388 s.
+
+  | Point | Résultat |
+  |---|---|
+  | En-tête de session | `yaRequest {"reasoningSummary": "off", "bashWaitSeconds": 30}` ; `yaTools` inchangé |
+  | Ligne `await bash(cmd)` | « waits at most 30 seconds. » dans les 40 corps |
+  | `reasoning` des corps | `{"effort": "high"}`, 40 sur 40 (défaut `off` inchangé) |
+  | Attentes réelles | 4 cellules `await bash(...)` rendues complètes après plus de 1 s (2,6 à 13,8 s) ; 2 cellules revenues à 30 s (30 007 et 30 014 ms), toutes deux sur `npm test` (suite complète) |
+  | Relèves, notifications | 2 relèves, 2 notifications `[bash-done]` |
+  | Silences sans requête sur le WebSocket (> 5 s) | 13,8 ; 30,0 ; 47,0 ; 30,0 ; 73,9 s |
+  | **Fermeture 1011** | **oui** : `1011 keepalive ping timeout`, puis 3 appels en SSE (corps complets), tâche résolue |
+  | Rapport | 0 invalidation, 0 miss serveur, 0 compaction, taux de cache de la session 0,958 ; `err.log` vide ; scan de secrets propre |
+
+  **Chronologie de la fermeture** (session et proxy du run) : à 19:59:12Z, la cellule lance la suite complète (`npm test > /tmp/testsprite-npm-test.log …`). Elle revient à 30 s avec un instantané (19:59:42Z). Le modèle relève deux fois le handle, puis finit son tour à 19:59:51Z. Le serveur ferme le WebSocket à 20:01:04Z, **73,9 s après la dernière réponse**. La notification `[bash-done]` arrive à 20:01:12Z (commande d'environ 120 s, borne haute). Plus tôt, un premier `npm test` (19:57:10Z → notification à 19:59:04Z, environ 114 s) avait laissé un silence de 47,0 s sans fermeture.
+
+  **Lecture** : les deux longs silences sont des fins de tour qui attendent `[bash-done]`, pas des attentes dans la cellule ; les silences dus à la fenêtre font 30 s au plus et n'ont pas fermé la connexion. C'est le mécanisme du constat du 15/11 (77,2 s), pas un effet de la fenêtre. Les deux fermetures observées tombent après 73,9 et 77,2 s de silence, et un silence de 47,0 s est passé : cela suggère un délai serveur de l'ordre de 60 à 75 s, **hypothèse sur deux cas**, non vérifiée. Sur cette tâche, la suite complète dure environ 2 min, au-delà de 30 s : la fenêtre ne l'absorbe pas. Les durées du run YA-14 (max 39 s) ne contenaient pas ces suites complètes.
+
+  **Conséquence pour l'A/B** : des bascules 1011 sont attendues dans les deux bras sur `node-testsprite-356`. Elles restent affichées sans décider (règle d'écart du README). La correction (réponse aux pings entre deux requêtes, `websocket.rs:229-235`) relève de la couche providers, hors de ce levier.
 
 ## Règle de verdict
 
