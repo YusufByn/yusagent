@@ -524,7 +524,7 @@ Rapport complet : `docs/audit/audit-entree.md` (binaire de HEAD construit en CI,
 
 | Sujet | Constat | Ticket |
 |---|---|---|
-| Prompt système | environ 7 500 tokens est. (couches statiques 5 636, inventaire des skills 1 854) ; cible < 2 000 | YA-09 |
+| Prompt système | au 03/11 : environ 7 500 tokens est. (couches statiques 5 636, inventaire des skills 1 854). **Référence du 15/11/2026** (binaire `c770c5a`, `gpt-6-luna`, `default.json` ; journal du CDC du 15/11) : **instructions 6 230 tokens** (`o200k_base`, supposé) / 6 234 (attribution du backend Codex, champ non documenté) ; **tools 423** / 433, comptés à part (`python_repl` 171, `apply_patch` 252, JSON compact) ; `bench/smoke/ab/ya09-bash-count.py`. Cible < 2 000 hors tools | YA-09 |
 | Cache dans une session | prompt système et tools identiques octet par octet à chaque tour, après crash, reprise et compaction ; seul `cache_control` se déplace (schéma Anthropic normal) | YA-04 |
 | Cache entre sessions | prompt système différent à chaque session : date, cwd, chemin du journal de session | YA-04, YA-09 |
 | Breakpoints et TTL | 3 breakpoints automatiques ; TTL 1 h seulement via `PI_CACHE_RETENTION=long` ; `prompt_cache_key` = id de session | YA-04 |
