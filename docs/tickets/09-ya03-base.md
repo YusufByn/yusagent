@@ -179,3 +179,19 @@ Source : `bench/smoke/ab/ya14-codex-20261114.md` (`gpt-6-luna`, binaire `80e20ea
     - le changement de clé d'environnement de la passe 1 (tour 45) n'est pas la réécriture d'un test existant : c'est la fixture de son propre test, dont la clé `sk-from-env` n'avait pas de préfixe admis par la tâche.
   - La suite complète n'est lancée qu'une fois dans ces 4 échecs (`node-testsprite-356` passe 3, tour 49), et elle y révèle une régression.
 - **Rappel des A/B de YA-03** (point ouvert plus haut) : sur `gpt-6.1-terra`, l'agent réécrit un test existant qui passait avant le correctif dans les 22 bras en échec de `node-filesize-376` et `node-little-coder-102`.
+
+## Constat de l'A/B YA-09 `reasoningSummary` : WebSocket fermé pendant une attente de `bash()` en arrière-plan (15/11/2026)
+
+Source : `bench/smoke/ab/ya09-summary-20261115.md`, « Bascule SSE de `node-testsprite-356` ». Constat seulement, aucune action dans ce ticket.
+
+- **Faits** (passe 2, bras B, `20261115T162554Z-7086711-gpt-6-luna`, tâche résolue) :
+  1. L'agent rend sa réponse finale à 16:28:05Z, pendant qu'un `npm test -- --run` lancé par `bash()` tourne encore en arrière-plan.
+  2. À 16:29:22Z, le serveur ferme le WebSocket : `1011 keepalive ping timeout`. La connexion avait 203 s, dont environ 77 s sans requête.
+  3. À 16:29:54Z, la notification `[bash-done]` (`async_bash_completion`) réveille l'agent, 109 s après sa réponse.
+  4. La requête suivante échoue sur le WebSocket avant le début du flux (`provider_transport_failure`, `eventsEmitted: false`). Elle part en SSE, en corps complet (186 Ko), et obtient 27 776 tokens en cache sur 28 079.
+- **Effet mesuré** : 1 appel sur 720 dans ce bras, sans perte de cache notable. L'unité n'est pas écartée (ce n'est pas une erreur provider).
+- **Cause probable, côté client (hypothèse, lecture du code)** : entre deux requêtes, le worker de la connexion attend la commande suivante sans lire le flux (`crates/pa-ai/src/providers/openai_codex_responses/websocket.rs:229-235`, « The worker parks between requests »). Les pings du serveur ne reçoivent donc pas de pong tant qu'aucune requête n'est en cours ; `tokio-tungstenite` n'y répond qu'en lisant le flux. Le code de fermeture 1011 et la raison « keepalive ping timeout » vont dans ce sens. Le reverse proxy du banc relaie les octets sans journaliser les trames de contrôle (`bench/smoke/proxies.py`), donc les pings ne sont pas vus. Ce code vient de l'amont (identique à `c83ac68b3`). Le client garde pourtant une connexion inactive jusqu'à 5 min (`SESSION_WEBSOCKET_CACHE_TTL_MS`, `websocket.rs:29`).
+- **Ce qui reste ouvert** :
+  - le délai de ping du serveur n'est pas connu. Ici, la fermeture tombe environ 77 s après la dernière réponse. Un seul cas sur 60 lancements, alors que d'autres attentes entre appels dépassent 77 s au banc (maximum 110 s, `bench/smoke/README.md`, « Garde-fou d'inactivité ») ;
+  - après la bascule, la session reste en SSE (`record_websocket_failure` « Pins the session to SSE fallback », `crates/pa-ai/src/providers/openai_codex_responses/session.rs:64` ; lu à `mod.rs:223-227`), donc en corps complet à chaque requête : la suite de conversation n'existe que sur la connexion WebSocket (`mod.rs:408-409`). Le coût de cette bascule sur une longue session n'est pas mesuré ;
+  - le lien avec les attentes de `bash()` (constats YA-14 ci-dessus) : une commande longue en arrière-plan crée un silence côté modèle. YA-09 doit en tenir compte s'il change l'attente de `bash()` (levier 1 de la proposition du 14/11/2026).

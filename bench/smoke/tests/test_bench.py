@@ -194,7 +194,8 @@ class AbPlan(unittest.TestCase):
 
 
 def write_arm(root: Path, name: str, task: str, theo: float, status: str = "resolved",
-              session_error: str | None = None, proxy_status: str = "101") -> Path:
+              session_error: str | None = None, proxy_status: str = "101",
+              anomalies: list[str] | None = None) -> Path:
     """Run synthétique d'une tâche : report.json, journaux de proxy et de session."""
     run_dir = root / name
     out = run_dir / "tasks" / task / "run-1"
@@ -212,7 +213,7 @@ def write_arm(root: Path, name: str, task: str, theo: float, status: str = "reso
               "tokens": {"input": 10, "cacheRead": 0, "cacheWrite": 0},
               "cost": {"total": theo * 1.2, "pessimistic_total": theo * 1.3,
                        "theoretical_total": theo, "theoretical": {"cacheRead": 0}},
-              "server_misses": [], "subagents": {"cost": 0}}
+              "server_misses": [], "subagents": {"cost": 0}, "anomalies": anomalies or []}
     (run_dir / "report.json").write_text(json.dumps({"header": {}, "results": [result]}))
     return run_dir
 
@@ -277,6 +278,28 @@ class AbStats(unittest.TestCase):
             self.assertIn("passe 1 (toutes ses tâches) : paire 1 écartée entière", text)
             self.assertIn("flux bloqué (garde-fou d'inactivité", text)
             self.assertIn("**toutes, théorique (décision) : -20.0 %", text)
+
+    def test_report_anomalies_are_non_excluding_incidents(self):
+        # YA-09 : une bascule SSE (anomalie de report.json) est un incident non écartant.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            arms = []
+            for task in ("t1", "t2"):
+                for side in "AB":
+                    anomalies = (["1 appel(s) de boucle en SSE (bascule)"]
+                                 if (task, side) == ("t2", "B") else None)
+                    run_dir = write_arm(root, f"{task}-{side}", task, 1.0, anomalies=anomalies)
+                    arms.append({"pass": 1, "task": task, "order": "AB", "arm": side,
+                                 "exit": 0, "run_dir": str(run_dir)})
+            plan = root / "ab.json"
+            plan.write_text(json.dumps({"arms": arms, "seed": 1, "seed_source": "test",
+                                        "settings_diff": {}, "idle_timeout_s": 300}))
+            text = self.run_stats(["--plan", str(plan), "--draws", "200"])
+            self.assertIn("retenues 2, écartées 0", text)
+            incidents = text.split("## Incidents", 1)[1]
+            self.assertIn("- passe 1, t2 : bras B : anomalie du rapport : 1 appel(s) de boucle "
+                          "en SSE (bascule)", incidents)
+            self.assertNotIn("- aucun", incidents.split("##", 1)[0])
 
     def test_timeout_classification(self):
         with tempfile.TemporaryDirectory() as tmp:
