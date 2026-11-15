@@ -255,7 +255,7 @@ mod tests {
                 (
                     store.path,
                     REQUEST_KEY.to_string(),
-                    json!({"reasoningSummary": "auto"})
+                    json!({"reasoningSummary": "off"})
                 ),
             ]
         );
@@ -286,9 +286,10 @@ mod tests {
         engine
     }
 
-    /// yusAgent (YA-09): a new session freezes `reasoningSummary` from the settings; a durable
-    /// header that has it keeps it over the settings; a header frozen by YA-03 without it (a
-    /// session from before the field) is `"auto"`.
+    /// yusAgent (YA-09): a new session freezes `reasoningSummary` from the settings (`"off"`
+    /// when unset, the default since 15/11/2026); a durable header that has it keeps it over
+    /// the settings; a header frozen by YA-03 without it (a session from before the field) is
+    /// `"auto"`, with the default settings too.
     #[test]
     fn a_build_freezes_the_request_settings() {
         let _faux = FAUX_TEST_LOCK
@@ -298,8 +299,12 @@ mod tests {
         let auto = json!({"reasoningSummary": "auto"});
 
         let dir = tempfile::TempDir::new().unwrap();
-        let engine = build_with_settings(dir.path(), None, r#"{"reasoningSummary": "off"}"#);
+        let engine = build_with_settings(dir.path(), None, "{}");
         assert_eq!(built_request(&engine), Some(off.clone()));
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let engine = build_with_settings(dir.path(), None, r#"{"reasoningSummary": "auto"}"#);
+        assert_eq!(built_request(&engine), Some(auto.clone()));
 
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(
@@ -309,13 +314,15 @@ mod tests {
         );
         assert_eq!(built_request(&engine), Some(off));
 
-        let dir = tempfile::TempDir::new().unwrap();
-        let engine = build_with_settings(
-            dir.path(),
-            Some(json!({ FROZEN_TOOLS_KEY: kernel_tools() })),
-            r#"{"reasoningSummary": "off"}"#,
-        );
-        assert_eq!(built_request(&engine), Some(auto));
+        for settings in ["{}", r#"{"reasoningSummary": "off"}"#] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let engine = build_with_settings(
+                dir.path(),
+                Some(json!({ FROZEN_TOOLS_KEY: kernel_tools() })),
+                settings,
+            );
+            assert_eq!(built_request(&engine), Some(auto.clone()), "{settings}");
+        }
     }
 
     /// A durable header with frozen kernel tools, and settings asking for `editTool: "native"`

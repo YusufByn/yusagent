@@ -1,15 +1,17 @@
 //! yusAgent (YA-09): request settings frozen per session, today `reasoningSummary`.
 //!
 //! `reasoningSummary` in `settings.json`:
-//! - unset or `"auto"`: the request is left as is. The `OpenAI` Responses providers send
+//! - unset (the default since the CDC decision of 15/11/2026) or `"off"`: `reasoning.summary`
+//!   is removed from the request body, as Codex CLI does for `gpt-6-luna`
+//!   (`default_reasoning_summary: "none"`, field omitted, `codex-rs/core/src/client.rs:1149-1152`
+//!   at `rust-v0.169.0`). Only the Responses APIs of [`RESPONSES_APIS`] are touched, all three
+//!   of them, though the A/B that decided the default measured `gpt-6-luna` only
+//!   (`bench/smoke/ab/ya09-summary-20261115.md`). The provider then streams reasoning items
+//!   without summary text: the thinking blocks keep their signature (replay) with an empty
+//!   text, and nothing is shown as reasoning in the TUI or over ACP;
+//! - `"auto"`: the request is left as is. The `OpenAI` Responses providers send
 //!   `reasoning.summary: "auto"` with every reasoning effort
-//!   (`pa_ai::providers::openai_codex_responses`, `reasoning_summary_value`);
-//! - `"off"`: `reasoning.summary` is removed from the request body, as Codex CLI does for
-//!   `gpt-6-luna` (`default_reasoning_summary: "none"`, field omitted,
-//!   `codex-rs/core/src/client.rs:1149-1152` at `rust-v0.169.0`). Only the Responses APIs of
-//!   [`RESPONSES_APIS`] are touched. The provider then streams reasoning items without summary
-//!   text: the thinking blocks keep their signature (replay) with an empty text, and nothing is
-//!   shown as reasoning in the TUI or over ACP.
+//!   (`pa_ai::providers::openai_codex_responses`, `reasoning_summary_value`), as upstream.
 //!
 //! The removal is a payload hook around the session's stream function ([`scoped_stream_fn`]),
 //! so the provider layer stays as upstream. It runs before the hooks of the request timing and
@@ -20,8 +22,10 @@
 //! every resume; settings changed in between give a warning. A session from before this field
 //! is `"auto"`, what it was sent with: it is recognized by the frozen tools of YA-03 in its
 //! header (written to every session since YA-03). An unreadable `yaRequest` is rewritten as
-//! `"auto"` too. A session from before YA-03 (neither field) is frozen with the current
-//! settings, as its tools are. Listed in `docs/fork-changes.md`.
+//! `"auto"` too. A session from before YA-03 (neither field) cannot be told from a new one when
+//! it is frozen (the daemon freezes an in-memory copy without its history): it is frozen with
+//! the current settings, as its tools are, so `"off"` unless set. Listed in
+//! `docs/fork-changes.md`.
 
 use std::sync::Arc;
 
@@ -31,14 +35,14 @@ use serde_json::Value;
 
 use crate::session::manager::SessionManager;
 
-/// The `reasoningSummary` setting.
+/// The `reasoningSummary` setting; unset is [`ReasoningSummarySetting::Off`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningSummarySetting {
     /// The provider default: `reasoning.summary: "auto"` on the Responses APIs.
-    #[default]
     Auto,
-    /// `reasoning.summary` removed from the request body.
+    /// `reasoning.summary` removed from the request body (the default).
+    #[default]
     Off,
 }
 
@@ -55,14 +59,18 @@ pub const REQUEST_HEADER_KEY: &str = "yaRequest";
 
 /// The effective request settings of a session, written to its header at creation and read
 /// back on every resume: an unset setting is stored as the value it resolved to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrozenRequest {
-    #[serde(default)]
     pub reasoning_summary: ReasoningSummarySetting,
 }
 
 impl FrozenRequest {
+    /// The settings a session created before the field was sent with: `"auto"`.
+    pub const LEGACY: FrozenRequest = FrozenRequest {
+        reasoning_summary: ReasoningSummarySetting::Auto,
+    };
+
     /// The request settings of the current settings.
     #[must_use]
     pub fn of(reasoning_summary: Option<ReasoningSummarySetting>) -> Self {
@@ -93,9 +101,9 @@ fn label(setting: ReasoningSummarySetting) -> String {
     serde_json::to_value(setting).map_or_else(|_| "?".to_string(), |value| value.to_string())
 }
 
-/// The request settings of a session: the frozen ones of its header (a resume), `"auto"` for a
-/// session created before the field (`legacy`), else the current settings (frozen from now
-/// on).
+/// The request settings of a session: the frozen ones of its header (a resume),
+/// [`FrozenRequest::LEGACY`] (`"auto"`) for a session created before the field (`legacy`), else
+/// the current settings (frozen from now on).
 #[must_use]
 pub fn session_request(
     frozen: Option<FrozenRequest>,
@@ -105,7 +113,7 @@ pub fn session_request(
     let current = FrozenRequest::of(reasoning_summary);
     let Some(frozen) = frozen else {
         let frozen = if legacy {
-            FrozenRequest::default()
+            FrozenRequest::LEGACY
         } else {
             current
         };
@@ -199,7 +207,8 @@ fn strip_then(hook: Option<OnPayloadHook>) -> OnPayloadHook {
 }
 
 /// `inner` with the session's frozen request settings applied to each request. `"auto"` returns
-/// `inner` itself: the request is the provider's, byte for byte.
+/// `inner` itself: the request is the provider's, byte for byte. `"off"`, the default, removes
+/// `reasoning.summary`.
 #[must_use]
 pub fn scoped_stream_fn(inner: StreamFn, request: FrozenRequest) -> StreamFn {
     if request.reasoning_summary == ReasoningSummarySetting::Auto {
@@ -305,61 +314,76 @@ mod tests {
         assert_eq!(wrapped(codex_body(), &model("anthropic-messages")), None);
     }
 
+    const OFF: FrozenRequest = FrozenRequest {
+        reasoning_summary: ReasoningSummarySetting::Off,
+    };
+
+    /// Since the CDC decision of 15/11/2026, an unset setting is `"off"`.
     #[test]
-    fn a_new_session_freezes_the_current_settings() {
-        let request = session_request(None, false, Some(ReasoningSummarySetting::Off));
+    fn the_default_is_off() {
         assert_eq!(
-            request.frozen.reasoning_summary,
+            ReasoningSummarySetting::default(),
             ReasoningSummarySetting::Off
         );
-        assert_eq!(request.to_write, Some(request.frozen));
-        assert_eq!(request.warning, None);
-        let unset = session_request(None, false, None);
-        assert_eq!(unset.frozen, FrozenRequest::default());
-        assert_eq!(unset.to_write, Some(FrozenRequest::default()));
+        assert_eq!(FrozenRequest::of(None), OFF);
+        assert_eq!(
+            FrozenRequest::of(Some(ReasoningSummarySetting::Auto)),
+            FrozenRequest::LEGACY
+        );
     }
 
-    /// A session from before the field was sent with `"auto"` and keeps it.
+    #[test]
+    fn a_new_session_freezes_the_current_settings() {
+        let request = session_request(None, false, Some(ReasoningSummarySetting::Auto));
+        assert_eq!(request.frozen, FrozenRequest::LEGACY);
+        assert_eq!(request.to_write, Some(request.frozen));
+        assert_eq!(request.warning, None);
+        // Unset: the default, `"off"`, written as such.
+        let unset = session_request(None, false, None);
+        assert_eq!(unset.frozen, OFF);
+        assert_eq!(unset.to_write, Some(OFF));
+        assert_eq!(unset.warning, None);
+    }
+
+    /// A session from before the field was sent with `"auto"` and keeps it, the default
+    /// (`"off"`) included.
     #[test]
     fn a_legacy_session_is_auto() {
         let request = session_request(None, true, Some(ReasoningSummarySetting::Off));
-        assert_eq!(
-            request.frozen.reasoning_summary,
-            ReasoningSummarySetting::Auto
-        );
-        assert_eq!(request.to_write, Some(FrozenRequest::default()));
+        assert_eq!(request.frozen, FrozenRequest::LEGACY);
+        assert_eq!(request.to_write, Some(FrozenRequest::LEGACY));
         assert!(request.warning.is_some());
         let request = session_request(None, true, None);
+        assert_eq!(request.frozen, FrozenRequest::LEGACY);
+        assert!(request.warning.is_some());
+        let request = session_request(None, true, Some(ReasoningSummarySetting::Auto));
         assert_eq!(request.warning, None);
     }
 
     #[test]
     fn a_resume_keeps_the_frozen_settings_and_warns_on_a_change() {
-        let off = FrozenRequest {
-            reasoning_summary: ReasoningSummarySetting::Off,
-        };
-        let request = session_request(Some(off), false, None);
-        assert_eq!(request.frozen, off);
+        let request = session_request(Some(FrozenRequest::LEGACY), false, None);
+        assert_eq!(request.frozen, FrozenRequest::LEGACY);
         assert_eq!(request.to_write, None);
         let warning = request.warning.expect("warning");
-        assert!(warning.contains("reasoningSummary \"off\""), "{warning}");
         assert!(warning.contains("reasoningSummary \"auto\""), "{warning}");
-        let same = session_request(Some(off), true, Some(ReasoningSummarySetting::Off));
+        assert!(warning.contains("reasoningSummary \"off\""), "{warning}");
+        let same = session_request(Some(OFF), true, None);
+        assert_eq!(same.frozen, OFF);
         assert_eq!(same.warning, None);
     }
 
     #[test]
-    fn the_header_value_round_trips_and_defaults_to_auto() {
-        let off = FrozenRequest {
-            reasoning_summary: ReasoningSummarySetting::Off,
-        };
-        let value = serde_json::to_value(off).unwrap();
-        assert_eq!(value, json!({"reasoningSummary": "off"}));
-        assert_eq!(FrozenRequest::from_header_value(Some(&value)), Some(off));
-        assert_eq!(
-            FrozenRequest::from_header_value(Some(&json!({}))),
-            Some(FrozenRequest::default())
-        );
+    fn the_header_value_round_trips() {
+        for (frozen, value) in [
+            (OFF, json!({"reasoningSummary": "off"})),
+            (FrozenRequest::LEGACY, json!({"reasoningSummary": "auto"})),
+        ] {
+            assert_eq!(serde_json::to_value(frozen).unwrap(), value);
+            assert_eq!(FrozenRequest::from_header_value(Some(&value)), Some(frozen));
+        }
+        // Not written by any version: unreadable, rewritten as `"auto"` by the freeze.
+        assert_eq!(FrozenRequest::from_header_value(Some(&json!({}))), None);
         assert_eq!(FrozenRequest::from_header_value(Some(&json!("x"))), None);
         assert_eq!(FrozenRequest::from_header_value(None), None);
     }
@@ -367,25 +391,36 @@ mod tests {
     #[test]
     fn freeze_writes_new_sessions_and_reads_legacy_ones_as_auto() {
         let dir = tempfile::tempdir().unwrap();
+        // A new session with the default settings: `"off"`.
         let mut manager = SessionManager::in_memory(dir.path());
-        let frozen = freeze_session_request(&mut manager, Some(ReasoningSummarySetting::Off));
-        assert_eq!(frozen.reasoning_summary, ReasoningSummarySetting::Off);
+        let frozen = freeze_session_request(&mut manager, None);
+        assert_eq!(frozen, OFF);
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
             Some(&json!({"reasoningSummary": "off"}))
         );
         // A resume keeps it whatever the settings say.
-        let again = freeze_session_request(&mut manager, None);
-        assert_eq!(again, frozen);
+        let again = freeze_session_request(&mut manager, Some(ReasoningSummarySetting::Auto));
+        assert_eq!(again, OFF);
 
-        // A header frozen by YA-03 but without the request field: auto.
+        // `"auto"` set explicitly.
+        let mut manager = SessionManager::in_memory(dir.path());
+        let frozen = freeze_session_request(&mut manager, Some(ReasoningSummarySetting::Auto));
+        assert_eq!(frozen, FrozenRequest::LEGACY);
+        assert_eq!(
+            manager.ya_header_field(REQUEST_HEADER_KEY),
+            Some(&json!({"reasoningSummary": "auto"}))
+        );
+
+        // A header frozen by YA-03 but without the request field (before 15/11/2026): auto,
+        // with the default settings too.
         let mut legacy = SessionManager::in_memory(dir.path());
         legacy.ya_set_header_field(
             super::super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY,
             json!({"editTool": "native", "shellTool": "kernel"}),
         );
-        let frozen = freeze_session_request(&mut legacy, Some(ReasoningSummarySetting::Off));
-        assert_eq!(frozen, FrozenRequest::default());
+        let frozen = freeze_session_request(&mut legacy, None);
+        assert_eq!(frozen, FrozenRequest::LEGACY);
         assert_eq!(
             legacy.ya_header_field(REQUEST_HEADER_KEY),
             Some(&json!({"reasoningSummary": "auto"}))
@@ -397,15 +432,22 @@ mod tests {
     #[test]
     fn an_unreadable_field_is_rewritten_as_auto() {
         let dir = tempfile::tempdir().unwrap();
-        for bad in [json!("off"), json!({"reasoningSummary": "none"}), json!(1)] {
-            let mut manager = SessionManager::in_memory(dir.path());
-            manager.ya_set_header_field(REQUEST_HEADER_KEY, bad);
-            let frozen = freeze_session_request(&mut manager, Some(ReasoningSummarySetting::Off));
-            assert_eq!(frozen, FrozenRequest::default());
-            assert_eq!(
-                manager.ya_header_field(REQUEST_HEADER_KEY),
-                Some(&json!({"reasoningSummary": "auto"}))
-            );
+        for bad in [
+            json!("off"),
+            json!({"reasoningSummary": "none"}),
+            json!({}),
+            json!(1),
+        ] {
+            for setting in [None, Some(ReasoningSummarySetting::Off)] {
+                let mut manager = SessionManager::in_memory(dir.path());
+                manager.ya_set_header_field(REQUEST_HEADER_KEY, bad.clone());
+                let frozen = freeze_session_request(&mut manager, setting);
+                assert_eq!(frozen, FrozenRequest::LEGACY);
+                assert_eq!(
+                    manager.ya_header_field(REQUEST_HEADER_KEY),
+                    Some(&json!({"reasoningSummary": "auto"}))
+                );
+            }
         }
     }
 }
