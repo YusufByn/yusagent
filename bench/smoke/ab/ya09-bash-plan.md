@@ -1,5 +1,7 @@
 # A/B YA-09 `bashWaitSeconds` (1 s contre 30 s) : plan et règle de verdict
 
+> **Plan non exécuté.** Décision de Yusuf du 15/11/2026 à 21h40 (journal du CDC) : les choix d'Unharnessed sont repris directement, sans A/B, et mesurés plus tard sur Terminal-Bench. Cet A/B est donc sauté, et **le défaut de `bashWaitSeconds` passe à 30 s** sans verdict mesuré (écart à la règle « toute optimisation justifiable par une mesure »). Le plan, la graine et les scripts restent versionnés pour une mesure ultérieure. Les sessions créées avant le réglage gardent 1 s. Dans ce qui suit, le « bras A » (`default.json`) correspondrait désormais à 30 s : un A/B futur devrait prendre `{"bashWaitSeconds": 1}` comme bras de contrôle.
+
 Règles fixées et versionnées avant tout run réel. Étape 1 du levier `bash()` de la « Proposition pour YA-09 » (journal du CDC, 14/11/2026). Plan validé par Yusuf le 15/11/2026 : option B (fenêtre en réglage, 30 s), avec ses ajouts (source des 77 s, référence du prompt, scripts versionnés, durée médiane par lancement, écart 59 contre 70, notice MIT).
 
 ## Question
