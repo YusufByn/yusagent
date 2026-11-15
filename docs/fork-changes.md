@@ -409,6 +409,20 @@ Symptôme : `kernel cell receipt never appeared at /tmp/.../receipts/delete.json
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
+## Instabilité probable : `login_panel_pty_e2e` (YA-09)
+
+`crates/pa-cli/tests/login_panel_pty_e2e.rs`, test `prime_login_renders_the_team_picker_without_a_terminal_takeover` (`:633`), shard 1/8 de `ci.yml`, sélectionné quand une PR touche `pa-cli`. Fichier identique à `upstream/main` (`git diff --stat upstream/main -- crates/pa-cli/tests/login_panel_pty_e2e.rs` vide au 15/11/2026).
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 43751270454 | `49f6bc27c` (`main`, push) | 1 | réussi (1,6 s) |
+| 43756666927 | `7f3f8eafd` (`ya-09-bash`, PR #41) | 1 | échec du shard 1/8 |
+| 43756666927 | `7f3f8eafd` (`ya-09-bash`, PR #41) | 2 (relance du job seul, sans push, autorisée par Yusuf) | réussi (1,6 s) |
+
+Symptôme : `Timeout waiting for the provider selector panel (needle "Search providers")` à `login_panel_pty_e2e.rs:633`, après 30 s : le panneau des providers n'apparaît pas dans le PTY. La PR #41 ne touche dans `pa-cli` que `prompt_command.rs` (commande `prime-agent prompt`), hors du TUI de login. Hypothèse : rendu du PTY trop lent sur un runner chargé ; non vérifiée.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
 ## Désactivations par défaut (YA-01)
 
 Session lancée sans `settings.json` ni variable d'environnement. Chaque ligne se réactive dans `settings.json` (global, `~/.prime/agent/settings.json`).
