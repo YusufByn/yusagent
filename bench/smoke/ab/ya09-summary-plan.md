@@ -39,7 +39,34 @@ python3 -I bench/smoke/tools/ab_stats.py --plan <ab.json> --baseline bench/smoke
   - sha256 de l'archive `prime-agent-0.10.2-darwin-arm64.tar.gz` : `49001dcfe185bf72814d80eb43dac7c7c5c3d89ea1029a4be661ef0f7d873611` (manifeste, `SHA256SUMS` et `shasum -a 256`).
   - sha256 de l'exécutable `prime-agent` : `04c27dd29b2252e89dce47afb6c01bc3c70b9d7bc1ae6a4cae4d1178d57c393f` (manifeste, `executableSha256`, et `shasum -a 256` sur l'exécutable extrait).
   - Les commits suivants de la branche ne touchent que `bench/` : `git diff --quiet 7086711 HEAD -- crates prime-agent-runtime skills vendor install-rust.sh Cargo.toml Cargo.lock` doit sortir avec le code 0 avant le run.
-- **Pas de chauffe sans l'accord de Yusuf.**
+- **Chauffe du 15/11/2026**, sur le binaire `7086711`, avec l'accord de Yusuf. Hors A/B : elle ne compte pas. `py-shortuuid-118`, `gpt-6-luna`, effort high, `DO_NOT_TRACK=1 PI_OFFLINE=1`, `--log-bodies`. Les dossiers de runs ne sont pas versionnés.
+
+  | Run | Réglages | Dossier | Résultat |
+  |---|---|---|---|
+  | Chauffe B | `reasoning-summary-off.json` | `bench/smoke/runs/20261115T144916Z-7086711-gpt-6-luna` | résolue |
+  | Reprise de la chauffe B (`continue_session.py`, nouveau processus) | `reasoning-summary-off.json` | `…/tasks/py-shortuuid-118/continue-1` | réponse, sortie 0 |
+  | Chauffe A | `default.json` | `bench/smoke/runs/20261115T145010Z-7086711-gpt-6-luna` | résolue |
+
+  Reprise : `python3 -I bench/smoke/continue_session.py --binary <dossier>/prime-agent --task py-shortuuid-118 --out <run B>/tasks/py-shortuuid-118/continue-1 --model gpt-6-luna --effort high --settings bench/smoke/settings/reasoning-summary-off.json --log-bodies "Résume en deux phrases ce que tu as modifié et pourquoi."` (même consigne que la chauffe YA-14).
+
+  Vérifications, lues par `python3 -I bench/smoke/tools/check_warmup.py <run>/tasks/py-shortuuid-118/<run-1 ou continue-1> [<run>/report.json]` :
+
+  | Point | Chauffe B (off) | Reprise (off) | Chauffe A (auto) |
+  |---|---|---|---|
+  | `reasoning` dans le journal des corps | `{"effort":"high"}`, 9 corps sur 9 | `{"effort":"high"}`, 1 corps | `{"effort":"high","summary":"auto"}`, 10 corps sur 10 |
+  | WebSocket | 9 requêtes, statut 101 ; 9 `response.completed` | 1 requête, statut 101 ; 1 `completed` | 10 requêtes, statut 101 ; 10 `completed` |
+  | `reasoning_tokens` > 0 | 5 réponses sur 9 (13 à 452) | 0 sur 1 (réponse texte) | 6 sur 10 |
+  | Items `reasoning` avec `encrypted_content` | 5 sur 5 ; texte des blocs vide, `summary` vide | 5 rejoués sur 5, `summary: []` | 6 sur 6, résumé présent |
+  | Suite par `previous_response_id` | requêtes 2 à 9 | non (nouveau processus) | requêtes 2 à 10 |
+  | Corps complets | requête 1 seulement | 1, attendu à la reprise | requête 1 seulement |
+  | Ruptures | 0 invalidation, 0 miss serveur, 0 compaction | — | 0 invalidation, 0 miss serveur, 0 compaction |
+  | Taux de cache de la session | 0,840 | — | 0,860 |
+  | En-tête de session | `yaRequest {"reasoningSummary":"off"}` | inchangé, aucun avertissement | `yaRequest {"reasoningSummary":"auto"}` |
+  | `err.log` | vide | vide | vide |
+  | Scan de secrets | 14 valeurs, 0 fichier touché | 24 valeurs, 0 fichier touché | 14 valeurs, 0 fichier touché |
+
+  - **Cache de la reprise** : le corps complet de la reprise (24 items, nouvelle connexion) est accepté par le backend. Il obtient 12 160 tokens en cache sur 12 409. C'est la longueur de l'avant-dernière requête du run (12 193) arrondie à 128, pas celle de la dernière (12 322). Même observation que `ya03-plan.md` (« Cache après reprise », mécanisme inconnu). Sans effet sur l'A/B : chaque tâche est une session en un seul processus.
+  - **Conclusion** : en `off`, le backend accepte le corps sans `summary` sur WebSocket, garde le raisonnement chiffré, remonte les `reasoning_tokens` et garde la suite de conversation. Le découpage « avec raisonnement » de la méthode reste possible.
 
 Chauffe prévue : une tâche (`py-shortuuid-118`), bras B, `gpt-6-luna`, effort high. Elle ne compte dans aucun A/B. Elle vérifie au vrai backend :
 - le corps sans `summary` est accepté sur le WebSocket ;
