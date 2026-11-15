@@ -181,6 +181,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/tests/prefix_stability.rs` | modif. (fichier du fork) | Champ `reasoning` des variantes (modèle qui raisonne, effort high) ; scénarios `reasoningSummary` absent et `"off"` (préfixe stable, `reasoning` attendu à chaque requête, tools et paramètres identiques entre les bras hors `reasoning`) ; même vérification sur le WebSocket Codex avec suite de conversation. `engine_with_model` prend le niveau de raisonnement. | YA-09 |
 | `bench/smoke/settings/reasoning-summary-off.json` | ajout | Réglage du bras B de l'A/B `reasoningSummary`. | YA-09 |
 | `bench/smoke/ab/ya09-summary-plan.md` | ajout | Plan et règle de verdict de l'A/B `reasoningSummary`, graine. | YA-09 |
+| `.changes/ya-09-summary.md` | ajout | Fragment de changelog (check « Changelog fragment »). | YA-09 |
 | `bench/smoke/ab/ya09-summary-mesures.py` | ajout | Mesures de latence de l'A/B (latence fixe par appel avec raisonnement, phase agent appariée par tâche, IC bootstrap sur les tâches, condition de latence de la règle de verdict), validées sur le run YA-14. | YA-09 |
 
 
