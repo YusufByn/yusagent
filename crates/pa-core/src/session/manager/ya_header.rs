@@ -9,10 +9,13 @@
 
 use super::{FileEntry, SessionHeader, SessionManager};
 
-/// The header fields a session made from another one keeps: its frozen tools, which its
-/// copied history was written with (`session_engine::ya_tool_family`).
-pub const INHERITED_HEADER_KEYS: &[&str] =
-    &[crate::session_engine::ya_tool_family::FROZEN_TOOLS_HEADER_KEY];
+/// The header fields a session made from another one keeps: its frozen tools and request
+/// settings, which its copied history was written with (`session_engine::ya_tool_family`,
+/// `session_engine::ya_request`).
+pub const INHERITED_HEADER_KEYS: &[&str] = &[
+    crate::session_engine::ya_tool_family::FROZEN_TOOLS_HEADER_KEY,
+    crate::session_engine::ya_request::REQUEST_HEADER_KEY,
+];
 
 /// Copy the [`INHERITED_HEADER_KEYS`] present in `source_rest` (the `rest` of another
 /// session's header) into `target`; absent ones stay as they are.
@@ -123,6 +126,22 @@ mod tests {
             header.parent_session.as_deref(),
             Some(source_path.display().to_string().as_str())
         );
+    }
+
+    /// yusAgent (YA-09): a fork's new header keeps the source's frozen request settings too.
+    #[test]
+    fn fork_keeps_the_request_settings_of_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        let mut source = SessionManager::in_memory(dir.path());
+        let source_path = source.materialize_session_file(Some(sessions.clone()));
+        let off = json!({"reasoningSummary": "off"});
+        assert!(source.ya_set_header_field("yaTools", codex_tools()));
+        assert!(source.ya_set_header_field("yaRequest", off.clone()));
+        let forked = SessionManager::fork_from(&source_path, dir.path(), &sessions).unwrap();
+        let header = super::super::read_session_header(forked.get_session_file().unwrap()).unwrap();
+        assert_eq!(header.rest.get("yaRequest"), Some(&off));
+        assert_eq!(header.rest.get("yaTools"), Some(&codex_tools()));
     }
 
     /// An in-memory session materialized into a file keeps its frozen tools.

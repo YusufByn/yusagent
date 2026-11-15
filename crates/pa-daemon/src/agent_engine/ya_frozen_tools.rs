@@ -1,5 +1,7 @@
 //! yusAgent (YA-03): the frozen tools of a daemon session (`editTool`, `shellTool`), kept in the
-//! header of the durable session file the worker owns.
+//! header of the durable session file the worker owns. yusAgent (YA-09): the frozen request
+//! settings (`reasoningSummary`, field `yaRequest`) ride the same way: every field of
+//! `pa_core::session::manager::ya_header::INHERITED_HEADER_KEYS` is carried.
 //!
 //! The engine runs on an in-memory session manager; `pa_core` freezes the tools in that
 //! manager's header (`session_engine::ya_tool_family::freeze_session_tools`). The daemon carries
@@ -21,7 +23,9 @@ use super::{AgentSessionEngine, CoreSessionEngine};
 use crate::session_store::SessionFile;
 use crate::worker::SessionCore;
 
-/// The header field the frozen tools live in.
+/// The header field the frozen tools live in (the build carries every inherited field,
+/// `ya_sync_frozen_tools`).
+#[cfg(test)]
 pub(crate) const FROZEN_TOOLS_KEY: &str =
     pa_core::session_engine::ya_tool_family::FROZEN_TOOLS_HEADER_KEY;
 
@@ -118,10 +122,14 @@ impl AgentSessionEngine {
         let Ok(manager) = persistence.try_lock() else {
             return;
         };
-        let value = manager.ya_header_field(FROZEN_TOOLS_KEY).cloned();
+        let values: Vec<(&str, Value)> =
+            pa_core::session::manager::ya_header::INHERITED_HEADER_KEYS
+                .iter()
+                .filter_map(|key| Some((*key, manager.ya_header_field(key)?.clone())))
+                .collect();
         drop(manager);
-        if let Some(value) = value {
-            sink(path, FROZEN_TOOLS_KEY, &value);
+        for (key, value) in values {
+            sink(path, key, &value);
         }
     }
 }
@@ -131,6 +139,8 @@ mod tests {
     use super::*;
     use crate::agent_engine::{AgentEngineConfig, FAUX_TEST_LOCK};
     use serde_json::json;
+
+    const REQUEST_KEY: &str = pa_core::session_engine::ya_request::REQUEST_HEADER_KEY;
 
     fn kernel_tools() -> Value {
         json!({"editTool": "kernel", "shellTool": "kernel"})
@@ -211,7 +221,7 @@ mod tests {
     }
 
     /// A durable header without frozen tools: the build freezes them and the sink receives
-    /// them for that file.
+    /// them for that file, with the frozen request settings (YA-09).
     #[test]
     fn a_build_hands_the_frozen_tools_to_the_sink() {
         let _faux = FAUX_TEST_LOCK
@@ -236,8 +246,76 @@ mod tests {
             .expect("build");
         assert_eq!(
             *received.lock().unwrap(),
-            vec![(store.path, FROZEN_TOOLS_KEY.to_string(), kernel_tools())]
+            vec![
+                (
+                    store.path.clone(),
+                    FROZEN_TOOLS_KEY.to_string(),
+                    kernel_tools()
+                ),
+                (
+                    store.path,
+                    REQUEST_KEY.to_string(),
+                    json!({"reasoningSummary": "auto"})
+                ),
+            ]
         );
+    }
+
+    /// The request settings of the built session's in-memory header.
+    fn built_request(engine: &AgentSessionEngine) -> Option<Value> {
+        engine.runtime.block_on(async {
+            let built = engine.session.lock().await.clone().expect("built session");
+            let persistence = built.session.shared_persistence();
+            let manager = persistence.lock().await;
+            let value = manager.ya_header_field(REQUEST_KEY).cloned();
+            drop(manager);
+            value
+        })
+    }
+
+    fn build_with_settings(dir: &Path, rest: Option<Value>, settings: &str) -> AgentSessionEngine {
+        let store = durable_store(dir, rest);
+        std::fs::create_dir_all(dir.join("agent")).unwrap();
+        std::fs::write(dir.join("agent/settings.json"), settings).unwrap();
+        let engine = faux_engine(dir, &store.path);
+        let model = engine.resolve_model().expect("faux model");
+        engine
+            .runtime
+            .block_on(engine.ensure_core_session_async(&model))
+            .expect("build");
+        engine
+    }
+
+    /// yusAgent (YA-09): a new session freezes `reasoningSummary` from the settings; a durable
+    /// header that has it keeps it over the settings; a header frozen by YA-03 without it (a
+    /// session from before the field) is `"auto"`.
+    #[test]
+    fn a_build_freezes_the_request_settings() {
+        let _faux = FAUX_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let off = json!({"reasoningSummary": "off"});
+        let auto = json!({"reasoningSummary": "auto"});
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let engine = build_with_settings(dir.path(), None, r#"{"reasoningSummary": "off"}"#);
+        assert_eq!(built_request(&engine), Some(off.clone()));
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let engine = build_with_settings(
+            dir.path(),
+            Some(json!({ REQUEST_KEY: off.clone() })),
+            r#"{"reasoningSummary": "auto"}"#,
+        );
+        assert_eq!(built_request(&engine), Some(off));
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let engine = build_with_settings(
+            dir.path(),
+            Some(json!({ FROZEN_TOOLS_KEY: kernel_tools() })),
+            r#"{"reasoningSummary": "off"}"#,
+        );
+        assert_eq!(built_request(&engine), Some(auto));
     }
 
     /// A durable header with frozen kernel tools, and settings asking for `editTool: "native"`

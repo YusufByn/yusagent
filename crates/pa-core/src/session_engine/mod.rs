@@ -57,6 +57,8 @@ pub mod turn_boundary;
 pub mod usage_log;
 // yusAgent (YA-03): kernel crash during a cell, restart and notice.
 pub(crate) mod ya_kernel_restart;
+// yusAgent (YA-09): request settings (`reasoningSummary`), frozen per session.
+pub mod ya_request;
 // yusAgent (YA-03): native tools by model family, frozen per session.
 pub mod ya_tool_family;
 
