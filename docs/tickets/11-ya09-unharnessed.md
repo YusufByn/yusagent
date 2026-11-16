@@ -39,6 +39,25 @@ Brouillons du prompt v2 comptés au §4 : `docs/tickets/11-ya09-unharnessed/` (`
 - « Edits au premier essai » du smoke bench n'est pas comparable d'avant en après cette PR (note dans `bench/smoke/README.md`).
 - Les messages d'échec d'`edit()` gardent leurs préfixes ; `bench/smoke/metrics.py` (`EDIT_FAILURE`) reconnaît aussi les nouveaux.
 
+## PR B livrée (`ya-09-prompt-v2`, PR #43, mergée le 16/11/2026 en `362a0f2f7`)
+
+- CI : 14 checks requis verts sur `bf6095e70` (dernier commit). Un run rouge en route (`f81f980f2`) : deux vérifications de cycle de vie lancées hors de `cargo` (`ledger_liveness`, spawn refusé en version 2 ; `restore_notice`, inventaire XML de la version 1) ; corrigé par `promptVersion: 1` dans leurs réglages.
+- Ajouts demandés en revue : refus d'une session version 2 avec sous-agents (message qui indique `"promptVersion": 1`) ; `PRIME_AGENT_PROMPT_VERSION = "1"` dans `.cargo/config.toml` (tests upstream en configuration d'upstream, aucun test upstream modifié) ; e2e du produit `crates/pa-cli/tests/ya_prompt_v2_e2e.rs` ; variables documentées dans `docs/usage.md` ; note du banc sur « edits au premier essai » ; `bench/smoke/tools/edits.py`.
+- Chauffes de vérification (binaire `f81f980f2`, sha256 `1265ccc13306d3dd514eeb2df20e8c075a3437c3d311a52bc96c1827b696d359` ; `gpt-6-luna`, effort high, `default.json`, `RLM_MAX_DEPTH` et `PRIME_AGENT_PROMPT_VERSION` retirés ; run `bench/smoke/runs/20261116T091720Z-f81f980-gpt-6-luna`, non versionné) : `py-shortuuid-118` et `node-koa-2029` résolues, `node-testsprite-356` non résolue (instable dans la baseline) ; 53 appels, tout en WebSocket, aucune bascule SSE, aucune fermeture 1011. En-têtes `yaRequest {"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2}`, `yaTools {"editTool": "kernel", "shellTool": "kernel"}`. `edit()` : 2, 16 et 5 appels, 0 échec, aucune écriture de fichier en Python pur (`python3 -I bench/smoke/tools/edits.py <run>`).
+- **Changements de requête** (premier corps contre `main` `6d8168a` et `c770c5a`, relus et jugés conformes par Yusuf) : `instructions` remplacées par le prompt version 2, **1 329 tokens** (`o200k_base` supposé ; 1 333 à l'attribution du backend Codex) contre 6 230 (6 234) ; `tools` : `python_repl` seul, description courte, **98 tokens** (90 au backend) contre 423 (433) ; autres paramètres identiques octet pour octet. Commande : `uv run --no-project --with tiktoken==0.14.0 python -I bench/smoke/ab/ya09-bash-count.py --body <run>/tasks/<tâche>/run-1/proxy-bodies.ndjson --usage <run>/tasks/<tâche>/run-1/sessions/<id>.usage.ndjson`.
+- Binaire de `main` après merge : `362a0f2f723d4d0ed5a34c717a14d8b7105c2f2d`, build `ya-build-macos-arm64` 43844537391, version `0.10.2-continuous.362a0f2f7`, sha256 de l'exécutable `1b674f0edd8d526cf3206679f1b5f91760a826d6f5fb99f843dbac0894a4d838` (sources livrées identiques à `bf6095e70`). Pas de chauffe sur ce binaire.
+
+## Clôture (16/11/2026)
+
+Ticket 11 clos : les cinq points du lot sont livrés (PR #42 et #43). Critère de YA-09 « prompt système de base < 2 000 tokens hors tools » atteint (1 329 tokens, compte local, `o200k_base` supposé ; 1 333 au backend).
+
+Points ouverts, hors de ce ticket :
+- **WebSocket fermé en 1011** pendant un silence (constat de la chauffe de la PR A) : ticket séparé, dans une nouvelle session.
+- **Avis groupés dans le démon** : critère d'acceptation de YA-10.
+- **Mesure** : aucune des reprises d'Unharnessed n'a de verdict mesuré (décision du 15/11) ; `bench/smoke/settings/prompt-v1.json` sert de bras de contrôle pour la mesure au Terminal-Bench.
+- **Baselines du smoke bench** (`bench/smoke/baseline/`) : mesurées avant ces défauts (prompt version 1, `apply_patch`, pas de regroupement des avis) ; à refaire sur le nouveau défaut avant de s'y comparer. « Edits au premier essai » n'est plus comparable d'avant en après (note de `bench/smoke/README.md`).
+- **Sous-agents** : la version 2 ne les documente pas (session refusée, `promptVersion: 1` requis) ; une version 2 avec sous-agents reste à écrire si le besoin revient.
+
 ## 0. Constats qui orientent le plan
 
 - Notre base est plus récente que la leur : `3358e0016` est un ancêtre de notre `main`, 318 commits avant notre point commun avec upstream (`c83ac68b3`). Leur gestion des réveils (`crates/uh-core/src/session_engine/wakes.rs`, `SessionWakes`) n'existe pas chez nous. Les points 4 et 5 sont donc **réécrits** sur nos points d'entrée, pas recopiés.
