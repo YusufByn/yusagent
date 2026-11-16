@@ -1,0 +1,13 @@
+id = "py-silence-001"
+lang = "python"
+source = { path = "repo" }
+setup = "uv venv -q .venv && uv pip install -q --python .venv/bin/python pytest==8.4.2"
+test = ".venv/bin/python -m pytest -q -p no:cacheprovider -o junit_family=xunit1 --junitxml=\"$SMOKE_JUNIT\" tests"
+fail_to_pass = [
+  "tests/test_hidden.py::test_attente_ecrite_par_la_commande",
+]
+pass_to_pass = []
+timeout_s = 900
+# `chauffe` : hors des tâches tirées par défaut (run.py, tools/ab.py), lancée seulement par
+# TASKS=py-silence-001. Une commande de 180 s : silence sans requête au modèle (YA-09, ticket 12).
+tags = ["python", "chauffe"]

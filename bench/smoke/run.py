@@ -214,8 +214,10 @@ def load_tasks(selected: list[str] | None, capture: bool) -> list[dict]:
         if unknown:
             fail(f"tâches inconnues : {', '.join(unknown)}")
         return [t for t in tasks if t["id"] in selected]
-    # Par défaut : les tâches du banc ; les tâches d'exemple seulement en mode capture.
-    chosen = [t for t in tasks if ("exemple" in t.get("tags", [])) == capture]
+    # Par défaut : les tâches du banc ; les tâches d'exemple seulement en mode capture ; les
+    # tâches de chauffe jamais (TASKS=<id> seulement).
+    chosen = [t for t in tasks if "chauffe" not in t.get("tags", [])
+              and ("exemple" in t.get("tags", [])) == capture]
     if not chosen:
         fail("aucune tâche sélectionnée (TASKS=id1,id2)")
     return chosen

@@ -1,0 +1,1 @@
+Lance avec `bash()`, à la racine du dépôt, la commande `sleep 180 && echo fini > attente.txt`, puis attends qu'elle se termine avant de répondre. N'écris pas `attente.txt` toi-même : seule cette commande doit le créer. Une fois le fichier présent, réponds « fait ».
