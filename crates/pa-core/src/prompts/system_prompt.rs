@@ -105,7 +105,7 @@ pub struct BuildSystemPromptOptions<'a> {
     pub ya_tool_choice: crate::session_engine::ya_tool_family::ToolChoice,
     /// yusAgent (YA-09): the session's `await bash(cmd)` window (`bashWaitSeconds`); `None` or 1
     /// keeps the upstream line (`super::ya_bash_wait`).
-    pub ya_bash_wait_seconds: Option<std::num::NonZeroU32>,
+    pub ya_bash_wait_seconds: Option<crate::session_engine::ya_request::BashWait>,
     /// yusAgent (YA-09, ticket 11): the session's prompt version; `None` or version 1 keeps the
     /// upstream layers (`super::ya_prompt_v2` for version 2).
     pub ya_prompt_version: Option<crate::session_engine::ya_request::PromptVersion>,

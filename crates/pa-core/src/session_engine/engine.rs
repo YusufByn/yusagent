@@ -347,6 +347,13 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             &config.agent_dir,
         ),
     )?;
+    // yusAgent (YA-09, ticket 13): an explicit `bashWaitSeconds: "full"` in a version-1 session
+    // is refused, before anything is frozen.
+    super::ya_request::check_bash_wait(
+        &*wiring.session.lock().await,
+        ya_bash_wait_seconds,
+        ya_prompt_version,
+    )?;
     let ya_request = super::ya_request::freeze_session_request(
         &mut *wiring.session.lock().await,
         ya_reasoning_summary,

@@ -104,6 +104,12 @@ fn assemble_breakdown(
         system_prompt: None,
         ..ResourceLoaderOptions::new(cwd.to_path_buf(), agent_dir)
     })?;
+    // yusAgent (YA-09, ticket 11): the prompt version of the current settings (the setting, else
+    // `PRIME_AGENT_PROMPT_VERSION`, else 2).
+    let ya_prompt_version = pa_core::session_engine::ya_request::prompt_version_setting(
+        settings.settings().prompt_version,
+    )
+    .unwrap_or_default();
     let breakdown = pa_core::prompts::system_prompt::system_prompt_breakdown(
         &pa_core::prompts::BuildSystemPromptOptions {
             cwd: cwd.display().to_string(),
@@ -123,20 +129,13 @@ fn assemble_breakdown(
             generic_mcp_servers: generic_servers,
             rlm_depth: Some(0),
             model_prompt_extras: model_prompts.extras.as_deref(),
-            // yusAgent (YA-09): the `await bash(cmd)` window of the current settings (30 s unset).
-            ya_bash_wait_seconds: Some(
-                pa_core::session_engine::ya_request::resolve_bash_wait_seconds(
-                    settings.settings().bash_wait_seconds,
-                ),
-            ),
-            // yusAgent (YA-09, ticket 11): the prompt version of the current settings (the
-            // setting, else `PRIME_AGENT_PROMPT_VERSION`, else 2).
-            ya_prompt_version: Some(
-                pa_core::session_engine::ya_request::prompt_version_setting(
-                    settings.settings().prompt_version,
-                )
-                .unwrap_or_default(),
-            ),
+            // yusAgent (YA-09): the `await bash(cmd)` wait of the current settings (unset:
+            // `"full"` in version 2, 30 s in version 1).
+            ya_bash_wait_seconds: Some(pa_core::session_engine::ya_request::resolve_bash_wait(
+                settings.settings().bash_wait_seconds,
+                ya_prompt_version,
+            )),
+            ya_prompt_version: Some(ya_prompt_version),
             ..Default::default()
         },
     );
@@ -233,7 +232,7 @@ mod tests {
     }
 
     /// yusAgent (YA-09): the dump shows the `await bash(cmd)` window of the settings, 30 s
-    /// when unset.
+    /// when unset in version 1 (the tests run with `PRIME_AGENT_PROMPT_VERSION=1`).
     #[test]
     fn shows_the_bash_wait_of_the_settings() {
         let dir = tempfile::tempdir().unwrap();

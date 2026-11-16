@@ -266,7 +266,7 @@ pub fn kernel_provisioner(
     on_unavailable_skills: Option<crate::kernel::provisioner::UnavailableSkillsCallback>,
     on_bootstrap_result: Option<crate::kernel::provisioner::KernelBootstrapResultHandler>,
     ya_native_shell: bool,
-    ya_bash_wait_seconds: std::num::NonZeroU32,
+    ya_bash_wait_seconds: super::ya_request::BashWait,
     ya_bash_timeout_seconds: Option<u32>,
 ) -> Arc<KernelProvisioner> {
     let mut env = HashMap::with_capacity(3);
@@ -373,6 +373,7 @@ impl IpythonKernelProvisioner for KernelProvisioner {
             Ok(Box::new(KernelManagerExecutor {
                 manager,
                 cell_timeout_ms,
+                ya_bash_wait: this.ya_bash_wait_seconds(),
             }) as Box<dyn KernelExecutor>)
         })
     }
@@ -390,6 +391,8 @@ struct KernelManagerExecutor {
     manager: crate::kernel::manager::ReplKernelManager,
     /// The provisioner-resolved per-cell watchdog budget (`None`: never armed).
     cell_timeout_ms: Option<u64>,
+    /// yusAgent (YA-09, ticket 13): the session's `await bash(cmd)` wait, for the watchdog note.
+    ya_bash_wait: Option<super::ya_request::BashWait>,
 }
 
 impl KernelExecutor for KernelManagerExecutor {
@@ -408,8 +411,9 @@ impl KernelExecutor for KernelManagerExecutor {
         let signal = options.signal;
         let on_late_sent_agent_message = options.on_late_sent_agent_message;
         let cell_timeout_ms = self.cell_timeout_ms;
+        let ya_bash_wait = self.ya_bash_wait;
         Box::pin(async move {
-            let result = manager
+            let mut result = manager
                 .execute(
                     &code,
                     crate::kernel::shared::ExecuteOptions {
@@ -424,6 +428,9 @@ impl KernelExecutor for KernelManagerExecutor {
                 )
                 .await
                 .map_err(KernelExecError::Other)?;
+            // yusAgent (YA-09, ticket 13, D5): the watchdog advice of a `"full"` wait.
+            result.stderr =
+                crate::prompts::ya_bash_wait::watchdog_note(result.stderr, ya_bash_wait);
             Ok(convert_execute_result(result))
         })
     }

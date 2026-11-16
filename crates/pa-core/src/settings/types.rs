@@ -329,9 +329,10 @@ pub struct Settings {
     /// yusAgent (YA-09): `"auto"` (unset) or `"off"` (`reasoning.summary` removed from the
     /// Responses requests), frozen per session (`crate::session_engine::ya_request`).
     pub reasoning_summary: Option<crate::session_engine::ya_request::ReasoningSummarySetting>,
-    /// yusAgent (YA-09): `await bash(cmd)` window in seconds, at least 1 (unset: 30; upstream
-    /// waits 1), frozen per session (`crate::session_engine::ya_request`).
-    pub bash_wait_seconds: Option<std::num::NonZeroU32>,
+    /// yusAgent (YA-09): `await bash(cmd)` window in seconds, at least 1, or `"full"` (unset:
+    /// `"full"` in prompt version 2, 30 in version 1; upstream waits 1), frozen per session
+    /// (`crate::session_engine::ya_request`).
+    pub bash_wait_seconds: Option<crate::session_engine::ya_request::BashWait>,
     /// yusAgent (YA-09): seconds an idle session holds `[bash-done]` notices while other
     /// commands run (unset: 120; 0: upstream, one wake per notice), not frozen
     /// (`crate::session_engine::ya_bash_notice_batch`).
