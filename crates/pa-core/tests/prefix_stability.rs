@@ -1081,7 +1081,10 @@ async fn codex_bash_wait_changes_only_the_await_line() {
         1,
         "{default_prompt}"
     );
-    assert!(!default_prompt.contains("waits at most"), "{default_prompt}");
+    assert!(
+        !default_prompt.contains("waits at most"),
+        "{default_prompt}"
+    );
     assert_eq!(
         upstream_prompt.matches(upstream_line).count(),
         1,
