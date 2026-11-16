@@ -264,6 +264,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `.changes/ya-09-ws-keepalive.md` | ajout | Fragment de changelog. | YA-09 |
 | `bench/smoke/tasks/py-silence-001/`, `bench/smoke/run.py`, `bench/smoke/tools/ab.py`, `bench/smoke/tests/test_bench.py`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Tâche de chauffe `py-silence-001` (commande de 180 s), tag `chauffe` exclu des tâches tirées par défaut, test de la sélection. | YA-09 |
 | `bench/smoke/tools/compare_bodies.py`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Changements de requête entre deux chauffes (`proxy-bodies.ndjson`) : clés du premier corps identiques ou différentes, jeux de clés, forme de l'`input`. Lecture seule. | YA-09 |
+| `bench/smoke/tools/cache_calls.py`, `bench/smoke/ab/ya09-cache-v2-plan.md`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Miss de cache par appel, relectures partielles, taux de cache, mesure par bras d'un A/B ; plan et règle de l'A/B du cache du prompt v2 (prompt v2 contre v1). | YA-09 |
 | `docs/tickets/12-ya09-ws-keepalive.md` | ajout | Ticket 12 : constat, recherche upstream, cause, décisions du 16/11/2026, tests, résultats des deux chauffes, note pour le ticket de l'attente complète de `bash()`. | YA-09 |
 
 
