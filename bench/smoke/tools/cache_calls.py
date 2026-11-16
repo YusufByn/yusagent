@@ -206,7 +206,8 @@ def show_plan(plan: Path, draws: int, seed: int) -> None:
     elif diff >= THRESHOLD:
         verdict = "écart au-dessus du seuil mais IC qui contient 0 : non concluant"
     else:
-        verdict = f"écart sous le seuil de {THRESHOLD:.0%} : pas d'écart net"
+        verdict = (f"écart sous le seuil de {THRESHOLD:.0%} : pas d'écart net détecté "
+                   f"(borne haute de l'IC : {high:+.1%})")
     print(f"Verdict (règle de ya09-cache-v2-plan.md, seuil {THRESHOLD:.0%} et borne basse > 0) : "
           f"{verdict}")
 
