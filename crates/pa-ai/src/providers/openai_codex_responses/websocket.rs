@@ -27,7 +27,9 @@ use crate::providers::openai_codex_responses::session::{session_state, CachedCon
 use crate::providers::openai_codex_responses::ya_idle;
 
 pub const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-06";
-pub(crate) const SESSION_WEBSOCKET_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
+// yusAgent (YA-09, ticket 13, D4): 15 min instead of 5, so a `bash()` cell awaited up to its
+// 600 s time limit does not close the connection (`ya_idle` keeps it alive meanwhile).
+pub(crate) const SESSION_WEBSOCKET_CACHE_TTL_MS: u64 = 15 * 60 * 1000;
 
 #[allow(unused_imports)] // re-exported for consumers of the transport module
 pub use crate::providers::openai_codex_responses::session::{

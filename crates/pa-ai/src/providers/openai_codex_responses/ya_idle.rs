@@ -128,6 +128,16 @@ mod tests {
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
     use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 
+    /// Ticket 13, D4: the idle connection lives 15 min, past a `bash()` cell awaited up to its
+    /// 600 s time limit (plus 5 s before SIGKILL).
+    #[test]
+    fn the_idle_connection_outlives_a_full_bash_wait() {
+        assert_eq!(
+            crate::providers::openai_codex_responses::websocket::SESSION_WEBSOCKET_CACHE_TTL_MS,
+            15 * 60 * 1000
+        );
+    }
+
     #[test]
     fn control_frames_keep_the_worker_and_close_ends_it() {
         let id = u64::MAX - 1;
