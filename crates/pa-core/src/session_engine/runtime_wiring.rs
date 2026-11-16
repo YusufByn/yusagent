@@ -267,6 +267,7 @@ pub fn kernel_provisioner(
     on_bootstrap_result: Option<crate::kernel::provisioner::KernelBootstrapResultHandler>,
     ya_native_shell: bool,
     ya_bash_wait_seconds: std::num::NonZeroU32,
+    ya_bash_timeout_seconds: Option<u32>,
 ) -> Arc<KernelProvisioner> {
     let mut env = HashMap::with_capacity(3);
     env.insert(
@@ -322,6 +323,8 @@ pub fn kernel_provisioner(
             ya_native_shell,
             // yusAgent (YA-09): the `await bash(cmd)` window (`bashWaitSeconds`).
             ya_bash_wait_seconds: Some(ya_bash_wait_seconds),
+            // yusAgent (YA-09, ticket 11): the default `bash()` limit (version 2: 600 s).
+            ya_bash_timeout_seconds,
         },
     ))
 }

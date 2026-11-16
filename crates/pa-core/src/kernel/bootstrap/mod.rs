@@ -8,6 +8,7 @@ mod disk_memo;
 mod runtime_code;
 pub(crate) mod venv;
 // yusAgent (YA-03): bootstrap of a `shellTool: "native"` session (no `bash` in the namespace).
+pub mod ya_bash_timeout;
 pub mod ya_bash_wait;
 pub mod ya_native_shell;
 

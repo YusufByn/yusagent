@@ -75,6 +75,7 @@ const KNOWN_FIELDS: &[&str] = &[
     "reasoningSummary",
     "bashWaitSeconds",
     "bashNoticeBatchSeconds",
+    "promptVersion",
 ];
 
 /// Extract each known field independently; ignore fields whose JSON type does not match the Rust

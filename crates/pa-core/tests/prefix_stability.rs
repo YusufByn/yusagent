@@ -66,21 +66,23 @@ const OTHER_FAMILY: Variant = Variant {
     tools: &["python_repl"],
     reasoning: false,
 };
+/// yusAgent (YA-09, ticket 11): the default settings give one tool (`editTool` unset is the
+/// kernel's `edit()`) and the version-2 prompt.
 const CODEX_DEFAULT: Variant = Variant {
     provider: "openai",
     model_id: "gpt-6.1-terra",
     settings: None,
-    tools: &["python_repl", "apply_patch"],
+    tools: &["python_repl"],
     reasoning: false,
 };
-const CODEX_EDIT_KERNEL: Variant = Variant {
-    settings: Some(r#"{"editTool": "kernel"}"#),
-    tools: &["python_repl"],
+const CODEX_EDIT_NATIVE: Variant = Variant {
+    settings: Some(r#"{"editTool": "native"}"#),
+    tools: &["python_repl", "apply_patch"],
     ..CODEX_DEFAULT
 };
 const CODEX_SHELL_NATIVE: Variant = Variant {
     settings: Some(r#"{"shellTool": "native"}"#),
-    tools: &["python_repl", "apply_patch", "exec_command", "write_stdin"],
+    tools: &["python_repl", "exec_command", "write_stdin"],
     ..CODEX_DEFAULT
 };
 /// yusAgent (YA-09): `reasoningSummary` on a reasoning model, unset (the default, `"off"`
@@ -874,39 +876,58 @@ async fn openai_responses_prefix_is_stable_across_requests() {
     prefix_scenario(Api::OpenAiResponses, OTHER_FAMILY).await;
 }
 
-/// yusAgent (YA-03): Codex family, default settings: `apply_patch` (freeform) after
-/// `python_repl`, and the prompt documents it.
+/// yusAgent (YA-09, ticket 11): Codex family, default settings: one tool (`python_repl`) and
+/// the version-2 prompt, which documents `edit()`, `bash(timeout=600)` and the grouping rule;
+/// the short `python_repl` description; the header freezes version 2.
 #[tokio::test]
 async fn codex_default_prefix_is_stable_across_requests() {
     let bodies = prefix_scenario(Api::OpenAiResponses, CODEX_DEFAULT).await;
+    let Some(first) = bodies.first() else { return };
+    let prompt = responses_system_prompt(first);
+    for expected in [
+        "# yusAgent",
+        "You have one tool, `python_repl`",
+        "timeout: float | None = 600",
+        "`read(path, offset=1, limit=2000)",
+        "`await edit(path, old_str, new_str)",
+        "an edit together with the command that tests it.",
+        "`await bash(cmd)` waits at most 30 seconds.",
+    ] {
+        assert!(prompt.contains(expected), "{expected}: {prompt}");
+    }
+    for absent in [
+        "apply_patch",
+        "Continual Harness",
+        "Recursive agent depth: 0",
+        "<available_skills>",
+    ] {
+        assert!(!prompt.contains(absent), "{absent}: {prompt}");
+    }
+    let request = request_object(Api::OpenAiResponses, 1, first);
+    assert_eq!(
+        request["tools"][0]["description"],
+        "Run Python code in the persistent REPL. Top-level `await` works; variables persist across calls."
+    );
+}
+
+/// yusAgent (YA-03): `editTool: "native"`: `apply_patch` (freeform) after `python_repl`, and
+/// the version-2 prompt documents it.
+#[tokio::test]
+async fn codex_edit_native_prefix_is_stable_across_requests() {
+    let bodies = prefix_scenario(Api::OpenAiResponses, CODEX_EDIT_NATIVE).await;
     let Some(first) = bodies.first() else { return };
     let request = request_object(Api::OpenAiResponses, 1, first);
     let tools = request["tools"].as_array().expect("tools");
     assert_eq!(tools[1]["type"], "custom", "apply_patch is a freeform tool");
     let prompt = responses_system_prompt(first);
     assert!(
-        prompt.contains("and `apply_patch`, which edits files."),
+        prompt.contains("and `apply_patch`, which creates and edits files."),
         "{prompt}"
     );
-    assert!(prompt.contains("`read(path: str"), "{prompt}");
     assert!(
-        prompt.contains("env: dict[str, str] | None = None"),
+        prompt.contains("in the same response: they run in order"),
         "{prompt}"
     );
-}
-
-/// yusAgent (YA-03): `editTool: "kernel"`: no edit tool, `edit()` documented as on `main`.
-#[tokio::test]
-async fn codex_edit_kernel_prefix_is_stable_across_requests() {
-    let bodies = prefix_scenario(Api::OpenAiResponses, CODEX_EDIT_KERNEL).await;
-    let Some(first) = bodies.first() else { return };
-    let prompt = responses_system_prompt(first);
-    assert!(prompt.contains("has one tool: `python_repl`"), "{prompt}");
-    assert!(
-        prompt.contains("the primary method for editing files"),
-        "{prompt}"
-    );
-    assert!(!prompt.contains("apply_patch"), "{prompt}");
 }
 
 /// yusAgent (YA-03): `shellTool: "native"`: `exec_command` and `write_stdin` after
@@ -1022,8 +1043,8 @@ async fn codex_bash_wait_changes_only_the_await_line() {
     assert_eq!(
         headers,
         [
-            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30})),
-            Some(json!({"reasoningSummary": "off"})),
+            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2})),
+            Some(json!({"reasoningSummary": "off", "promptVersion": 2})),
         ]
     );
     let bodies = server.bodies();
@@ -1087,7 +1108,7 @@ async fn resumed_session_from_before_bash_wait_keeps_one_second() {
     let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
-    let before = json!({"reasoningSummary": "off"});
+    let before = json!({"reasoningSummary": "off", "promptVersion": 2});
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
 
@@ -1113,7 +1134,7 @@ async fn resumed_session_from_before_bash_wait_keeps_one_second() {
 }
 
 /// yusAgent (YA-03): `editTool` and `shellTool` are frozen in the session header at creation.
-/// A Codex session created with the default settings, resumed after the settings changed to
+/// A Codex session created with `editTool: "native"`, resumed after the settings changed to
 /// `editTool: "kernel"` and `shellTool: "native"`, keeps its tools and its prefix: the request
 /// after the resume extends the one before it.
 #[tokio::test]
@@ -1125,9 +1146,14 @@ async fn resumed_session_keeps_its_tools_when_settings_change() {
     let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
     let sessions = agent_dir.join("sessions");
     let server = ModelServer::start(api).await;
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        CODEX_EDIT_NATIVE.settings.expect("settings"),
+    )
+    .expect("settings.json");
     let mut session = SessionManager::in_memory(&cwd);
     let path = session.materialize_session_file(Some(sessions.clone()));
-    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_EDIT_NATIVE, session).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
     let frozen = json!({"editTool": "native", "shellTool": "kernel"});
@@ -1140,7 +1166,7 @@ async fn resumed_session_keeps_its_tools_when_settings_change() {
     )
     .expect("settings.json");
     let resumed = SessionManager::open(&cwd, &sessions, &path);
-    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, resumed).await;
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_EDIT_NATIVE, resumed).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
 
@@ -1151,13 +1177,75 @@ async fn resumed_session_keeps_its_tools_when_settings_change() {
         let request = request_object(api, index + 1, body);
         assert_eq!(
             tool_names(&request),
-            CODEX_DEFAULT.tools,
+            CODEX_EDIT_NATIVE.tools,
             "request {}",
             index + 1
         );
     }
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
+}
+
+/// yusAgent (YA-09, ticket 11, option A): a session created before the lot (its `yaRequest`
+/// has no `promptVersion`, as one written with `promptVersion: 1`) keeps the version-1 prompt,
+/// byte for byte, when resumed with the default settings (version 2): the request after the
+/// resume extends the one before it, and the header is left as is. A new session of the same
+/// project gets version 2.
+#[tokio::test]
+async fn resumed_session_from_before_prompt_v2_keeps_the_v1_prompt() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    std::fs::write(agent_dir.join("settings.json"), r#"{"promptVersion": 1}"#)
+        .expect("settings.json");
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+    let before = json!({"reasoningSummary": "off", "bashWaitSeconds": 30});
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
+
+    std::fs::write(agent_dir.join("settings.json"), "{}").expect("settings.json");
+    let resumed = SessionManager::open(&cwd, &sessions, &path);
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, resumed).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
+
+    let mut fresh = SessionManager::in_memory(&cwd);
+    fresh.materialize_session_file(Some(sessions.clone()));
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, fresh).await;
+    run_prompt(&engine, PROMPTS[1]).await;
+    drop(engine);
+
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 3, "one request per prompt");
+    assert_prefix_stable(api, &bodies[..2]);
+    for (index, body) in bodies[..2].iter().enumerate() {
+        let prompt = responses_system_prompt(body);
+        assert!(
+            prompt.contains("# prime-agent harness") && prompt.contains("## Continual Harness"),
+            "request {}: {prompt}",
+            index + 1
+        );
+        let request = request_object(api, index + 1, body);
+        assert!(
+            request["tools"][0]["description"]
+                .as_str()
+                .is_some_and(|description| description.starts_with("Execute Python code")),
+            "request {}: the upstream description",
+            index + 1
+        );
+    }
+    let prompt = responses_system_prompt(&bodies[2]);
+    assert!(prompt.contains("# yusAgent"), "new session: {prompt}");
 }
 
 /// yusAgent (YA-09): a session from before 15/11/2026 (header with `yaTools`, without
@@ -1180,7 +1268,7 @@ async fn resumed_legacy_session_keeps_summary_auto() {
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(
         header.rest.get("yaRequest"),
-        Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30})),
+        Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2})),
         "{header:?}"
     );
 
@@ -1219,7 +1307,7 @@ async fn resumed_legacy_session_keeps_summary_auto() {
 }
 
 /// yusAgent (YA-03): a fork keeps the frozen tools of its source. A Codex session created with
-/// the default settings is forked after the settings changed to `editTool: "kernel"` and
+/// `editTool: "native"` is forked after the settings changed to `editTool: "kernel"` and
 /// `shellTool: "native"`: the fork's header carries the source's `yaTools`, and its request has
 /// the source's tools and system prompt.
 #[tokio::test]
@@ -1231,9 +1319,14 @@ async fn forked_session_keeps_the_tools_of_its_source_when_settings_change() {
     let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
     let sessions = agent_dir.join("sessions");
     let server = ModelServer::start(api).await;
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        CODEX_EDIT_NATIVE.settings.expect("settings"),
+    )
+    .expect("settings.json");
     let mut session = SessionManager::in_memory(&cwd);
     let path = session.materialize_session_file(Some(sessions.clone()));
-    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_EDIT_NATIVE, session).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
 
@@ -1245,7 +1338,7 @@ async fn forked_session_keeps_the_tools_of_its_source_when_settings_change() {
     let forked = SessionManager::fork_from(&path, &cwd, &sessions).expect("fork");
     let forked_path = forked.get_session_file().expect("fork file").to_path_buf();
     assert_ne!(forked_path, path);
-    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, forked).await;
+    let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_EDIT_NATIVE, forked).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
 
@@ -1258,7 +1351,7 @@ async fn forked_session_keeps_the_tools_of_its_source_when_settings_change() {
         let request = request_object(api, index + 1, body);
         assert_eq!(
             tool_names(&request),
-            CODEX_DEFAULT.tools,
+            CODEX_EDIT_NATIVE.tools,
             "request {}",
             index + 1
         );
@@ -1563,6 +1656,10 @@ async fn codex_websocket_apply_patch_replays_as_custom_and_continues() {
         ws_text_turn("resp_4", "msg_4", "Updated."),
     ])
     .await;
+    // yusAgent (YA-09, ticket 11): `apply_patch` is a setting since the kernel's `edit()`
+    // became the default.
+    std::fs::write(agent_dir.join("settings.json"), r#"{"editTool": "native"}"#)
+        .expect("settings.json");
 
     let mut session = SessionManager::in_memory(&cwd);
     let path = session.materialize_session_file(Some(sessions.clone()));

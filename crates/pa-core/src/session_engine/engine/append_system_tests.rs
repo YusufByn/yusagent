@@ -67,7 +67,8 @@ async fn assert_prompt_case(case: PromptCase) {
         if case.custom_system {
             assert!(prompt.starts_with("CUSTOM_SYSTEM_SENTINEL"));
         } else {
-            assert!(prompt.starts_with("# prime-agent harness"));
+            // yusAgent (YA-09, ticket 11): the version-2 prompt by default.
+            assert!(prompt.starts_with("# yusAgent"));
         }
         for context in ["PROJECT_CONTEXT_SENTINEL", "GLOBAL_CONTEXT_SENTINEL"] {
             assert_eq!(prompt.matches(context).count(), 1);

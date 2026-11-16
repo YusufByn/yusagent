@@ -287,6 +287,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     // yusAgent (YA-09): `reasoningSummary`, captured before the move too.
     let ya_reasoning_summary = settings.settings().reasoning_summary;
     let ya_bash_wait_seconds = settings.settings().bash_wait_seconds;
+    let ya_prompt_version = settings.settings().prompt_version;
     let ya_notice_window =
         super::ya_bash_notice_batch::batch_window(settings.settings().bash_notice_batch_seconds);
     // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
@@ -337,6 +338,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         &mut *wiring.session.lock().await,
         ya_reasoning_summary,
         ya_bash_wait_seconds,
+        ya_prompt_version,
     );
     let stream_fn = super::ya_request::scoped_stream_fn(stream_fn, ya_request);
     // yusAgent (YA-03): the native tools of the model's family, frozen for the session in its
@@ -589,6 +591,10 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         on_bootstrap_result,
         ya_tools.native_shell,
         ya_request.bash_wait_seconds,
+        // yusAgent (YA-09, ticket 11): `bash()` stops after 600 s by default in a version-2
+        // session (`kernel::bootstrap::ya_bash_timeout`).
+        (ya_request.prompt_version == super::ya_request::PromptVersion::V2)
+            .then_some(crate::kernel::bootstrap::ya_bash_timeout::DEFAULT_TIMEOUT_SECONDS),
     );
     super::ya_bash_notice_batch::bind_running_probe(ya_notice_batch.as_ref(), &provisioner);
     let mut tools = config.tools.clone();
@@ -609,6 +615,11 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         if ya_tools.native_shell {
             definition.description =
                 crate::prompts::ya_tools_prompt::python_repl_description(&definition.description);
+        }
+        // yusAgent (YA-09, ticket 11): the short description of the version-2 prompt.
+        if ya_request.prompt_version == super::ya_request::PromptVersion::V2 {
+            definition.description =
+                crate::prompts::ya_prompt_v2::python_repl_description(ya_tools).to_string();
         }
         // yusAgent (YA-03): a cell that kills the kernel restarts it at once and ends with a
         // notice; applied after the cap so the notice is never cut.
@@ -733,6 +744,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             ya_tool_choice: ya_tools,
             // yusAgent (YA-09): the `await bash(cmd)` window of the session.
             ya_bash_wait_seconds: Some(ya_request.bash_wait_seconds),
+            // yusAgent (YA-09, ticket 11): the prompt version of the session.
+            ya_prompt_version: Some(ya_request.prompt_version),
             ..Default::default()
         },
     );

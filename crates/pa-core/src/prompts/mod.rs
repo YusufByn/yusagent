@@ -19,6 +19,9 @@ pub mod ya_tools_prompt;
 // yusAgent (YA-09): the `await bash(cmd)` window of the session (`bashWaitSeconds`).
 pub mod ya_bash_wait;
 
+// yusAgent (YA-09, ticket 11): the short system prompt (`promptVersion: 2`).
+pub mod ya_prompt_v2;
+
 pub mod system_prompt;
 
 pub use system_prompt::{

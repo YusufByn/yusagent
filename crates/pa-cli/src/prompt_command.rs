@@ -129,6 +129,8 @@ fn assemble_breakdown(
                     settings.settings().bash_wait_seconds,
                 ),
             ),
+            // yusAgent (YA-09, ticket 11): the prompt version of the current settings (2 unset).
+            ya_prompt_version: Some(settings.settings().prompt_version.unwrap_or_default()),
             ..Default::default()
         },
     );
@@ -251,9 +253,32 @@ mod tests {
         );
     }
 
+    /// yusAgent (YA-09, ticket 11): the dump shows the prompt version of the settings, 2 when
+    /// unset.
+    #[test]
+    fn shows_the_prompt_version_of_the_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let (default, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
+        assert!(
+            default.assembled.starts_with("# yusAgent"),
+            "{}",
+            default.assembled
+        );
+        assert!(!default.assembled.contains("Recursive agent depth: 0"));
+        let project = dir.path().join(".prime/agent");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("settings.json"), r#"{"promptVersion": 1}"#).unwrap();
+        let (upstream, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
+        assert!(upstream.assembled.starts_with("# prime-agent harness"));
+    }
+
     #[test]
     fn assembles_the_layered_prompt_for_a_directory() {
         let dir = tempfile::tempdir().unwrap();
+        // yusAgent (YA-09, ticket 11): the upstream layers are prompt version 1.
+        let project = dir.path().join(".prime/agent");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("settings.json"), r#"{"promptVersion": 1}"#).unwrap();
         let (breakdown, errors) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
         assert!(errors.is_empty());
         assert!(breakdown.assembled.starts_with("# prime-agent harness"));

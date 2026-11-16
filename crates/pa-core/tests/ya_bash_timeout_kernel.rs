@@ -139,3 +139,45 @@ async fn a_command_past_its_timeout_wakes_with_the_reason() {
 
     kernel.dispose(None).await;
 }
+
+/// yusAgent (YA-09, ticket 11): the bootstrap line of a version-2 session
+/// (`IpythonKernelProvisionerOptions::ya_bash_timeout_seconds`, `bootstrap::ya_bash_timeout`)
+/// sets the default limit of `bash()`; without it (version 1) there is none.
+#[tokio::test]
+async fn the_bootstrap_sets_the_default_limit_of_a_version_two_session() {
+    let Some(python) = kernel_python() else {
+        return;
+    };
+    for (seconds, expected) in [(Some(600), "600.0"), (None, "None")] {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let mut host_handlers = HostRequestHandlers::new();
+        register_kernel_notice_host_handlers(
+            Arc::new(|_: KernelNotice| {}),
+            Arc::new(|_: BashConsumedNotice| {}),
+            &mut host_handlers,
+        );
+        let kernel = IpythonKernelProvisioner::new(
+            dir.path(),
+            IpythonKernelProvisionerOptions {
+                python: Some(python.clone()),
+                host_handlers,
+                ya_bash_timeout_seconds: seconds,
+                ..Default::default()
+            },
+        );
+        let result = kernel
+            .ensure(None, None)
+            .await
+            .expect("kernel must start")
+            .execute(
+                "import sys\nh = bash('true')\nprint(sys.modules['rlm.ya_timeout'].DEFAULT_TIMEOUT, hasattr(h, '_ya_timeout_timer'))",
+                ExecuteOptions::default(),
+            )
+            .await
+            .expect("execute must not fail");
+        assert_eq!(result.status, ExecuteStatus::Ok, "{}", result.stderr);
+        let armed = if seconds.is_some() { "True" } else { "False" };
+        assert_eq!(result.stdout.trim(), format!("{expected} {armed}"));
+        kernel.dispose(None).await;
+    }
+}

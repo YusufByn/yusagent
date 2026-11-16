@@ -336,6 +336,10 @@ pub struct Settings {
     /// commands run (unset: 120; 0: upstream, one wake per notice), not frozen
     /// (`crate::session_engine::ya_bash_notice_batch`).
     pub bash_notice_batch_seconds: Option<u32>,
+    /// yusAgent (YA-09, ticket 11): system prompt version, `2` (unset, short prompt) or `1`
+    /// (the prompt of `main` before the lot), frozen per session
+    /// (`crate::session_engine::ya_request`).
+    pub prompt_version: Option<crate::session_engine::ya_request::PromptVersion>,
     pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,
