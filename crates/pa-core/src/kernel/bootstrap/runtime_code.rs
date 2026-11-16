@@ -80,7 +80,7 @@ except Exception as _prime_agent_rlm_error:
 
     rlm = _PrimeAgentMissingRlm()
 
-    def bash(command, persistent=False, env=None):
+    def bash(command, persistent=False, env=None, timeout=None):
         rlm._raise_missing()
 
     def read(path, offset=1, limit=2000):

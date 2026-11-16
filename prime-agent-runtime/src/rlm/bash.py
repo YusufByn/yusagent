@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, NoReturn, cast
 
-from . import _winjob
+from . import _winjob, ya_timeout
 
 _IS_POSIX = os.name == "posix"
 
@@ -869,6 +869,8 @@ class BashHandle:
                     "pid": self._pid,
                     "command": command,
                     "exitCode": result.exit_code,
+                    # yusAgent (YA-09): a command stopped by its `timeout` says so.
+                    **ya_timeout.notice_fields(self),
                 }
             )
             if isinstance(reply, dict) and reply.get("status") == "ok":
@@ -1299,7 +1301,14 @@ class PersistentBashHandle(BashHandle):
                 return
             command = _capped(self.command)
             reply = await repl.host_request(
-                {"type": "bash.completed", "pid": self._pid, "command": command, "exitCode": result.exit_code}
+                {
+                    "type": "bash.completed",
+                    "pid": self._pid,
+                    "command": command,
+                    "exitCode": result.exit_code,
+                    # yusAgent (YA-09): a command stopped by its `timeout` says so.
+                    **ya_timeout.notice_fields(self),
+                }
             )
             if isinstance(reply, dict) and reply.get("status") == "ok":
                 self._arm_consumed_notice(command)
@@ -1311,7 +1320,12 @@ class PersistentBashHandle(BashHandle):
         return f"<BashHandle persistent pid={self._pid} {state} command={self.command!r}>"
 
 
-def bash(command: str, persistent: bool = False, env: dict[str, str] | None = None) -> BashHandle:
+def bash(
+    command: str,
+    persistent: bool = False,
+    env: dict[str, str] | None = None,
+    timeout: float | None = ya_timeout.UNSET,
+) -> BashHandle:
     """Start a shell command immediately; await the handle for the result.
 
     `await bash(cmd)` is a one-shot: cancelling the await (e.g. an interrupt)
@@ -1348,15 +1362,24 @@ def bash(command: str, persistent: bool = False, env: dict[str, str] | None = No
     env (yusAgent, YA-03): variables set for this command only, over the
     kernel environment (the kernel's os.environ is unchanged). Keys and values
     must be str.
+
+    timeout (yusAgent, YA-09; rlm/ya_timeout.py): seconds after which a
+    command still running gets SIGTERM, then SIGKILL 5 s later; a line in its
+    output and its completion notice say so. Unset: the session default (none
+    unless the kernel bootstrap sets one), and no limit for a persistent
+    shell. None: no limit.
     """
     if not isinstance(command, str) or not command:
         raise TypeError("command must be a non-empty str")
     env = _checked_env(env)
+    timeout = ya_timeout.resolve(timeout, persistent)
     if persistent:
         handle: BashHandle = _spawn_persistent(command, env)
     else:
         _install_shutdown_hook()
         handle = BashHandle(command, env)
+    if timeout is not None:
+        ya_timeout.arm(handle, timeout)
     from . import repl
 
     repl.emit(

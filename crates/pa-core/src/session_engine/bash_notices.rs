@@ -122,11 +122,11 @@ fn validate_completion(data: &Value) -> anyhow::Result<KernelNotice> {
         .get("exitCode")
         .and_then(Value::as_i64)
         .ok_or_else(|| anyhow::anyhow!("bash.completed exitCode must be an integer"))?;
-    Ok(KernelNotice::bash_completion(
-        consumed.pid,
-        &consumed.command,
-        exit_code,
-    ))
+    // yusAgent (YA-09): a command stopped by its `timeout` says so (`ya_bash_timeout`).
+    super::ya_bash_timeout::mark_timeout(
+        KernelNotice::bash_completion(consumed.pid, &consumed.command, exit_code),
+        data,
+    )
 }
 
 /// TS `createAsyncBashConsumedHostHandler` validation: a positive integer pid and a
