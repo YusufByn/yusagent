@@ -157,7 +157,7 @@ tasks/<id>/
 
 | Tâche | Rôle |
 |---|---|
-| `py-silence-001` | `bash()` lance `sleep 130 && echo fini > attente.txt` et l'agent attend la fin : un silence d'au moins 120 s sans requête au modèle. Vérifie le keepalive du WebSocket Codex (YA-09, ticket 12 : 0 fermeture `1011`, 0 bascule SSE) et resservira pour l'attente complète de `bash()`. Contrôle : `python3 -I bench/smoke/tools/check_warmup.py <run>/tasks/py-silence-001/run-1 <run>/report.json` (run lancé avec `--log-bodies`). |
+| `py-silence-001` | `bash()` lance `sleep 180 && echo fini > attente.txt` et l'agent attend la fin : un silence d'au moins 120 s sans requête au modèle. Vérifie le keepalive du WebSocket Codex (YA-09, ticket 12 : 0 fermeture `1011`, 0 bascule SSE) et resservira pour l'attente complète de `bash()`. Contrôle : `python3 -I bench/smoke/tools/check_warmup.py <run>/tasks/py-silence-001/run-1 <run>/report.json` (run lancé avec `--log-bodies`). |
 
 ### Validation sans modèle
 
@@ -242,6 +242,7 @@ Communs aux deux bras depuis YA-14 (sans effet sur les 120 bras des A/B de YA-03
 | `tools/edits.py` | Par tâche d'un run : appels à `edit()`, cellules avec `edit()` en erreur et leur message, lignes de code qui écrivent un fichier sans `edit()` (repérage par motif, à relire) ; vérification des chauffes de la PR B du ticket 11 (YA-09). Lecture seule |
 | `tools/notice-batch-repro.sh` | Rejeu factice du regroupement des avis `[bash-done]` (YA-09, ticket 11) : trois commandes détachées, provider factice, dossier jetable, aucun appel réel ; affiche l'ordre des avis et des réponses (attendu : trois avis puis un seul réveil ; fenêtre `0` : un réveil par avis) |
 | `tools/check_warmup.py` | Contrôles d'une chauffe lancée avec `--log-bodies` (tâche ou reprise) : `reasoning` des corps, corps complets, WebSocket et suite de conversation au proxy, `reasoning_tokens`, champs `yaRequest` et `yaTools` de l'en-tête de session, blocs de raisonnement et `encrypted_content`, fenêtre de `bash()` (ligne du prompt, cellules revenues avant la fin, attentes complètes de plus de 1 s, notifications, plus long silence sans requête sur le WebSocket, mentions de 1011), statut et ruptures du rapport (YA-09) |
+| `tools/compare_bodies.py` | Changements de requête entre deux chauffes lancées avec `--log-bodies` : clés du premier corps identiques ou différentes (taille), jeux de clés de tous les corps, forme de l'`input` ; usage : `python3 -I bench/smoke/tools/compare_bodies.py <référence>/proxy-bodies.ndjson <branche>/proxy-bodies.ndjson` (YA-09, ticket 12). Lecture seule |
 | `tools/ab_controls.py` | Contrôles indépendants d'un A/B entrelacé, toutes unités : statuts, erreurs provider et de quota, compactions, ruptures, corps complets, bascules SSE, anomalies, `reasoning_tokens`, appels les plus longs (YA-09) ; usage : `python3 -I bench/smoke/tools/ab_controls.py bench/smoke/runs/ab-<horodatage>` |
 | `tests/test_bench.py` | Tests sans modèle : cache théorique, garde-fou d'inactivité, plan de l'A/B, écart sur erreur provider, anomalies du rapport en incidents non écartants |
 | `ab/` | Rapports d'A/B (versionnés) |
