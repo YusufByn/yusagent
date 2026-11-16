@@ -47,6 +47,8 @@ mod errors;
 pub(crate) mod request;
 pub(crate) mod session;
 pub(crate) mod websocket;
+// yusAgent (YA-09, ticket 12): a parked WebSocket answers keepalive pings.
+pub(crate) mod ya_idle;
 
 pub const API_OPENAI_CODEX_RESPONSES: &str = "openai-codex-responses";
 
@@ -400,6 +402,10 @@ async fn run_websocket_attempt(
         options.base.signal.clone(),
     )
     .await?;
+    // yusAgent (YA-09, ticket 12): data frames the connection ignored while parked.
+    if let Some(diagnostic) = ya_idle::take_idle_messages_diagnostic(connection.connection_id) {
+        crate::utils_inner::diagnostics::append_assistant_message_diagnostic(output, diagnostic);
+    }
 
     let use_cached_context = matches!(
         options.base.transport,
@@ -826,6 +832,8 @@ mod tests {
     mod ya_freeform;
     // yusAgent (YA-04): signatures and continuation on done items with `output_index`.
     mod ya_signatures;
+    // yusAgent (YA-09, ticket 12): keepalive pings while parked, SSE fallback.
+    mod ya_keepalive;
 
     /// The user-facing text for a failed codex stream is the verbatim error message; the
     /// raw-`fetch` connection failure surfaces the runtime's own refused-connect text.

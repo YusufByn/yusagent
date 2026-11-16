@@ -24,6 +24,7 @@ use crate::providers::openai_codex_responses::errors::{
     WEBSOCKET_CONNECTION_ENDED_REASON,
 };
 use crate::providers::openai_codex_responses::session::{session_state, CachedConnection};
+use crate::providers::openai_codex_responses::ya_idle;
 
 pub const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-06";
 pub(crate) const SESSION_WEBSOCKET_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
@@ -222,15 +223,40 @@ async fn spawn_connection_worker(
 
     let connection_id = next_connection_id();
     let (command_tx, command_rx) = mpsc::channel::<WorkerCommand>(4);
-    tokio::spawn(connection_worker(stream, command_rx));
+    tokio::spawn(connection_worker(stream, command_rx, connection_id));
     Ok((command_tx, connection_id))
 }
 
 /// The worker parks between requests so a session can reuse one connection.
-async fn connection_worker(stream: WsStream, mut commands: mpsc::Receiver<WorkerCommand>) {
+async fn connection_worker(
+    stream: WsStream,
+    mut commands: mpsc::Receiver<WorkerCommand>,
+    connection_id: u64,
+) {
     let (mut sink, mut stream) = stream.split();
     loop {
-        let Some(command) = commands.recv().await else {
+        // yusAgent (YA-09, ticket 12): keep reading while parked so the server's keepalive pings
+        // get their pong (`ya_idle`).
+        let command = tokio::select! {
+            biased;
+            command = commands.recv() => command,
+            read = stream.next() => {
+                match ya_idle::on_idle_read(connection_id, read) {
+                    ya_idle::IdleRead::Ping => {
+                        let _ = sink.flush().await;
+                    }
+                    ya_idle::IdleRead::Continue => {}
+                    ya_idle::IdleRead::Closed => {
+                        ya_idle::forget_connection(connection_id);
+                        let _ = sink.close().await;
+                        return;
+                    }
+                }
+                continue;
+            }
+        };
+        let Some(command) = command else {
+            ya_idle::forget_connection(connection_id);
             return;
         };
         match command {
@@ -444,6 +470,10 @@ pub async fn acquire_websocket(
 
     let cached_worker = {
         let mut state = session_state().lock().ok();
+        // yusAgent (YA-09, ticket 12): a connection closed while parked is replaced, not reused.
+        if let Some(state) = state.as_mut() {
+            ya_idle::evict_closed_connection(&mut state.connections, session_id);
+        }
         match state
             .as_mut()
             .and_then(|state| state.connections.get_mut(session_id))
