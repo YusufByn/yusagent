@@ -262,8 +262,9 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-ai/src/providers/openai_codex_responses/mod.rs` | modif. (fichier upstream, 8 lignes) | Déclare `ya_idle` ; pose le diagnostic `websocket_idle_messages_ignored` après `acquire_websocket` ; déclare le module de tests `ya_keepalive`. | YA-09 |
 | `crates/pa-ai/src/providers/openai_codex_responses/tests/ya_keepalive.rs` | ajout | Serveur factice WebSocket et SSE : pongs pendant le silence, reconnexion en WebSocket après une fermeture pendant le silence, message égaré compté et non livré, non-régression du repli SSE. | YA-09 |
 | `.changes/ya-09-ws-keepalive.md` | ajout | Fragment de changelog. | YA-09 |
-| `bench/smoke/tasks/py-silence-001/`, `bench/smoke/run.py`, `bench/smoke/tools/ab.py`, `bench/smoke/tests/test_bench.py`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Tâche de chauffe `py-silence-001` (commande de 130 s), tag `chauffe` exclu des tâches tirées par défaut, test de la sélection. | YA-09 |
-| `docs/tickets/12-ya09-ws-keepalive.md` | ajout | Ticket 12 : constat, recherche upstream, cause, décisions du 16/11/2026, tests, chauffe. | YA-09 |
+| `bench/smoke/tasks/py-silence-001/`, `bench/smoke/run.py`, `bench/smoke/tools/ab.py`, `bench/smoke/tests/test_bench.py`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Tâche de chauffe `py-silence-001` (commande de 180 s), tag `chauffe` exclu des tâches tirées par défaut, test de la sélection. | YA-09 |
+| `bench/smoke/tools/compare_bodies.py`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Changements de requête entre deux chauffes (`proxy-bodies.ndjson`) : clés du premier corps identiques ou différentes, jeux de clés, forme de l'`input`. Lecture seule. | YA-09 |
+| `docs/tickets/12-ya09-ws-keepalive.md` | ajout | Ticket 12 : constat, recherche upstream, cause, décisions du 16/11/2026, tests, résultats des deux chauffes, note pour le ticket de l'attente complète de `bash()`. | YA-09 |
 
 
 

@@ -55,10 +55,47 @@ Un message de données reçu hors requête n'appartient à aucune requête : sur
 
 ## Tâche de chauffe
 
-`bench/smoke/tasks/py-silence-001` (tag `chauffe`) : `sleep 130 && echo fini > attente.txt` par `bash()`, puis attente de la fin. Elle n'est jamais tirée par défaut (`run.py`, `tools/ab.py`) et se lance par `TASKS=py-silence-001`.
+`bench/smoke/tasks/py-silence-001` (tag `chauffe`) : `bash()` lance `sleep 180 && echo fini > attente.txt` et l'agent attend la fin. Elle n'est jamais tirée par défaut (`run.py`, `tools/ab.py`) et se lance par `TASKS=py-silence-001`. Première version à `sleep 130` : avec `bashWaitSeconds` à 30, la cellule rendait la main à 30 s et le silence restait sous 120 s (chauffe 1). Passage à 180 s le 16/11/2026, accord de Yusuf.
 
 ## Vérification réelle (autorisée d'avance, pas une mesure)
 
-Critères : tous les appels de boucle en WebSocket, 0 bascule SSE, 0 `1011` dans les journaux, un silence d'au moins 120 s entre deux appels, et l'appel qui suit le silence en suite de conversation (`previous_response_id`). Contrôle : `python3 -I bench/smoke/tools/check_warmup.py <run>/tasks/py-silence-001/run-1 <run>/report.json`.
+Critères : tous les appels de boucle en WebSocket, 0 bascule SSE, 0 `1011` dans les journaux, un silence d'au moins 120 s entre deux appels prouvé par `sincePrevMs`, et l'appel qui suit le silence en suite de conversation (`previous_response_id`).
 
-Résultats : à compléter après la chauffe.
+Binaire de `cce48e6d5` (build `ya-build-macos-arm64` 43850337252, sha256 de l'exécutable `f0b99ce94b9508a82082f3a3e699480e069a1c04a3771408d4b1efb037c20f52`), `gpt-6-luna`, effort high, `default.json`, `--log-bodies`. Runs non versionnés.
+
+Commandes :
+
+```bash
+python3 -I bench/smoke/run.py --binary <dossier>/prime-agent --provider openai-codex --model gpt-6-luna --effort high --settings bench/smoke/settings/default.json --tasks py-silence-001 --log-bodies
+python3 -I bench/smoke/tools/check_warmup.py <run>/tasks/py-silence-001/run-1 <run>/report.json
+python3 -I bench/smoke/metrics.py --since-prev <run>
+python3 -I bench/smoke/tools/compare_bodies.py bench/smoke/runs/20261116T091720Z-f81f980-gpt-6-luna/tasks/py-shortuuid-118/run-1/proxy-bodies.ndjson <run>/tasks/py-silence-001/run-1/proxy-bodies.ndjson
+```
+
+**Avant les chauffes**, run `--capture` sans modèle (`20261116T105819Z-cce48e6-gpt-6-luna`, tâche à `sleep 130`) : préparation et état cassé validés, 4 appels en WebSocket avec suite de conversation, 0 anomalie, 0 secret trouvé. Le seul CONNECT refusé (`example.com`) vient de la sonde de sandbox du serveur de capture (`bench/tools/capture/run.py:271`).
+
+| | Chauffe 1 (`sleep 130`) | Chauffe 2 (`sleep 180`) |
+|---|---|---|
+| Run | `20261116T105840Z-cce48e6-gpt-6-luna` | `20261116T110353Z-cce48e6-gpt-6-luna` |
+| Statut | résolue | résolue |
+| Appels de boucle, transport | 4, tous en WebSocket, une seule connexion (1 `ws_open`, 1 `ws_close` en fin de session) | 3, tous en WebSocket, une seule connexion |
+| Bascule SSE, `provider_transport_failure` | 0, 0 | 0, 0 |
+| Mentions de `1011` (`out.jsonl`, `err.log`) | 0 | 0 |
+| `sincePrevMs` maximal | 97 685 ms (seq 4) : **critère non atteint** | **180 050 ms** (seq 3) : critère atteint |
+| Plus long silence vu au proxy (fin de réponse → requête suivante) | 95,0 s | 178,8 s |
+| Appel après le silence | seq 4, `previous_response_id`, `continuation: True` | seq 3, `previous_response_id`, `continuation: True` |
+| Diagnostic `websocket_idle_messages_ignored` | 0 | 0 |
+
+Les fermetures observées avant le correctif tombaient entre 73,9 et 79,2 s de silence. Les deux chauffes dépassent ce seuil sur la même connexion, la seconde de plus de 100 s.
+
+**Miss serveur** : `cacheRead = 0` sur des appels en suite de conversation, sur la même connexion WebSocket, sans invalidation journalisée (classés « miss serveur » par le rapport) :
+- chauffe 1 : appels 2 (`sincePrevMs` 34 010, prompt 1 774) et 4 (97 685, prompt 2 014). L'appel 3 lit 1 664 tokens en cache ; taux de cache de la session 0,231 ;
+- chauffe 2 : appels 2 (3 062, prompt 1 657) et 3 (180 050, prompt 1 719) ; aucun appel ne lit du cache, taux de session 0,000.
+
+Ces miss ne dépendent pas du transport : la connexion et la chaîne `previous_response_id` sont intactes. Ils restent sans explication ici, sur des prompts courts (moins de 2 100 tokens).
+
+**Changements de requête** (`compare_bodies.py`, premier corps des deux chauffes contre celui de `py-shortuuid-118` de la chauffe `f81f980f2` de la PR B ; entre `f81f980f2` et `main`, seul `crates/pa-cli/tests/ya_prompt_v2_e2e.rs` change dans `crates/`) : `instructions` (5 434 octets), `tools`, `model`, `reasoning`, `include`, `text`, `store`, `stream`, `tool_choice`, `parallel_tool_calls` et `type` identiques octet pour octet ; seuls `input` (énoncé de la tâche) et `prompt_cache_key` (identifiant de session) diffèrent. Mêmes jeux de clés : premier corps sans `previous_response_id`, suivants avec. Relu par Yusuf avant le merge : à faire.
+
+## Note pour le ticket suivant (attente complète de `bash()`)
+
+Le client garde une connexion inactive au plus 5 min (`SESSION_WEBSOCKET_CACHE_TTL_MS`, `crates/pa-ai/src/providers/openai_codex_responses/websocket.rs:30` après ce ticket, `:29` avant). Une commande de plus de 5 min sans appel au modèle dépassera ce TTL : la connexion sera fermée par le client, et l'appel suivant partira sur un WebSocket neuf en corps complet, sans suite de conversation (pas de repli SSE depuis ce ticket). À traiter si ce ticket rend l'attente complète : allonger le TTL, ou accepter et mesurer ce corps complet. Garde-fou d'inactivité du banc (300 s) : le reverse proxy compte les octets relayés dans les deux sens, trames de contrôle comprises (`bench/smoke/proxies.py:451` et `:465`). Les pings du serveur et, depuis ce ticket, les pongs du client le remettent donc à zéro tant que la connexion vit. Après la fermeture par le TTL client, plus aucun octet ne passe : une commande de plus de 10 min (5 min de TTL, puis 300 s de garde-fou) serait arrêtée en `stalled` (estimation par lecture du code, non vérifiée). Il faudra relever `--idle-timeout` pour une telle tâche.
