@@ -85,4 +85,8 @@ Affichés sans entrer dans le verdict : coût rapporté, tâches résolues, appe
 
 ## Résultats
 
-À compléter après le run.
+Run `bench/smoke/runs/ab-20261116T124625Z` (16/11/2026, 40 lancements, 20 unités retenues sur 20). Rapport : `bench/smoke/ab/ya09-cache-v2-20261116.md`.
+
+- Miss : A (v2) 25/261 (9,6 %), B (v1) 16/376 (4,3 %). **d = +5,3 points, IC 95 % [+3,0 ; +7,8] : écart net, ticket prioritaire** (`docs/tickets/14-ya09-cache-miss.md`).
+- Relectures partielles : A 35/261 (13,4 %), B 54/376 (14,4 %).
+- Coût, sans décider : B / A − 1 = +40,1 % [+22,8 ; +60,7] en coût à cache théorique ; 20/20 résolues par bras.
