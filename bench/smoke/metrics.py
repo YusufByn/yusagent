@@ -46,9 +46,12 @@ ERROR_LINE = re.compile(r"^(\w+(?:Error|Exception|Exit|Interrupt))\b")
 # le marqueur du contrôle de workspace d'`apply_patch` (`crates/pa-core/src/tools/ya_workspace.rs`,
 # `OUTSIDE_WORKSPACE_MARKER`).
 EDIT_CALL = re.compile(r"(?<![\w.])edit(?:\.run)?\s*\(")
+# YA-09 (ticket 11) : messages ajoutés au skill (fichier absent avec la consigne de création,
+# `old_str` vide sur un fichier existant, chemin hors du workspace) ; les anciens restent lus.
 EDIT_FAILURE = re.compile(
-    r"^(?:ValueError: (?:string not found in |found \d+ occurrences in )"
-    r"|FileNotFoundError: .+ not found$)")
+    r"^(?:ValueError: (?:string not found in |found \d+ occurrences in |old_str is empty but )"
+    r"|FileNotFoundError: .+ not found(?:$|; to create it)"
+    r"|PermissionError: .+ is outside the workspace )")
 OUTSIDE_WORKSPACE_MARKER = "[outside-workspace]"
 # Échecs, lus hors de `isError` : le flag reste à `false` dans les sessions de l'A/B 1 de
 # YA-03 (ab-20261114T120431Z), y compris sur les échecs.

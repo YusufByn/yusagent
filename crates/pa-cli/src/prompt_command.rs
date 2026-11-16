@@ -129,6 +129,14 @@ fn assemble_breakdown(
                     settings.settings().bash_wait_seconds,
                 ),
             ),
+            // yusAgent (YA-09, ticket 11): the prompt version of the current settings (the
+            // setting, else `PRIME_AGENT_PROMPT_VERSION`, else 2).
+            ya_prompt_version: Some(
+                pa_core::session_engine::ya_request::prompt_version_setting(
+                    settings.settings().prompt_version,
+                )
+                .unwrap_or_default(),
+            ),
             ..Default::default()
         },
     );
@@ -249,6 +257,27 @@ mod tests {
             ),
             upstream.assembled
         );
+    }
+
+    /// yusAgent (YA-09, ticket 11): the dump shows the prompt version of the settings (the
+    /// tests run with `PRIME_AGENT_PROMPT_VERSION=1`, `.cargo/config.toml`, so both versions are
+    /// set explicitly).
+    #[test]
+    fn shows_the_prompt_version_of_the_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join(".prime/agent");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("settings.json"), r#"{"promptVersion": 2}"#).unwrap();
+        let (short, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
+        assert!(
+            short.assembled.starts_with("# yusAgent"),
+            "{}",
+            short.assembled
+        );
+        assert!(!short.assembled.contains("Recursive agent depth: 0"));
+        std::fs::write(project.join("settings.json"), r#"{"promptVersion": 1}"#).unwrap();
+        let (upstream, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
+        assert!(upstream.assembled.starts_with("# prime-agent harness"));
     }
 
     #[test]

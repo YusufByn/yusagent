@@ -28,6 +28,13 @@
 //! stores it unless it is 1: a `yaRequest` without it is 1 second, what every session created
 //! before this field ran with, so its prompt does not change when it is resumed.
 //!
+//! `promptVersion` in `settings.json` (lot Unharnessed of YA-09, ticket 11): `2` (unset) is the
+//! short system prompt (`prompts::ya_prompt_v2`), with a default `bash()` time limit of 600 s
+//! (`kernel::bootstrap::ya_bash_timeout`); `1` is the prompt of `main` before the lot, built
+//! from the upstream layers. The header stores it unless it is 1: a `yaRequest` without it is
+//! version 1, so every session created before the lot keeps its prompt, byte for byte, when it
+//! is resumed (option A of the ticket, decision of Yusuf of 16/11/2026).
+//!
 //! Frozen for the session at creation in the session header, field [`REQUEST_HEADER_KEY`]
 //! (kept by forks, `session::manager::ya_header::INHERITED_HEADER_KEYS`), and read back on
 //! every resume; settings changed in between give a warning. A session from before this field
@@ -64,6 +71,116 @@ pub const RESPONSES_APIS: &[&str] = &[
     "openai-responses",
     "azure-openai-responses",
 ];
+
+/// The `promptVersion` setting: the system prompt of a session. Stored as a number (`1`, `2`);
+/// any other value is unreadable (an unset setting at load, an unreadable header field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
+pub enum PromptVersion {
+    /// The prompt of `main` before the lot: upstream layers and the fork's replacements.
+    V1,
+    /// The short prompt (`prompts::ya_prompt_v2`), the default.
+    #[default]
+    V2,
+}
+
+impl TryFrom<u8> for PromptVersion {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(PromptVersion::V1),
+            2 => Ok(PromptVersion::V2),
+            other => Err(format!("promptVersion must be 1 or 2, not {other}")),
+        }
+    }
+}
+
+impl From<PromptVersion> for u8 {
+    fn from(version: PromptVersion) -> Self {
+        match version {
+            PromptVersion::V1 => 1,
+            PromptVersion::V2 => 2,
+        }
+    }
+}
+
+/// The environment variable read when `promptVersion` is not set (below the setting, above the
+/// default 2, like `RLM_MAX_DEPTH` for `rlmMaxDepth`). `.cargo/config.toml` sets it to 1 so the
+/// upstream tests keep the upstream prompt with spawning on (`RLM_MAX_DEPTH = "2"`).
+pub const PROMPT_VERSION_ENV: &str = "PRIME_AGENT_PROMPT_VERSION";
+
+/// The `promptVersion` of a session's settings: the setting, else [`PROMPT_VERSION_ENV`] (`1` or
+/// `2`, anything else ignored); `None`: the default (2).
+#[must_use]
+pub fn prompt_version_setting(setting: Option<PromptVersion>) -> Option<PromptVersion> {
+    prompt_version_from(setting, std::env::var(PROMPT_VERSION_ENV).ok().as_deref())
+}
+
+fn prompt_version_from(setting: Option<PromptVersion>, env: Option<&str>) -> Option<PromptVersion> {
+    setting.or_else(|| {
+        env.and_then(|value| value.trim().parse::<u8>().ok())
+            .and_then(|value| PromptVersion::try_from(value).ok())
+    })
+}
+
+/// The prompt version the session `manager` holds runs with, read without writing its header:
+/// the frozen one, version 1 for a header from before the field (or unreadable), else
+/// `setting` (the default 2 when unset). Same rules as [`freeze_session_request`].
+#[must_use]
+pub fn session_prompt_version(
+    manager: &SessionManager,
+    setting: Option<PromptVersion>,
+) -> PromptVersion {
+    let field = manager.ya_header_field(REQUEST_HEADER_KEY);
+    match FrozenRequest::from_header_value(field) {
+        Some(frozen) => frozen.prompt_version,
+        None if field.is_some()
+            || manager
+                .ya_header_field(super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY)
+                .is_some() =>
+        {
+            PromptVersion::V1
+        }
+        None => setting.unwrap_or_default(),
+    }
+}
+
+/// Refuses a version-2 session that can have subagents (a child, or a root whose
+/// `rlmMaxDepth` is above 0): the version-2 prompt does not document them (ticket 11). Checked
+/// before the request settings are frozen, so a refused session keeps no version in its header.
+///
+/// # Errors
+///
+/// The refusal, which names the setting to change.
+pub fn check_subagents(
+    version: PromptVersion,
+    rlm_depth: Option<u32>,
+    root_max_depth: Option<u64>,
+) -> anyhow::Result<()> {
+    let depth = rlm_depth.unwrap_or(0);
+    let max_depth = root_max_depth.unwrap_or(0);
+    if version == PromptVersion::V1 || (depth == 0 && max_depth == 0) {
+        return Ok(());
+    }
+    let reason = if depth > 0 {
+        format!("this is a subagent session (depth {depth})")
+    } else {
+        format!("rlmMaxDepth is {max_depth}")
+    };
+    anyhow::bail!(
+        "The version-2 system prompt (promptVersion 2, the default) does not document subagents, and {reason}. Set \"promptVersion\": 1 in settings.json to use subagents, or set \"rlmMaxDepth\": 0."
+    )
+}
+
+fn legacy_prompt_version() -> PromptVersion {
+    PromptVersion::V1
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
+fn is_legacy_prompt_version(version: &PromptVersion) -> bool {
+    *version == PromptVersion::V1
+}
 
 /// The session header field that freezes the request settings
 /// (`SessionManager::ya_set_header_field`).
@@ -104,13 +221,21 @@ pub struct FrozenRequest {
         skip_serializing_if = "is_legacy_bash_wait_seconds"
     )]
     pub bash_wait_seconds: NonZeroU32,
+    /// The system prompt (`promptVersion`); absent from a header: version 1.
+    #[serde(
+        default = "legacy_prompt_version",
+        skip_serializing_if = "is_legacy_prompt_version"
+    )]
+    pub prompt_version: PromptVersion,
 }
 
 impl FrozenRequest {
-    /// The settings a session created before the field was sent with: `"auto"`, 1 second.
+    /// The settings a session created before the field was sent with: `"auto"`, 1 second,
+    /// prompt version 1.
     pub const LEGACY: FrozenRequest = FrozenRequest {
         reasoning_summary: ReasoningSummarySetting::Auto,
         bash_wait_seconds: LEGACY_BASH_WAIT_SECONDS,
+        prompt_version: PromptVersion::V1,
     };
 
     /// The request settings of the current settings.
@@ -118,10 +243,12 @@ impl FrozenRequest {
     pub fn of(
         reasoning_summary: Option<ReasoningSummarySetting>,
         bash_wait_seconds: Option<NonZeroU32>,
+        prompt_version: Option<PromptVersion>,
     ) -> Self {
         FrozenRequest {
             reasoning_summary: reasoning_summary.unwrap_or_default(),
             bash_wait_seconds: resolve_bash_wait_seconds(bash_wait_seconds),
+            prompt_version: prompt_version.unwrap_or_default(),
         }
     }
 
@@ -147,8 +274,9 @@ fn label(request: FrozenRequest) -> String {
     let summary = serde_json::to_value(request.reasoning_summary)
         .map_or_else(|_| "?".to_string(), |value| value.to_string());
     format!(
-        "reasoningSummary {summary}, bashWaitSeconds {}",
-        request.bash_wait_seconds
+        "reasoningSummary {summary}, bashWaitSeconds {}, promptVersion {}",
+        request.bash_wait_seconds,
+        u8::from(request.prompt_version)
     )
 }
 
@@ -161,8 +289,9 @@ pub fn session_request(
     legacy: bool,
     reasoning_summary: Option<ReasoningSummarySetting>,
     bash_wait_seconds: Option<NonZeroU32>,
+    prompt_version: Option<PromptVersion>,
 ) -> SessionRequest {
-    let current = FrozenRequest::of(reasoning_summary, bash_wait_seconds);
+    let current = FrozenRequest::of(reasoning_summary, bash_wait_seconds, prompt_version);
     let Some(frozen) = frozen else {
         let frozen = if legacy {
             FrozenRequest::LEGACY
@@ -201,6 +330,7 @@ pub fn freeze_session_request(
     manager: &mut SessionManager,
     reasoning_summary: Option<ReasoningSummarySetting>,
     bash_wait_seconds: Option<NonZeroU32>,
+    prompt_version: Option<PromptVersion>,
 ) -> FrozenRequest {
     let field = manager.ya_header_field(REQUEST_HEADER_KEY);
     let frozen = FrozenRequest::from_header_value(field);
@@ -209,7 +339,13 @@ pub fn freeze_session_request(
         || manager
             .ya_header_field(super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY)
             .is_some();
-    let request = session_request(frozen, legacy, reasoning_summary, bash_wait_seconds);
+    let request = session_request(
+        frozen,
+        legacy,
+        reasoning_summary,
+        bash_wait_seconds,
+        prompt_version,
+    );
     if let Some(to_write) = request.to_write {
         if let Ok(value) = serde_json::to_value(to_write) {
             manager.ya_set_header_field(REQUEST_HEADER_KEY, value);
@@ -371,17 +507,19 @@ mod tests {
     const OFF: FrozenRequest = FrozenRequest {
         reasoning_summary: ReasoningSummarySetting::Off,
         bash_wait_seconds: LEGACY_BASH_WAIT_SECONDS,
+        prompt_version: PromptVersion::V1,
     };
 
     fn seconds(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("non-zero")
     }
 
-    /// The default settings: `"off"`, 30 seconds.
+    /// The default settings: `"off"`, 30 seconds, prompt version 2.
     fn default_request() -> FrozenRequest {
         FrozenRequest {
             reasoning_summary: ReasoningSummarySetting::Off,
             bash_wait_seconds: seconds(30),
+            prompt_version: PromptVersion::V2,
         }
     }
 
@@ -390,6 +528,7 @@ mod tests {
         FrozenRequest {
             reasoning_summary: ReasoningSummarySetting::Auto,
             bash_wait_seconds: seconds(30),
+            prompt_version: PromptVersion::V2,
         }
     }
 
@@ -401,25 +540,29 @@ mod tests {
             ReasoningSummarySetting::Off
         );
         assert_eq!(DEFAULT_BASH_WAIT_SECONDS.get(), 30);
-        assert_eq!(FrozenRequest::of(None, None), default_request());
+        assert_eq!(FrozenRequest::of(None, None, None), default_request());
         assert_eq!(
-            FrozenRequest::of(Some(ReasoningSummarySetting::Auto), None),
+            FrozenRequest::of(Some(ReasoningSummarySetting::Auto), None, None),
             auto_request()
         );
         assert_eq!(
-            FrozenRequest::of(Some(ReasoningSummarySetting::Auto), Some(seconds(1))),
+            FrozenRequest::of(
+                Some(ReasoningSummarySetting::Auto),
+                Some(seconds(1)),
+                Some(PromptVersion::V1)
+            ),
             FrozenRequest::LEGACY
         );
     }
 
     #[test]
     fn a_new_session_freezes_the_current_settings() {
-        let request = session_request(None, false, Some(ReasoningSummarySetting::Auto), None);
+        let request = session_request(None, false, Some(ReasoningSummarySetting::Auto), None, None);
         assert_eq!(request.frozen, auto_request());
         assert_eq!(request.to_write, Some(request.frozen));
         assert_eq!(request.warning, None);
         // Unset: the defaults, written as such.
-        let unset = session_request(None, false, None, None);
+        let unset = session_request(None, false, None, None, None);
         assert_eq!(unset.frozen, default_request());
         assert_eq!(unset.to_write, Some(default_request()));
         assert_eq!(unset.warning, None);
@@ -429,11 +572,11 @@ mod tests {
     /// the defaults included.
     #[test]
     fn a_legacy_session_is_auto_and_one_second() {
-        let request = session_request(None, true, Some(ReasoningSummarySetting::Off), None);
+        let request = session_request(None, true, Some(ReasoningSummarySetting::Off), None, None);
         assert_eq!(request.frozen, FrozenRequest::LEGACY);
         assert_eq!(request.to_write, Some(FrozenRequest::LEGACY));
         assert!(request.warning.is_some());
-        let request = session_request(None, true, None, None);
+        let request = session_request(None, true, None, None, None);
         assert_eq!(request.frozen, FrozenRequest::LEGACY);
         assert!(request.warning.is_some());
         let request = session_request(
@@ -441,13 +584,14 @@ mod tests {
             true,
             Some(ReasoningSummarySetting::Auto),
             Some(seconds(1)),
+            Some(PromptVersion::V1),
         );
         assert_eq!(request.warning, None);
     }
 
     #[test]
     fn a_resume_keeps_the_frozen_settings_and_warns_on_a_change() {
-        let request = session_request(Some(FrozenRequest::LEGACY), false, None, None);
+        let request = session_request(Some(FrozenRequest::LEGACY), false, None, None, None);
         assert_eq!(request.frozen, FrozenRequest::LEGACY);
         assert_eq!(request.to_write, None);
         let warning = request.warning.expect("warning");
@@ -455,7 +599,9 @@ mod tests {
         assert!(warning.contains("reasoningSummary \"off\""), "{warning}");
         assert!(warning.contains("bashWaitSeconds 1"), "{warning}");
         assert!(warning.contains("bashWaitSeconds 30"), "{warning}");
-        let same = session_request(Some(default_request()), true, None, None);
+        assert!(warning.contains("promptVersion 1"), "{warning}");
+        assert!(warning.contains("promptVersion 2"), "{warning}");
+        let same = session_request(Some(default_request()), true, None, None, None);
         assert_eq!(same.frozen, default_request());
         assert_eq!(same.warning, None);
     }
@@ -467,7 +613,7 @@ mod tests {
             (FrozenRequest::LEGACY, json!({"reasoningSummary": "auto"})),
             (
                 default_request(),
-                json!({"reasoningSummary": "off", "bashWaitSeconds": 30}),
+                json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2}),
             ),
         ] {
             assert_eq!(serde_json::to_value(frozen).unwrap(), value);
@@ -484,28 +630,33 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // A new session with the default settings: `"off"`, 30 seconds.
         let mut manager = SessionManager::in_memory(dir.path());
-        let frozen = freeze_session_request(&mut manager, None, None);
+        let frozen = freeze_session_request(&mut manager, None, None, None);
         assert_eq!(frozen, default_request());
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
+            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2}))
         );
         // A resume keeps it whatever the settings say.
         let again = freeze_session_request(
             &mut manager,
             Some(ReasoningSummarySetting::Auto),
             Some(seconds(1)),
+            Some(PromptVersion::V1),
         );
         assert_eq!(again, default_request());
 
         // `"auto"` set explicitly.
         let mut manager = SessionManager::in_memory(dir.path());
-        let frozen =
-            freeze_session_request(&mut manager, Some(ReasoningSummarySetting::Auto), None);
+        let frozen = freeze_session_request(
+            &mut manager,
+            Some(ReasoningSummarySetting::Auto),
+            None,
+            None,
+        );
         assert_eq!(frozen, auto_request());
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "auto", "bashWaitSeconds": 30}))
+            Some(&json!({"reasoningSummary": "auto", "bashWaitSeconds": 30, "promptVersion": 2}))
         );
 
         // A header frozen by YA-03 but without the request field (before 15/11/2026): auto and
@@ -515,7 +666,7 @@ mod tests {
             super::super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY,
             json!({"editTool": "native", "shellTool": "kernel"}),
         );
-        let frozen = freeze_session_request(&mut legacy, None, None);
+        let frozen = freeze_session_request(&mut legacy, None, None, None);
         assert_eq!(frozen, FrozenRequest::LEGACY);
         assert_eq!(
             legacy.ya_header_field(REQUEST_HEADER_KEY),
@@ -534,11 +685,13 @@ mod tests {
             json!({}),
             json!(1),
             json!({"reasoningSummary": "off", "bashWaitSeconds": 0}),
+            json!({"reasoningSummary": "off", "promptVersion": 3}),
+            json!({"reasoningSummary": "off", "promptVersion": "2"}),
         ] {
             for setting in [None, Some(ReasoningSummarySetting::Off)] {
                 let mut manager = SessionManager::in_memory(dir.path());
                 manager.ya_set_header_field(REQUEST_HEADER_KEY, bad.clone());
-                let frozen = freeze_session_request(&mut manager, setting, None);
+                let frozen = freeze_session_request(&mut manager, setting, None, None);
                 assert_eq!(frozen, FrozenRequest::LEGACY);
                 assert_eq!(
                     manager.ya_header_field(REQUEST_HEADER_KEY),
@@ -553,7 +706,12 @@ mod tests {
     #[test]
     fn bash_wait_in_the_header() {
         assert_eq!(
-            serde_json::to_value(FrozenRequest::of(None, Some(seconds(1)))).unwrap(),
+            serde_json::to_value(FrozenRequest::of(
+                None,
+                Some(seconds(1)),
+                Some(PromptVersion::V1)
+            ))
+            .unwrap(),
             json!({"reasoningSummary": "off"})
         );
         assert_eq!(
@@ -578,7 +736,10 @@ mod tests {
         for setting in [None, Some(seconds(45))] {
             let mut manager = SessionManager::in_memory(dir.path());
             manager.ya_set_header_field(REQUEST_HEADER_KEY, json!({"reasoningSummary": "off"}));
-            assert_eq!(freeze_session_request(&mut manager, None, setting), OFF);
+            assert_eq!(
+                freeze_session_request(&mut manager, None, setting, None),
+                OFF
+            );
             assert_eq!(
                 manager.ya_header_field(REQUEST_HEADER_KEY),
                 Some(&json!({"reasoningSummary": "off"}))
@@ -601,5 +762,110 @@ mod tests {
         }
         assert_eq!(resolve_bash_wait_seconds(None), DEFAULT_BASH_WAIT_SECONDS);
         assert_eq!(resolve_bash_wait_seconds(Some(seconds(1))).get(), 1);
+    }
+
+    /// Option A of ticket 11: a `yaRequest` without `promptVersion` (every session created
+    /// before the lot) is version 1 and keeps it at resume, with the default settings (2) too;
+    /// its header is left as is. A new session freezes version 2.
+    #[test]
+    fn a_session_from_before_the_lot_keeps_prompt_version_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = json!({"reasoningSummary": "off", "bashWaitSeconds": 30});
+        for setting in [None, Some(PromptVersion::V2)] {
+            let mut manager = SessionManager::in_memory(dir.path());
+            manager.ya_set_header_field(REQUEST_HEADER_KEY, before.clone());
+            let frozen = freeze_session_request(&mut manager, None, None, setting);
+            assert_eq!(frozen.prompt_version, PromptVersion::V1);
+            assert_eq!(manager.ya_header_field(REQUEST_HEADER_KEY), Some(&before));
+        }
+        let mut manager = SessionManager::in_memory(dir.path());
+        let frozen = freeze_session_request(&mut manager, None, None, None);
+        assert_eq!(frozen.prompt_version, PromptVersion::V2);
+        // Version 1 set explicitly: not written, as a header from before the lot.
+        let mut manager = SessionManager::in_memory(dir.path());
+        let frozen = freeze_session_request(&mut manager, None, None, Some(PromptVersion::V1));
+        assert_eq!(frozen.prompt_version, PromptVersion::V1);
+        assert_eq!(
+            manager.ya_header_field(REQUEST_HEADER_KEY),
+            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
+        );
+    }
+
+    /// Ticket 11: a version-2 session that can have subagents is refused, with the setting to
+    /// change; version 1, or no subagents, passes.
+    #[test]
+    fn subagents_need_prompt_version_one() {
+        let refused = check_subagents(PromptVersion::V2, None, Some(1))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("rlmMaxDepth is 1"), "{refused}");
+        assert!(refused.contains("\"promptVersion\": 1"), "{refused}");
+        let child = check_subagents(PromptVersion::V2, Some(1), None)
+            .unwrap_err()
+            .to_string();
+        assert!(child.contains("subagent session (depth 1)"), "{child}");
+        assert!(check_subagents(PromptVersion::V1, None, Some(2)).is_ok());
+        assert!(check_subagents(PromptVersion::V1, Some(1), None).is_ok());
+        assert!(check_subagents(PromptVersion::V2, None, Some(0)).is_ok());
+        assert!(check_subagents(PromptVersion::V2, Some(0), None).is_ok());
+    }
+
+    /// The setting wins over the environment variable, which wins over the default; an invalid
+    /// variable is ignored.
+    #[test]
+    fn the_environment_variable_is_below_the_setting() {
+        assert_eq!(prompt_version_from(None, None), None);
+        assert_eq!(
+            prompt_version_from(None, Some("1")),
+            Some(PromptVersion::V1)
+        );
+        assert_eq!(
+            prompt_version_from(Some(PromptVersion::V2), Some("1")),
+            Some(PromptVersion::V2)
+        );
+        for bad in ["3", "", "v1", "-1"] {
+            assert_eq!(prompt_version_from(None, Some(bad)), None, "{bad}");
+        }
+    }
+
+    /// The version read without writing follows the freeze: frozen, legacy (version 1), or the
+    /// setting.
+    #[test]
+    fn the_session_prompt_version_is_read_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SessionManager::in_memory(dir.path());
+        assert_eq!(session_prompt_version(&manager, None), PromptVersion::V2);
+        assert_eq!(
+            session_prompt_version(&manager, Some(PromptVersion::V1)),
+            PromptVersion::V1
+        );
+        assert_eq!(manager.ya_header_field(REQUEST_HEADER_KEY), None);
+        let mut frozen = SessionManager::in_memory(dir.path());
+        frozen.ya_set_header_field(REQUEST_HEADER_KEY, json!({"reasoningSummary": "off"}));
+        assert_eq!(session_prompt_version(&frozen, None), PromptVersion::V1);
+        let mut legacy = SessionManager::in_memory(dir.path());
+        legacy.ya_set_header_field(
+            super::super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY,
+            json!({"editTool": "kernel", "shellTool": "kernel"}),
+        );
+        assert_eq!(
+            session_prompt_version(&legacy, Some(PromptVersion::V2)),
+            PromptVersion::V1
+        );
+    }
+
+    /// `promptVersion` in `settings.json`: 1 or 2; anything else is dropped at load.
+    #[test]
+    fn the_prompt_version_setting_loads_one_or_two() {
+        let load = |value: Value| {
+            crate::settings::load::from_value_lenient(&json!({ "promptVersion": value }))
+                .prompt_version
+        };
+        assert_eq!(load(json!(1)), Some(PromptVersion::V1));
+        assert_eq!(load(json!(2)), Some(PromptVersion::V2));
+        for bad in [json!(0), json!(3), json!("2"), json!(1.5), json!(null)] {
+            assert_eq!(load(bad.clone()), None, "{bad}");
+        }
+        assert_eq!(PromptVersion::default(), PromptVersion::V2);
     }
 }

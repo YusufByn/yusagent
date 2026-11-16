@@ -14,8 +14,9 @@
 //! Settings, frozen for the session at creation (written to the session header, field
 //! [`FROZEN_TOOLS_HEADER_KEY`], and read back on every resume; settings changed in between give
 //! a warning, not other tools):
-//! - `editTool` unset: `apply_patch` on Codex, the kernel's `edit()` elsewhere; `"kernel"`: the
-//!   kernel everywhere; `"native"`: `apply_patch`, refused outside Codex.
+//! - `editTool` unset or `"kernel"`: the kernel's `edit()` everywhere (unset was `apply_patch` on
+//!   Codex until the lot Unharnessed of YA-09, ticket 11; one tool by default since);
+//!   `"native"`: `apply_patch`, refused outside Codex.
 //! - `shellTool` unset or `"kernel"`: `bash()` in the kernel; `"native"`: `exec_command` /
 //!   `write_stdin` with `bash` removed from the kernel namespace, refused outside Codex.
 //!
@@ -124,9 +125,9 @@ pub fn resolve_tool_choice(
             "{setting} \"native\" is only available for the Codex model family; {model_label} is not one. Remove the setting or set it to \"kernel\"."
         )
     };
+    // yusAgent (YA-09, ticket 11): unset is the kernel's `edit()` on every family (one tool).
     let apply_patch = match edit_tool {
-        None => codex,
-        Some(EditToolSetting::Kernel) => false,
+        None | Some(EditToolSetting::Kernel) => false,
         Some(EditToolSetting::Native) if codex => true,
         Some(EditToolSetting::Native) => return Err(refuse("editTool")),
     };
@@ -367,15 +368,9 @@ mod tests {
     }
 
     #[test]
-    fn unset_edit_tool_is_native_on_codex_and_kernel_elsewhere() {
+    fn unset_edit_tool_is_the_kernel_on_every_family() {
         let codex = resolve_tool_choice(ToolFamily::Codex, None, None, "m").unwrap();
-        assert_eq!(
-            codex,
-            ToolChoice {
-                apply_patch: true,
-                native_shell: false
-            }
-        );
+        assert_eq!(codex, ToolChoice::default());
         let other = resolve_tool_choice(ToolFamily::Other, None, None, "m").unwrap();
         assert_eq!(other, ToolChoice::default());
     }
@@ -466,7 +461,8 @@ mod tests {
         .is_err());
     }
 
-    const CODEX_DEFAULT: ToolChoice = ToolChoice {
+    /// `editTool: "native"` on Codex (the default before ticket 11).
+    const CODEX_PATCH: ToolChoice = ToolChoice {
         apply_patch: true,
         native_shell: false,
     };
@@ -474,15 +470,31 @@ mod tests {
     #[test]
     fn new_session_freezes_its_effective_settings() {
         let tools = session_tools(ToolFamily::Codex, None, None, None, "m").unwrap();
-        assert_eq!(tools.choice, CODEX_DEFAULT);
+        assert_eq!(tools.choice, ToolChoice::default());
         assert_eq!(
             tools.to_write,
             Some(FrozenTools {
-                edit_tool: EditToolSetting::Native,
+                edit_tool: EditToolSetting::Kernel,
                 shell_tool: ShellToolSetting::Kernel,
             })
         );
         assert_eq!(tools.warning, None);
+        let value = serde_json::to_value(tools.to_write.unwrap()).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"editTool": "kernel", "shellTool": "kernel"})
+        );
+        assert_eq!(FrozenTools::from_header_value(Some(&value)), tools.to_write);
+        // `editTool: "native"` set: `apply_patch`, frozen as such.
+        let tools = session_tools(
+            ToolFamily::Codex,
+            None,
+            Some(EditToolSetting::Native),
+            None,
+            "m",
+        )
+        .unwrap();
+        assert_eq!(tools.choice, CODEX_PATCH);
         let value = serde_json::to_value(tools.to_write.unwrap()).unwrap();
         assert_eq!(
             value,
@@ -503,10 +515,17 @@ mod tests {
 
     #[test]
     fn resume_keeps_the_frozen_tools_and_warns_when_settings_differ() {
-        let frozen = FrozenTools::of(CODEX_DEFAULT);
+        let frozen = FrozenTools::of(CODEX_PATCH);
         // Unchanged settings: same tools, nothing to write, no warning.
-        let same = session_tools(ToolFamily::Codex, Some(frozen), None, None, "m").unwrap();
-        assert_eq!(same.choice, CODEX_DEFAULT);
+        let same = session_tools(
+            ToolFamily::Codex,
+            Some(frozen),
+            Some(EditToolSetting::Native),
+            None,
+            "m",
+        )
+        .unwrap();
+        assert_eq!(same.choice, CODEX_PATCH);
         assert_eq!((same.to_write, same.warning), (None, None));
         // Other settings: the frozen tools win, with a warning naming both.
         let changed = session_tools(
@@ -517,7 +536,7 @@ mod tests {
             "m",
         )
         .unwrap();
-        assert_eq!(changed.choice, CODEX_DEFAULT);
+        assert_eq!(changed.choice, CODEX_PATCH);
         assert_eq!(changed.to_write, None);
         let warning = changed.warning.expect("a warning");
         assert!(
@@ -549,7 +568,7 @@ mod tests {
     fn native_frozen_tools_refuse_a_resume_on_another_family() {
         let error = session_tools(
             ToolFamily::Other,
-            Some(FrozenTools::of(CODEX_DEFAULT)),
+            Some(FrozenTools::of(CODEX_PATCH)),
             None,
             None,
             "anthropic/claude-opus-5-5",

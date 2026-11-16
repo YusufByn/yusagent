@@ -113,3 +113,16 @@ Points d'accroche :
 - Appels annexes (`pa_ai` direct) : résumé de compaction (`crates/pa-core/src/session_engine/compaction_exec.rs:183-213`), `/refine` (`crates/pa-core/src/session_engine/refine.rs:668`), résumé de branche (`crates/pa-core/src/session_engine/branch_summarization.rs:473`). Ils retrouvent le journal par l'id de session qu'ils passent déjà au provider. Sans journal, `usage_log::complete_simple` est exactement `pa_ai::complete_simple`.
 
 Exemple (banc de capture, cas `s1-anthropic`, deuxième requête) : voir `usage-report.md` d'un run (`bench/tools/capture/usage_check.py`).
+
+## Variables d'environnement qui changent la requête (YA-09)
+
+Le binaire lit ces variables quand le réglage correspondant de `settings.json` est absent ; elles changent le prompt système, donc le préfixe envoyé au modèle. Une session fige ce qu'elle en tire à sa création : la variable ne compte que pour les nouvelles sessions.
+
+| Variable | Réglage | Valeurs | Effet | Source |
+|---|---|---|---|---|
+| `RLM_MAX_DEPTH` | `rlmMaxDepth` (prioritaire) | entier ≥ 1 ; absent : 0 (défaut du fork) | Borne de récursion des sous-agents. À 0, le prompt (version 1) perd la surface des sous-agents ; au-dessus de 0, une session en prompt version 2 est refusée. | `crates/pa-core/src/session_engine/rlm_host.rs:391` |
+| `PRIME_AGENT_PROMPT_VERSION` | `promptVersion` (prioritaire) | `1` ou `2` (autre valeur ignorée) ; absent : 2 | Prompt système de la session : `2` le prompt court (`crates/pa-core/src/prompts/ya_prompt_v2.rs`), `1` le prompt d'avant le ticket 11. Figé dans l'en-tête (`yaRequest.promptVersion`, écrit pour la version 2). | `crates/pa-core/src/session_engine/ya_request.rs:111` |
+
+- **Combinaison refusée** : prompt version 2 et sous-agents (`rlmMaxDepth` ≥ 1, ou session enfant), au démarrage de la session, avec un message qui indique `"promptVersion": 1` (`check_subagents`, `ya_request.rs:156`).
+- **Tests** : `.cargo/config.toml` pose `RLM_MAX_DEPTH = "2"` et `PRIME_AGENT_PROMPT_VERSION = "1"` pour `cargo test` et `cargo run` (configuration d'upstream : prompt version 1, sous-agents) ; les tests des défauts du produit retirent les deux (`crates/pa-core/tests/prefix_stability.rs`, `crates/pa-cli/tests/ya_prompt_v2_e2e.rs`). Les binaires de la CI et du banc ne lisent pas ce fichier.
+- **Mesures** : ne pas laisser ces variables dans l'environnement d'un run du banc sans les noter dans le rapport ; le banc ne les pose pas.

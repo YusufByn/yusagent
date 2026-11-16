@@ -14,14 +14,30 @@ Brouillons du prompt v2 comptés au §4 : `docs/tickets/11-ya09-unharnessed/` (`
 6. **Description courte de `python_repl` en v2** : oui.
 7. Ce plan est versionné avec la PR A.
 
-**Ordre** : PR A, puis un ticket séparé sur la fermeture du WebSocket en 1011 (lancé par Yusuf), puis PR B. **Chauffes autorisées d'avance** (vérifications, pas des mesures) : `node-testsprite-356` après la PR A ; 3 tâches après la PR B (`node-testsprite-356`, une Python et une Node). Résumé des changements de requête relu par Yusuf avant chaque merge.
+**Ordre** (modifié par Yusuf le 16/11/2026) : PR A, puis **PR B dans la même session** (contexte du lot), puis le ticket séparé sur la fermeture du WebSocket en 1011, dans une nouvelle session. L'ordre initial plaçait le ticket 1011 entre A et B. **Chauffes autorisées d'avance** (vérifications, pas des mesures) : `node-testsprite-356` après la PR A ; 3 tâches après la PR B (`node-testsprite-356`, une Python et une Node). Résumé des changements de requête relu par Yusuf avant chaque merge.
 
-## PR A livrée (`ya-09-bash-runtime`)
+## PR A livrée (`ya-09-bash-runtime`, PR #42, mergée le 16/11/2026 en `6ccc602d1`)
+
+- CI : 14 checks requis verts sur `3b21be854` (dernier commit de la PR). Premier run rouge (`1c9ecf4`) : `held_count` inutilisé hors tests (clippy), et l'e2e `notices_after_the_turn_wake_the_model_once` donnait un réveil par avis. Les avis étaient bien retenus jusqu'à la fin de la dernière commande, mais mis en file un par un, donc traités en trois appels modèle ; corrigé en les mettant en file comme un seul lot (`3b21be854`).
+- Rejeu factice : `bash bench/smoke/tools/notice-batch-repro.sh <binaire> <python du kernel> [fenêtre]` (provider factice, aucun appel réel). Sur le binaire de `3b21be854` : les trois avis partent ensemble à la fin de la dernière commande, un seul appel de réveil ; avec la fenêtre `0`, un réveil par avis.
+- Chauffe `node-testsprite-356` (binaire `1c9ecf4`, avant la correction ; `gpt-6-luna`, effort high, `default.json`, run `bench/smoke/runs/20261116T080936Z-1c9ecf4-gpt-6-luna`, non versionné) : tâche non résolue (1 test caché sur 63, `doctor.test.ts`), 23 appels, un seul avis `[bash-done]`, reparti après la réponse du tour à la fin de la commande. WebSocket fermé en 1011 après 79,2 s sans requête (un `npm test` de 86 s) : 5 appels repassés en SSE, cas du ticket 1011. Changements de requête contre la chauffe de `main` `6d8168a` (`20261115T213039Z-6d8168a-gpt-6-luna`), premier corps : `instructions`, `tools` et paramètres identiques octet pour octet, seule `prompt_cache_key` (identifiant de session) diffère ; ligne `[bash-done]` envoyée au même format. Relu et jugé conforme par Yusuf.
 
 Écarts au plan ci-dessous, après lecture du code :
 - **Avis groupés : hôte sans démon seulement** (`-p`, RPC, banc). **Exigence reportée à YA-10** (critère d'acceptation ajouté à la section YA-10 du CDC, accord de Yusuf du 16/11) : le banc, lancé en `-p`, teste un comportement que l'extension n'aura qu'à YA-10. Le worker du démon (extension, TUI) admet les avis par ses propres files (`crates/pa-daemon/src/worker/queue.rs:531`, `admit_kernel_notice`) et livre une ligne custom seule par tour (`queue.rs:345-350`) avec une seule `custom_message` par requête (`crates/pa-daemon/src/worker/turn.rs:346`). Y grouper plusieurs avis demande de changer ce format de tour : à faire avec YA-10, où ce chemin est exercé. Le démon garde le comportement upstream.
 - **Mécanisme** (`crates/pa-core/src/session_engine/ya_bash_notice_batch.rs`) : un avis qui arrive pendant une exécution (`Agent::signal()` présent) suit le chemin upstream et rejoint l'appel suivant ; à l'arrêt, il est retenu, puis tous les avis retenus sont mis en file ensemble avec un seul réveil quand la dernière commande se termine (callback de fin du kernel), quand aucune commande ne tourne (shell persistant), ou quand le plus ancien a attendu la fenêtre. Une lecture du résultat (`bash.consumed`) retire l'avis retenu. `bashNoticeBatchSeconds: 0` enregistre les sinks upstream tels quels. Le réglage n'est pas figé : le prompt n'en parle pas.
 - **Timeout** (`prime-agent-runtime/src/rlm/ya_timeout.py`) : sans `timeout`, la limite est `ya_timeout.DEFAULT_TIMEOUT`, `None` dans la PR A ; la PR B la pose à 600 pour les sessions v2 par le bootstrap. Le minuteur est annulé quand la commande se termine (pas au réapage du groupe comme chez Unharnessed : les restes d'un `cmd &` après la fin ne sont pas tués, comme pour une commande normale).
+
+- Après merge, binaire de `main` (`6ccc602d1adceb767b2b62e7c113c087cafdf8b2`, build `ya-build-macos-arm64` 43832657296, version `0.10.2-continuous.6ccc602d1`, sha256 de l'exécutable `27abbd478deeee007d64e0d6c286323781d11e4ea967241b4314995f763bc8a0` ; sources livrées identiques à `3b21be854`) : rejeu factice conforme, trois avis au même instant puis un seul `assistant:WOKEN`. Aucune chauffe réelle (demande de Yusuf).
+
+## PR B (`ya-09-prompt-v2`)
+
+Écarts au plan ci-dessous, après lecture du code :
+- Champ d'en-tête `yaRequest.promptVersion` (et non `prompt`), même nom que le réglage, comme `bashWaitSeconds`.
+- Ligne `edit()` du prompt v2 alignée sur la décision 3 et son ajout : création par `old_str=""`, lignes modifiées numérotées en retour, refus si le texte est absent, répété, ou si le chemin sort du workspace (brouillons de `docs/tickets/11-ya09-unharnessed/` non mis à jour : le texte livré est `crates/pa-core/src/prompts/ya_prompt_v2/core.md`).
+- Inventaire v2 : `agent-observe` masqué avec `agent-message` sans sous-agents ; section omise si aucun skill n'est affiché.
+- La version 2 ne documente pas les sous-agents : une session version 2 qui peut en avoir (`rlmMaxDepth` ≥ 1, ou enfant) est refusée au démarrage, message qui indique `"promptVersion": 1` (demande de Yusuf du 16/11). Pour que les tests upstream gardent le spawn à 2 sans retouche, `.cargo/config.toml` pose `PRIME_AGENT_PROMPT_VERSION = "1"`, lu sous le réglage.
+- « Edits au premier essai » du smoke bench n'est pas comparable d'avant en après cette PR (note dans `bench/smoke/README.md`).
+- Les messages d'échec d'`edit()` gardent leurs préfixes ; `bench/smoke/metrics.py` (`EDIT_FAILURE`) reconnaît aussi les nouveaux.
 
 ## 0. Constats qui orientent le plan
 

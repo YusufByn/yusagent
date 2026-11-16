@@ -160,7 +160,8 @@ def observe(binary, root, observed):
     thread = threading.Thread(target=provider.serve_forever, daemon=True)
     thread.start()
     # yusAgent (YA-06): the default rlmMaxDepth is 0; spawn at the upstream 2.
-    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2}))
+    # yusAgent (YA-09, ticket 11): prompt version 1, the one that allows subagents.
+    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2, 'promptVersion': 1}))
     (root / 'agent/models.json').write_text(json.dumps({'providers': {'fixture': {
         'api': 'openai-completions', 'apiKey': 'fixture-only',
         'baseUrl': f'http://127.0.0.1:{provider.server_port}/v1', 'models': [{

@@ -41,7 +41,8 @@ def observe(binary, root, observed):
             'id': 'parity-1', 'name': 'Parity 1', 'reasoning': False,
             'contextWindow': 128000, 'maxTokens': 4096}]}}}))
     # yusAgent (YA-06): the default rlmMaxDepth is 0; spawn at the upstream 2.
-    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2,
+    # yusAgent (YA-09, ticket 11): prompt version 1, the one that allows subagents.
+    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2, 'promptVersion': 1,
         'defaultProvider': 'parity-local', 'defaultModel': 'parity-1'}))
     path = root / 'd.sock'
     scope = OwnedProcesses(binary, root, path)

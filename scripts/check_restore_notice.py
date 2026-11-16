@@ -183,8 +183,9 @@ def run_case(binary, root, observation):
         'baseUrl': 'http://127.0.0.1:%s/v1' % server.server_address[1],
         'models': [{'id': 'restore-fixture', 'name': 'Restore fixture', 'reasoning': False,
                     'contextWindow': 128000, 'maxTokens': 4096}]}}}))
+    # yusAgent (YA-09, ticket 11): prompt version 1, whose skill inventory this check reads.
     (agent / 'settings.json').write_text(json.dumps({'defaultProvider': 'fixture',
-        'defaultModel': 'restore-fixture', 'prewarmPythonKernel': False}))
+        'defaultModel': 'restore-fixture', 'prewarmPythonKernel': False, 'promptVersion': 1}))
     command = [str(binary), '--mode', 'json', '--provider', 'fixture', '--model',
                'restore-fixture', '--session-dir', str(sessions)]
     try:

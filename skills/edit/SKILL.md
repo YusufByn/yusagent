@@ -14,8 +14,13 @@ Call directly from the kernel:
 
 Use exact old/new strings. If the text contains triple double quotes, use
 triple single-quoted variables (`old = '''...'''`) or build `old`/`new` from
-inspected file slices. Returns a short confirmation; raises if `old_str` is
-missing or matches more than once (widen the snippet to make it unique).
+inspected file slices. Returns the path and the changed lines with a few
+lines of context, numbered like `read()`; raises if `old_str` is missing or
+matches more than once (widen the snippet to make it unique).
+
+An empty `old_str` creates a new file with `new_str` as its content (the file
+must not exist yet; missing parent directories are created). A path outside
+the workspace (the session's working directory) is refused.
 
 Or from a shell cell:
 

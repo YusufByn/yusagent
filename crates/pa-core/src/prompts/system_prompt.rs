@@ -106,6 +106,9 @@ pub struct BuildSystemPromptOptions<'a> {
     /// yusAgent (YA-09): the session's `await bash(cmd)` window (`bashWaitSeconds`); `None` or 1
     /// keeps the upstream line (`super::ya_bash_wait`).
     pub ya_bash_wait_seconds: Option<std::num::NonZeroU32>,
+    /// yusAgent (YA-09, ticket 11): the session's prompt version; `None` or version 1 keeps the
+    /// upstream layers (`super::ya_prompt_v2` for version 2).
+    pub ya_prompt_version: Option<crate::session_engine::ya_request::PromptVersion>,
     /// Enabled user-configured generic MCP servers.
     pub generic_mcp_servers: Vec<String>,
 }
@@ -129,6 +132,21 @@ pub fn system_prompt_breakdown(options: &BuildSystemPromptOptions) -> SystemProm
                 "--system-prompt",
                 custom.to_string(),
             ));
+        }
+        // yusAgent (YA-09, ticket 11): version 2 replaces the three upstream layers.
+        _ if is_v2(options) => {
+            segments.push(PromptSegment::static_segment(
+                "core",
+                "prompts/ya_prompt_v2/core.md",
+                super::ya_prompt_v2::static_prefix(options.ya_tool_choice),
+            ));
+            if let Some(extras) = options.model_prompt_extras {
+                segments.push(PromptSegment::static_segment(
+                    "model-prompts",
+                    layers::layer_source("model-prompts").unwrap_or_default(),
+                    extras.to_string(),
+                ));
+            }
         }
         _ => {
             segments.push(PromptSegment::static_segment(
@@ -209,17 +227,30 @@ pub fn system_prompt_breakdown(options: &BuildSystemPromptOptions) -> SystemProm
         .collect();
     if has_file_access && !visible_skills.is_empty() {
         // yusAgent (YA-03): the bundled-skills note names the session's shell.
-        let inventory = super::ya_tools_prompt::skills_inventory(
-            &format_skills_for_prompt(&options.skills),
-            options.ya_tool_choice,
-        )
-        .trim()
-        .to_string();
-        segments.push(PromptSegment::dynamic_segment(
-            "skills-inventory",
-            "skill discovery",
-            inventory,
-        ));
+        // yusAgent (YA-09, ticket 11): version 2 lists the skills in its compact form.
+        let inventory = if is_v2(options) {
+            let subagents = options.rlm_depth.unwrap_or(0) > 0
+                || options.rlm_max_depth.is_some_and(|depth| depth > 0);
+            super::ya_prompt_v2::skills_inventory(
+                &options.skills,
+                subagents,
+                super::session_paths::skill_location,
+            )
+        } else {
+            super::ya_tools_prompt::skills_inventory(
+                &format_skills_for_prompt(&options.skills),
+                options.ya_tool_choice,
+            )
+            .trim()
+            .to_string()
+        };
+        if !inventory.is_empty() {
+            segments.push(PromptSegment::dynamic_segment(
+                "skills-inventory",
+                "skill discovery",
+                inventory,
+            ));
+        }
     }
 
     if has_ipython {
@@ -321,12 +352,21 @@ fn environment_section(options: &BuildSystemPromptOptions) -> String {
     lines.join("\n")
 }
 
+/// yusAgent (YA-09, ticket 11): whether the session runs the short prompt of version 2.
+fn is_v2(options: &BuildSystemPromptOptions) -> bool {
+    options.ya_prompt_version == Some(crate::session_engine::ya_request::PromptVersion::V2)
+}
+
 fn session_role_section(options: &BuildSystemPromptOptions, has_ipython: bool) -> String {
     let depth = options.rlm_depth.unwrap_or(0);
     let mut lines = vec![format!(
         "Recursive agent depth: {depth}{}",
         if depth == 0 { " (root)" } else { " (not root)" }
     )];
+    // yusAgent (YA-09, ticket 11): version 2 states the depth of a child only.
+    if is_v2(options) && depth == 0 {
+        lines.clear();
+    }
     if options.daemonless {
         let line = if options.can_spawn {
             // yusAgent (YA-06): text in `rlm_off`, without the subagent clauses at depth bound 0.
@@ -335,9 +375,13 @@ fn session_role_section(options: &BuildSystemPromptOptions, has_ipython: bool) -
             "This session has no daemon: `rlm.spawn` is unavailable, heartbeats never fire, and background `bash()` completions wake you with a queued `[bash-done]` turn."
         };
         // yusAgent (YA-03): without `bash()`, the `[bash-done]` clauses go.
-        lines.push(
-            super::ya_tools_prompt::daemonless_line(line, options.ya_tool_choice).into_owned(),
-        );
+        let line = super::ya_tools_prompt::daemonless_line(line, options.ya_tool_choice);
+        // yusAgent (YA-09, ticket 11): the version-2 wording of the line.
+        lines.push(if is_v2(options) {
+            super::ya_prompt_v2::daemonless_line(&line).into_owned()
+        } else {
+            line.into_owned()
+        });
     }
     if has_ipython {
         // yusAgent (YA-03): no `await bash(cmd)` contract without `bash()`.

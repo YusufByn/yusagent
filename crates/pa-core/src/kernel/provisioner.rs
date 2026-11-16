@@ -140,6 +140,9 @@ pub struct IpythonKernelProvisionerOptions {
     /// yusAgent (YA-09): `bashWaitSeconds`, the `await bash(cmd)` window; `None` or 1 keeps the
     /// upstream bootstrap (`bootstrap::ya_bash_wait`).
     pub ya_bash_wait_seconds: Option<std::num::NonZeroU32>,
+    /// yusAgent (YA-09, ticket 11): the default `bash()` limit in seconds (a version-2
+    /// session); `None` keeps no limit (`bootstrap::ya_bash_timeout`).
+    pub ya_bash_timeout_seconds: Option<u32>,
 }
 
 /// Why and how long one startup failed, published through the shared startup
@@ -1079,6 +1082,11 @@ async fn start_kernel_impl(
     let bootstrap_code = crate::kernel::bootstrap::ya_bash_wait::bash_wait_bootstrap_code(
         &bootstrap_code,
         options.ya_bash_wait_seconds,
+    );
+    // yusAgent (YA-09, ticket 11): the default `bash()` limit of a version-2 session.
+    let bootstrap_code = crate::kernel::bootstrap::ya_bash_timeout::bash_timeout_bootstrap_code(
+        &bootstrap_code,
+        options.ya_bash_timeout_seconds,
     );
     let mut env = options.env.clone();
     if let Some(shell_path) = &options.shell_path {
