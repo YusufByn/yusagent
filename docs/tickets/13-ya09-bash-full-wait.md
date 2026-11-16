@@ -13,6 +13,29 @@ Suite du ticket 12 (« Note pour le ticket suivant »). Plan écrit en lecture s
 
 Chauffes `py-silence-001` et `py-silence-002` autorisées d'avance.
 
+## Implémentation (16/11/2026, branche `ya-13-bash-full-wait`)
+
+Relecture d'Unharnessed à `fe2cf2815` (clone jetable `/tmp/unharnessed-fe2cf2815-ya13`, rien exécuté) :
+- `__await__` attend sans borne (`unharnessed-runtime/src/rlm/bash.py:975-1000`) : pas de fenêtre ni d'instantané.
+- Leur prompt n'a pas de phrase sur la durée de l'`await` : `await handle -> BashResult`, le `timeout` par défaut (`crates/uh-core/src/prompts/layers/core.md:6-8`) et « Do not hold the turn with `sleep` or long blocking awaits » (`core.md:20`).
+
+Ce qui est fait :
+- **Réglage** : `BashWait` (`session_engine/ya_request.rs`), nombre ou `"full"`, même clé `bashWaitSeconds` dans les réglages et dans `yaRequest`. Défaut par `resolve_bash_wait` : `"full"` en v2, 30 s en v1 (D6). `check_bash_wait` refuse, avant le gel, une session qui tournerait en v1 avec `"full"`. Le défaut ne donne jamais cette paire : seul un `"full"` explicite (D3, D6) ou un en-tête écrit à la main y mène. Une session reprise garde sa valeur figée, et un `"full"` explicite ne refuse pas une session v1 déjà figée.
+- **Kernel** : `_YIELD_AFTER_SECONDS = None` après le basculement des avis (`kernel/bootstrap/ya_bash_wait.rs`). Runtime Python intact.
+- **Prompt** : en `"full"`, la ligne `await bash(cmd)` entière est remplacée (`prompts/ya_bash_wait.rs`, `FULL_WAIT_LINE`) : « `await bash(cmd)` waits until the command ends or its `timeout` kills it, and returns its `BashResult`. To keep working while a command runs, start it without `await` and collect the result on its `[bash-done]` notification. Never `await` a server: keep its handle, with `timeout=None` or `persistent=True` so the time limit does not kill it. »
+- **Watchdog (D5)** : en `"full"`, la note dit « Start long shell work with bash() without await and collect it on its [bash-done] notification ». Elle est réécrite dans `KernelManagerExecutor` (`runtime_wiring.rs`) par `ya_bash_wait::watchdog_note`. `execution.rs` n'est pas modifié ; un test épingle sa phrase.
+- **TTL (D4)** : `SESSION_WEBSOCKET_CACHE_TTL_MS` à 15 min (`websocket.rs:30-32`).
+- **Banc** : `prompt-v1.json` à 30 s, tâche `py-silence-002`, `check_warmup.py` (ligne `full`, cellules complètes après 30 s, connexions, préfixe), README.
+
+Écarts au plan :
+1. **Fichiers upstream en plus de la liste** : `engine.rs` (appel du refus), `runtime_wiring.rs`, `provisioner.rs`, `system_prompt.rs` (type du champ du fork, accesseur, réécriture de la note), `pa-cli/src/prompt_command.rs` (résolution du défaut avec la version du prompt). Tous imposés par le changement de type ou par D5. `settings/load.rs` n'a pas changé : la clé y était déjà.
+2. **D5 sans toucher `execution.rs`** : la note est réécrite après coup par le fork, plutôt que modifiée dans le fichier upstream.
+3. **Texte de la ligne** : la proposition disait « start it with `persistent=True` or keep its handle ». En v2, un handle non persistant est tué au timeout de 600 s par défaut, d'où « keep its handle, with `timeout=None` or `persistent=True` ».
+4. **Refus** : vérifié sur la requête effective de la session plutôt que sur le seul réglage. Même résultat pour les sessions neuves ; un en-tête écrit à la main en v1 avec `"full"` est refusé aussi.
+5. **Règle 8** : un `cargo check` a été lancé une fois en local au début de l'implémentation, avant de revenir à la règle. La validation Rust se fait par `ci.yml`.
+
+Tests : listés dans `docs/fork-changes.md` (ticket 13). Runtime en local : `cd prime-agent-runtime && uv run --python 3.11 python -m unittest discover -s test -p 'test_ya_bash_*.py'` : 24 tests OK. Banc : `python3 -I -m unittest discover -s bench/smoke/tests` : 48 tests OK.
+
 ## Constat de départ
 
 - **Aujourd'hui** : dans une session qui reçoit les avis `[bash-done]`, `await bash(cmd)` rend la main au bout de `_YIELD_AFTER_SECONDS` (1 s chez upstream, `prime-agent-runtime/src/rlm/bash.py:69` et `:1078`). Il renvoie alors un instantané : `r.running` vaut True et la commande continue (`bash.py:1105-1106`, `:1109-1119`).
