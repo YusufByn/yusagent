@@ -35,7 +35,8 @@ Brouillons du prompt v2 comptés au §4 : `docs/tickets/11-ya09-unharnessed/` (`
 - Champ d'en-tête `yaRequest.promptVersion` (et non `prompt`), même nom que le réglage, comme `bashWaitSeconds`.
 - Ligne `edit()` du prompt v2 alignée sur la décision 3 et son ajout : création par `old_str=""`, lignes modifiées numérotées en retour, refus si le texte est absent, répété, ou si le chemin sort du workspace (brouillons de `docs/tickets/11-ya09-unharnessed/` non mis à jour : le texte livré est `crates/pa-core/src/prompts/ya_prompt_v2/core.md`).
 - Inventaire v2 : `agent-observe` masqué avec `agent-message` sans sous-agents ; section omise si aucun skill n'est affiché.
-- La version 2 ne documente pas les sous-agents : avec `rlmMaxDepth` ≥ 1, `promptVersion: 1` les garde (limite notée dans `docs/fork-changes.md`).
+- La version 2 ne documente pas les sous-agents : une session version 2 qui peut en avoir (`rlmMaxDepth` ≥ 1, ou enfant) est refusée au démarrage, message qui indique `"promptVersion": 1` (demande de Yusuf du 16/11). Pour que les tests upstream gardent le spawn à 2 sans retouche, `.cargo/config.toml` pose `PRIME_AGENT_PROMPT_VERSION = "1"`, lu sous le réglage.
+- « Edits au premier essai » du smoke bench n'est pas comparable d'avant en après cette PR (note dans `bench/smoke/README.md`).
 - Les messages d'échec d'`edit()` gardent leurs préfixes ; `bench/smoke/metrics.py` (`EDIT_FAILURE`) reconnaît aussi les nouveaux.
 
 ## 0. Constats qui orientent le plan
