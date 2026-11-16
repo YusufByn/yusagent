@@ -191,6 +191,16 @@ pub fn register_in_process_kernel_notice_handlers(
     agent_slot: &BashNoticeAgentSlot,
     handlers: &mut HostRequestHandlers,
 ) {
+    let (notice, consumed) = in_process_kernel_notice_sinks(wake, agent_slot);
+    register_kernel_notice_host_handlers(notice, consumed, handlers);
+}
+
+/// The in-process sinks of [`register_in_process_kernel_notice_handlers`] (yusAgent, YA-09:
+/// split out so `ya_bash_notice_batch` can hold idle notices in front of them).
+pub(super) fn in_process_kernel_notice_sinks(
+    wake: &BashNoticeWake,
+    agent_slot: &BashNoticeAgentSlot,
+) -> (KernelNoticeSink, BashConsumedSink) {
     let notice_wake = Arc::clone(wake);
     let notice_slot = Arc::clone(agent_slot);
     let notice: KernelNoticeSink = Arc::new(move |notice| {
@@ -219,11 +229,11 @@ pub fn register_in_process_kernel_notice_handlers(
             }
         });
     });
-    register_kernel_notice_host_handlers(notice, consumed, handlers);
+    (notice, consumed)
 }
 
 /// The bound agent behind the late slot, when the session still lives.
-fn bound_agent(slot: &BashNoticeAgentSlot) -> Option<Arc<pa_agent::agent::Agent>> {
+pub(super) fn bound_agent(slot: &BashNoticeAgentSlot) -> Option<Arc<pa_agent::agent::Agent>> {
     slot.lock()
         .expect("bash notice agent slot lock")
         .as_ref()

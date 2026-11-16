@@ -55,6 +55,8 @@ pub mod tool_bridge;
 pub mod turn_boundary;
 // yusAgent (T04, YA-13): the per-call usage journal (`<id>.usage.ndjson`).
 pub mod usage_log;
+// yusAgent (YA-09): `[bash-done]` notices held while the agent is idle, released together.
+pub(crate) mod ya_bash_notice_batch;
 // yusAgent (YA-09): the notice of a command stopped by its `bash(timeout=...)`.
 pub(crate) mod ya_bash_timeout;
 // yusAgent (YA-03): kernel crash during a cell, restart and notice.
