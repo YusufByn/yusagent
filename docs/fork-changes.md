@@ -252,6 +252,8 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/tests/prefix_stability.rs` | modif. (fichier du fork) | Défaut Codex à un tool et prompt v2 (texte, description courte) ; `editTool: "native"` en variante ; shell natif sans `apply_patch` ; en-têtes `yaRequest` avec `promptVersion: 2` ; reprise et fork créés avec `editTool: "native"` ; WebSocket `apply_patch` avec `editTool: "native"` ; nouveau scénario `resumed_session_from_before_prompt_v2_keeps_the_v1_prompt` (option A) ; nouveau scénario `prompt_version_two_refuses_subagents` ; le Fixture retire `RLM_MAX_DEPTH` et `PRIME_AGENT_PROMPT_VERSION` (défauts du produit). | YA-09 |
 | `crates/pa-core/tests/ya_bash_timeout_kernel.rs` | modif. (fichier du fork) | Vrai kernel : la ligne de bootstrap d'une session version 2 pose la limite par défaut (600 s), rien sans elle. | YA-09 |
 | `.changes/ya-09-prompt-v2.md` | ajout | Fragment de changelog. | YA-09 |
+| `crates/pa-cli/tests/ya_prompt_v2_e2e.rs` | ajout | Binaire réel en `-p`, provider factice, vrai kernel, sur les défauts du produit (`RLM_MAX_DEPTH` et `PRIME_AGENT_PROMPT_VERSION` retirés) : session version 2 qui crée puis édite un fichier avec `edit()` et lance un `bash()` (limite par défaut 600 s), prompt v2 et en-tête vérifiés ; `rlmMaxDepth: 1` refusé au démarrage avec le message. | YA-09 |
+| `docs/usage.md` | modif. (fichier du fork) | Section « Variables d'environnement qui changent la requête » : `RLM_MAX_DEPTH` et `PRIME_AGENT_PROMPT_VERSION` (réglage prioritaire, valeurs, effet sur le prompt, combinaison refusée, valeurs de `.cargo/config.toml`). | YA-09 |
 
 
 
