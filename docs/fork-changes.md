@@ -254,6 +254,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `.changes/ya-09-prompt-v2.md` | ajout | Fragment de changelog. | YA-09 |
 | `crates/pa-cli/tests/ya_prompt_v2_e2e.rs` | ajout | Binaire réel en `-p`, provider factice, vrai kernel, sur les défauts du produit (`RLM_MAX_DEPTH` et `PRIME_AGENT_PROMPT_VERSION` retirés) : session version 2 qui crée puis édite un fichier avec `edit()` et lance un `bash()` (limite par défaut 600 s), prompt v2 et en-tête vérifiés ; `rlmMaxDepth: 1` refusé au démarrage avec le message. | YA-09 |
 | `docs/usage.md` | modif. (fichier du fork) | Section « Variables d'environnement qui changent la requête » : `RLM_MAX_DEPTH` et `PRIME_AGENT_PROMPT_VERSION` (réglage prioritaire, valeurs, effet sur le prompt, combinaison refusée, valeurs de `.cargo/config.toml`). | YA-09 |
+| `scripts/check_ledger_liveness.py`, `check_dead_child_delete.py`, `check_observe_selectors.py`, `check_factory_resumption.py`, `check_late_message_receipt.py`, `check_restore_notice.py` | modif. (scripts upstream, 1 à 2 lignes chacun) | Vérifications de cycle de vie (CI, shard 1) qui lancent le binaire hors de `cargo`, avec un environnement en liste blanche (la variable de `.cargo/config.toml` n'y arrive pas) : `promptVersion: 1` dans leur `settings.json`, à côté de `rlmMaxDepth: 2` pour les cinq qui font un spawn (refusé en version 2), et pour `check_restore_notice.py` qui lit l'inventaire XML des skills de la version 1. Constat du run 43835681084 (`ledger_liveness`, `restore_notice`). | YA-09 |
 
 
 

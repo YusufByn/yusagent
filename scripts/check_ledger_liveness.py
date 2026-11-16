@@ -289,7 +289,8 @@ def run_case(binary, root, observed):
                     'contextWindow': 128000, 'maxTokens': 4096}]}}}
     (root / 'agent/models.json').write_text(json.dumps(models))
     # yusAgent (YA-06): the default rlmMaxDepth is 0; spawn at the upstream 2.
-    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2,
+    # yusAgent (YA-09, ticket 11): prompt version 1, the one that allows subagents.
+    (root / 'agent/settings.json').write_text(json.dumps({'prewarmPythonKernel': False, 'rlmMaxDepth': 2, 'promptVersion': 1,
         'defaultProvider': 'parity-local', 'defaultModel': 'parity-1',
         'onboardingCompleted': True, 'telemetry': {'noticeShown': True}}))
     process, client = None, None
