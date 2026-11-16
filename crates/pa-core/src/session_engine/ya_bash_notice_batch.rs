@@ -4,9 +4,9 @@
 //! A notice that arrives while the agent runs keeps the upstream path: its row joins the
 //! steering queue and rides the run's next model call at no extra cost. A notice that arrives
 //! while the agent is idle (its turn is over) is held here instead of waking the session. The
-//! held notices are steered together, with one wake, when the last background command settles
-//! (the kernel's background-settle callback), when no command is running at all (a persistent
-//! shell), or when the oldest held notice has waited the window. A read of a held command's
+//! held notices are steered together as one queued batch, with one wake, when the last
+//! background command settles (the kernel's background-settle callback), when no command is
+//! running at all (a persistent shell), or when the oldest held notice has waited the window. A read of a held command's
 //! result (`bash.consumed`) withdraws its notice here, as it does from the queue.
 //!
 //! Grouping and the window come from Unharnessed (MIT, commit 7dc73199e,
@@ -143,8 +143,8 @@ impl NoticeBatch {
     }
 
     /// Number of held notices.
-    #[must_use]
-    pub fn held_count(&self) -> usize {
+    #[cfg(test)]
+    fn held_count(&self) -> usize {
         self.held().notices.len()
     }
 }
@@ -212,11 +212,16 @@ pub fn register_in_process_handlers(
             let Some(agent) = bound_agent(&slot) else {
                 return;
             };
-            for notice in notices {
-                if let Some(row) = session_message_to_loop(&SessionAgentMessage::Custom(notice.row))
-                {
-                    agent.steer(row);
-                }
+            // One queued batch: the next model call takes every released row, whatever the
+            // steering mode (rows steered one by one run one call each).
+            let rows: Vec<_> = notices
+                .into_iter()
+                .filter_map(|notice| {
+                    session_message_to_loop(&SessionAgentMessage::Custom(notice.row))
+                })
+                .collect();
+            if !rows.is_empty() {
+                agent.steer(rows);
             }
             wake();
         })
