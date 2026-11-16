@@ -94,7 +94,7 @@ Les fermetures observées avant le correctif tombaient entre 73,9 et 79,2 s de s
 
 Ces miss ne dépendent pas du transport : la connexion et la chaîne `previous_response_id` sont intactes. Ils restent sans explication ici, sur des prompts courts (moins de 2 100 tokens).
 
-**Changements de requête** (`compare_bodies.py`, premier corps des deux chauffes contre celui de `py-shortuuid-118` de la chauffe `f81f980f2` de la PR B ; entre `f81f980f2` et `main`, seul `crates/pa-cli/tests/ya_prompt_v2_e2e.rs` change dans `crates/`) : `instructions` (5 434 octets), `tools`, `model`, `reasoning`, `include`, `text`, `store`, `stream`, `tool_choice`, `parallel_tool_calls` et `type` identiques octet pour octet ; seuls `input` (énoncé de la tâche) et `prompt_cache_key` (identifiant de session) diffèrent. Mêmes jeux de clés : premier corps sans `previous_response_id`, suivants avec. Relu par Yusuf avant le merge : à faire.
+**Changements de requête** (`compare_bodies.py`, premier corps des deux chauffes contre celui de `py-shortuuid-118` de la chauffe `f81f980f2` de la PR B ; entre `f81f980f2` et `main`, seul `crates/pa-cli/tests/ya_prompt_v2_e2e.rs` change dans `crates/`) : `instructions` (5 434 octets), `tools`, `model`, `reasoning`, `include`, `text`, `store`, `stream`, `tool_choice`, `parallel_tool_calls` et `type` identiques octet pour octet ; seuls `input` (énoncé de la tâche) et `prompt_cache_key` (identifiant de session) diffèrent. Mêmes jeux de clés : premier corps sans `previous_response_id`, suivants avec. Relu et mergé par Yusuf le 16/11 (PR #45).
 
 ## Note pour le ticket suivant (attente complète de `bash()`)
 

@@ -1,14 +1,15 @@
 # Ticket 13 : YA-09, attente complète de `bash()` comme Unharnessed (option A)
 
-Suite du ticket 12 (« Note pour le ticket suivant »). Plan écrit en lecture seule le 16/11/2026 pendant l'A/B du cache v2, sur `main` à `5d8bb92b3`. Décisions de Yusuf du même jour reportées dans chaque section (D1 à D5). Rien n'est codé à ce stade.
+Suite du ticket 12 (« Note pour le ticket suivant »). Plan écrit en lecture seule le 16/11/2026 pendant l'A/B du cache v2, sur `main` à `5d8bb92b3`. Décisions de Yusuf du même jour reportées dans chaque section (D1 à D6). Rien n'est codé à ce stade.
 
 ## Décisions de Yusuf (16/11/2026)
 
 1. **D1, valeur** : `"full"`.
 2. **D2, défaut** : `"full"` par défaut directement, sans A/B (règle Unharnessed du 15/11, confirmée le 16/11). Garde-fou : les chauffes. La section « Mesure » est écartée.
-3. **D3, prompt v1** : `"full"` refusé en prompt v1. `bench/smoke/settings/prompt-v1.json` fixe `bashWaitSeconds` à 30 pour que le bras de contrôle reste l'ancien harness. Un test vérifie qu'il démarre.
+3. **D3, prompt v1** : `"full"` refusé en prompt v1 (restreint au `"full"` explicite par D6). `bench/smoke/settings/prompt-v1.json` fixe `bashWaitSeconds` à 30 pour que le bras de contrôle reste l'ancien harness. Un test vérifie qu'il démarre.
 4. **D4, TTL** : T1, TTL client à 15 min, listé dans `docs/fork-changes.md`.
 5. **D5, watchdog** : note du watchdog adaptée dans ce ticket (l'extension passe par le démon).
+6. **D6, refus en v1 limité au `"full"` explicite** (16/11, 15h12) : le refus de D3 ne vaut que si `"full"` est écrit explicitement dans les réglages. Si `"full"` vient du défaut et que la session est en prompt v1 (sessions créées avant le lot Unharnessed, sous-agents), elle prend 30 s. Raison : ne pas casser la reprise des anciennes sessions v1. D6 remplace l'ajout « le refus vaut aussi quand `"full"` vient du défaut ».
 
 Chauffes `py-silence-001` et `py-silence-002` autorisées d'avance.
 
@@ -23,9 +24,9 @@ Chauffes `py-silence-001` et `py-silence-002` autorisées d'avance.
 
 - **Nouvelle valeur de `bashWaitSeconds`** : `"full"` (D1). Ce reste une variante dans la même branche (règle 5). Le type passe de `NonZeroU32` à une énumération : un nombre (comme aujourd'hui) ou `"full"` (`settings/types.rs:334`, `settings/load.rs:76`, `ya_request.rs:190-250`).
 - **Défaut** (D2) : réglage absent = `"full"`. `DEFAULT_BASH_WAIT_SECONDS` (`ya_request.rs:190`) devient la valeur `"full"`. Un nombre explicite garde la fenêtre bornée.
-- **En-tête et reprise** : la valeur est figée dans `yaRequest`, `"full"` compris. Une session reprise garde sa valeur, comme aujourd'hui : une session figée à 30 s reste à 30 s, un `yaRequest` sans le champ reste à 1 s (`LEGACY_BASH_WAIT_SECONDS`, `ya_request.rs:194`). À vérifier pendant l'implémentation : le cas d'une session sans `yaRequest`, qui prend les réglages courants (écart déjà accepté pour `reasoningSummary` le 15/11), avec le refus de D3 si elle est en prompt v1.
+- **En-tête et reprise** : la valeur est figée dans `yaRequest`, `"full"` compris. Une session reprise garde sa valeur, comme aujourd'hui : une session figée à 30 s reste à 30 s, un `yaRequest` sans le champ reste à 1 s (`LEGACY_BASH_WAIT_SECONDS`, `ya_request.rs:194`). À vérifier pendant l'implémentation : le cas d'une session sans `yaRequest`, qui prend les réglages courants (écart déjà accepté pour `reasoningSummary` le 15/11), en prompt v1 : elle prend 30 s si `"full"` vient du défaut, refus seulement si `"full"` est explicite (D6).
 - **Kernel** : `ya_bash_wait.rs` émet `…._YIELD_AFTER_SECONDS = None` après le basculement des avis. Sans gestionnaire `bash.completed`, ou en `shellTool: "native"`, rien ne change.
-- **Refus en prompt v1** (D3) : une session en `promptVersion` 1 avec `bashWaitSeconds` `"full"` (explicite ou par défaut) est refusée au démarrage, sur le modèle du refus des sous-agents en v2 (`check_subagents`, `ya_request.rs:149-174`) : vérifié avant le gel des réglages, message qui nomme le réglage (`"bashWaitSeconds": 30`). Raison : le prompt v1 n'a pas de timeout par défaut (`ya_timeout.py:25`, `:40`), donc un `await` sur un serveur bloquerait sans fin.
+- **Refus en prompt v1** (D3) : une session en `promptVersion` 1 avec `bashWaitSeconds` `"full"` **écrit explicitement dans les réglages** est refusée au démarrage (D6), sur le modèle du refus des sous-agents en v2 (`check_subagents`, `ya_request.rs:149-174`) : vérifié avant le gel des réglages, message qui nomme le réglage (`"bashWaitSeconds": 30`). Raison : le prompt v1 n'a pas de timeout par défaut (`ya_timeout.py:25`, `:40`), donc un `await` sur un serveur bloquerait sans fin. **Défaut en v1 (D6)** : si `"full"` vient du défaut (réglage absent), une session v1 prend 30 s au lieu d'être refusée : sessions créées avant le lot Unharnessed reprises sans `yaRequest`, sous-agents en v1. Raison : ne pas casser la reprise des anciennes sessions v1.
 
 ## Changements dans les requêtes et le préfixe
 
@@ -93,7 +94,7 @@ Chauffes `py-silence-001` et `py-silence-002` autorisées d'avance.
 
 Une PR, avec ces modules :
 - **Fork** :
-  - `session_engine/ya_request.rs` (valeur `"full"`, défaut, refus en v1) ;
+  - `session_engine/ya_request.rs` (valeur `"full"`, défaut, refus en v1 du `"full"` explicite, 30 s en v1 par défaut) ;
   - `kernel/bootstrap/ya_bash_wait.rs` (ligne `None`) ;
   - `prompts/ya_bash_wait.rs` (ligne du prompt).
 - **Upstream** (modifications minimales, listées dans `fork-changes.md`) :
@@ -116,7 +117,9 @@ Une PR, avec ces modules :
   - ligne de bootstrap ;
   - ligne du prompt (un seul remplacement, reste octet pour octet) ;
   - `prefix_stability.rs` : une session `"full"` stable ;
-  - refus de `"full"` en prompt v1 (explicite ou par défaut), message qui nomme `bashWaitSeconds` ;
+  - refus d'un `"full"` explicite en prompt v1, message qui nomme `bashWaitSeconds` (D6) ;
+  - reprise d'une session v1 sans `yaRequest`, réglage absent : pas de refus, 30 s (D6) ;
+  - sous-agent en prompt v1, réglage absent : pas de refus, 30 s (D6) ;
   - démarrage avec les réglages de `bench/smoke/settings/prompt-v1.json` (D3) : pas de refus, 30 s figé ;
   - TTL de 15 min ;
   - note du watchdog en `"full"` (D5).
