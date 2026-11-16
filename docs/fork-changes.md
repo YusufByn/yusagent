@@ -230,6 +230,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-cli/tests/ya_bash_notice_batch_e2e.rs` | ajout | Binaire réel en `-p`, provider factice, vrai kernel : trois avis après le tour = un réveil ; fenêtre 0 = un réveil par avis ; un avis pendant l'exécution rejoint l'appel suivant ; fenêtre courte = avis relâché pendant qu'une commande tourne encore. | YA-09 |
 | `docs/tickets/11-ya09-unharnessed.md`, `docs/tickets/11-ya09-unharnessed/` | ajout | Plan du lot Unharnessed, décisions du 16/11/2026, brouillons du prompt v2 comptés. | YA-09 |
 | `.changes/ya-09-bash-runtime.md` | ajout | Fragment de changelog. | YA-09 |
+| `bench/smoke/tools/notice-batch-repro.sh`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Rejeu factice du regroupement des avis `[bash-done]` avec un binaire donné (provider factice, aucun appel réel) ; ligne du tableau des outils. | YA-09 |
 
 
 
