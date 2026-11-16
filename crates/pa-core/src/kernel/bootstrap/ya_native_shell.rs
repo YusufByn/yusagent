@@ -22,7 +22,7 @@ pub const NATIVE_SHELL_BASH_ERROR: &str =
 const BIND_BASH: &str = "    bash = _prime_agent_rlm_module.bash\n";
 const BASH_NOTICES: &str = "    _prime_agent_rlm_module._set_completion_notices_wired(True)\n";
 const FALLBACK_BASH: &str =
-    "    def bash(command, persistent=False, env=None):\n        rlm._raise_missing()\n\n";
+    "    def bash(command, persistent=False, env=None, timeout=None):\n        rlm._raise_missing()\n\n";
 
 /// The bootstrap code of a native-shell session, from the default one. A test pins the markers
 /// to the upstream bootstrap, so an upstream change that moves them fails there.

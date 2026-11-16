@@ -332,6 +332,10 @@ pub struct Settings {
     /// yusAgent (YA-09): `await bash(cmd)` window in seconds, at least 1 (unset: 30; upstream
     /// waits 1), frozen per session (`crate::session_engine::ya_request`).
     pub bash_wait_seconds: Option<std::num::NonZeroU32>,
+    /// yusAgent (YA-09): seconds an idle session holds `[bash-done]` notices while other
+    /// commands run (unset: 120; 0: upstream, one wake per notice), not frozen
+    /// (`crate::session_engine::ya_bash_notice_batch`).
+    pub bash_notice_batch_seconds: Option<u32>,
     pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,

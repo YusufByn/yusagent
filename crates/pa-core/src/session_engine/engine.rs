@@ -287,6 +287,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     // yusAgent (YA-09): `reasoningSummary`, captured before the move too.
     let ya_reasoning_summary = settings.settings().reasoning_summary;
     let ya_bash_wait_seconds = settings.settings().bash_wait_seconds;
+    let ya_notice_window =
+        super::ya_bash_notice_batch::batch_window(settings.settings().bash_notice_batch_seconds);
     // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
     let cache_retention =
         super::cache_retention::resolve_from_env(settings.settings().cache_retention);
@@ -498,13 +500,15 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     // session's agent and fire the embedding's wake once the agent
     // exists (the slot binds below).
     let bash_notice_agent = super::bash_notices::BashNoticeAgentSlot::default();
-    if let Some(wake) = config.bash_notice_wake.clone() {
-        super::bash_notices::register_in_process_kernel_notice_handlers(
+    // yusAgent (YA-09): idle notices held and released together (`ya_bash_notice_batch`).
+    let ya_notice_batch = config.bash_notice_wake.clone().and_then(|wake| {
+        super::ya_bash_notice_batch::register_in_process_handlers(
+            ya_notice_window,
             &wake,
             &bash_notice_agent,
             &mut handlers,
-        );
-    }
+        )
+    });
     // One model-visible skill list, computed now that the host-handler
     // registry is final (every registration, the refine handlers, and
     // the in-process bash notices are in): a controller-backed bundled
@@ -577,12 +581,16 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         session_artifact_dir,
         cell_timeout_ms,
         on_restore,
-        config.on_background_work_settled.clone(),
+        super::ya_bash_notice_batch::settled_callback(
+            ya_notice_batch.as_ref(),
+            config.on_background_work_settled.clone(),
+        ),
         on_unavailable_skills,
         on_bootstrap_result,
         ya_tools.native_shell,
         ya_request.bash_wait_seconds,
     );
+    super::ya_bash_notice_batch::bind_running_probe(ya_notice_batch.as_ref(), &provisioner);
     let mut tools = config.tools.clone();
     if !tools.iter().any(|tool| tool.name() == PYTHON_TOOL_NAME) {
         let mut definition = crate::tools::ipython::create_ipython_tool_definition(
