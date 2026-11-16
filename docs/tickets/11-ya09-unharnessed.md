@@ -27,6 +27,17 @@ Brouillons du prompt v2 comptés au §4 : `docs/tickets/11-ya09-unharnessed/` (`
 - **Mécanisme** (`crates/pa-core/src/session_engine/ya_bash_notice_batch.rs`) : un avis qui arrive pendant une exécution (`Agent::signal()` présent) suit le chemin upstream et rejoint l'appel suivant ; à l'arrêt, il est retenu, puis tous les avis retenus sont mis en file ensemble avec un seul réveil quand la dernière commande se termine (callback de fin du kernel), quand aucune commande ne tourne (shell persistant), ou quand le plus ancien a attendu la fenêtre. Une lecture du résultat (`bash.consumed`) retire l'avis retenu. `bashNoticeBatchSeconds: 0` enregistre les sinks upstream tels quels. Le réglage n'est pas figé : le prompt n'en parle pas.
 - **Timeout** (`prime-agent-runtime/src/rlm/ya_timeout.py`) : sans `timeout`, la limite est `ya_timeout.DEFAULT_TIMEOUT`, `None` dans la PR A ; la PR B la pose à 600 pour les sessions v2 par le bootstrap. Le minuteur est annulé quand la commande se termine (pas au réapage du groupe comme chez Unharnessed : les restes d'un `cmd &` après la fin ne sont pas tués, comme pour une commande normale).
 
+- Après merge, binaire de `main` (`6ccc602d1adceb767b2b62e7c113c087cafdf8b2`, build `ya-build-macos-arm64` 43832657296, version `0.10.2-continuous.6ccc602d1`, sha256 de l'exécutable `27abbd478deeee007d64e0d6c286323781d11e4ea967241b4314995f763bc8a0` ; sources livrées identiques à `3b21be854`) : rejeu factice conforme, trois avis au même instant puis un seul `assistant:WOKEN`. Aucune chauffe réelle (demande de Yusuf).
+
+## PR B (`ya-09-prompt-v2`)
+
+Écarts au plan ci-dessous, après lecture du code :
+- Champ d'en-tête `yaRequest.promptVersion` (et non `prompt`), même nom que le réglage, comme `bashWaitSeconds`.
+- Ligne `edit()` du prompt v2 alignée sur la décision 3 et son ajout : création par `old_str=""`, lignes modifiées numérotées en retour, refus si le texte est absent, répété, ou si le chemin sort du workspace (brouillons de `docs/tickets/11-ya09-unharnessed/` non mis à jour : le texte livré est `crates/pa-core/src/prompts/ya_prompt_v2/core.md`).
+- Inventaire v2 : `agent-observe` masqué avec `agent-message` sans sous-agents ; section omise si aucun skill n'est affiché.
+- La version 2 ne documente pas les sous-agents : avec `rlmMaxDepth` ≥ 1, `promptVersion: 1` les garde (limite notée dans `docs/fork-changes.md`).
+- Les messages d'échec d'`edit()` gardent leurs préfixes ; `bench/smoke/metrics.py` (`EDIT_FAILURE`) reconnaît aussi les nouveaux.
+
 ## 0. Constats qui orientent le plan
 
 - Notre base est plus récente que la leur : `3358e0016` est un ancêtre de notre `main`, 318 commits avant notre point commun avec upstream (`c83ac68b3`). Leur gestion des réveils (`crates/uh-core/src/session_engine/wakes.rs`, `SessionWakes`) n'existe pas chez nous. Les points 4 et 5 sont donc **réécrits** sur nos points d'entrée, pas recopiés.

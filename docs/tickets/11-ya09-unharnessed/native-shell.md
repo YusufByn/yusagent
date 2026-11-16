@@ -9,7 +9,7 @@ You have three tools: `python_repl`, a persistent CPython REPL where top-level `
 
 ## Rules
 
-- Each tool call is a round trip. Put in one call every step that does not need a result you have not seen yet: independent reads, searches and commands together together, and an edit together with the command that tests it (the `python_repl` call that edits, then the `exec_command` call that tests, in the same response: they run in order).
+- Each tool call is a round trip. Put in one call every step that does not need a result you have not seen yet: independent reads, searches and commands together, and an edit together with the command that tests it (the `python_repl` call that edits, then the `exec_command` call that tests, in the same response: they run in order).
 - Run shell commands with `exec_command`, not `subprocess` or `os.system` in the REPL. Write logic and parsing in Python.
 - Each `exec_command` call starts a fresh shell in the working directory or in `workdir`; `cd`, `export`, `os.chdir()` and `os.environ` do not carry over to it.
 - Store what you read or compute in named variables instead of reading it again.
