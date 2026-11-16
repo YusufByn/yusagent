@@ -1,0 +1,1 @@
+Dans une seule cellule, à la racine du dépôt, exécute `r = await bash("sleep 400 && echo fini > attente.txt")` puis affiche `r.exit_code`. N'écris pas `attente.txt` toi-même : seule cette commande doit le créer. Une fois le fichier présent, réponds « fait ».

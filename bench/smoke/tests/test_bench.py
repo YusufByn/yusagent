@@ -180,12 +180,14 @@ class TaskSelection(unittest.TestCase):
     """Les tâches de chauffe (tag `chauffe`) ne sont jamais tirées par défaut (YA-09, ticket 12)."""
 
     def test_warmup_tasks_only_on_request(self):
-        warmups = {t["id"] for t in run.load_tasks(["py-silence-001"], False)}
-        self.assertEqual(warmups, {"py-silence-001"})
+        warmups = {t["id"] for t in run.load_tasks(["py-silence-001", "py-silence-002"], False)}
+        self.assertEqual(warmups, {"py-silence-001", "py-silence-002"})
         for capture in (False, True):
             ids = {t["id"] for t in run.load_tasks(None, capture)}
             self.assertNotIn("py-silence-001", ids)
+            self.assertNotIn("py-silence-002", ids)
         self.assertNotIn("py-silence-001", ab.bench_tasks())
+        self.assertNotIn("py-silence-002", ab.bench_tasks())
         self.assertIn("node-testsprite-356", ab.bench_tasks())
 
 
