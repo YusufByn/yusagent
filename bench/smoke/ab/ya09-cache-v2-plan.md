@@ -37,25 +37,25 @@ Le constat du 16/11 (« 0 miss sur 43 appels en v1 ») venait de deux chauffes s
 - Binaire de `main` `318f3e118b71bc5734ac81507d001ecf82adaf87` : build `ya-build-macos-arm64` 43857318671, version `v0.10.2`, sha256 de l'exécutable `1c1923832681f6179e485a4797a3de85942644078b2e95a35f15ca4f35685dcb` (manifeste et `shasum -a 256`). Installation : `bash bench/smoke/tools/install-bin.sh 43857318671 318f3e118b71bc5734ac81507d001ecf82adaf87`.
 - `gpt-6-luna`, provider `openai-codex` (WebSocket), effort `high`.
 - **5 tâches** stables de la baseline Luna (résolues 3 fois sur 3) : `node-koa-2029`, `node-tough-cookie-630`, `py-langextract-584`, `py-tldextract-368`, `py-tldextract-383`. Écartées : `node-testsprite-356` (instable), `py-shortuuid-118` (sessions courtes, environ 10 appels : peu d'appels par unité), et les tâches instables (`node-filesize-376`, `node-little-coder-102`, `py-graphiti-2030`).
-- **2 passes entrelacées** (`tools/ab.py`), même jour : à chaque passe, chaque tâche lance ses deux bras dos à dos, dans un ordre tiré au sort.
-- **Graine : 145634427** (tirée de `os.urandom` le 16/11/2026 à 11:53Z, avant le run). Ordre obtenu par `--dry-run` : `1:koa AB, 1:tough-cookie BA, 1:langextract AB, 1:tldextract-368 BA, 1:tldextract-383 BA, 2:koa AB, 2:tough-cookie AB, 2:langextract AB, 2:tldextract-368 AB, 2:tldextract-383 AB`.
+- **4 passes entrelacées** (`tools/ab.py`), même jour (2 passes au premier jet du plan, passées à 4 par Yusuf le 16/11/2026 avant le run) : à chaque passe, chaque tâche lance ses deux bras dos à dos, dans un ordre tiré au sort.
+- **Graine : 145634427** (tirée de `os.urandom` le 16/11/2026 à 11:53Z, avant le run). Ordre obtenu par `--dry-run` (16/11/2026, 12:20Z) : passe 1 `koa AB, tough-cookie BA, langextract AB, tldextract-368 BA, tldextract-383 BA` ; passe 2 `koa AB, tough-cookie AB, langextract AB, tldextract-368 AB, tldextract-383 AB` ; passe 3 `koa AB, tough-cookie AB, langextract BA, tldextract-368 AB, tldextract-383 BA` ; passe 4 `koa AB, tough-cookie BA, langextract BA, tldextract-368 BA, tldextract-383 AB`. Les passes 1 et 2 sont celles du premier jet (même graine).
 - `DO_NOT_TRACK=1 PI_OFFLINE=1`, `PI_CACHE_RETENTION=short` (fixés par le runner), garde-fou d'inactivité de 300 s.
 - Quota : mêmes conditions que les A/B précédents (`ya14-codex-plan.md`, « Quota ») : fenêtre de 5 h utilisée à 10 % au plus avant de lancer, aucun autre usage du compte pendant l'A/B, arrêt sur erreur de quota.
 - **Unités écartées** : règle du README (« A/B : erreurs provider ») appliquée par `ab_stats.py` (`units_from_plan`), reprise telle quelle par `cache_calls.py --plan`. Une erreur provider sur un bras écarte l'unité (la tâche de cette passe, ses deux bras).
 
-Commandes (validées par `--dry-run` le 16/11/2026 à 11:53Z, contrôles du binaire passés) :
+Commandes (validées par `--dry-run` le 16/11/2026 à 12:20Z avec `--passes 4`, contrôles du binaire passés) :
 
 ```bash
 bash bench/smoke/tools/install-bin.sh 43857318671 318f3e118b71bc5734ac81507d001ecf82adaf87
 python3 -I bench/smoke/tools/ab.py ~/.cache/yusagent-bin/318f3e118b71bc5734ac81507d001ecf82adaf87 318f3e118b71bc5734ac81507d001ecf82adaf87 \
   --a bench/smoke/settings/default.json --b bench/smoke/settings/prompt-v1.json \
   --tasks node-koa-2029,node-tough-cookie-630,py-langextract-584,py-tldextract-368,py-tldextract-383 \
-  --passes 2 --model gpt-6-luna --effort high --seed 145634427
+  --passes 4 --model gpt-6-luna --effort high --seed 145634427
 python3 -I bench/smoke/tools/cache_calls.py --plan bench/smoke/runs/ab-<horodatage>/ab.json
 python3 -I bench/smoke/tools/ab_stats.py --plan bench/smoke/runs/ab-<horodatage>/ab.json --baseline bench/smoke/baseline/gpt-6-luna.json
 ```
 
-Coût estimé (estimation) : 20 lancements, environ 0,2 $ en coût rapporté. Base : l'A/B du 15/11 a coûté 0,25 et 0,28 $ par bras pour 29 unités retenues, soit environ 0,009 $ par lancement. Le quota de l'abonnement est la vraie limite. Durée : environ 45 min (estimation ; 7 406 s, soit 2 h 03, pour les 60 lancements du 15/11, `ab.json`, `overhead.wall_total_s`).
+Coût estimé (estimation) : 40 lancements, environ 0,4 $ en coût rapporté. Base : l'A/B du 15/11 a coûté 0,25 et 0,28 $ par bras pour 29 unités retenues, soit environ 0,009 $ par lancement. Le quota de l'abonnement est la vraie limite. Durée : environ 1 h 25 (estimation : 7 406 s pour les 60 lancements du 15/11, soit environ 123 s par lancement, `ab.json`, `overhead.wall_total_s`).
 
 ## Métriques
 
@@ -75,13 +75,13 @@ Affichés sans entrer dans le verdict : coût rapporté, tâches résolues, appe
 |---|---|
 | d ≥ 3 points **et** borne basse de l'IC > 0 | écart net : **le cache en v2 devient un ticket prioritaire** |
 | d ≥ 3 points, IC qui contient 0 | non concluant : Yusuf décide (passes en plus, ou ticket quand même) |
-| d < 3 points | pas d'écart net : pas de ticket prioritaire sur ce point |
+| d < 3 points | **pas d'écart net détecté** : pas de ticket prioritaire sur ce point. Le rapport affiche la borne haute de l'IC : l'écart réel peut aller jusqu'à cette valeur |
 
 **Pourquoi 3 points** : le taux v1 mesuré sur ces 5 tâches est de 2,7 à 2,8 % (tableau ci-dessus). 3 points de plus, c'est environ le double. C'est aussi la moitié du taux vu sur `f81f980` (6 %) : un écart de cet ordre se verrait en coût.
 
-**Puissance (estimation)** : environ 20 appels hors premier par unité, soit environ 200 par bras sur 10 unités. Avec 2,8 % contre 5,8 %, l'erreur type de d vaut environ 2 points sans compter la corrélation intra-session. La demi-largeur de l'IC est donc d'au moins 4 points. Avec 2 passes, seul un écart réel d'environ 5 points ou plus a de bonnes chances de sortir « net ». Un écart réel de 3 points finira probablement « non concluant ». Ce choix est assumé : un A/B court, et des passes en plus seulement si le résultat le demande.
+**Puissance (estimation, sans la corrélation intra-session, qui l'abaisse)** : environ 20 appels hors premier par unité, soit environ 400 par bras sur 20 unités. Avec 2,8 % contre 5,8 %, l'erreur type de d vaut environ 1,4 point, et la demi-largeur de l'IC environ 2,8 points. Un écart réel de 4 points sortirait « net » environ 8 fois sur 10 ; un écart réel de 3 points, environ une fois sur deux. Un « pas d'écart net détecté » n'exclut donc pas un écart réel : sa borne haute dit jusqu'où il peut aller.
 
-**Vérification de l'outil** : sur l'A/B `reasoningSummary` du 15/11 (prompt v1 dans les deux bras), `cache_calls.py --plan` donne d = +0,6 point, IC [−0,4, +1,6], verdict « pas d'écart net », comme attendu pour deux bras de même prompt.
+**Vérification de l'outil** : sur l'A/B `reasoningSummary` du 15/11 (prompt v1 dans les deux bras), `cache_calls.py --plan` donne d = +0,6 point, IC [−0,4, +1,6], verdict « pas d'écart net détecté » (borne haute +1,6 point), comme attendu pour deux bras de même prompt.
 
 ## Résultats
 
