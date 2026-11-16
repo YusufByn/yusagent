@@ -129,11 +129,11 @@ def settings_diff(a: dict, b: dict) -> dict[str, list]:
 
 
 def bench_tasks() -> list[str]:
-    """Tâches du banc : toutes celles de `tasks/` sauf les exemples."""
+    """Tâches du banc : toutes celles de `tasks/` sauf les exemples et les chauffes."""
     found = []
     for toml in sorted((SMOKE / "tasks").glob("*/task.toml")):
         task = tomllib.loads(toml.read_text())
-        if "exemple" not in task.get("tags", []):
+        if not {"exemple", "chauffe"} & set(task.get("tags", [])):
             found.append(task["id"])
     return found
 

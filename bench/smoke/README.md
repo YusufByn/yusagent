@@ -153,6 +153,12 @@ tasks/<id>/
 
 `source` : `{ path = "repo" }` (dossier local) ou `{ git = "<url>", commit = "<sha>", gold = "<sha>", patch = "break.patch" }` (`commit` : parent de la correction ; `gold` : commit de correction, pour `--validate-gold`). Champs des tâches publiques : `license`, `upstream` (dépôt, PR, issue), `files` (fichiers de `files/` copiés dans le workspace avant `setup`, par exemple le `uv.lock` figé à la revalidation quand le dépôt n'en a pas ; `files/freeze.txt` garde l'environnement de référence). Tags : `python` ou `node`, `multi-fichiers`, `difficile` ; une tâche `difficile` résolue en moins de 10 tours est signalée dans les anomalies. Les tâches du banc n'ont pas de scénario de capture qui les résout : en mode capture, elles jouent `smoke-fail`. Construction : `tools/make_task.py` depuis un candidat de `tools/candidates.csv` ; l'énoncé est réécrit à la main. `test` doit écrire un rapport JUnit dans `$SMOKE_JUNIT` ; un identifiant de test vaut `<fichier relatif>::<nom>` (ou `<classe>::<nom>`). Les tâches marquées `exemple` (`py-example-001`, `node-example-001`) valident le format et ne comptent pas dans le banc : elles ne tournent par défaut qu'en mode capture.
 
+**Tâches de chauffe** (tag `chauffe`) : jamais tirées par défaut, ni par `run.py` (mode réel ou capture) ni par `tools/ab.py`, et absentes des A/B et de `--validate-gold` sans `TASKS`. Elles servent aux vérifications sur le vrai backend, pas aux mesures. Lancement : `TASKS=<id>` (`--tasks <id>`).
+
+| Tâche | Rôle |
+|---|---|
+| `py-silence-001` | `bash()` lance `sleep 130 && echo fini > attente.txt` et l'agent attend la fin : un silence d'au moins 120 s sans requête au modèle. Vérifie le keepalive du WebSocket Codex (YA-09, ticket 12 : 0 fermeture `1011`, 0 bascule SSE) et resservira pour l'attente complète de `bash()`. Contrôle : `python3 -I bench/smoke/tools/check_warmup.py <run>/tasks/py-silence-001/run-1 <run>/report.json` (run lancé avec `--log-bodies`). |
+
 ### Validation sans modèle
 
 ```bash
