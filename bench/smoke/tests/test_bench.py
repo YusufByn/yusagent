@@ -6,7 +6,8 @@ Couvre le coût à cache théorique (`metrics.py`), le garde-fou d'inactivité (
 `proxies.py`), le plan de l'A/B entrelacé (`tools/ab.py`), l'écart sur erreur provider
 d'`tools/ab_stats.py` et, pour la comparaison contre Codex CLI (YA-14) : la fin de réponse lue
 au proxy, la rupture sur corps complet, l'appariement par ordre, le bras Codex (`codex_arm.py`),
-les scénarios Codex du serveur de capture et la règle de verdict. Bibliothèque standard
+les scénarios Codex du serveur de capture et la règle de verdict ; les causes des miss du
+cache serveur (`tools/cache_causes.py`, YA-09). Bibliothèque standard
 uniquement.
 """
 
@@ -42,6 +43,7 @@ def load(name: str, path: Path):
 run = load("smoke_run", SMOKE / "run.py")
 ab = load("smoke_ab", SMOKE / "tools" / "ab.py")
 ab_stats = load("smoke_ab_stats", SMOKE / "tools" / "ab_stats.py")
+cache_causes = load("smoke_cache_causes", SMOKE / "tools" / "cache_causes.py")
 
 PRICES = {"long_context_threshold_input_tokens": 272_000,
           "models": {"m": {"short": {"input": 1.0, "cached_input": 0.1, "output": 10.0,
@@ -763,6 +765,45 @@ class CodexFullBodies(unittest.TestCase):
                {"event": "response", "ts": 7, "session": "a"}]
         self.assertEqual(codex_arm.full_bodies(log),
                          {"generation_requests": 5, "full_body": 3, "after_first": 2})
+
+
+class CacheCauses(unittest.TestCase):
+    """YA-09, ticket 14 : miss et relectures partielles lus au proxy (`tools/cache_causes.py`)."""
+
+    def test_session_calls(self):
+        def req(ts, continuation=True, generate=None):
+            return {"event": "request", "ts": ts, "transport": "websocket",
+                    "continuation": continuation, "generate": generate}
+
+        def resp(ts, prompt, read, generate=None):
+            return {"event": "response", "ts": ts, "generate": generate,
+                    "usage": {"input_tokens": prompt, "cached_tokens": read}}
+        log = [{"event": "ws_open", "ts": 0},
+               req(1, continuation=False, generate=False), resp(2, 1500, 0, generate=False),  # prewarm
+               req(1000, continuation=False), resp(1500, 2000, 1408),   # premier appel
+               req(3000), resp(3500, 3000, 1920),                       # préfixe de l'appel 1
+               req(5000), resp(5500, 4000, 0),                          # miss
+               req(41000), resp(41500, 5000, 1920)]                     # partiel, 3 appels en arrière
+        bodies = [{"body": {"generate": False, "input": []}},
+                  {"body": {"model": "m", "input": [1]}},
+                  {"body": {"model": "m", "input": [2], "previous_response_id": "r1"}},
+                  {"body": {"model": "m", "input": [3], "previous_response_id": "r2"}},
+                  {"body": {"model": "n", "input": [4], "previous_response_id": "r3"}}]
+        s = cache_causes.session_calls(log, bodies)
+        self.assertEqual(s["prewarm"]["requests"], 1)
+        self.assertEqual(s["problems"], [])
+        first, second, third, fourth = s["calls"]
+        self.assertTrue(first["first"] and first["new_connection"])
+        self.assertEqual((second["miss"], second["partial"], second["back"]), (False, False, 1))
+        self.assertFalse(second["new_connection"])
+        self.assertEqual((third["miss"], third["partial"], third["back"]), (True, False, None))
+        self.assertEqual((fourth["miss"], fourth["partial"], fourth["back"]), (False, True, 3))
+        self.assertEqual(fourth["age"], 40.0)
+        self.assertEqual([c["same_body"] for c in s["calls"]], [None, True, True, False])
+        summary = cache_causes.summarize([s])
+        self.assertEqual((summary["later"], summary["miss"], summary["partial"]), (3, 1, 1))
+        self.assertEqual(summary["by_age"], [("< 10", 1, 0, 2), ("30-60", 0, 1, 1)])
+        self.assertEqual(summary["bodies"], [3, 1, 1, 2])
 
 
 def fake_jwt(claims: dict) -> str:
