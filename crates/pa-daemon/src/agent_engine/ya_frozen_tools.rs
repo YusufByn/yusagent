@@ -255,7 +255,7 @@ mod tests {
                 (
                     store.path,
                     REQUEST_KEY.to_string(),
-                    json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2})
+                    json!({"reasoningSummary": "off", "bashWaitSeconds": 30})
                 ),
             ]
         );
@@ -290,8 +290,7 @@ mod tests {
     /// settings (`"off"` and 30 when unset, the defaults since 15/11/2026); a durable header
     /// that has the field keeps it over the settings (here a header from before
     /// `bashWaitSeconds`: 1 second kept); a header frozen by YA-03 without it (a session from
-    /// before the field) is `"auto"` and 1 second, with the default settings too. Since ticket 11,
-    /// a new session also freezes `promptVersion` 2; a header without it is version 1.
+    /// before the field) is `"auto"` and 1 second, with the default settings too.
     #[test]
     fn a_build_freezes_the_request_settings() {
         let _faux = FAUX_TEST_LOCK
@@ -304,14 +303,14 @@ mod tests {
         let engine = build_with_settings(dir.path(), None, "{}");
         assert_eq!(
             built_request(&engine),
-            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2}))
+            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
         );
 
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(dir.path(), None, r#"{"reasoningSummary": "auto"}"#);
         assert_eq!(
             built_request(&engine),
-            Some(json!({"reasoningSummary": "auto", "bashWaitSeconds": 30, "promptVersion": 2}))
+            Some(json!({"reasoningSummary": "auto", "bashWaitSeconds": 30}))
         );
 
         let dir = tempfile::TempDir::new().unwrap();

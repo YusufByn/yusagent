@@ -7,3 +7,7 @@ DO_NOT_TRACK = "1"
 # upstream tests exercise spawning at the upstream bound, 2. Same rule: a
 # test that sets its own value keeps it.
 RLM_MAX_DEPTH = "2"
+# yusAgent (YA-09, ticket 11): the default prompt is version 2, which refuses subagents; the
+# upstream tests keep the upstream prompt (version 1) with spawning at 2. Read below the
+# `promptVersion` setting; a test that sets its own value (or removes it) keeps it.
+PRIME_AGENT_PROMPT_VERSION = "1"

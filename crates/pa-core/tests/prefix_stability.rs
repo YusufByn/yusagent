@@ -555,6 +555,20 @@ async fn engine_with_model(
     session: SessionManager,
     thinking_level: Option<pa_agent::types::ThinkingLevel>,
 ) -> SessionEngine {
+    try_engine_with_model(model, api_key, agent_dir, cwd, session, thinking_level)
+        .await
+        .expect("create_session")
+}
+
+/// yusAgent (YA-09, ticket 11): [`engine_with_model`] with the outcome of `create_session`.
+async fn try_engine_with_model(
+    model: &Value,
+    api_key: &str,
+    agent_dir: &Path,
+    cwd: &Path,
+    session: SessionManager,
+    thinking_level: Option<pa_agent::types::ThinkingLevel>,
+) -> anyhow::Result<SessionEngine> {
     let provider_model: pa_types::ai::Model =
         serde_json::from_value(model.clone()).expect("provider model");
     let loop_model: pa_agent::types::Model =
@@ -599,7 +613,6 @@ async fn engine_with_model(
         image_model_router: None,
     })
     .await
-    .expect("create_session")
 }
 
 async fn run_prompt(engine: &SessionEngine, prompt: &str) {
@@ -635,6 +648,10 @@ impl Fixture {
             ("PRIME_AGENT_CODING_AGENT_DIR", None),
             ("PRIME_API_KEY", None),
             ("PI_CACHE_RETENTION", None),
+            // yusAgent (YA-09, ticket 11): the product defaults (`rlmMaxDepth` 0, prompt version
+            // 2), not the upstream ones `.cargo/config.toml` sets for the upstream tests.
+            ("RLM_MAX_DEPTH", None),
+            ("PRIME_AGENT_PROMPT_VERSION", None),
         ]);
         Some(Self {
             dir,
@@ -1184,6 +1201,61 @@ async fn resumed_session_keeps_its_tools_when_settings_change() {
     }
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaTools"), Some(&frozen), "{header:?}");
+}
+
+/// yusAgent (YA-09, ticket 11): a version-2 session with subagents (`rlmMaxDepth: 1`) is refused
+/// at creation with a message that names `promptVersion: 1`, and its header keeps no request
+/// settings; with `promptVersion: 1` it starts.
+#[tokio::test]
+async fn prompt_version_two_refuses_subagents() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    std::fs::write(agent_dir.join("settings.json"), r#"{"rlmMaxDepth": 1}"#)
+        .expect("settings.json");
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions.clone()));
+    let Err(error) = try_engine_with_model(
+        &model_json(api, server.port, CODEX_DEFAULT),
+        "prefix-test-placeholder",
+        &agent_dir,
+        &cwd,
+        session,
+        None,
+    )
+    .await
+    else {
+        panic!("a version-2 session with rlmMaxDepth 1 must be refused");
+    };
+    let message = format!("{error:#}");
+    assert!(message.contains("\"promptVersion\": 1"), "{message}");
+    assert!(message.contains("rlmMaxDepth is 1"), "{message}");
+    if let Some(header) = pa_core::session::manager::read_session_header(&path) {
+        assert_eq!(header.rest.get("yaRequest"), None, "{header:?}");
+    }
+
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"rlmMaxDepth": 1, "promptVersion": 1}"#,
+    )
+    .expect("settings.json");
+    let mut session = SessionManager::in_memory(&cwd);
+    session.materialize_session_file(Some(sessions));
+    let engine = try_engine_with_model(
+        &model_json(api, server.port, CODEX_DEFAULT),
+        "prefix-test-placeholder",
+        &agent_dir,
+        &cwd,
+        session,
+        None,
+    )
+    .await
+    .expect("version 1 with subagents starts");
+    drop(engine);
 }
 
 /// yusAgent (YA-09, ticket 11, option A): a session created before the lot (its `yaRequest`

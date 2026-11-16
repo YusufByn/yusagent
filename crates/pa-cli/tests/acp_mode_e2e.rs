@@ -2045,8 +2045,7 @@ fn acp_daemon_attached_forwards_cli_session_options() {
         "--append-system-prompt reaches the worker"
     );
     assert!(
-        // yusAgent (YA-09, ticket 11): the compact inventory of the version-2 prompt.
-        system_prompt.contains("- `acp-argv-probe`: probe"),
+        system_prompt.contains("<name>acp-argv-probe</name>"),
         "--skill reaches the worker"
     );
     let turn = client.request(

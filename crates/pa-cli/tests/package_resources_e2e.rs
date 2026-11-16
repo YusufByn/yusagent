@@ -107,11 +107,11 @@ fn package_provided_skill_appears_in_created_session_skill_list() {
     let (stdout, stderr, code) = run(&configured, &script);
     assert_eq!(code, 0, "stderr: {stderr}");
     let text = assistant_text(&stdout);
-    // yusAgent (YA-09, ticket 11): the compact inventory of the version-2 prompt.
     assert!(
-        text.contains("- `e-greeting`: Greets from a package"),
+        text.contains("<name>e-greeting</name>"),
         "system prompt lists the package skill:\n{text}"
     );
+    assert!(text.contains("<description>Greets from a package</description>"));
     assert!(
         text.contains("fixture-pkg/skills/e-greeting/SKILL.md"),
         "location points into the package"
@@ -128,7 +128,7 @@ fn package_provided_skill_appears_in_created_session_skill_list() {
     assert_eq!(code, 0, "stderr: {stderr}");
     let text = assistant_text(&stdout);
     assert!(
-        !text.contains("`e-greeting`"),
+        !text.contains("<name>e-greeting</name>"),
         "empty skills filter disables the skill"
     );
 }

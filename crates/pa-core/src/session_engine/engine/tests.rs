@@ -146,10 +146,10 @@ async fn engine_runs_tool_loop_and_persists() {
 
     // The system prompt is the layered assembly: static core layer
     // first, dynamic tail after.
-    // yusAgent (YA-09, ticket 11): the version-2 prompt by default, without the depth line of a
-    // root session.
-    assert!(engine.system_prompt.starts_with("# yusAgent"));
-    assert!(!engine.system_prompt.contains("Recursive agent depth"));
+    assert!(engine.system_prompt.starts_with("# prime-agent harness"));
+    assert!(engine
+        .system_prompt
+        .contains("Recursive agent depth: 0 (root)"));
 
     let outcome = engine
         .prompt("run the echo tool", PromptOptions::default())

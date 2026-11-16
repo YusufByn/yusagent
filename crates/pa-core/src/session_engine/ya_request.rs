@@ -105,6 +105,74 @@ impl From<PromptVersion> for u8 {
     }
 }
 
+/// The environment variable read when `promptVersion` is not set (below the setting, above the
+/// default 2, like `RLM_MAX_DEPTH` for `rlmMaxDepth`). `.cargo/config.toml` sets it to 1 so the
+/// upstream tests keep the upstream prompt with spawning on (`RLM_MAX_DEPTH = "2"`).
+pub const PROMPT_VERSION_ENV: &str = "PRIME_AGENT_PROMPT_VERSION";
+
+/// The `promptVersion` of a session's settings: the setting, else [`PROMPT_VERSION_ENV`] (`1` or
+/// `2`, anything else ignored); `None`: the default (2).
+#[must_use]
+pub fn prompt_version_setting(setting: Option<PromptVersion>) -> Option<PromptVersion> {
+    prompt_version_from(setting, std::env::var(PROMPT_VERSION_ENV).ok().as_deref())
+}
+
+fn prompt_version_from(setting: Option<PromptVersion>, env: Option<&str>) -> Option<PromptVersion> {
+    setting.or_else(|| {
+        env.and_then(|value| value.trim().parse::<u8>().ok())
+            .and_then(|value| PromptVersion::try_from(value).ok())
+    })
+}
+
+/// The prompt version the session `manager` holds runs with, read without writing its header:
+/// the frozen one, version 1 for a header from before the field (or unreadable), else
+/// `setting` (the default 2 when unset). Same rules as [`freeze_session_request`].
+#[must_use]
+pub fn session_prompt_version(
+    manager: &SessionManager,
+    setting: Option<PromptVersion>,
+) -> PromptVersion {
+    let field = manager.ya_header_field(REQUEST_HEADER_KEY);
+    match FrozenRequest::from_header_value(field) {
+        Some(frozen) => frozen.prompt_version,
+        None if field.is_some()
+            || manager
+                .ya_header_field(super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY)
+                .is_some() =>
+        {
+            PromptVersion::V1
+        }
+        None => setting.unwrap_or_default(),
+    }
+}
+
+/// Refuses a version-2 session that can have subagents (a child, or a root whose
+/// `rlmMaxDepth` is above 0): the version-2 prompt does not document them (ticket 11). Checked
+/// before the request settings are frozen, so a refused session keeps no version in its header.
+///
+/// # Errors
+///
+/// The refusal, which names the setting to change.
+pub fn check_subagents(
+    version: PromptVersion,
+    rlm_depth: Option<u32>,
+    root_max_depth: Option<u64>,
+) -> anyhow::Result<()> {
+    let depth = rlm_depth.unwrap_or(0);
+    let max_depth = root_max_depth.unwrap_or(0);
+    if version == PromptVersion::V1 || (depth == 0 && max_depth == 0) {
+        return Ok(());
+    }
+    let reason = if depth > 0 {
+        format!("this is a subagent session (depth {depth})")
+    } else {
+        format!("rlmMaxDepth is {max_depth}")
+    };
+    anyhow::bail!(
+        "The version-2 system prompt (promptVersion 2, the default) does not document subagents, and {reason}. Set \"promptVersion\": 1 in settings.json to use subagents, or set \"rlmMaxDepth\": 0."
+    )
+}
+
 fn legacy_prompt_version() -> PromptVersion {
     PromptVersion::V1
 }
@@ -720,6 +788,69 @@ mod tests {
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
             Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
+        );
+    }
+
+    /// Ticket 11: a version-2 session that can have subagents is refused, with the setting to
+    /// change; version 1, or no subagents, passes.
+    #[test]
+    fn subagents_need_prompt_version_one() {
+        let refused = check_subagents(PromptVersion::V2, None, Some(1))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("rlmMaxDepth is 1"), "{refused}");
+        assert!(refused.contains("\"promptVersion\": 1"), "{refused}");
+        let child = check_subagents(PromptVersion::V2, Some(1), None)
+            .unwrap_err()
+            .to_string();
+        assert!(child.contains("subagent session (depth 1)"), "{child}");
+        assert!(check_subagents(PromptVersion::V1, None, Some(2)).is_ok());
+        assert!(check_subagents(PromptVersion::V1, Some(1), None).is_ok());
+        assert!(check_subagents(PromptVersion::V2, None, Some(0)).is_ok());
+        assert!(check_subagents(PromptVersion::V2, Some(0), None).is_ok());
+    }
+
+    /// The setting wins over the environment variable, which wins over the default; an invalid
+    /// variable is ignored.
+    #[test]
+    fn the_environment_variable_is_below_the_setting() {
+        assert_eq!(prompt_version_from(None, None), None);
+        assert_eq!(
+            prompt_version_from(None, Some("1")),
+            Some(PromptVersion::V1)
+        );
+        assert_eq!(
+            prompt_version_from(Some(PromptVersion::V2), Some("1")),
+            Some(PromptVersion::V2)
+        );
+        for bad in ["3", "", "v1", "-1"] {
+            assert_eq!(prompt_version_from(None, Some(bad)), None, "{bad}");
+        }
+    }
+
+    /// The version read without writing follows the freeze: frozen, legacy (version 1), or the
+    /// setting.
+    #[test]
+    fn the_session_prompt_version_is_read_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SessionManager::in_memory(dir.path());
+        assert_eq!(session_prompt_version(&manager, None), PromptVersion::V2);
+        assert_eq!(
+            session_prompt_version(&manager, Some(PromptVersion::V1)),
+            PromptVersion::V1
+        );
+        assert_eq!(manager.ya_header_field(REQUEST_HEADER_KEY), None);
+        let mut frozen = SessionManager::in_memory(dir.path());
+        frozen.ya_set_header_field(REQUEST_HEADER_KEY, json!({"reasoningSummary": "off"}));
+        assert_eq!(session_prompt_version(&frozen, None), PromptVersion::V1);
+        let mut legacy = SessionManager::in_memory(dir.path());
+        legacy.ya_set_header_field(
+            super::super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY,
+            json!({"editTool": "kernel", "shellTool": "kernel"}),
+        );
+        assert_eq!(
+            session_prompt_version(&legacy, Some(PromptVersion::V2)),
+            PromptVersion::V1
         );
     }
 

@@ -334,6 +334,19 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let stream_fn = super::cache_retention::scoped_stream_fn(stream_fn, cache_retention);
     // yusAgent (YA-09): the request settings, frozen for the session in its header before the
     // tools are (`ya_request`); `"auto"` leaves `stream_fn` as is.
+    // yusAgent (YA-09, ticket 11): `promptVersion` (setting, else `PRIME_AGENT_PROMPT_VERSION`);
+    // a version-2 session that can have subagents is refused before anything is frozen.
+    let ya_prompt_version = super::ya_request::prompt_version_setting(ya_prompt_version);
+    super::ya_request::check_subagents(
+        super::ya_request::session_prompt_version(&*wiring.session.lock().await, ya_prompt_version),
+        config.rlm_depth,
+        crate::prompts::rlm_off::root_max_depth(
+            config.rlm_depth,
+            conversation_log.as_deref(),
+            &cwd,
+            &config.agent_dir,
+        ),
+    )?;
     let ya_request = super::ya_request::freeze_session_request(
         &mut *wiring.session.lock().await,
         ya_reasoning_summary,
