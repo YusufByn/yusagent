@@ -18,15 +18,18 @@
 //! so the provider layer stays as upstream. It runs before the hooks of the request timing and
 //! the usage journal, which see the body as sent.
 //!
-//! `bashWaitSeconds` in `settings.json` (lever `bash()` of YA-09, `bench/smoke/ab/ya09-bash-plan.md`):
-//! how long `await bash(cmd)` waits before it returns a snapshot of a command still running, in
-//! whole seconds, at least 1. **Unset is 30 seconds** (decision of Yusuf, CDC journal of
-//! 15/11/2026, taken from Unharnessed without an A/B); upstream waits 1 second
-//! (`prime-agent-runtime/src/rlm/bash.py`, `_YIELD_AFTER_SECONDS`). A value other than 1 changes
-//! the `await bash(cmd)` line of the system prompt (`prompts::ya_bash_wait`) and the kernel
-//! bootstrap (`kernel::bootstrap::ya_bash_wait`); the request body is left as is. The header
-//! stores it unless it is 1: a `yaRequest` without it is 1 second, what every session created
-//! before this field ran with, so its prompt does not change when it is resumed.
+//! `bashWaitSeconds` in `settings.json` (lever `bash()` of YA-09, `bench/smoke/ab/ya09-bash-plan.md`,
+//! `docs/tickets/13-ya09-bash-full-wait.md`): how long `await bash(cmd)` waits before it returns
+//! a snapshot of a command still running, in whole seconds, at least 1, or `"full"`: no window,
+//! the await returns when the command ends or its `timeout` kills it, as Unharnessed does.
+//! **Unset is `"full"` in a version-2 session** (decision D2 of Yusuf, 16/11/2026, without an
+//! A/B) **and 30 seconds in a version-1 session** (D6: version 1 has no default `bash()` time
+//! limit); an explicit `"full"` in version 1 is refused ([`check_bash_wait`], D3). Upstream waits
+//! 1 second (`prime-agent-runtime/src/rlm/bash.py`, `_YIELD_AFTER_SECONDS`). A value other than
+//! 1 changes the `await bash(cmd)` line of the system prompt (`prompts::ya_bash_wait`) and the
+//! kernel bootstrap (`kernel::bootstrap::ya_bash_wait`); the request body is left as is. The
+//! header stores it unless it is 1: a `yaRequest` without it is 1 second, what every session
+//! created before this field ran with, so its prompt does not change when it is resumed.
 //!
 //! `promptVersion` in `settings.json` (lot Unharnessed of YA-09, ticket 11): `2` (unset) is the
 //! short system prompt (`prompts::ya_prompt_v2`), with a default `bash()` time limit of 600 s
@@ -186,26 +189,121 @@ fn is_legacy_prompt_version(version: &PromptVersion) -> bool {
 /// (`SessionManager::ya_set_header_field`).
 pub const REQUEST_HEADER_KEY: &str = "yaRequest";
 
-/// The `await bash(cmd)` window of an unset `bashWaitSeconds`, in seconds.
-pub const DEFAULT_BASH_WAIT_SECONDS: NonZeroU32 = NonZeroU32::new(30).expect("30 is not zero");
+/// The `bashWaitSeconds` setting: how long `await bash(cmd)` waits before it returns a
+/// snapshot of a command still running. In `settings.json` and in the header: a whole number of
+/// seconds, at least 1, or `"full"`; anything else is unreadable (an unset setting at load, an
+/// unreadable header field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BashWait {
+    /// A snapshot after this many seconds (upstream: 1).
+    Seconds(NonZeroU32),
+    /// No window: the await returns when the command ends or its `timeout` kills it, as
+    /// Unharnessed does (ticket 13, decision D1). The default of a version-2 session.
+    Full,
+}
+
+/// The word of [`BashWait::Full`] in the settings and the header.
+pub const FULL_WAIT: &str = "full";
+
+impl BashWait {
+    /// A window of `seconds`; `None` for 0.
+    #[must_use]
+    pub fn seconds(seconds: u32) -> Option<Self> {
+        NonZeroU32::new(seconds).map(BashWait::Seconds)
+    }
+}
+
+impl std::fmt::Display for BashWait {
+    /// As in `settings.json`: `30`, `"full"`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BashWait::Seconds(seconds) => write!(f, "{seconds}"),
+            BashWait::Full => write!(f, "\"{FULL_WAIT}\""),
+        }
+    }
+}
+
+impl Serialize for BashWait {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            BashWait::Seconds(seconds) => serializer.serialize_u32(seconds.get()),
+            BashWait::Full => serializer.serialize_str(FULL_WAIT),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BashWait {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Seconds(NonZeroU32),
+            Word(String),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Seconds(seconds) => Ok(BashWait::Seconds(seconds)),
+            Raw::Word(word) if word == FULL_WAIT => Ok(BashWait::Full),
+            Raw::Word(word) => Err(serde::de::Error::custom(format!(
+                "bashWaitSeconds must be a whole number of seconds (at least 1) or \"{FULL_WAIT}\", not \"{word}\""
+            ))),
+        }
+    }
+}
+
+/// The `await bash(cmd)` wait of an unset `bashWaitSeconds` in a version-2 session: `"full"`
+/// (ticket 13, decision D2).
+pub const DEFAULT_BASH_WAIT: BashWait = BashWait::Full;
+
+/// The window of an unset `bashWaitSeconds` in a version-1 session, in seconds: the default
+/// before ticket 13. Version 1 has no default `bash()` time limit, so a full wait could block
+/// forever on a server: an unset setting keeps 30 s there (sessions resumed from before the lot,
+/// subagents), and an explicit `"full"` is refused ([`check_bash_wait`], decisions D3 and D6).
+pub const V1_DEFAULT_BASH_WAIT_SECONDS: NonZeroU32 = NonZeroU32::new(30).expect("30 is not zero");
 
 /// The `await bash(cmd)` window of upstream, in seconds: the value of a `yaRequest` without the
 /// field (every session created before it).
 pub const LEGACY_BASH_WAIT_SECONDS: NonZeroU32 = NonZeroU32::MIN;
 
-/// The window of the setting `bashWaitSeconds`: its value, or [`DEFAULT_BASH_WAIT_SECONDS`].
+/// The wait of the setting `bashWaitSeconds` for a session of prompt `version`: its value, else
+/// [`DEFAULT_BASH_WAIT`] in version 2 and [`V1_DEFAULT_BASH_WAIT_SECONDS`] in version 1.
 #[must_use]
-pub fn resolve_bash_wait_seconds(setting: Option<NonZeroU32>) -> NonZeroU32 {
-    setting.unwrap_or(DEFAULT_BASH_WAIT_SECONDS)
+pub fn resolve_bash_wait(setting: Option<BashWait>, version: PromptVersion) -> BashWait {
+    setting.unwrap_or(match version {
+        PromptVersion::V1 => BashWait::Seconds(V1_DEFAULT_BASH_WAIT_SECONDS),
+        PromptVersion::V2 => DEFAULT_BASH_WAIT,
+    })
 }
 
-fn legacy_bash_wait_seconds() -> NonZeroU32 {
-    LEGACY_BASH_WAIT_SECONDS
+fn legacy_bash_wait() -> BashWait {
+    BashWait::Seconds(LEGACY_BASH_WAIT_SECONDS)
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
-fn is_legacy_bash_wait_seconds(seconds: &NonZeroU32) -> bool {
-    *seconds == LEGACY_BASH_WAIT_SECONDS
+fn is_legacy_bash_wait(wait: &BashWait) -> bool {
+    *wait == legacy_bash_wait()
+}
+
+/// Refuses a session that would run prompt version 1 with `bashWaitSeconds` `"full"`: version 1
+/// has no default `bash()` time limit, so an `await` on a server would block forever (ticket 13,
+/// D3). The default never gives this pair ([`resolve_bash_wait`]): only an explicit `"full"`
+/// does (D6), or a header written by hand. Checked before the request settings are frozen, so a
+/// refused session keeps nothing in its header.
+///
+/// # Errors
+///
+/// The refusal, which names the setting to change.
+pub fn check_bash_wait(
+    manager: &SessionManager,
+    bash_wait: Option<BashWait>,
+    prompt_version: Option<PromptVersion>,
+) -> anyhow::Result<()> {
+    let frozen = pending_session_request(manager, None, bash_wait, prompt_version).frozen;
+    if frozen.prompt_version == PromptVersion::V1 && frozen.bash_wait_seconds == BashWait::Full {
+        anyhow::bail!(
+            "bashWaitSeconds \"{FULL_WAIT}\" needs the version-2 system prompt: version 1 has no default bash() time limit, so an await could block forever. Set \"bashWaitSeconds\": 30 in settings.json, or use \"promptVersion\": 2."
+        );
+    }
+    Ok(())
 }
 
 /// The effective request settings of a session, written to its header at creation and read
@@ -215,12 +313,12 @@ fn is_legacy_bash_wait_seconds(seconds: &NonZeroU32) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct FrozenRequest {
     pub reasoning_summary: ReasoningSummarySetting,
-    /// `await bash(cmd)` window, in seconds (`bashWaitSeconds`).
+    /// `await bash(cmd)` wait (`bashWaitSeconds`): seconds, or `"full"`.
     #[serde(
-        default = "legacy_bash_wait_seconds",
-        skip_serializing_if = "is_legacy_bash_wait_seconds"
+        default = "legacy_bash_wait",
+        skip_serializing_if = "is_legacy_bash_wait"
     )]
-    pub bash_wait_seconds: NonZeroU32,
+    pub bash_wait_seconds: BashWait,
     /// The system prompt (`promptVersion`); absent from a header: version 1.
     #[serde(
         default = "legacy_prompt_version",
@@ -234,21 +332,23 @@ impl FrozenRequest {
     /// prompt version 1.
     pub const LEGACY: FrozenRequest = FrozenRequest {
         reasoning_summary: ReasoningSummarySetting::Auto,
-        bash_wait_seconds: LEGACY_BASH_WAIT_SECONDS,
+        bash_wait_seconds: BashWait::Seconds(LEGACY_BASH_WAIT_SECONDS),
         prompt_version: PromptVersion::V1,
     };
 
-    /// The request settings of the current settings.
+    /// The request settings of the current settings. An unset `bashWaitSeconds` follows the
+    /// prompt version ([`resolve_bash_wait`]).
     #[must_use]
     pub fn of(
         reasoning_summary: Option<ReasoningSummarySetting>,
-        bash_wait_seconds: Option<NonZeroU32>,
+        bash_wait_seconds: Option<BashWait>,
         prompt_version: Option<PromptVersion>,
     ) -> Self {
+        let prompt_version = prompt_version.unwrap_or_default();
         FrozenRequest {
             reasoning_summary: reasoning_summary.unwrap_or_default(),
-            bash_wait_seconds: resolve_bash_wait_seconds(bash_wait_seconds),
-            prompt_version: prompt_version.unwrap_or_default(),
+            bash_wait_seconds: resolve_bash_wait(bash_wait_seconds, prompt_version),
+            prompt_version,
         }
     }
 
@@ -288,7 +388,7 @@ pub fn session_request(
     frozen: Option<FrozenRequest>,
     legacy: bool,
     reasoning_summary: Option<ReasoningSummarySetting>,
-    bash_wait_seconds: Option<NonZeroU32>,
+    bash_wait_seconds: Option<BashWait>,
     prompt_version: Option<PromptVersion>,
 ) -> SessionRequest {
     let current = FrozenRequest::of(reasoning_summary, bash_wait_seconds, prompt_version);
@@ -321,17 +421,14 @@ fn warning(frozen: FrozenRequest, current: FrozenRequest) -> Option<String> {
     })
 }
 
-/// The request settings of the session `manager` holds: the frozen ones of its header, or the
-/// current settings written to a header that has none. A header that already has the frozen
-/// tools of YA-03 is from before this field, and an unreadable field is rewritten: both
-/// `"auto"`. Prints the resume warning to stderr. Call it before the tools are frozen in a new
-/// session.
-pub fn freeze_session_request(
-    manager: &mut SessionManager,
+/// The request settings the session `manager` holds would run with, read without writing its
+/// header (rules of [`freeze_session_request`]).
+fn pending_session_request(
+    manager: &SessionManager,
     reasoning_summary: Option<ReasoningSummarySetting>,
-    bash_wait_seconds: Option<NonZeroU32>,
+    bash_wait_seconds: Option<BashWait>,
     prompt_version: Option<PromptVersion>,
-) -> FrozenRequest {
+) -> SessionRequest {
     let field = manager.ya_header_field(REQUEST_HEADER_KEY);
     let frozen = FrozenRequest::from_header_value(field);
     let unreadable = field.is_some() && frozen.is_none();
@@ -339,9 +436,28 @@ pub fn freeze_session_request(
         || manager
             .ya_header_field(super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY)
             .is_some();
-    let request = session_request(
+    session_request(
         frozen,
         legacy,
+        reasoning_summary,
+        bash_wait_seconds,
+        prompt_version,
+    )
+}
+
+/// The request settings of the session `manager` holds: the frozen ones of its header, or the
+/// current settings written to a header that has none. A header that already has the frozen
+/// tools of YA-03 is from before this field, and an unreadable field is rewritten: both
+/// `"auto"`. Prints the resume warning to stderr. Call it before the tools are frozen in a new
+/// session, after [`check_bash_wait`].
+pub fn freeze_session_request(
+    manager: &mut SessionManager,
+    reasoning_summary: Option<ReasoningSummarySetting>,
+    bash_wait_seconds: Option<BashWait>,
+    prompt_version: Option<PromptVersion>,
+) -> FrozenRequest {
+    let request = pending_session_request(
+        manager,
         reasoning_summary,
         bash_wait_seconds,
         prompt_version,
@@ -506,19 +622,19 @@ mod tests {
     /// `"off"` and 1 second: a `yaRequest` written before `bashWaitSeconds`.
     const OFF: FrozenRequest = FrozenRequest {
         reasoning_summary: ReasoningSummarySetting::Off,
-        bash_wait_seconds: LEGACY_BASH_WAIT_SECONDS,
+        bash_wait_seconds: BashWait::Seconds(LEGACY_BASH_WAIT_SECONDS),
         prompt_version: PromptVersion::V1,
     };
 
-    fn seconds(value: u32) -> NonZeroU32 {
-        NonZeroU32::new(value).expect("non-zero")
+    fn seconds(value: u32) -> BashWait {
+        BashWait::seconds(value).expect("non-zero")
     }
 
-    /// The default settings: `"off"`, 30 seconds, prompt version 2.
+    /// The default settings: `"off"`, `"full"`, prompt version 2.
     fn default_request() -> FrozenRequest {
         FrozenRequest {
             reasoning_summary: ReasoningSummarySetting::Off,
-            bash_wait_seconds: seconds(30),
+            bash_wait_seconds: BashWait::Full,
             prompt_version: PromptVersion::V2,
         }
     }
@@ -527,20 +643,35 @@ mod tests {
     fn auto_request() -> FrozenRequest {
         FrozenRequest {
             reasoning_summary: ReasoningSummarySetting::Auto,
-            bash_wait_seconds: seconds(30),
+            bash_wait_seconds: BashWait::Full,
             prompt_version: PromptVersion::V2,
         }
     }
 
-    /// Since the CDC decisions of 15/11/2026, unset settings are `"off"` and 30 seconds.
+    /// The default settings of a version-1 session: `"off"`, 30 seconds (D6).
+    fn v1_request() -> FrozenRequest {
+        FrozenRequest {
+            reasoning_summary: ReasoningSummarySetting::Off,
+            bash_wait_seconds: seconds(30),
+            prompt_version: PromptVersion::V1,
+        }
+    }
+
+    /// Unset settings are `"off"` (CDC, 15/11/2026) and `"full"` in version 2 (ticket 13, D2),
+    /// 30 seconds in version 1 (D6).
     #[test]
-    fn the_default_is_off_and_thirty_seconds() {
+    fn the_default_is_off_and_full_in_version_two() {
         assert_eq!(
             ReasoningSummarySetting::default(),
             ReasoningSummarySetting::Off
         );
-        assert_eq!(DEFAULT_BASH_WAIT_SECONDS.get(), 30);
+        assert_eq!(DEFAULT_BASH_WAIT, BashWait::Full);
+        assert_eq!(V1_DEFAULT_BASH_WAIT_SECONDS.get(), 30);
         assert_eq!(FrozenRequest::of(None, None, None), default_request());
+        assert_eq!(
+            FrozenRequest::of(None, None, Some(PromptVersion::V1)),
+            v1_request()
+        );
         assert_eq!(
             FrozenRequest::of(Some(ReasoningSummarySetting::Auto), None, None),
             auto_request()
@@ -597,8 +728,8 @@ mod tests {
         let warning = request.warning.expect("warning");
         assert!(warning.contains("reasoningSummary \"auto\""), "{warning}");
         assert!(warning.contains("reasoningSummary \"off\""), "{warning}");
-        assert!(warning.contains("bashWaitSeconds 1"), "{warning}");
-        assert!(warning.contains("bashWaitSeconds 30"), "{warning}");
+        assert!(warning.contains("bashWaitSeconds 1,"), "{warning}");
+        assert!(warning.contains("bashWaitSeconds \"full\""), "{warning}");
         assert!(warning.contains("promptVersion 1"), "{warning}");
         assert!(warning.contains("promptVersion 2"), "{warning}");
         let same = session_request(Some(default_request()), true, None, None, None);
@@ -613,7 +744,11 @@ mod tests {
             (FrozenRequest::LEGACY, json!({"reasoningSummary": "auto"})),
             (
                 default_request(),
-                json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2}),
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2}),
+            ),
+            (
+                v1_request(),
+                json!({"reasoningSummary": "off", "bashWaitSeconds": 30}),
             ),
         ] {
             assert_eq!(serde_json::to_value(frozen).unwrap(), value);
@@ -628,13 +763,15 @@ mod tests {
     #[test]
     fn freeze_writes_new_sessions_and_reads_legacy_ones_as_auto() {
         let dir = tempfile::tempdir().unwrap();
-        // A new session with the default settings: `"off"`, 30 seconds.
+        // A new session with the default settings: `"off"`, `"full"`.
         let mut manager = SessionManager::in_memory(dir.path());
         let frozen = freeze_session_request(&mut manager, None, None, None);
         assert_eq!(frozen, default_request());
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2}))
+            Some(
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})
+            )
         );
         // A resume keeps it whatever the settings say.
         let again = freeze_session_request(
@@ -656,7 +793,9 @@ mod tests {
         assert_eq!(frozen, auto_request());
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "auto", "bashWaitSeconds": 30, "promptVersion": 2}))
+            Some(
+                &json!({"reasoningSummary": "auto", "bashWaitSeconds": "full", "promptVersion": 2})
+            )
         );
 
         // A header frozen by YA-03 but without the request field (before 15/11/2026): auto and
@@ -685,6 +824,7 @@ mod tests {
             json!({}),
             json!(1),
             json!({"reasoningSummary": "off", "bashWaitSeconds": 0}),
+            json!({"reasoningSummary": "off", "bashWaitSeconds": "Full"}),
             json!({"reasoningSummary": "off", "promptVersion": 3}),
             json!({"reasoningSummary": "off", "promptVersion": "2"}),
         ] {
@@ -702,7 +842,8 @@ mod tests {
     }
 
     /// `bashWaitSeconds` in the header: written unless it is 1; a `yaRequest` without it is
-    /// 1 second; a value that is not a positive integer makes the field unreadable.
+    /// 1 second; a value that is neither a positive integer nor `"full"` makes the field
+    /// unreadable.
     #[test]
     fn bash_wait_in_the_header() {
         assert_eq!(
@@ -718,22 +859,38 @@ mod tests {
             FrozenRequest::from_header_value(Some(&json!({"reasoningSummary": "off"}))),
             Some(OFF)
         );
-        for bad in [json!(0), json!(-1), json!(1.5), json!("30")] {
+        assert_eq!(
+            FrozenRequest::from_header_value(Some(
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})
+            )),
+            Some(default_request())
+        );
+        for bad in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("30"),
+            json!("Full"),
+            json!(""),
+            json!(null),
+        ] {
             assert_eq!(
                 FrozenRequest::from_header_value(Some(
                     &json!({"reasoningSummary": "off", "bashWaitSeconds": bad})
                 )),
-                None
+                None,
+                "{bad}"
             );
         }
     }
 
     /// A session created before `bashWaitSeconds` (`yaRequest` without it) keeps 1 second at
-    /// resume, with the default settings (30) or another value, and its header is left as is.
+    /// resume, with the default settings, another value or `"full"`, and its header is left as
+    /// is.
     #[test]
     fn a_session_from_before_the_field_keeps_one_second() {
         let dir = tempfile::tempdir().unwrap();
-        for setting in [None, Some(seconds(45))] {
+        for setting in [None, Some(seconds(45)), Some(BashWait::Full)] {
             let mut manager = SessionManager::in_memory(dir.path());
             manager.ya_set_header_field(REQUEST_HEADER_KEY, json!({"reasoningSummary": "off"}));
             assert_eq!(
@@ -747,8 +904,8 @@ mod tests {
         }
     }
 
-    /// `bashWaitSeconds` in `settings.json`: a positive integer; anything else is dropped at
-    /// load (a wrongly typed field is unset), so the session runs with the default.
+    /// `bashWaitSeconds` in `settings.json`: a positive integer or `"full"`; anything else is
+    /// dropped at load (a wrongly typed field is unset), so the session runs with the default.
     #[test]
     fn the_setting_loads_positive_integers_only() {
         let load = |value: Value| {
@@ -757,11 +914,31 @@ mod tests {
         };
         assert_eq!(load(json!(30)), Some(seconds(30)));
         assert_eq!(load(json!(1)), Some(seconds(1)));
-        for bad in [json!(0), json!(-5), json!(1.5), json!("30"), json!(null)] {
+        assert_eq!(load(json!("full")), Some(BashWait::Full));
+        for bad in [
+            json!(0),
+            json!(-5),
+            json!(1.5),
+            json!("30"),
+            json!("Full"),
+            json!(" full"),
+            json!(true),
+            json!(null),
+        ] {
             assert_eq!(load(bad.clone()), None, "{bad}");
         }
-        assert_eq!(resolve_bash_wait_seconds(None), DEFAULT_BASH_WAIT_SECONDS);
-        assert_eq!(resolve_bash_wait_seconds(Some(seconds(1))).get(), 1);
+        assert_eq!(resolve_bash_wait(None, PromptVersion::V2), BashWait::Full);
+        assert_eq!(resolve_bash_wait(None, PromptVersion::V1), seconds(30));
+        assert_eq!(
+            resolve_bash_wait(Some(seconds(1)), PromptVersion::V2),
+            seconds(1)
+        );
+        assert_eq!(
+            resolve_bash_wait(Some(BashWait::Full), PromptVersion::V1),
+            BashWait::Full
+        );
+        assert_eq!(BashWait::Full.to_string(), "\"full\"");
+        assert_eq!(seconds(30).to_string(), "30");
     }
 
     /// Option A of ticket 11: a `yaRequest` without `promptVersion` (every session created
@@ -808,6 +985,106 @@ mod tests {
         assert!(check_subagents(PromptVersion::V1, Some(1), None).is_ok());
         assert!(check_subagents(PromptVersion::V2, None, Some(0)).is_ok());
         assert!(check_subagents(PromptVersion::V2, Some(0), None).is_ok());
+    }
+
+    /// Ticket 13, D3 and D6: an explicit `"full"` in a new version-1 session is refused before
+    /// anything is written, with the setting to change; an unset setting in version 1 is 30 s.
+    #[test]
+    fn an_explicit_full_wait_is_refused_in_version_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SessionManager::in_memory(dir.path());
+        let refused = check_bash_wait(&manager, Some(BashWait::Full), Some(PromptVersion::V1))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("bashWaitSeconds \"full\""), "{refused}");
+        assert!(refused.contains("\"bashWaitSeconds\": 30"), "{refused}");
+        assert_eq!(manager.ya_header_field(REQUEST_HEADER_KEY), None);
+        // Version 2, explicit or unset: no refusal.
+        assert!(check_bash_wait(&manager, Some(BashWait::Full), None).is_ok());
+        assert!(check_bash_wait(&manager, None, None).is_ok());
+        // Version 1 with a number: no refusal.
+        assert!(check_bash_wait(&manager, Some(seconds(30)), Some(PromptVersion::V1)).is_ok());
+    }
+
+    /// D6: a version-1 session without a frozen `yaRequest` (a session from before YA-03, or a
+    /// subagent, which needs version 1) and without the setting is not refused: 30 s.
+    #[test]
+    fn an_unset_wait_in_version_one_is_thirty_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manager = SessionManager::in_memory(dir.path());
+        assert!(check_bash_wait(&manager, None, Some(PromptVersion::V1)).is_ok());
+        let frozen = freeze_session_request(&mut manager, None, None, Some(PromptVersion::V1));
+        assert_eq!(frozen, v1_request());
+        assert_eq!(
+            manager.ya_header_field(REQUEST_HEADER_KEY),
+            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
+        );
+    }
+
+    /// A resumed session keeps its frozen wait: an explicit `"full"` in the current settings
+    /// does not refuse a session frozen in version 1 (30 s, or 1 s from before the field, or a
+    /// header frozen by YA-03 only).
+    #[test]
+    fn a_frozen_session_is_not_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for header in [
+            json!({"reasoningSummary": "off", "bashWaitSeconds": 30}),
+            json!({"reasoningSummary": "off"}),
+        ] {
+            let mut manager = SessionManager::in_memory(dir.path());
+            manager.ya_set_header_field(REQUEST_HEADER_KEY, header.clone());
+            assert!(check_bash_wait(&manager, Some(BashWait::Full), None).is_ok());
+            assert!(
+                check_bash_wait(&manager, Some(BashWait::Full), Some(PromptVersion::V1)).is_ok()
+            );
+            let frozen = freeze_session_request(&mut manager, None, Some(BashWait::Full), None);
+            assert_ne!(frozen.bash_wait_seconds, BashWait::Full);
+            assert_eq!(manager.ya_header_field(REQUEST_HEADER_KEY), Some(&header));
+        }
+        let mut legacy = SessionManager::in_memory(dir.path());
+        legacy.ya_set_header_field(
+            super::super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY,
+            json!({"editTool": "kernel", "shellTool": "kernel"}),
+        );
+        assert!(check_bash_wait(&legacy, Some(BashWait::Full), Some(PromptVersion::V1)).is_ok());
+        // A session frozen with `"full"` (version 2) keeps it at resume, whatever the settings.
+        let mut full = SessionManager::in_memory(dir.path());
+        assert_eq!(
+            freeze_session_request(&mut full, None, None, None),
+            default_request()
+        );
+        assert_eq!(
+            freeze_session_request(&mut full, None, Some(seconds(30)), Some(PromptVersion::V1)),
+            default_request()
+        );
+    }
+
+    /// D3: the settings of the version-1 arm of the bench (`bench/smoke/settings/prompt-v1.json`)
+    /// start a session, frozen at 30 s.
+    #[test]
+    fn the_bench_prompt_v1_settings_start_at_thirty_seconds() {
+        let value: Value = serde_json::from_str(include_str!(
+            "../../../../bench/smoke/settings/prompt-v1.json"
+        ))
+        .unwrap();
+        let settings = crate::settings::load::from_value_lenient(&value);
+        assert_eq!(settings.prompt_version, Some(PromptVersion::V1));
+        assert_eq!(settings.bash_wait_seconds, Some(seconds(30)));
+        let dir = tempfile::tempdir().unwrap();
+        let mut manager = SessionManager::in_memory(dir.path());
+        assert!(check_bash_wait(
+            &manager,
+            settings.bash_wait_seconds,
+            settings.prompt_version
+        )
+        .is_ok());
+        let frozen = freeze_session_request(
+            &mut manager,
+            settings.reasoning_summary,
+            settings.bash_wait_seconds,
+            settings.prompt_version,
+        );
+        assert_eq!(frozen, v1_request());
     }
 
     /// The setting wins over the environment variable, which wins over the default; an invalid

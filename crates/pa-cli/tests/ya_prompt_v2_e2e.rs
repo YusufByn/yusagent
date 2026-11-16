@@ -10,6 +10,8 @@
 //! a. A version-2 session: the short prompt, `edit()` creates then edits a file, `bash()` runs
 //!    with its default limit of 600 s, and the header freezes version 2 and the kernel tools.
 //! b. `rlmMaxDepth: 1` with version 2 is refused at start, with the setting to change.
+//! c. Ticket 13: the default `bashWaitSeconds` (`"full"`): a cell that awaits a 3-second command
+//!    gets its complete result, and no `[bash-done]` wake follows.
 
 use std::path::{Path, PathBuf};
 
@@ -166,7 +168,7 @@ fn a_version_two_session_edits_and_runs_commands() {
     assert_eq!(header["type"], "session", "{header}");
     assert_eq!(
         header["yaRequest"],
-        serde_json::json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2})
+        serde_json::json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})
     );
     assert_eq!(
         header["yaTools"],
@@ -192,6 +194,36 @@ fn a_version_two_session_edits_and_runs_commands() {
     ] {
         assert!(output.contains(expected), "{expected}: {output}");
     }
+}
+
+const FULL_WAIT_CELL: &str = r#"r = await bash("sleep 3; echo fini")
+print("WAIT", type(r).__name__, r.exit_code, r.output.strip())
+import sys
+print("YIELD", sys.modules["rlm.bash"]._YIELD_AFTER_SECONDS)"#;
+
+#[test]
+fn the_default_wait_returns_the_complete_result() {
+    let lane = lane(None);
+    let script = serde_json::json!({
+        "responses": [
+            { "content": [
+                { "type": "toolCall", "name": "ipython", "arguments": { "code": FULL_WAIT_CELL } },
+            ] },
+            "done",
+        ],
+    });
+    let (stdout, stderr, code) = lane.run(&script);
+    assert_eq!(code, 0, "stderr: {stderr}\nstdout: {stdout}");
+    assert_eq!(stdout.trim(), "done", "stderr: {stderr}");
+    let entries = lane.entries();
+    assert_eq!(
+        entries[0]["yaRequest"]["bashWaitSeconds"],
+        serde_json::json!("full")
+    );
+    let text = serde_json::Value::Array(entries).to_string();
+    assert!(text.contains("WAIT BashResult 0 fini"), "{text}");
+    assert!(text.contains("YIELD None"), "{text}");
+    assert!(!text.contains("[bash-done]"), "no wake: {text}");
 }
 
 #[test]
