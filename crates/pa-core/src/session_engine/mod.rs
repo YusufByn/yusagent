@@ -63,6 +63,8 @@ pub(crate) mod ya_bash_timeout;
 pub(crate) mod ya_kernel_restart;
 // yusAgent (YA-09): request settings (`reasoningSummary`), frozen per session.
 pub mod ya_request;
+// yusAgent (YA-09, ticket 14): `session-id` header on the ChatGPT provider (`codexSessionIdHeader`).
+pub mod ya_session_id_header;
 // yusAgent (YA-03): native tools by model family, frozen per session.
 pub mod ya_tool_family;
 

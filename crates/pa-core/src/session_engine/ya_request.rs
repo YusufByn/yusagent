@@ -1,5 +1,5 @@
-//! yusAgent (YA-09): request settings frozen per session, today `reasoningSummary` and
-//! `bashWaitSeconds`.
+//! yusAgent (YA-09): request settings frozen per session, today `reasoningSummary`,
+//! `bashWaitSeconds`, `promptVersion` and `codexSessionIdHeader`.
 //!
 //! `reasoningSummary` in `settings.json`:
 //! - unset (the default since the CDC decision of 15/11/2026) or `"off"`: `reasoning.summary`
@@ -37,6 +37,11 @@
 //! from the upstream layers. The header stores it unless it is 1: a `yaRequest` without it is
 //! version 1, so every session created before the lot keeps its prompt, byte for byte, when it
 //! is resumed (option A of the ticket, decision of Yusuf of 16/11/2026).
+//!
+//! `codexSessionIdHeader` in `settings.json` (ticket 14, option A): `true` adds the `session-id`
+//! request header on the `ChatGPT` provider (`super::ya_session_id_header`); unset or `false`,
+//! the default until its A/B decides, leaves the requests as upstream. The header stores it only
+//! when on: a `yaRequest` without it is off, what every session created before it ran with.
 //!
 //! Frozen for the session at creation in the session header, field [`REQUEST_HEADER_KEY`]
 //! (kept by forks, `session::manager::ya_header::INHERITED_HEADER_KEYS`), and read back on
@@ -297,7 +302,8 @@ pub fn check_bash_wait(
     bash_wait: Option<BashWait>,
     prompt_version: Option<PromptVersion>,
 ) -> anyhow::Result<()> {
-    let frozen = pending_session_request(manager, None, bash_wait, prompt_version).frozen;
+    let frozen =
+        pending_session_request(manager, FrozenRequest::of(None, bash_wait, prompt_version)).frozen;
     if frozen.prompt_version == PromptVersion::V1 && frozen.bash_wait_seconds == BashWait::Full {
         anyhow::bail!(
             "bashWaitSeconds \"{FULL_WAIT}\" needs the version-2 system prompt: version 1 has no default bash() time limit, so an await could block forever. Set \"bashWaitSeconds\": 30 in settings.json, or use \"promptVersion\": 2."
@@ -325,19 +331,30 @@ pub struct FrozenRequest {
         skip_serializing_if = "is_legacy_prompt_version"
     )]
     pub prompt_version: PromptVersion,
+    /// The `session-id` header on the `ChatGPT` provider (`codexSessionIdHeader`); absent from a
+    /// header: off.
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub codex_session_id_header: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
+fn is_off(value: &bool) -> bool {
+    !*value
 }
 
 impl FrozenRequest {
     /// The settings a session created before the field was sent with: `"auto"`, 1 second,
-    /// prompt version 1.
+    /// prompt version 1, no `session-id` header.
     pub const LEGACY: FrozenRequest = FrozenRequest {
         reasoning_summary: ReasoningSummarySetting::Auto,
         bash_wait_seconds: BashWait::Seconds(LEGACY_BASH_WAIT_SECONDS),
         prompt_version: PromptVersion::V1,
+        codex_session_id_header: false,
     };
 
     /// The request settings of the current settings. An unset `bashWaitSeconds` follows the
-    /// prompt version ([`resolve_bash_wait`]).
+    /// prompt version ([`resolve_bash_wait`]); `codexSessionIdHeader` is off (see
+    /// [`FrozenRequest::with_codex_session_id_header`]).
     #[must_use]
     pub fn of(
         reasoning_summary: Option<ReasoningSummarySetting>,
@@ -349,6 +366,16 @@ impl FrozenRequest {
             reasoning_summary: reasoning_summary.unwrap_or_default(),
             bash_wait_seconds: resolve_bash_wait(bash_wait_seconds, prompt_version),
             prompt_version,
+            codex_session_id_header: false,
+        }
+    }
+
+    /// `self` with the `codexSessionIdHeader` setting (unset: off).
+    #[must_use]
+    pub fn with_codex_session_id_header(self, setting: Option<bool>) -> Self {
+        FrozenRequest {
+            codex_session_id_header: setting.unwrap_or(false),
+            ..self
         }
     }
 
@@ -373,8 +400,13 @@ pub struct SessionRequest {
 fn label(request: FrozenRequest) -> String {
     let summary = serde_json::to_value(request.reasoning_summary)
         .map_or_else(|_| "?".to_string(), |value| value.to_string());
+    let header = if request.codex_session_id_header {
+        ", codexSessionIdHeader true"
+    } else {
+        ""
+    };
     format!(
-        "reasoningSummary {summary}, bashWaitSeconds {}, promptVersion {}",
+        "reasoningSummary {summary}, bashWaitSeconds {}, promptVersion {}{header}",
         request.bash_wait_seconds,
         u8::from(request.prompt_version)
     )
@@ -391,7 +423,19 @@ pub fn session_request(
     bash_wait_seconds: Option<BashWait>,
     prompt_version: Option<PromptVersion>,
 ) -> SessionRequest {
-    let current = FrozenRequest::of(reasoning_summary, bash_wait_seconds, prompt_version);
+    session_request_from(
+        frozen,
+        legacy,
+        FrozenRequest::of(reasoning_summary, bash_wait_seconds, prompt_version),
+    )
+}
+
+/// [`session_request`] with the `current` settings already resolved.
+fn session_request_from(
+    frozen: Option<FrozenRequest>,
+    legacy: bool,
+    current: FrozenRequest,
+) -> SessionRequest {
     let Some(frozen) = frozen else {
         let frozen = if legacy {
             FrozenRequest::LEGACY
@@ -422,13 +466,8 @@ fn warning(frozen: FrozenRequest, current: FrozenRequest) -> Option<String> {
 }
 
 /// The request settings the session `manager` holds would run with, read without writing its
-/// header (rules of [`freeze_session_request`]).
-fn pending_session_request(
-    manager: &SessionManager,
-    reasoning_summary: Option<ReasoningSummarySetting>,
-    bash_wait_seconds: Option<BashWait>,
-    prompt_version: Option<PromptVersion>,
-) -> SessionRequest {
+/// header (rules of [`freeze_session_request`]), `current` being those of the settings.
+fn pending_session_request(manager: &SessionManager, current: FrozenRequest) -> SessionRequest {
     let field = manager.ya_header_field(REQUEST_HEADER_KEY);
     let frozen = FrozenRequest::from_header_value(field);
     let unreadable = field.is_some() && frozen.is_none();
@@ -436,13 +475,7 @@ fn pending_session_request(
         || manager
             .ya_header_field(super::ya_tool_family::FROZEN_TOOLS_HEADER_KEY)
             .is_some();
-    session_request(
-        frozen,
-        legacy,
-        reasoning_summary,
-        bash_wait_seconds,
-        prompt_version,
-    )
+    session_request_from(frozen, legacy, current)
 }
 
 /// The request settings of the session `manager` holds: the frozen ones of its header, or the
@@ -456,12 +489,19 @@ pub fn freeze_session_request(
     bash_wait_seconds: Option<BashWait>,
     prompt_version: Option<PromptVersion>,
 ) -> FrozenRequest {
-    let request = pending_session_request(
+    freeze_current_request(
         manager,
-        reasoning_summary,
-        bash_wait_seconds,
-        prompt_version,
-    );
+        FrozenRequest::of(reasoning_summary, bash_wait_seconds, prompt_version),
+    )
+}
+
+/// [`freeze_session_request`] with the current settings already resolved (`current`), for the
+/// settings [`FrozenRequest::of`] does not take (`codexSessionIdHeader`).
+pub fn freeze_current_request(
+    manager: &mut SessionManager,
+    current: FrozenRequest,
+) -> FrozenRequest {
+    let request = pending_session_request(manager, current);
     if let Some(to_write) = request.to_write {
         if let Ok(value) = serde_json::to_value(to_write) {
             manager.ya_set_header_field(REQUEST_HEADER_KEY, value);
@@ -511,11 +551,14 @@ fn strip_then(hook: Option<OnPayloadHook>) -> OnPayloadHook {
     })
 }
 
-/// `inner` with the session's frozen request settings applied to each request. `"auto"` returns
-/// `inner` itself: the request is the provider's, byte for byte. `"off"`, the default, removes
-/// `reasoning.summary`.
+/// `inner` with the session's frozen request settings applied to each request. `"auto"` with the
+/// `session-id` header off returns `inner` itself: the request is the provider's, byte for byte.
+/// `"off"`, the default, removes `reasoning.summary`. `codexSessionIdHeader` adds the header on
+/// the `ChatGPT` provider (`super::ya_session_id_header`); the body is left as is.
 #[must_use]
 pub fn scoped_stream_fn(inner: StreamFn, request: FrozenRequest) -> StreamFn {
+    let inner =
+        super::ya_session_id_header::scoped_stream_fn(inner, request.codex_session_id_header);
     if request.reasoning_summary == ReasoningSummarySetting::Auto {
         return inner;
     }
@@ -624,6 +667,7 @@ mod tests {
         reasoning_summary: ReasoningSummarySetting::Off,
         bash_wait_seconds: BashWait::Seconds(LEGACY_BASH_WAIT_SECONDS),
         prompt_version: PromptVersion::V1,
+        codex_session_id_header: false,
     };
 
     fn seconds(value: u32) -> BashWait {
@@ -636,6 +680,7 @@ mod tests {
             reasoning_summary: ReasoningSummarySetting::Off,
             bash_wait_seconds: BashWait::Full,
             prompt_version: PromptVersion::V2,
+            codex_session_id_header: false,
         }
     }
 
@@ -645,6 +690,7 @@ mod tests {
             reasoning_summary: ReasoningSummarySetting::Auto,
             bash_wait_seconds: BashWait::Full,
             prompt_version: PromptVersion::V2,
+            codex_session_id_header: false,
         }
     }
 
@@ -654,6 +700,7 @@ mod tests {
             reasoning_summary: ReasoningSummarySetting::Off,
             bash_wait_seconds: seconds(30),
             prompt_version: PromptVersion::V1,
+            codex_session_id_header: false,
         }
     }
 
@@ -1144,5 +1191,67 @@ mod tests {
             assert_eq!(load(bad.clone()), None, "{bad}");
         }
         assert_eq!(PromptVersion::default(), PromptVersion::V2);
+    }
+
+    /// `codexSessionIdHeader` (ticket 14, option A): off by default and not written; on, written
+    /// as `true` in a new session's `yaRequest` and kept at resume; a `yaRequest` without it
+    /// (every session from before it) is off, whatever the settings say, with a warning.
+    #[test]
+    fn the_session_id_header_is_frozen_only_when_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = |setting: Option<bool>| {
+            FrozenRequest::of(None, None, None).with_codex_session_id_header(setting)
+        };
+        assert_eq!(current(None), default_request());
+        assert_eq!(current(Some(false)), default_request());
+
+        let mut on = SessionManager::in_memory(dir.path());
+        let frozen = freeze_current_request(&mut on, current(Some(true)));
+        assert!(frozen.codex_session_id_header);
+        assert_eq!(
+            on.ya_header_field(REQUEST_HEADER_KEY),
+            Some(&json!({
+                "reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2,
+                "codexSessionIdHeader": true,
+            }))
+        );
+        assert_eq!(freeze_current_request(&mut on, current(None)), frozen);
+
+        let mut off = SessionManager::in_memory(dir.path());
+        assert_eq!(
+            freeze_current_request(&mut off, current(Some(false))),
+            default_request()
+        );
+        assert_eq!(
+            off.ya_header_field(REQUEST_HEADER_KEY),
+            Some(
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})
+            )
+        );
+        assert_eq!(
+            freeze_current_request(&mut off, current(Some(true))),
+            default_request()
+        );
+
+        let resumed = session_request_from(Some(default_request()), false, current(Some(true)));
+        assert_eq!(resumed.frozen, default_request());
+        let warning = resumed.warning.expect("warning");
+        assert!(warning.contains("codexSessionIdHeader true"), "{warning}");
+        let legacy = session_request(None, true, None, None, None);
+        assert!(!legacy.frozen.codex_session_id_header);
+    }
+
+    /// `codexSessionIdHeader` in `settings.json`: a boolean; anything else is dropped at load.
+    #[test]
+    fn the_session_id_header_setting_loads_booleans_only() {
+        let load = |value: Value| {
+            crate::settings::load::from_value_lenient(&json!({ "codexSessionIdHeader": value }))
+                .codex_session_id_header
+        };
+        assert_eq!(load(json!(true)), Some(true));
+        assert_eq!(load(json!(false)), Some(false));
+        for bad in [json!(1), json!("true"), json!(null)] {
+            assert_eq!(load(bad.clone()), None, "{bad}");
+        }
     }
 }
