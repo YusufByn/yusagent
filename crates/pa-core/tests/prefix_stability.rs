@@ -104,6 +104,18 @@ const CODEX_BASH_WAIT_1: Variant = Variant {
     ..CODEX_DEFAULT
 };
 
+/// yusAgent (YA-09, ticket 14): `codexSessionIdHeader` on, outside the `ChatGPT` provider (the
+/// header is for `openai-codex` only).
+const SESSION_ID_HEADER_ON: &str = r#"{"codexSessionIdHeader": true}"#;
+const OTHER_FAMILY_SESSION_ID_HEADER: Variant = Variant {
+    settings: Some(SESSION_ID_HEADER_ON),
+    ..OTHER_FAMILY
+};
+const CODEX_SESSION_ID_HEADER: Variant = Variant {
+    settings: Some(SESSION_ID_HEADER_ON),
+    ..CODEX_DEFAULT
+};
+
 /// Process env is shared by the tests of this binary: one scenario at a time.
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -200,10 +212,12 @@ enum Reply {
     Text(&'static str),
 }
 
-/// Records every request body, in arrival order.
+/// Records every request body, in arrival order, and its head (request line and headers;
+/// yusAgent, YA-09, ticket 14).
 struct ModelServer {
     port: u16,
     bodies: Arc<Mutex<Vec<Vec<u8>>>>,
+    heads: Arc<Mutex<Vec<String>>>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -214,12 +228,15 @@ impl ModelServer {
             .expect("bind the model server");
         let port = listener.local_addr().expect("server address").port();
         let bodies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+        let heads: Arc<Mutex<Vec<String>>> = Arc::default();
         let recorded = Arc::clone(&bodies);
+        let recorded_heads = Arc::clone(&heads);
         let task = tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
                 let recorded = Arc::clone(&recorded);
+                let recorded_heads = Arc::clone(&recorded_heads);
                 tokio::spawn(async move {
-                    if let Err(error) = serve(api, socket, &recorded).await {
+                    if let Err(error) = serve(api, socket, &recorded, &recorded_heads).await {
                         eprintln!("model server: {error}");
                     }
                 });
@@ -228,12 +245,17 @@ impl ModelServer {
         Self {
             port,
             bodies,
+            heads,
             _task: task,
         }
     }
 
     fn bodies(&self) -> Vec<Vec<u8>> {
         self.bodies.lock().unwrap().clone()
+    }
+
+    fn heads(&self) -> Vec<String> {
+        self.heads.lock().unwrap().clone()
     }
 }
 
@@ -242,12 +264,14 @@ async fn serve(
     api: Api,
     mut socket: TcpStream,
     recorded: &Mutex<Vec<Vec<u8>>>,
+    recorded_heads: &Mutex<Vec<String>>,
 ) -> std::io::Result<()> {
-    let body = read_body(&mut socket).await?;
+    let (head, body) = read_request(&mut socket).await?;
     let reply = plan(api, &body);
     let seq = {
         let mut bodies = recorded.lock().unwrap();
         bodies.push(body);
+        recorded_heads.lock().unwrap().push(head);
         bodies.len()
     };
     let events = match api {
@@ -263,7 +287,8 @@ async fn serve(
     socket.shutdown().await
 }
 
-async fn read_body(socket: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+/// The head (request line and headers) and the body of one request.
+async fn read_request(socket: &mut TcpStream) -> std::io::Result<(String, Vec<u8>)> {
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 16_384];
     loop {
@@ -286,7 +311,7 @@ async fn read_body(socket: &mut TcpStream) -> std::io::Result<Vec<u8>> {
             })
             .ok_or_else(|| std::io::Error::other(format!("no content-length in {head:?}")))?;
         if bytes.len() >= end + 4 + length {
-            return Ok(bytes[end + 4..end + 4 + length].to_vec());
+            return Ok((head.to_string(), bytes[end + 4..end + 4 + length].to_vec()));
         }
     }
 }
@@ -797,8 +822,13 @@ fn assert_prefix_stable(api: Api, bodies: &[Vec<u8>]) {
 // Scenarios
 
 async fn prefix_scenario(api: Api, variant: Variant) -> Vec<Vec<u8>> {
+    prefix_scenario_with_heads(api, variant).await.0
+}
+
+/// [`prefix_scenario`], with the head of each request (yusAgent, YA-09, ticket 14).
+async fn prefix_scenario_with_heads(api: Api, variant: Variant) -> (Vec<Vec<u8>>, Vec<String>) {
     let Some(fixture) = Fixture::new().await else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let server = ModelServer::start(api).await;
     let engine = open_session(api, &server, &fixture.agent_dir(), &fixture.cwd(), variant).await;
@@ -825,7 +855,9 @@ async fn prefix_scenario(api: Api, variant: Variant) -> Vec<Vec<u8>> {
     );
     // yusAgent (YA-03): the tool set of the variant, in its fixed order.
     assert_eq!(tool_names(&last), variant.tools, "{variant:?}: tools");
-    bodies
+    let heads = server.heads();
+    assert_eq!(heads.len(), bodies.len(), "one head per request");
+    (bodies, heads)
 }
 
 /// The tool names of a request, in order.
@@ -1469,6 +1501,8 @@ fn mock_codex_token() -> String {
 struct CodexWsServer {
     port: u16,
     requests: Arc<Mutex<Vec<Value>>>,
+    /// yusAgent (YA-09, ticket 14): the head of each upgrade request (request line and headers).
+    handshakes: Arc<Mutex<Vec<String>>>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -1479,14 +1513,19 @@ impl CodexWsServer {
             .expect("bind the websocket server");
         let port = listener.local_addr().expect("server address").port();
         let requests: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let handshakes: Arc<Mutex<Vec<String>>> = Arc::default();
         let turns = Arc::new(Mutex::new(std::collections::VecDeque::from(turns)));
         let recorded = Arc::clone(&requests);
+        let recorded_handshakes = Arc::clone(&handshakes);
         let task = tokio::spawn(async move {
             while let Ok((socket, _)) = listener.accept().await {
                 let recorded = Arc::clone(&recorded);
+                let recorded_handshakes = Arc::clone(&recorded_handshakes);
                 let turns = Arc::clone(&turns);
                 tokio::spawn(async move {
-                    if let Err(error) = serve_ws(socket, &turns, &recorded).await {
+                    if let Err(error) =
+                        serve_ws(socket, &turns, &recorded, &recorded_handshakes).await
+                    {
                         eprintln!("websocket server: {error}");
                     }
                 });
@@ -1495,12 +1534,17 @@ impl CodexWsServer {
         Self {
             port,
             requests,
+            handshakes,
             _task: task,
         }
     }
 
     fn requests(&self) -> Vec<Value> {
         self.requests.lock().expect("requests").clone()
+    }
+
+    fn handshakes(&self) -> Vec<String> {
+        self.handshakes.lock().expect("handshakes").clone()
     }
 }
 
@@ -1509,6 +1553,7 @@ async fn serve_ws(
     mut socket: TcpStream,
     turns: &Mutex<std::collections::VecDeque<Vec<Value>>>,
     recorded: &Mutex<Vec<Value>>,
+    recorded_handshakes: &Mutex<Vec<String>>,
 ) -> std::io::Result<()> {
     use sha1::Digest as _;
     let mut head = Vec::new();
@@ -1518,6 +1563,10 @@ async fn serve_ws(
         head.push(byte[0]);
     }
     let head = String::from_utf8_lossy(&head).to_string();
+    recorded_handshakes
+        .lock()
+        .expect("handshakes")
+        .push(head.clone());
     let Some(key) = head.lines().find_map(|line| {
         line.split_once(':')
             .filter(|(name, _)| name.trim().eq_ignore_ascii_case("sec-websocket-key"))
@@ -1872,6 +1921,149 @@ async fn codex_websocket_reasoning_summary_follows_the_setting() {
             "auto, request {}",
             index + 1
         );
+    }
+}
+
+/// yusAgent (YA-09, ticket 14): the values of the header `name` in a request head (request line
+/// then headers), whatever its case.
+fn header_values(head: &str, name: &str) -> Vec<String> {
+    head.lines()
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(header, _)| header.trim().eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.trim().to_string())
+        .collect()
+}
+
+/// yusAgent (YA-09, ticket 14): a two-prompt session on the Codex WebSocket with `settings` in
+/// the agent dir: the upgrade heads, the request frames and the `yaRequest` of the session header.
+async fn codex_ws_session_id_run(
+    fixture: &Fixture,
+    settings: &str,
+) -> (Vec<String>, Vec<Value>, Option<Value>) {
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    std::fs::write(agent_dir.join("settings.json"), settings).expect("settings.json");
+    let server = CodexWsServer::start(vec![
+        ws_text_turn("resp_1", "msg_1", "One."),
+        ws_text_turn("resp_2", "msg_2", "Two."),
+    ])
+    .await;
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(agent_dir.join("sessions")));
+    let engine = codex_ws_engine(server.port, &agent_dir, &cwd, session).await;
+    run_prompt(&engine, "CODEX-WS-SESSION-ID-1: answer.").await;
+    run_prompt(&engine, "CODEX-WS-SESSION-ID-2: answer.").await;
+    drop(engine);
+    let header = pa_core::session::manager::read_session_header(&path).expect("header");
+    (
+        server.handshakes(),
+        server.requests(),
+        header.rest.get("yaRequest").cloned(),
+    )
+}
+
+/// The request frames without `prompt_cache_key` (the session id, one per session).
+fn frames_without_cache_key(requests: &[Value]) -> Vec<String> {
+    requests
+        .iter()
+        .map(|request| {
+            let mut request = request.clone();
+            request
+                .as_object_mut()
+                .expect("a request object")
+                .remove("prompt_cache_key");
+            request.to_string()
+        })
+        .collect()
+}
+
+/// yusAgent (YA-09, ticket 14, option A): on the Codex WebSocket (the `ChatGPT` provider, the
+/// bench route), three sessions of one project: `codexSessionIdHeader` unset (the default),
+/// `false`, then `true`. On the wire:
+/// - the upgrade request carries `session_id` (upstream) in every arm, and `session-id` with the
+///   same value, the session id (the body's `prompt_cache_key`), only when the setting is on;
+/// - the request frames are identical in the three arms, byte for byte, but the prompt cache key:
+///   the header changes neither the body nor the prefix, and the second request still continues
+///   the first (`previous_response_id`);
+/// - the session header freezes `"codexSessionIdHeader": true` when on, and nothing otherwise.
+#[tokio::test]
+async fn codex_websocket_session_id_header_follows_the_setting() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let mut arms = Vec::new();
+    for settings in [
+        "{}",
+        r#"{"codexSessionIdHeader": false}"#,
+        SESSION_ID_HEADER_ON,
+    ] {
+        arms.push(codex_ws_session_id_run(&fixture, settings).await);
+    }
+    for (index, (handshakes, requests, ya_request)) in arms.iter().enumerate() {
+        let on = index == 2;
+        assert_eq!(requests.len(), 2, "arm {index}: {requests:#?}");
+        assert_eq!(
+            requests[1].get("previous_response_id"),
+            Some(&json!("resp_1")),
+            "arm {index}: the second request continues the first: {:#}",
+            requests[1]
+        );
+        assert_eq!(handshakes.len(), 1, "arm {index}: {handshakes:#?}");
+        let head = &handshakes[0];
+        let session_id = requests[0]["prompt_cache_key"]
+            .as_str()
+            .expect("prompt_cache_key");
+        assert_eq!(
+            header_values(head, "session_id"),
+            [session_id],
+            "arm {index}: {head}"
+        );
+        let expected: Vec<&str> = if on { vec![session_id] } else { Vec::new() };
+        assert_eq!(
+            header_values(head, "session-id"),
+            expected,
+            "arm {index}: {head}"
+        );
+        assert_eq!(
+            ya_request
+                .as_ref()
+                .and_then(|request| request.get("codexSessionIdHeader")),
+            on.then_some(&json!(true)),
+            "arm {index}: {ya_request:?}"
+        );
+    }
+    let default = frames_without_cache_key(&arms[0].1);
+    assert_eq!(frames_without_cache_key(&arms[1].1), default, "off");
+    assert_eq!(
+        frames_without_cache_key(&arms[2].1),
+        default,
+        "the header leaves the request body as is"
+    );
+}
+
+/// yusAgent (YA-09, ticket 14, option A): `codexSessionIdHeader` on, outside the `ChatGPT`
+/// provider (Anthropic Messages, `OpenAI` Responses with a model outside and inside the Codex
+/// family): no request carries `session-id`, and each prefix stays stable
+/// ([`prefix_scenario`]).
+#[tokio::test]
+async fn session_id_header_is_never_sent_to_other_providers() {
+    for (api, variant) in [
+        (Api::AnthropicMessages, OTHER_FAMILY_SESSION_ID_HEADER),
+        (Api::OpenAiResponses, OTHER_FAMILY_SESSION_ID_HEADER),
+        (Api::OpenAiResponses, CODEX_SESSION_ID_HEADER),
+    ] {
+        let (bodies, heads) = prefix_scenario_with_heads(api, variant).await;
+        if bodies.is_empty() {
+            return;
+        }
+        for (index, head) in heads.iter().enumerate() {
+            assert!(
+                header_values(head, "session-id").is_empty(),
+                "{} {variant:?}, request {}: {head}",
+                api.name(),
+                index + 1
+            );
+        }
     }
 }
 
