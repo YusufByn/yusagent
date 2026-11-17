@@ -266,7 +266,7 @@ Lu sans rien exécuter dans `/tmp/codex-0.169.0-ya14` (tag `rust-v0.169.0`, `d32
 - Réglage `codexSessionIdHeader` (booléen, absent = coupé), module du fork `crates/pa-core/src/session_engine/ya_session_id_header.rs`.
 - À `true`, `session-id` = id de session s'ajoute aux en-têtes de requête du `stream_fn` (`add_session_id_header`, `:47-58`), seulement si le provider est `openai-codex` et l'API `openai-codex-responses` (`is_chatgpt`, `:40-42`). Le provider fusionne ces en-têtes sur la poignée de main WebSocket et sur la requête SSE (`crates/pa-ai/src/providers/openai_codex_responses/mod.rs:209-222`, `request.rs:76-78`, `:104-106`). `session_id` et `x-client-request-id` d'upstream restent.
 - **Couche providers non touchée** : aucun fichier sous `crates/pa-ai/` dans le diff.
-- Figé dans `yaRequest` (`crates/pa-core/src/session_engine/ya_request.rs:334-337`), écrit seulement à `true`.
+- Figé dans `yaRequest` (`crates/pa-core/src/session_engine/ya_request.rs:334-338`), toujours écrit : `true` ou `false` (demande de Yusuf après relecture de la PR #50). Absent = session d'avant le champ = coupé ; son en-tête n'est pas réécrit.
 
 ### Corps et préfixe
 
@@ -285,3 +285,13 @@ Le SSE du provider Codex n'a pas de test sur le fil : le chemin des en-têtes es
 ### Plan d'A/B et contrôle de la dérive
 
 `bench/smoke/ab/ya09-session-id-plan.md`, à valider par Yusuf avant le run : bras réglage coupé contre activé, même binaire, 4 passes entrelacées. Métrique principale : taux de miss sous 6 000 tokens de prompt précédent. Le plan contient aussi le contrôle de la dérive des relectures partielles en v1 (binaire `80e20ea` relancé tel quel), faisable d'après la lecture du code.
+
+### Relecture de la PR #50 (17/11/2026)
+
+Demandes de Yusuf, traitées dans la même PR :
+- règle de dégradation écrite sans ambiguïté : d_global ≤ −3 points **et** borne haute de l'IC < 0, les deux à la fois ;
+- taux de base de la métrique principale (21/90, 23,3 %, IC 95 % [15,7 ; 32,6], bras A de `ab-20261116T124625Z`) et justification du seuil de 10 points dans le plan ;
+- cas « 0 < d < 10 points, borne basse > 0 » ajouté : non concluant, Yusuf décide (`verdict` de `ya09-session-id-mesures.py`) ;
+- `bench/smoke/tools/power.py` et `bench/smoke/tools/drift_se.py` versionnés, cités dans le plan avec leurs commandes ; leurs sorties redonnent les chiffres du plan ;
+- `"codexSessionIdHeader": false` écrit dans `yaRequest` quand le réglage est désactivé (test `the_session_id_header_is_always_frozen`, assertions de `prefix_stability.rs`) ;
+- étape 0 du contrôle de la dérive lancée en mode capture, sans modèle : `bench/smoke/runs/20261117T120533Z-80e20ea-gpt-6-luna`. Le banc actuel relance `80e20ea` tel quel (détail dans le plan).
