@@ -13,6 +13,8 @@ Suite du ticket 12 (« Note pour le ticket suivant »). Plan écrit en lecture s
 
 7. **D7, alignement sur le prompt d'Unharnessed** (17/11, option A complète) : en `"full"`, pas de ligne `await bash(cmd)` (A.1, Unharnessed n'en a pas) ; dans le préfixe statique v2, `await handle -> BashResult` (A.2, leur `core.md:8`) et « Do not hold the turn with `sleep` or long blocking awaits: end the turn and wait for the notification. » (A.3, leur `core.md:19`). **Rupture de préfixe acceptée** : toute session v2 existante voit son préfixe changer une fois à la reprise. Chauffes : `py-silence-001` suffit pour l'attente complète, pas de relance de `py-silence-002` sur le premier binaire ; les deux sont à refaire sur le binaire final.
 
+8. **D8, critère « sans réveil »** (17/11, après les chauffes du binaire final) : le critère « attente complète sans réveil `[bash-done]` » ne vaut que pour une cellule qui fait `await`. Lancer une commande longue sans `await` et la reprendre sur `[bash-done]` suit A.3 : comportement voulu (`py-silence-001` du binaire final).
+
 Chauffes `py-silence-001` et `py-silence-002` autorisées d'avance.
 
 ## Implémentation (16/11/2026, branche `ya-13-bash-full-wait`)
@@ -64,6 +66,32 @@ python3 -I bench/smoke/tools/compare_bodies.py bench/smoke/runs/20261116T110353Z
 - `compare_bodies.py` contre `20261116T110353Z-cce48e6` (fenêtre de 30 s) : dans `instructions`, seule la ligne 47 (`await bash(cmd)`) diffère ; `tools` (489 octets), `reasoning`, `include`, `text`, `tool_choice`, `parallel_tool_calls`, `store`, `stream`, `type` et `model` sont identiques ; `input` ne diffère que par la date de `<environment>` ; `prompt_cache_key` est l'id de session.
 - Hypothèse, n = 1 : la phrase « start it without `await` » du premier jet a pu pousser le modèle à retirer l'`await` dans `py-silence-002`. Unharnessed n'a pas cette phrase : d'où D7.
 - Hors critères (ticket 14) : miss serveur à l'appel 4 de `py-silence-001` (après 176 s, prompt de 1 868 tokens) et à l'appel 2 de `py-silence-002` (après 7,8 s, prompt de 1 925 tokens).
+
+## Chauffes du binaire final (17/11/2026)
+
+Binaire de `a7d97ece5` (`ya-build-macos-arm64` 44047964339, sha256 de l'exécutable `687effce57b1ae28035ac0136504759170b6a6eea57458e2bd529acd08905c78`) ; `a4189e01f` ne change qu'un test. Prompt de D7. `gpt-6-luna`, effort high, `default.json`, `--idle-timeout 300`, `--log-bodies`. Lancées par Yusuf. Vérifications, pas des mesures.
+
+```bash
+python3 -I bench/smoke/tools/check_warmup.py bench/smoke/runs/20261117T093127Z-a7d97ec-gpt-6-luna/tasks/py-silence-001/run-1 bench/smoke/runs/20261117T093127Z-a7d97ec-gpt-6-luna/report.json
+python3 -I bench/smoke/tools/check_warmup.py bench/smoke/runs/20261117T095751Z-a7d97ec-gpt-6-luna/tasks/py-silence-002/run-1 bench/smoke/runs/20261117T095751Z-a7d97ec-gpt-6-luna/report.json
+python3 -I bench/smoke/tools/compare_bodies.py bench/smoke/runs/20261116T110353Z-cce48e6-gpt-6-luna/tasks/py-silence-001/run-1/proxy-bodies.ndjson bench/smoke/runs/20261117T093127Z-a7d97ec-gpt-6-luna/tasks/py-silence-001/run-1/proxy-bodies.ndjson
+python3 -I bench/smoke/tools/compare_bodies.py bench/smoke/runs/20261116T110353Z-cce48e6-gpt-6-luna/tasks/py-silence-001/run-1/proxy-bodies.ndjson bench/smoke/runs/20261117T095751Z-a7d97ec-gpt-6-luna/tasks/py-silence-002/run-1/proxy-bodies.ndjson
+```
+
+| Critère | `py-silence-001` | `py-silence-002` |
+|---|---|---|
+| Statut | `resolved` | `resolved` |
+| `yaRequest` | `{"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2}` | idem |
+| « 1011 » | 0 | 0 |
+| Connexions WebSocket | 1 | 1 |
+| Plus long silence sans requête | 166,3 s | 400,0 s, pas de `stalled` avec le garde-fou de 300 s |
+| Suite de conversation après le 1er appel | 3/3 | 2/2 |
+| Instructions et tools distincts | 1 et 1 (4 corps) | 1 et 1 (3 corps) |
+| Cellule qui lance la commande | `handle = bash("sleep 180 && echo fini > attente.txt", timeout=240)`, sans `await` (7 ms), puis `handle.poll()` | `r = await bash("sleep 400 && echo fini > attente.txt")` puis `print(r.exit_code)`, dans une cellule |
+| Attente complète sans `[bash-done]` (D8 : cellule qui fait `await`) | sans objet : pas d'`await`, fin du tour puis réveil par `[bash-done pid:46307 exit:0]` (A.3, voulu) | oui : cellule complète en 400 032 ms, sortie `0`, 0 avis |
+
+- `compare_bodies.py` contre `20261116T110353Z-cce48e6` (fenêtre de 30 s), pour les deux chauffes : `tools` (489 octets), `reasoning`, `include`, `text`, `tool_choice`, `parallel_tool_calls`, `store`, `stream`, `type` et `model` identiques ; `input` (énoncé et date) et `prompt_cache_key` (id de session) diffèrent comme attendu ; `instructions` (5 027 octets) diffère de trois lignes : l. 9 `and \`await handle\`` → `and \`await handle -> BashResult\`` (A.2), l. 24 « repeated awaits of a running command » → « long blocking awaits » (A.3), l. 47 `await bash(cmd)` retirée (A.1). Les deux chauffes envoient les mêmes `instructions`.
+- Hors critères (ticket 14) : miss serveur aux appels 3 et 4 de `py-silence-001` (taux de cache de session 0,182) et aux appels 2 et 3 de `py-silence-002` (le 3 à 2,7 s du 2 ; taux 0,000).
 
 ## Constat de départ
 
