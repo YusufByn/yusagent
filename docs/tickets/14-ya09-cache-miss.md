@@ -1,5 +1,7 @@
 # Ticket 14 : YA-09, miss du cache serveur en prompt v2
 
+**Clos le 17/11/2026** (section « Clôture » en fin de ticket) : en-tête `session-id` sans gain net, gardé désactivé ; dérive des relectures partielles extérieure à notre binaire.
+
 Ouvert le 16/11/2026 sur le verdict de l'A/B du cache v2. Rapport de l'A/B : `bench/smoke/ab/ya09-cache-v2-20261116.md`. Le verdict de la règle est un **écart net** : d = +5,3 points, IC 95 % [+3,0 ; +7,8].
 
 **Décision de Yusuf (16/11, 15h02)** : chercher la cause dans les journaux du run `ab-20261116T124625Z`, sans nouveau run, et regarder comment Unharnessed gère le cache.
@@ -228,6 +230,7 @@ Les relectures partielles pèsent presque autant que les miss, dans les deux bra
   - 14,4 % le 16/11 (`318f3e1`).
   - Les miss passent de 2,7 %, 2,7 % et 2,5 % à 4,3 %.
   - Le jour et le binaire changent ensemble : lot Unharnessed, keepalive du ticket 12. On ne peut pas trancher sans un run qui fixe l'un des deux, par exemple le binaire `80e20ea` rejoué le même jour que `318f3e1`, à décider par Yusuf.
+  - **Tranché le 17/11** : dérive extérieure à notre binaire (section « Clôture »).
 - **Premier appel en cache entre sessions** : 3/20 en B, 0/20 en A. Le préfixe commun de A (instructions et tools, 1 423 tokens) dépasse le minimum de 1 024 tokens de la doc de l'API, sans jamais être relu d'une session à l'autre. Ce point n'est pas expliqué.
 - **Ping du serveur** : son intervalle est toujours inconnu (passation du 16/11).
 
@@ -295,3 +298,24 @@ Demandes de Yusuf, traitées dans la même PR :
 - `bench/smoke/tools/power.py` et `bench/smoke/tools/drift_se.py` versionnés, cités dans le plan avec leurs commandes ; leurs sorties redonnent les chiffres du plan ;
 - `"codexSessionIdHeader": false` écrit dans `yaRequest` quand le réglage est désactivé (test `the_session_id_header_is_always_frozen`, assertions de `prefix_stability.rs`) ;
 - étape 0 du contrôle de la dérive lancée en mode capture, sans modèle : `bench/smoke/runs/20261117T120533Z-80e20ea-gpt-6-luna`. Le banc actuel relance `80e20ea` tel quel (détail dans le plan).
+
+## Clôture (17/11/2026)
+
+Rapport : `bench/smoke/ab/ya09-session-id-20261117.md`. Runs lancés par Yusuf sur `main` à `bf88ebc4a`, après le merge de la PR #50 ; règles fixées d'avance dans `bench/smoke/ab/ya09-session-id-plan.md`.
+
+**Option A, en-tête `session-id` : pas de gain net détecté, pas de dégradation.** A/B `bench/smoke/runs/ab-20261117T131130Z`, 4 passes, 20 unités retenues sur 20.
+- Miss sous 6 000 tokens de prompt précédent : A (sans en-tête) 26/97 (26,8 %), B (avec en-tête) 24/99 (24,2 %).
+- **d = +2,6 points, IC 95 % [−7,1 ; +11,3]** : cas 5 de la règle. Garde-fou : d_global = +3,2 points [−1,2 ; +7,5], pas de dégradation.
+- Contrôle sur le fil avant le run (`ab-20261117T130904Z`, capture) : `session-id` égal à `session_id` sur 4 requêtes sur 4 en B, sur aucune en A.
+- Une unité B en échec (passe 4, `py-tldextract-368`) : le modèle a fini son tour après 7 lectures, en annonçant un correctif qu'il n'a pas fait. Ni erreur provider, ni harness ; unité retenue.
+
+**Contrôle de la dérive : dérive extérieure à notre binaire.** Run `bench/smoke/runs/20261117T143934Z-80e20ea-gpt-6-luna` : le binaire `80e20ea` du 14/11, relancé tel quel, fait 100/396 (25,3 %) de relectures partielles, contre 7/297 (2,4 %) le 14/11. 25,3 % ≥ 8,4 % : pas de ticket sur le binaire.
+
+Décisions :
+- **Ticket clos.**
+- **Code de l'en-tête gardé**, désactivé par défaut : réglage `codexSessionIdHeader` (`crates/pa-core/src/session_engine/ya_session_id_header.rs`), absent ou `false` dans `settings.json`. Aucun défaut ni code changé par la clôture.
+- **Règle : pas de comparaison de cache entre jours.** Le 17/11, le même binaire fait 25,3 % de relectures partielles contre 2,4 % le 14/11, et 6,8 % de miss contre 2,7 %. Un taux de miss ou de relecture ne se compare qu'entre bras d'un même A/B entrelacé. Les références d'un autre jour (baseline, A/B antérieurs) ne servent pas à juger le cache.
+
+Pistes pour plus tard, non ouvertes :
+- **cookies de routage `__oailb` et `__cflb`** : sur `main` de Codex, `ChatGptRoutingAffinity` (`codex-rs/http-client/src/chatgpt_routing_affinity.rs`) garde ceux reçus à la poignée de main d'une connexion (`bench/smoke/ab/ya09-session-id-plan.md`, « Ce que fait Codex CLI ») ;
+- **prewarm** au démarrage de session (option B ci-dessus).
