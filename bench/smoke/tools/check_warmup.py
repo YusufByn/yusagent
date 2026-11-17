@@ -13,10 +13,16 @@ Lit le dossier d'une tâche (`run.py`) ou d'une reprise (`continue_session.py`),
   `reasoning_tokens` par réponse ;
 - sessions (`sessions/*.jsonl`) : champs `yaRequest` et `yaTools` de l'en-tête, blocs de
   raisonnement (texte vide, signature, `encrypted_content`, résumé) ;
-- `bash()` (levier YA-09) : fenêtre annoncée par la ligne `await bash(cmd)` des instructions,
-  cellules revenues avant la fin de leur commande, `await bash(...)` rendus complets après plus
-  de 1 s, notifications `[bash-done]`, plus long silence sans requête sur le WebSocket (fin d'une
-  réponse → requête suivante ou fermeture), fermetures `1011` dans les journaux ;
+- préfixe : nombre de valeurs distinctes d'`instructions` et de `tools` parmi les corps (1 et 1 :
+  préfixe stable dans la tâche) ;
+- `bash()` (levier YA-09) : fenêtre annoncée par la ligne `await bash(cmd)` des instructions
+  (secondes ; `full` quand la ligne est absente d'un prompt qui documente `BashHandle`, attente
+  complète du ticket 13), cellules revenues avant la fin de leur commande, cellules qui attendent
+  une commande (`await bash(...)`, ou `await h` d'un handle `h = bash(...)` d'une cellule
+  précédente) rendues complètes après plus de 1 s et après plus de 30 s (la fenêtre d'avant le
+  ticket 13), notifications `[bash-done]`, plus long silence sans requête sur
+  le WebSocket (fin d'une réponse → requête suivante ou fermeture), connexions WebSocket ouvertes,
+  fermetures `1011` dans les journaux ;
 - `err.log` : taille et occurrences de `Warning` et `error` ;
 - avec `report.json` : statut, appels en continuation et en invalidation, miss serveur,
   compactions, taux de cache de la session.
@@ -57,13 +63,23 @@ for f in sorted(glob.glob(str(d / "sessions" / "*.jsonl"))):
           f"type reasoning {sum(s.get('type') == 'reasoning' for s in sig)} ; avec encrypted_content {sum(bool(s.get('encrypted_content')) for s in sig)} ; "
           f"summary non vide {sum(bool(s.get('summary')) for s in sig)}")
 import re
-windows = Counter(m.group(1) for b in bodies
-                  for m in [re.search(r"`await bash\(cmd\)` waits at most (\d+) seconds?\.", b.get("instructions") or "")] if m)
-print(f"bash() : fenêtre de la ligne `await bash(cmd)` : {dict(windows) or 'absente'} (en secondes, par corps)")
-snapshots = long_awaits = notices = 0
+print(f"préfixe : instructions distinctes {len({b.get('instructions') for b in bodies})} ; "
+      f"tools distincts {len({json.dumps(b.get('tools'), sort_keys=True) for b in bodies})} (sur {len(bodies)} corps)")
+def window(text):
+    m = re.search(r"`await bash\(cmd\)` waits at most (\d+) seconds?\.", text)
+    if m:
+        return m.group(1)
+    return "full" if "`await bash(cmd)`" not in text and "BashHandle" in text else None
+windows = Counter(window(b.get("instructions") or "") for b in bodies)
+windows.pop(None, None)
+print(f"bash() : fenêtre de la ligne `await bash(cmd)` : {dict(windows) or 'absente'} (en secondes, ou full, par corps)")
+snapshots = long_awaits = past_30 = notices = 0
 longest = 0.0
+def awaits_bash(code, handles):
+    """La cellule attend une commande : `await bash(` ou `await h` d'un handle connu."""
+    return "await bash(" in code or any(re.search(rf"\bawait\s+{re.escape(h)}\b", code) for h in handles)
 for f in sorted(glob.glob(str(d / "sessions" / "*.jsonl"))):
-    calls = {}
+    calls, handles, awaiting = {}, set(), {}
     for e in jl(f):
         m = e.get("message") or {}
         if e.get("type") == "custom_message" and e.get("customType") == "async_bash_completion":
@@ -73,7 +89,10 @@ for f in sorted(glob.glob(str(d / "sessions" / "*.jsonl"))):
         if m.get("role") == "assistant":
             for c in m.get("content") or []:
                 if c.get("type") == "toolCall":
-                    calls[c.get("id")] = (c.get("arguments") or {}).get("code") or ""
+                    code = (c.get("arguments") or {}).get("code") or ""
+                    calls[c.get("id")] = code
+                    awaiting[c.get("id")] = awaits_bash(code, handles)
+                    handles |= set(re.findall(r"\b([A-Za-z_]\w*)\s*=\s*(?:await\s+)?bash\(", code))
         elif m.get("role") == "toolResult":
             det = m.get("details") or {}
             body = "".join(p.get("text", "") for p in m.get("content") or [] if isinstance(p, dict))
@@ -81,11 +100,12 @@ for f in sorted(glob.glob(str(d / "sessions" / "*.jsonl"))):
                         or "BashSnapshot running" in body)
             snapshots += snapshot
             seconds = (det.get("durationMs") or 0) / 1000
-            if not snapshot and seconds > 1 and "await bash(" in calls.get(m.get("toolCallId"), ""):
+            if not snapshot and seconds > 1 and awaiting.get(m.get("toolCallId")):
                 long_awaits += 1
+                past_30 += seconds > 30
                 longest = max(longest, seconds)
-print(f"  cellules revenues avant la fin : {snapshots} ; cellules `await bash(...)` rendues complètes après plus de 1 s : "
-      f"{long_awaits} (la plus longue {longest:.1f} s) ; notifications [bash-done] : {notices}")
+print(f"  cellules revenues avant la fin : {snapshots} ; cellules qui attendent une commande (`await bash(...)`, `await h`) rendues complètes après plus de 1 s : "
+      f"{long_awaits}, après plus de 30 s : {past_30} (la plus longue {longest:.1f} s) ; notifications [bash-done] : {notices}")
 gaps, last = [], None
 for x in log:
     if x.get("transport") != "websocket":
@@ -98,7 +118,9 @@ for x in log:
     elif x.get("event") == "response":
         last = x["ts"]
 closes = sum(len(re.findall(r"\b1011\b", (d / f).read_text(errors="ignore"))) for f in ("out.jsonl", "err.log") if (d / f).exists())
-print(f"  plus long silence sans requête sur le WebSocket : {max(gaps, default=0):.1f} s ; mentions de 1011 dans out.jsonl et err.log : {closes}")
+opens = sum(x.get("event") == "ws_open" for x in log)
+print(f"  plus long silence sans requête sur le WebSocket : {max(gaps, default=0):.1f} s ; connexions WebSocket ouvertes : {opens} ; "
+      f"mentions de 1011 dans out.jsonl et err.log : {closes}")
 for f in ("err.log",):
     p = d / f
     if p.exists():

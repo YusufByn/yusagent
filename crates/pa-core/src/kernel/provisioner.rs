@@ -139,7 +139,7 @@ pub struct IpythonKernelProvisionerOptions {
     pub ya_native_shell: bool,
     /// yusAgent (YA-09): `bashWaitSeconds`, the `await bash(cmd)` window; `None` or 1 keeps the
     /// upstream bootstrap (`bootstrap::ya_bash_wait`).
-    pub ya_bash_wait_seconds: Option<std::num::NonZeroU32>,
+    pub ya_bash_wait_seconds: Option<crate::session_engine::ya_request::BashWait>,
     /// yusAgent (YA-09, ticket 11): the default `bash()` limit in seconds (a version-2
     /// session); `None` keeps no limit (`bootstrap::ya_bash_timeout`).
     pub ya_bash_timeout_seconds: Option<u32>,
@@ -297,6 +297,12 @@ impl IpythonKernelProvisioner {
     #[must_use]
     pub fn cell_timeout_ms(&self) -> Option<u64> {
         self.inner.options.cell_timeout_ms
+    }
+
+    /// yusAgent (YA-09, ticket 13): the session's `await bash(cmd)` wait (`bashWaitSeconds`).
+    #[must_use]
+    pub fn ya_bash_wait_seconds(&self) -> Option<crate::session_engine::ya_request::BashWait> {
+        self.inner.options.ya_bash_wait_seconds
     }
 
     /// The Python skills pre-imported at kernel bootstrap.

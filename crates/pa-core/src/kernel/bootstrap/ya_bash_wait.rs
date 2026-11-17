@@ -8,31 +8,46 @@
 //! left as upstream. The global lives in the `rlm.bash` submodule, read from `sys.modules`: the
 //! package attribute `rlm.bash` is the `bash` function.
 //!
+//! `"full"` (ticket 13) sets the global to `None`: the await then takes the unbounded path the
+//! runtime already has for a kernel without the toggle (`bound = _YIELD_AFTER_SECONDS if wired
+//! else None`, then `_bounded_wait` with `bound` `None` is a plain `await`), and returns when the
+//! command ends or its `timeout` kills it. The completion notices stay wired for the commands
+//! started without `await`.
+//!
 //! Without the toggle (no `bash.completed` handler, or a native-shell session where
 //! `bootstrap::ya_native_shell` removed it) the await is unbounded or `bash` is absent, and the
 //! code is left as is. The bootstrap is not part of the prompt.
 
-use std::num::NonZeroU32;
+use crate::session_engine::ya_request::BashWait;
 
 /// The upstream toggle line, after which the window is set. A test pins it to the bootstrap.
 const BASH_NOTICES: &str = "    _prime_agent_rlm_module._set_completion_notices_wired(True)\n";
 
-/// The line that sets the window to `seconds`.
+/// The line that sets the window to `wait`: `N.0` seconds, or `None` for `"full"`.
 #[must_use]
-pub fn bash_wait_line(seconds: NonZeroU32) -> String {
-    format!("    __import__(\"sys\").modules[\"rlm.bash\"]._YIELD_AFTER_SECONDS = {seconds}.0\n")
+pub fn bash_wait_line(wait: BashWait) -> String {
+    let value = match wait {
+        BashWait::Seconds(seconds) => format!("{seconds}.0"),
+        BashWait::Full => "None".to_string(),
+    };
+    format!("    __import__(\"sys\").modules[\"rlm.bash\"]._YIELD_AFTER_SECONDS = {value}\n")
 }
 
-/// The bootstrap code with the `await bash(cmd)` window set to `seconds`. `None`, 1 second (the
+/// The bootstrap code with the `await bash(cmd)` window set to `wait`. `None`, 1 second (the
 /// upstream window) or a code without the toggle: `code` as is.
 #[must_use]
-pub fn bash_wait_bootstrap_code(code: &str, seconds: Option<NonZeroU32>) -> String {
-    match seconds {
-        Some(seconds) if seconds.get() != 1 && code.contains(BASH_NOTICES) => code.replacen(
-            BASH_NOTICES,
-            &format!("{BASH_NOTICES}{}", bash_wait_line(seconds)),
-            1,
-        ),
+pub fn bash_wait_bootstrap_code(code: &str, wait: Option<BashWait>) -> String {
+    match wait {
+        Some(wait)
+            if wait != BashWait::Seconds(std::num::NonZeroU32::MIN)
+                && code.contains(BASH_NOTICES) =>
+        {
+            code.replacen(
+                BASH_NOTICES,
+                &format!("{BASH_NOTICES}{}", bash_wait_line(wait)),
+                1,
+            )
+        }
         _ => code.to_string(),
     }
 }
@@ -43,8 +58,8 @@ mod tests {
     use crate::kernel::bootstrap::build_rlm_bootstrap_code;
     use crate::kernel::bootstrap::ya_native_shell::native_shell_bootstrap_code;
 
-    fn seconds(value: u32) -> Option<NonZeroU32> {
-        NonZeroU32::new(value)
+    fn seconds(value: u32) -> Option<BashWait> {
+        BashWait::seconds(value)
     }
 
     #[test]
@@ -75,6 +90,30 @@ mod tests {
             "{waited}"
         );
         assert_eq!(waited.replacen(line, "", 1), code);
+    }
+
+    /// Ticket 13: `"full"` sets the global to `None`, right after the toggle.
+    #[test]
+    fn full_sets_no_window() {
+        let code = build_rlm_bootstrap_code(&[], true);
+        let waited = bash_wait_bootstrap_code(&code, Some(BashWait::Full));
+        let line = "    __import__(\"sys\").modules[\"rlm.bash\"]._YIELD_AFTER_SECONDS = None\n";
+        assert_eq!(waited.matches(line).count(), 1, "{waited}");
+        assert!(
+            waited.contains(&format!("{BASH_NOTICES}{line}")),
+            "{waited}"
+        );
+        assert_eq!(waited.replacen(line, "", 1), code);
+        let unwired = build_rlm_bootstrap_code(&[], false);
+        assert_eq!(
+            bash_wait_bootstrap_code(&unwired, Some(BashWait::Full)),
+            unwired
+        );
+        let native = native_shell_bootstrap_code(&code);
+        assert_eq!(
+            bash_wait_bootstrap_code(&native, Some(BashWait::Full)),
+            native
+        );
     }
 
     /// Without the toggle the await is unbounded (no `bash.completed` handler) or `bash` is

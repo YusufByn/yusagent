@@ -2,25 +2,54 @@
 //! session's window (`bashWaitSeconds`, `session_engine::ya_request`).
 //!
 //! `None` (no value given to the builder) or 1: the upstream line, byte for byte. A session always
-//! passes its resolved value, 30 by default. Another value replaces only the window in it
-//! (`waits at most 30 seconds.`). The value is frozen per session, so the prompt stays stable
-//! within a session; two sessions with different values have different prompts.
+//! passes its resolved value (`"full"` by default in version 2, 30 in version 1). Another number
+//! replaces only the window in it (`waits at most 30 seconds.`). `"full"` (ticket 13) removes
+//! the line, which is about the window and its snapshot, as Unharnessed has none: the version-2
+//! prefix gives `await handle -> BashResult` and the rule against long blocking awaits
+//! (`crates/uh-core/src/prompts/layers/core.md:8` and `:19` at `fe2cf2815`). The value is frozen
+//! per session, so the prompt stays stable within a session; two sessions with different values
+//! have different prompts.
 
-use std::num::NonZeroU32;
+use crate::session_engine::ya_request::BashWait;
 
 /// The window as upstream writes it in the line (`system_prompt.rs`). A test pins it.
 pub const UPSTREAM_WINDOW: &str = "`await bash(cmd)` waits at most 1 second.";
 
-/// `line` (the upstream `await bash(cmd)` line) with the window of `seconds`.
+/// The whole upstream line, removed in `"full"`. A test pins it.
+pub const UPSTREAM_LINE: &str = "`await bash(cmd)` waits at most 1 second. If the command is still running, it returns a snapshot: `r.running` is True, `r.exit_code` is None, `r.output` is the output so far, and `r.handle` is the live handle. A completed result has `r.running` False and an integer `r.exit_code`. The command keeps running after a snapshot; end the turn and collect the final result on the `[bash-done]` notification.";
+
+/// The advice of the upstream cell watchdog note (`kernel/manager/execution.rs`,
+/// `cell_watchdog_note`), false in `"full"`: there the await does not background a command.
+pub const UPSTREAM_WATCHDOG_ADVICE: &str =
+    "Move long shell work to bash() (it auto-backgrounds past its yield window)";
+
+/// The advice of the watchdog note in a `"full"` session (ticket 13, D5).
+pub const FULL_WAIT_WATCHDOG_ADVICE: &str = "Start long shell work with bash() without await and collect it on its [bash-done] notification";
+
+/// `stderr` of a cell with the watchdog advice of the session's wait: in `"full"`, the upstream
+/// advice is replaced once; otherwise, or without a note, `stderr` as is. The watchdog runs in
+/// daemon sessions only (`session_engine::runtime_wiring::arm_cell_timeout_ms`).
 #[must_use]
-pub fn bash_await_line(line: &str, seconds: Option<NonZeroU32>) -> String {
-    match seconds {
-        Some(seconds) if seconds.get() != 1 => line.replacen(
+pub fn watchdog_note(stderr: String, wait: Option<BashWait>) -> String {
+    if wait == Some(BashWait::Full) && stderr.contains(UPSTREAM_WATCHDOG_ADVICE) {
+        stderr.replacen(UPSTREAM_WATCHDOG_ADVICE, FULL_WAIT_WATCHDOG_ADVICE, 1)
+    } else {
+        stderr
+    }
+}
+
+/// `line` (the upstream `await bash(cmd)` line) with the wait of the session; `None` in
+/// `"full"`: no line.
+#[must_use]
+pub fn bash_await_line(line: &str, wait: Option<BashWait>) -> Option<String> {
+    match wait {
+        Some(BashWait::Full) => None,
+        Some(BashWait::Seconds(seconds)) if seconds.get() != 1 => Some(line.replacen(
             UPSTREAM_WINDOW,
             &format!("`await bash(cmd)` waits at most {seconds} seconds."),
             1,
-        ),
-        _ => line.to_string(),
+        )),
+        _ => Some(line.to_string()),
     }
 }
 
@@ -30,10 +59,14 @@ mod tests {
     use crate::prompts::system_prompt::{build_system_prompt, BuildSystemPromptOptions};
 
     fn prompt(seconds: Option<u32>) -> String {
+        prompt_with(seconds.and_then(BashWait::seconds))
+    }
+
+    fn prompt_with(wait: Option<BashWait>) -> String {
         build_system_prompt(&BuildSystemPromptOptions {
             selected_tools: Some(vec!["python_repl"]),
             daemonless: true,
-            ya_bash_wait_seconds: seconds.and_then(NonZeroU32::new),
+            ya_bash_wait_seconds: wait,
             ..Default::default()
         })
     }
@@ -61,6 +94,68 @@ mod tests {
                 1
             ),
             upstream
+        );
+    }
+
+    /// Ticket 13: `"full"` removes the line; the rest of the prompt is upstream, byte for
+    /// byte, in version 1 and in version 2.
+    #[test]
+    fn full_removes_the_line_only() {
+        let upstream = prompt(None);
+        assert_eq!(upstream.matches(UPSTREAM_LINE).count(), 1, "{upstream}");
+        let full = prompt_with(Some(BashWait::Full));
+        assert!(!full.contains("`await bash(cmd)`"), "{full}");
+        assert_eq!(
+            upstream.replacen(&format!("\n{UPSTREAM_LINE}"), "", 1),
+            full
+        );
+        for version in [
+            crate::session_engine::ya_request::PromptVersion::V1,
+            crate::session_engine::ya_request::PromptVersion::V2,
+        ] {
+            let options = |wait| BuildSystemPromptOptions {
+                selected_tools: Some(vec!["python_repl"]),
+                daemonless: true,
+                ya_bash_wait_seconds: wait,
+                ya_prompt_version: Some(version),
+                ..Default::default()
+            };
+            let one = build_system_prompt(&options(BashWait::seconds(1)));
+            let full = build_system_prompt(&options(Some(BashWait::Full)));
+            assert_eq!(one.matches(UPSTREAM_LINE).count(), 1, "{version:?}: {one}");
+            assert_eq!(
+                one.replacen(&format!("\n{UPSTREAM_LINE}"), "", 1),
+                full,
+                "{version:?}"
+            );
+        }
+    }
+
+    /// D5: the note of the watchdog in `"full"`. The upstream advice is pinned to the source of
+    /// the note (one line of it there, the string continues across lines).
+    #[test]
+    fn the_watchdog_note_follows_the_wait() {
+        let source = include_str!("../kernel/manager/execution.rs");
+        assert!(
+            source.contains("Move long shell work to \\\nbash() (it auto-backgrounds past its yield window) and split"),
+            "the upstream watchdog note changed"
+        );
+        let note = format!(
+            "boom\n[watchdog] Cell exceeded the 60s python_repl budget (ran 3m). {UPSTREAM_WATCHDOG_ADVICE} and split long python work into smaller cells. Intentional long awaits (rlm.collect timeouts) can ignore this note."
+        );
+        let full = watchdog_note(note.clone(), Some(BashWait::Full));
+        assert_eq!(
+            full,
+            note.replacen(UPSTREAM_WATCHDOG_ADVICE, FULL_WAIT_WATCHDOG_ADVICE, 1)
+        );
+        assert!(full.contains("[bash-done]"), "{full}");
+        assert!(!full.contains("auto-backgrounds"), "{full}");
+        for wait in [None, BashWait::seconds(30), BashWait::seconds(1)] {
+            assert_eq!(watchdog_note(note.clone(), wait), note);
+        }
+        assert_eq!(
+            watchdog_note("plain".to_string(), Some(BashWait::Full)),
+            "plain"
         );
     }
 }

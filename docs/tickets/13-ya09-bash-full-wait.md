@@ -11,7 +11,87 @@ Suite du ticket 12 (« Note pour le ticket suivant »). Plan écrit en lecture s
 5. **D5, watchdog** : note du watchdog adaptée dans ce ticket (l'extension passe par le démon).
 6. **D6, refus en v1 limité au `"full"` explicite** (16/11, 15h12) : le refus de D3 ne vaut que si `"full"` est écrit explicitement dans les réglages. Si `"full"` vient du défaut et que la session est en prompt v1 (sessions créées avant le lot Unharnessed, sous-agents), elle prend 30 s. Raison : ne pas casser la reprise des anciennes sessions v1. D6 remplace l'ajout « le refus vaut aussi quand `"full"` vient du défaut ».
 
+7. **D7, alignement sur le prompt d'Unharnessed** (17/11, option A complète) : en `"full"`, pas de ligne `await bash(cmd)` (A.1, Unharnessed n'en a pas) ; dans le préfixe statique v2, `await handle -> BashResult` (A.2, leur `core.md:8`) et « Do not hold the turn with `sleep` or long blocking awaits: end the turn and wait for the notification. » (A.3, leur `core.md:19`). **Rupture de préfixe acceptée** : toute session v2 existante voit son préfixe changer une fois à la reprise. Chauffes : `py-silence-001` suffit pour l'attente complète, pas de relance de `py-silence-002` sur le premier binaire ; les deux sont à refaire sur le binaire final.
+
+8. **D8, critère « sans réveil »** (17/11, après les chauffes du binaire final) : le critère « attente complète sans réveil `[bash-done]` » ne vaut que pour une cellule qui fait `await`. Lancer une commande longue sans `await` et la reprendre sur `[bash-done]` suit A.3 : comportement voulu (`py-silence-001` du binaire final).
+
 Chauffes `py-silence-001` et `py-silence-002` autorisées d'avance.
+
+## Implémentation (16/11/2026, branche `ya-13-bash-full-wait`)
+
+Relecture d'Unharnessed à `fe2cf2815` (clone jetable `/tmp/unharnessed-fe2cf2815-ya13`, rien exécuté) :
+- `__await__` attend sans borne (`unharnessed-runtime/src/rlm/bash.py:975-1000`) : pas de fenêtre ni d'instantané.
+- Leur prompt n'a pas de phrase sur la durée de l'`await` : `await handle -> BashResult`, le `timeout` par défaut (`crates/uh-core/src/prompts/layers/core.md:6-8`) et « Do not hold the turn with `sleep` or long blocking awaits » (`core.md:20`).
+
+Ce qui est fait :
+- **Réglage** : `BashWait` (`session_engine/ya_request.rs`), nombre ou `"full"`, même clé `bashWaitSeconds` dans les réglages et dans `yaRequest`. Défaut par `resolve_bash_wait` : `"full"` en v2, 30 s en v1 (D6). `check_bash_wait` refuse, avant le gel, une session qui tournerait en v1 avec `"full"`. Le défaut ne donne jamais cette paire : seul un `"full"` explicite (D3, D6) ou un en-tête écrit à la main y mène. Une session reprise garde sa valeur figée, et un `"full"` explicite ne refuse pas une session v1 déjà figée.
+- **Kernel** : `_YIELD_AFTER_SECONDS = None` après le basculement des avis (`kernel/bootstrap/ya_bash_wait.rs`). Runtime Python intact.
+- **Prompt** (D7) : en `"full"`, pas de ligne `await bash(cmd)` (`prompts/ya_bash_wait.rs`, `bash_await_line` rend `None` ; `system_prompt.rs`, `lines.extend`). Préfixe statique v2 (`ya_prompt_v2/core.md:9`, `:24`) : `and \`await handle -> BashResult\`` et « Do not hold the turn with `sleep` or long blocking awaits: end the turn and wait for the notification. », mot à mot comme Unharnessed. Premier jet, remplacé par D7 : une ligne propre au fork (« … waits until the command ends or its `timeout` kills it … start it without `await` … Never `await` a server … »), voir « Chauffes du premier binaire ».
+- **Watchdog (D5)** : en `"full"`, la note dit « Start long shell work with bash() without await and collect it on its [bash-done] notification ». Elle est réécrite dans `KernelManagerExecutor` (`runtime_wiring.rs`) par `ya_bash_wait::watchdog_note`. `execution.rs` n'est pas modifié ; un test épingle sa phrase.
+- **TTL (D4)** : `SESSION_WEBSOCKET_CACHE_TTL_MS` à 15 min (`websocket.rs:30-32`).
+- **Banc** : `prompt-v1.json` à 30 s, tâche `py-silence-002`, `check_warmup.py` (ligne `full`, cellules complètes après 30 s, connexions, préfixe), README.
+
+Écarts au plan :
+1. **Fichiers upstream en plus de la liste** : `engine.rs` (appel du refus), `runtime_wiring.rs`, `provisioner.rs`, `system_prompt.rs` (type du champ du fork, accesseur, réécriture de la note), `pa-cli/src/prompt_command.rs` (résolution du défaut avec la version du prompt). Tous imposés par le changement de type ou par D5. `settings/load.rs` n'a pas changé : la clé y était déjà.
+2. **D5 sans toucher `execution.rs`** : la note est réécrite après coup par le fork, plutôt que modifiée dans le fichier upstream.
+3. **Texte de la ligne** : la proposition du plan (une ligne propre au fork) est abandonnée par D7 au profit du texte d'Unharnessed, sans ligne `await bash(cmd)`.
+4. **Refus** : vérifié sur la requête effective de la session plutôt que sur le seul réglage. Même résultat pour les sessions neuves ; un en-tête écrit à la main en v1 avec `"full"` est refusé aussi.
+5. **Règle 8** : un `cargo check` a été lancé une fois en local au début de l'implémentation, avant de revenir à la règle. La validation Rust se fait par `ci.yml`.
+
+6. **Rupture de préfixe des sessions v2 existantes** (D7, acceptée) : hors du plan, qui ne changeait que les sessions neuves.
+7. **`check_warmup.py`** compte aussi `await h` (handle d'une cellule précédente) : le premier jet ne comptait que `await bash(`, et manquait l'attente de 174,5 s de `py-silence-001`.
+
+Tests : listés dans `docs/fork-changes.md` (ticket 13). Runtime en local : `cd prime-agent-runtime && uv run --python 3.11 python -m unittest discover -s test -p 'test_ya_bash_*.py'` : 24 tests OK. Banc : `python3 -I -m unittest discover -s bench/smoke/tests` : 48 tests OK.
+
+## Chauffes du premier binaire (17/11/2026)
+
+Binaire de `713ba4bf1` (`ya-build-macos-arm64` 43921924087, relance unique après deux annulations sans runner, sha256 de l'exécutable `7ac7adbd1ad86b98b324cd66a2a4379a094838db041f622cce8e13672ae26a6e`), `gpt-6-luna`, effort high, `default.json`, `--idle-timeout 300`, `--log-bodies`. Lancées par Yusuf. Vérifications, pas des mesures. Ce binaire a encore la ligne du premier jet (avant D7).
+
+```bash
+python3 -I bench/smoke/tools/check_warmup.py bench/smoke/runs/20261117T075548Z-713ba4b-gpt-6-luna/tasks/py-silence-001/run-1 bench/smoke/runs/20261117T075548Z-713ba4b-gpt-6-luna/report.json
+python3 -I bench/smoke/tools/check_warmup.py bench/smoke/runs/20261117T075921Z-713ba4b-gpt-6-luna/tasks/py-silence-002/run-1 bench/smoke/runs/20261117T075921Z-713ba4b-gpt-6-luna/report.json
+python3 -I bench/smoke/tools/compare_bodies.py bench/smoke/runs/20261116T110353Z-cce48e6-gpt-6-luna/tasks/py-silence-001/run-1/proxy-bodies.ndjson bench/smoke/runs/20261117T075548Z-713ba4b-gpt-6-luna/tasks/py-silence-001/run-1/proxy-bodies.ndjson
+```
+
+| Critère | `py-silence-001` | `py-silence-002` |
+|---|---|---|
+| Statut | `resolved` | `resolved` |
+| « 1011 » | 0 | 0 |
+| Connexions WebSocket | 1 (186,5 s) | 1 (409,0 s) |
+| Plus long silence sans requête | 174,5 s | 394,9 s, pas de `stalled` avec le garde-fou de 300 s |
+| Suite de conversation après le 1er appel | 3/3 | 2/2 |
+| Instructions et tools distincts | 1 et 1 (4 corps) | 1 et 1 (3 corps) |
+| Attente complète sans `[bash-done]` | oui : `await h` dans une cellule de 174 525 ms, `BashResult(exit_code=0, duration=180.03)`, 0 avis | non testée : le modèle a écrit `r = bash(...)` sans `await` malgré la consigne, réveil par `[bash-done]` après 400 s |
+
+- `compare_bodies.py` contre `20261116T110353Z-cce48e6` (fenêtre de 30 s) : dans `instructions`, seule la ligne 47 (`await bash(cmd)`) diffère ; `tools` (489 octets), `reasoning`, `include`, `text`, `tool_choice`, `parallel_tool_calls`, `store`, `stream`, `type` et `model` sont identiques ; `input` ne diffère que par la date de `<environment>` ; `prompt_cache_key` est l'id de session.
+- Hypothèse, n = 1 : la phrase « start it without `await` » du premier jet a pu pousser le modèle à retirer l'`await` dans `py-silence-002`. Unharnessed n'a pas cette phrase : d'où D7.
+- Hors critères (ticket 14) : miss serveur à l'appel 4 de `py-silence-001` (après 176 s, prompt de 1 868 tokens) et à l'appel 2 de `py-silence-002` (après 7,8 s, prompt de 1 925 tokens).
+
+## Chauffes du binaire final (17/11/2026)
+
+Binaire de `a7d97ece5` (`ya-build-macos-arm64` 44047964339, sha256 de l'exécutable `687effce57b1ae28035ac0136504759170b6a6eea57458e2bd529acd08905c78`) ; `a4189e01f` ne change qu'un test. Prompt de D7. `gpt-6-luna`, effort high, `default.json`, `--idle-timeout 300`, `--log-bodies`. Lancées par Yusuf. Vérifications, pas des mesures.
+
+```bash
+python3 -I bench/smoke/tools/check_warmup.py bench/smoke/runs/20261117T093127Z-a7d97ec-gpt-6-luna/tasks/py-silence-001/run-1 bench/smoke/runs/20261117T093127Z-a7d97ec-gpt-6-luna/report.json
+python3 -I bench/smoke/tools/check_warmup.py bench/smoke/runs/20261117T095751Z-a7d97ec-gpt-6-luna/tasks/py-silence-002/run-1 bench/smoke/runs/20261117T095751Z-a7d97ec-gpt-6-luna/report.json
+python3 -I bench/smoke/tools/compare_bodies.py bench/smoke/runs/20261116T110353Z-cce48e6-gpt-6-luna/tasks/py-silence-001/run-1/proxy-bodies.ndjson bench/smoke/runs/20261117T093127Z-a7d97ec-gpt-6-luna/tasks/py-silence-001/run-1/proxy-bodies.ndjson
+python3 -I bench/smoke/tools/compare_bodies.py bench/smoke/runs/20261116T110353Z-cce48e6-gpt-6-luna/tasks/py-silence-001/run-1/proxy-bodies.ndjson bench/smoke/runs/20261117T095751Z-a7d97ec-gpt-6-luna/tasks/py-silence-002/run-1/proxy-bodies.ndjson
+```
+
+| Critère | `py-silence-001` | `py-silence-002` |
+|---|---|---|
+| Statut | `resolved` | `resolved` |
+| `yaRequest` | `{"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2}` | idem |
+| « 1011 » | 0 | 0 |
+| Connexions WebSocket | 1 | 1 |
+| Plus long silence sans requête | 166,3 s | 400,0 s, pas de `stalled` avec le garde-fou de 300 s |
+| Suite de conversation après le 1er appel | 3/3 | 2/2 |
+| Instructions et tools distincts | 1 et 1 (4 corps) | 1 et 1 (3 corps) |
+| Cellule qui lance la commande | `handle = bash("sleep 180 && echo fini > attente.txt", timeout=240)`, sans `await` (7 ms), puis `handle.poll()` | `r = await bash("sleep 400 && echo fini > attente.txt")` puis `print(r.exit_code)`, dans une cellule |
+| Attente complète sans `[bash-done]` (D8 : cellule qui fait `await`) | sans objet : pas d'`await`, fin du tour puis réveil par `[bash-done pid:46307 exit:0]` (A.3, voulu) | oui : cellule complète en 400 032 ms, sortie `0`, 0 avis |
+
+- `compare_bodies.py` contre `20261116T110353Z-cce48e6` (fenêtre de 30 s), pour les deux chauffes : `tools` (489 octets), `reasoning`, `include`, `text`, `tool_choice`, `parallel_tool_calls`, `store`, `stream`, `type` et `model` identiques ; `input` (énoncé et date) et `prompt_cache_key` (id de session) diffèrent comme attendu ; `instructions` (5 027 octets) diffère de trois lignes : l. 9 `and \`await handle\`` → `and \`await handle -> BashResult\`` (A.2), l. 24 « repeated awaits of a running command » → « long blocking awaits » (A.3), l. 47 `await bash(cmd)` retirée (A.1). Les deux chauffes envoient les mêmes `instructions`.
+- Hors critères (ticket 14) : miss serveur aux appels 3 et 4 de `py-silence-001` (taux de cache de session 0,182) et aux appels 2 et 3 de `py-silence-002` (le 3 à 2,7 s du 2 ; taux 0,000).
 
 ## Constat de départ
 

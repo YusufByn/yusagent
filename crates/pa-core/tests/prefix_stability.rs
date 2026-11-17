@@ -98,7 +98,7 @@ const CODEX_REASONING_SUMMARY_AUTO: Variant = Variant {
 };
 
 /// yusAgent (YA-09, lever `bash()`): `bashWaitSeconds: 1`, the upstream window (the default is
-/// 30 seconds since 15/11/2026).
+/// `"full"` in version 2 since ticket 13).
 const CODEX_BASH_WAIT_1: Variant = Variant {
     settings: Some(r#"{"bashWaitSeconds": 1}"#),
     ..CODEX_DEFAULT
@@ -908,11 +908,14 @@ async fn codex_default_prefix_is_stable_across_requests() {
         "`read(path, offset=1, limit=2000)",
         "`await edit(path, old_str, new_str)",
         "an edit together with the command that tests it.",
-        "`await bash(cmd)` waits at most 30 seconds.",
+        "and `await handle -> BashResult`",
+        "- Do not hold the turn with `sleep` or long blocking awaits: end the turn and wait for the notification.",
     ] {
         assert!(prompt.contains(expected), "{expected}: {prompt}");
     }
     for absent in [
+        "`await bash(cmd)`",
+        "repeated awaits",
         "apply_patch",
         "Continual Harness",
         "Recursive agent depth: 0",
@@ -1027,10 +1030,11 @@ async fn codex_reasoning_summary_auto_prefix_is_stable_across_requests() {
 }
 
 /// yusAgent (YA-09, lever `bash()`): two sessions of one project, the default settings
-/// (`bashWaitSeconds` 30 since 15/11/2026) then `bashWaitSeconds: 1`. Each prefix is stable
-/// across its requests; the default prompt has the 30-second line, and the two prompts differ
-/// only by that window; the tools and every other parameter are identical. The header of the
-/// default session freezes 30; the one set to 1 is written without the field, as before it.
+/// (`bashWaitSeconds` `"full"` in version 2 since ticket 13) then `bashWaitSeconds: 1`. Each
+/// prefix is stable across its requests; the default prompt has no `await bash(cmd)` line
+/// (ticket 13, as Unharnessed), and the two prompts differ only by the upstream line; the tools
+/// and every other parameter are identical. The header of the default session freezes `"full"`; the one set to 1
+/// is written without the field, as before it.
 #[tokio::test]
 async fn codex_bash_wait_changes_only_the_await_line() {
     let api = Api::OpenAiResponses;
@@ -1060,7 +1064,7 @@ async fn codex_bash_wait_changes_only_the_await_line() {
     assert_eq!(
         headers,
         [
-            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2})),
+            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})),
             Some(json!({"reasoningSummary": "off", "promptVersion": 2})),
         ]
     );
@@ -1069,27 +1073,25 @@ async fn codex_bash_wait_changes_only_the_await_line() {
     let (default, upstream) = bodies.split_at(EXPECTED_REQUESTS);
     assert_prefix_stable(api, default);
     assert_prefix_stable(api, upstream);
-    let upstream_line = "`await bash(cmd)` waits at most 1 second.";
-    let default_line = "`await bash(cmd)` waits at most 30 seconds.";
+    let upstream_line = pa_core::prompts::ya_bash_wait::UPSTREAM_LINE;
     let (default_prompt, upstream_prompt) = (
         responses_system_prompt(&default[0]),
         responses_system_prompt(&upstream[0]),
     );
-    assert_eq!(
-        default_prompt.matches(default_line).count(),
-        1,
+    assert!(
+        !default_prompt.contains("`await bash(cmd)`"),
         "{default_prompt}"
     );
-    assert!(!default_prompt.contains(upstream_line), "{default_prompt}");
     assert_eq!(
         upstream_prompt.matches(upstream_line).count(),
         1,
         "{upstream_prompt}"
     );
+    // The prompts are the system messages as JSON text: a newline is the escape `\n`.
     assert_eq!(
-        default_prompt.replacen(default_line, upstream_line, 1),
-        upstream_prompt,
-        "only the window differs"
+        upstream_prompt.replacen(&format!("\\n{upstream_line}"), "", 1),
+        default_prompt,
+        "only the await line differs"
     );
     let (mut fixed_default, _) = split_request(api, &request_object(api, 1, &default[0]));
     let (mut fixed_upstream, _) = split_request(api, &request_object(api, 1, &upstream[0]));
@@ -1107,8 +1109,8 @@ async fn codex_bash_wait_changes_only_the_await_line() {
 
 /// yusAgent (YA-09, lever `bash()`): a session created before `bashWaitSeconds` existed (its
 /// `yaRequest` has no field, as the one written with a window of 1) keeps the 1-second line when
-/// resumed with the default settings (30): the request after the resume extends the one before
-/// it, and the header is left as is.
+/// resumed with the default settings (`"full"`): the request after the resume extends the one
+/// before it, and the header is left as is.
 #[tokio::test]
 async fn resumed_session_from_before_bash_wait_keeps_one_second() {
     let api = Api::OpenAiResponses;
@@ -1340,7 +1342,7 @@ async fn resumed_legacy_session_keeps_summary_auto() {
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(
         header.rest.get("yaRequest"),
-        Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "promptVersion": 2})),
+        Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})),
         "{header:?}"
     );
 
