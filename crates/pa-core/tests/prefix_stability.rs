@@ -908,11 +908,14 @@ async fn codex_default_prefix_is_stable_across_requests() {
         "`read(path, offset=1, limit=2000)",
         "`await edit(path, old_str, new_str)",
         "an edit together with the command that tests it.",
-        pa_core::prompts::ya_bash_wait::FULL_WAIT_LINE,
+        "and `await handle -> BashResult`",
+        "- Do not hold the turn with `sleep` or long blocking awaits: end the turn and wait for the notification.",
     ] {
         assert!(prompt.contains(expected), "{expected}: {prompt}");
     }
     for absent in [
+        "`await bash(cmd)`",
+        "repeated awaits",
         "apply_patch",
         "Continual Harness",
         "Recursive agent depth: 0",
@@ -1028,9 +1031,9 @@ async fn codex_reasoning_summary_auto_prefix_is_stable_across_requests() {
 
 /// yusAgent (YA-09, lever `bash()`): two sessions of one project, the default settings
 /// (`bashWaitSeconds` `"full"` in version 2 since ticket 13) then `bashWaitSeconds: 1`. Each
-/// prefix is stable across its requests; the default prompt has the full-wait line in place of
-/// the upstream one, and the two prompts differ only by that line; the tools and every other
-/// parameter are identical. The header of the default session freezes `"full"`; the one set to 1
+/// prefix is stable across its requests; the default prompt has no `await bash(cmd)` line
+/// (ticket 13, as Unharnessed), and the two prompts differ only by the upstream line; the tools
+/// and every other parameter are identical. The header of the default session freezes `"full"`; the one set to 1
 /// is written without the field, as before it.
 #[tokio::test]
 async fn codex_bash_wait_changes_only_the_await_line() {
@@ -1071,18 +1074,12 @@ async fn codex_bash_wait_changes_only_the_await_line() {
     assert_prefix_stable(api, default);
     assert_prefix_stable(api, upstream);
     let upstream_line = pa_core::prompts::ya_bash_wait::UPSTREAM_LINE;
-    let default_line = pa_core::prompts::ya_bash_wait::FULL_WAIT_LINE;
     let (default_prompt, upstream_prompt) = (
         responses_system_prompt(&default[0]),
         responses_system_prompt(&upstream[0]),
     );
-    assert_eq!(
-        default_prompt.matches(default_line).count(),
-        1,
-        "{default_prompt}"
-    );
     assert!(
-        !default_prompt.contains("waits at most"),
+        !default_prompt.contains("`await bash(cmd)`"),
         "{default_prompt}"
     );
     assert_eq!(
@@ -1091,8 +1088,8 @@ async fn codex_bash_wait_changes_only_the_await_line() {
         "{upstream_prompt}"
     );
     assert_eq!(
-        default_prompt.replacen(default_line, upstream_line, 1),
-        upstream_prompt,
+        upstream_prompt.replacen(&format!("\n{upstream_line}"), "", 1),
+        default_prompt,
         "only the await line differs"
     );
     let (mut fixed_default, _) = split_request(api, &request_object(api, 1, &default[0]));

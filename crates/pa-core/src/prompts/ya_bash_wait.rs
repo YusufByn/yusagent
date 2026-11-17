@@ -3,24 +3,20 @@
 //!
 //! `None` (no value given to the builder) or 1: the upstream line, byte for byte. A session always
 //! passes its resolved value (`"full"` by default in version 2, 30 in version 1). Another number
-//! replaces only the window in it (`waits at most 30 seconds.`). `"full"` (ticket 13) replaces
-//! the whole line, which is about the window and its snapshot: [`FULL_WAIT_LINE`]. The value is
-//! frozen per session, so the prompt stays stable within a session; two sessions with different
-//! values have different prompts.
+//! replaces only the window in it (`waits at most 30 seconds.`). `"full"` (ticket 13) removes
+//! the line, which is about the window and its snapshot, as Unharnessed has none: the version-2
+//! prefix gives `await handle -> BashResult` and the rule against long blocking awaits
+//! (`crates/uh-core/src/prompts/layers/core.md:8` and `:19` at `fe2cf2815`). The value is frozen
+//! per session, so the prompt stays stable within a session; two sessions with different values
+//! have different prompts.
 
 use crate::session_engine::ya_request::BashWait;
 
 /// The window as upstream writes it in the line (`system_prompt.rs`). A test pins it.
 pub const UPSTREAM_WINDOW: &str = "`await bash(cmd)` waits at most 1 second.";
 
-/// The whole upstream line, replaced in `"full"`. A test pins it.
+/// The whole upstream line, removed in `"full"`. A test pins it.
 pub const UPSTREAM_LINE: &str = "`await bash(cmd)` waits at most 1 second. If the command is still running, it returns a snapshot: `r.running` is True, `r.exit_code` is None, `r.output` is the output so far, and `r.handle` is the live handle. A completed result has `r.running` False and an integer `r.exit_code`. The command keeps running after a snapshot; end the turn and collect the final result on the `[bash-done]` notification.";
-
-/// The line of a `"full"` session. Unharnessed has no such line: its prompt gives
-/// `await handle -> BashResult` and the default `timeout` (`crates/uh-core/src/prompts/layers/core.md:6-8`
-/// at `fe2cf2815`), as our version 2 does; this line says the await is not bounded and how to
-/// keep working meanwhile.
-pub const FULL_WAIT_LINE: &str = "`await bash(cmd)` waits until the command ends or its `timeout` kills it, and returns its `BashResult`. To keep working while a command runs, start it without `await` and collect the result on its `[bash-done]` notification. Never `await` a server: keep its handle, with `timeout=None` or `persistent=True` so the time limit does not kill it.";
 
 /// The advice of the upstream cell watchdog note (`kernel/manager/execution.rs`,
 /// `cell_watchdog_note`), false in `"full"`: there the await does not background a command.
@@ -42,17 +38,18 @@ pub fn watchdog_note(stderr: String, wait: Option<BashWait>) -> String {
     }
 }
 
-/// `line` (the upstream `await bash(cmd)` line) with the wait of the session.
+/// `line` (the upstream `await bash(cmd)` line) with the wait of the session; `None` in
+/// `"full"`: no line.
 #[must_use]
-pub fn bash_await_line(line: &str, wait: Option<BashWait>) -> String {
+pub fn bash_await_line(line: &str, wait: Option<BashWait>) -> Option<String> {
     match wait {
-        Some(BashWait::Full) => line.replacen(UPSTREAM_LINE, FULL_WAIT_LINE, 1),
-        Some(BashWait::Seconds(seconds)) if seconds.get() != 1 => line.replacen(
+        Some(BashWait::Full) => None,
+        Some(BashWait::Seconds(seconds)) if seconds.get() != 1 => Some(line.replacen(
             UPSTREAM_WINDOW,
             &format!("`await bash(cmd)` waits at most {seconds} seconds."),
             1,
-        ),
-        _ => line.to_string(),
+        )),
+        _ => Some(line.to_string()),
     }
 }
 
@@ -100,16 +97,18 @@ mod tests {
         );
     }
 
-    /// Ticket 13: `"full"` replaces the whole line once; the rest of the prompt is upstream,
-    /// byte for byte, in version 1 and in version 2.
+    /// Ticket 13: `"full"` removes the line; the rest of the prompt is upstream, byte for
+    /// byte, in version 1 and in version 2.
     #[test]
-    fn full_replaces_the_whole_line_only() {
+    fn full_removes_the_line_only() {
         let upstream = prompt(None);
         assert_eq!(upstream.matches(UPSTREAM_LINE).count(), 1, "{upstream}");
         let full = prompt_with(Some(BashWait::Full));
-        assert_eq!(full.matches(FULL_WAIT_LINE).count(), 1, "{full}");
-        assert!(!full.contains("waits at most"), "{full}");
-        assert_eq!(full.replacen(FULL_WAIT_LINE, UPSTREAM_LINE, 1), upstream);
+        assert!(!full.contains("`await bash(cmd)`"), "{full}");
+        assert_eq!(
+            upstream.replacen(&format!("\n{UPSTREAM_LINE}"), "", 1),
+            full
+        );
         for version in [
             crate::session_engine::ya_request::PromptVersion::V1,
             crate::session_engine::ya_request::PromptVersion::V2,
@@ -125,8 +124,8 @@ mod tests {
             let full = build_system_prompt(&options(Some(BashWait::Full)));
             assert_eq!(one.matches(UPSTREAM_LINE).count(), 1, "{version:?}: {one}");
             assert_eq!(
-                full.replacen(FULL_WAIT_LINE, UPSTREAM_LINE, 1),
-                one,
+                one.replacen(&format!("\n{UPSTREAM_LINE}"), "", 1),
+                full,
                 "{version:?}"
             );
         }

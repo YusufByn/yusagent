@@ -31,7 +31,7 @@ const INTRO_PATCH_SHELL: &str = "You have four tools: `python_repl`, a persisten
 
 const BASH_BLOCK: &str = "- `bash(command: str, persistent: bool = False, env: dict[str, str] | None = None, timeout: float | None = 600) -> BashHandle`: start a shell command in the background and return at once; each call is a new process; `env` adds variables for this command only; a command still running after `timeout` seconds is killed (`None`: no limit)
   - `persistent=True`: the shell survives kernel and harness restarts and has no default timeout; use it only for a server or job that must outlive a restart; after a restart, `from rlm import persistent_shells; persistent_shells()` returns the handles
-  - `BashHandle`: `.pid`, `.running`, `.command`, `.tail(n=50)`, `.output()`, `.poll() -> BashResult | None`, `.kill(sig=SIGTERM, grace=5.0)`, and `await handle`
+  - `BashHandle`: `.pid`, `.running`, `.command`, `.tail(n=50)`, `.output()`, `.poll() -> BashResult | None`, `.kill(sig=SIGTERM, grace=5.0)`, and `await handle -> BashResult`
   - `BashResult`: `.exit_code`, `.output`, `.duration`
 ";
 
@@ -58,7 +58,7 @@ const RULE_EDIT_PATCH: &str =
 const RULE_OUTPUT: &str = "- Output of one call beyond";
 const RULE_OUTPUT_SHELL: &str = "- Output of one `python_repl` or `exec_command` call beyond";
 
-const RULE_POLL: &str = "- Do not hold the turn with `sleep` or repeated awaits of a running command: end the turn and wait for the notification.";
+const RULE_POLL: &str = "- Do not hold the turn with `sleep` or long blocking awaits: end the turn and wait for the notification.";
 const RULE_POLL_SHELL: &str = "- Do not poll with `sleep`; follow a command still running when `exec_command` returns with `write_stdin` and empty `chars`.";
 
 // --- tail ---
