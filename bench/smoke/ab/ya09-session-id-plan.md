@@ -54,7 +54,7 @@ Pour une session racine, la valeur est `session_derived_cache_key` (`client.rs:7
 | A | `bench/smoke/settings/default.json` (`{}`) | réglage absent : pas d'en-tête `session-id` (défaut de `main`) |
 | B | `bench/smoke/settings/session-id-header.json` (`{"codexSessionIdHeader": true}`) | en-tête `session-id` = id de session sur le provider `openai-codex`, en plus de `session_id` |
 
-Écart de réglages calculé par `ab.py` : `{"codexSessionIdHeader": [null, true]}`. **Même binaire**, prompt v2 dans les deux bras, tout le reste identique. Le corps des requêtes et le préfixe sont identiques entre les bras (test `codex_websocket_session_id_header_follows_the_setting`, `crates/pa-core/tests/prefix_stability.rs`). Chaque session de B porte `"codexSessionIdHeader": true` dans `yaRequest` ; celles de A ne l'ont pas.
+Écart de réglages calculé par `ab.py` : `{"codexSessionIdHeader": [null, true]}`. **Même binaire**, prompt v2 dans les deux bras, tout le reste identique. Le corps des requêtes et le préfixe sont identiques entre les bras (test `codex_websocket_session_id_header_follows_the_setting`, `crates/pa-core/tests/prefix_stability.rs`). Chaque session de B porte `"codexSessionIdHeader": true` dans `yaRequest`, chaque session de A `"codexSessionIdHeader": false`.
 
 ## Protocole
 
@@ -110,40 +110,82 @@ Définitions de `bench/smoke/tools/cache_causes.py`, lues au journal du reverse 
 - miss au-dessus de 6 000 tokens, affiché sans décider ;
 - coût rapporté par bras et B / A − 1, affiché sans décider. Le coût à cache théorique et son IC viennent d'`ab_stats.py`.
 
-Toutes sont calculées par `bench/smoke/ab/ya09-session-id-mesures.py`, écrit avec ce plan. Le script vérifie aussi la trace : `yaRequest.codexSessionIdHeader` vaut `true` dans toutes les sessions de B et manque dans toutes celles de A, sinon le verdict est suspendu.
+Toutes sont calculées par `bench/smoke/ab/ya09-session-id-mesures.py`, écrit avec ce plan. Le script vérifie aussi la trace : `yaRequest.codexSessionIdHeader` vaut `true` dans toutes les sessions de B et `false` dans toutes celles de A, sinon le verdict est suspendu.
 
 **Vérification de l'outil** (`--sans-trace`, sur des A/B antérieurs au réglage) :
 - 16/11 (`ab-20261116T124625Z`) : il redonne la règle de cet A/B (miss global +5,3 points [+3,0 ; +7,8]), 21/90 sous 6 000 tokens en A et −1,9 [−4,4 ; +0,4] au-dessus, comme le ticket 14 ;
 - 15/11 (`ab-20261115T153500Z`, prompt v1 dans les deux bras) : miss global +0,6 [−0,4 ; +1,6], comme la vérification du plan du 16/11 ;
 - `--fil` : vérifié sur un A/B factice, sans modèle ni binaire (un cas conforme, un cas en écart). Pas encore sur un vrai binaire : c'est le contrôle 1 ci-dessus.
+- `verdict` : vérifié sur six cas construits (un par ligne de la règle, plus un garde-fou à une seule condition, qui ne déclenche pas).
 
 ## Règle de verdict (proposée, à valider avant le run)
 
-IC 95 % de d par bootstrap sur les unités : 10 000 tirages avec remise, recalcul de d sur chaque tirage, graine 0. C'est la méthode de l'A/B du 16/11 : elle tient compte de ce que les miss d'une même session ne sont pas indépendants.
+Notations, en points de pourcentage, sur les unités retenues :
+- **d** = taux de miss de A (sans en-tête) − taux de miss de B (avec en-tête), appels à prompt précédent < 6 000 tokens. Positif : moins de miss avec l'en-tête.
+- **d_global** = la même différence sur tous les appels hors premier. Négatif : plus de miss avec l'en-tête.
+- **IC** : IC 95 % par bootstrap sur les unités. 10 000 tirages avec remise, recalcul de l'écart sur chaque tirage, graine 0. C'est la méthode de l'A/B du 16/11 : elle tient compte de ce que les miss d'une même session ne sont pas indépendants. « Borne basse » et « borne haute » sont celles de cet IC.
 
-| Ordre | Résultat | Verdict |
+Les cas sont examinés dans l'ordre ; le premier qui s'applique donne le verdict. Les cas 2 à 5 couvrent toutes les valeurs de d et de sa borne basse.
+
+| Ordre | Condition | Verdict |
 |---|---|---|
-| 1 | Garde-fou : miss global d ≤ −3 points **et** borne haute de son IC < 0 | **l'en-tête dégrade le cache** : il reste coupé, quel que soit le résultat principal |
-| 2 | d ≥ 10 points **et** borne basse de l'IC > 0 | **gain net** : proposer `codexSessionIdHeader` activé par défaut (décision de Yusuf, changement de défaut dans un commit à part) |
-| 3 | d ≥ 10 points, IC qui contient 0 | **non concluant** : Yusuf décide (passes en plus, ou rien) |
-| 4 | d < 10 points | **pas de gain net détecté** : le réglage reste coupé. Le rapport donne la borne haute de l'IC, qui borne le gain réel plausible |
+| 1 | **Dégradation** : d_global ≤ −3 points **et** borne haute de l'IC de d_global < 0. **Les deux conditions à la fois** ; une seule ne suffit pas | **l'en-tête dégrade le cache** : le réglage reste coupé, quel que soit le résultat principal |
+| 2 | d ≥ 10 points **et** borne basse > 0 | **gain net** : proposer `codexSessionIdHeader` activé par défaut (décision de Yusuf, changement de défaut dans un commit à part) |
+| 3 | 0 < d < 10 points **et** borne basse > 0 | **non concluant** : effet probable mais sous le seuil ; Yusuf décide |
+| 4 | d ≥ 10 points **et** borne basse ≤ 0 | **non concluant** : Yusuf décide (passes en plus, ou rien) |
+| 5 | d < 10 points **et** borne basse ≤ 0 | **pas de gain net détecté** : le réglage reste coupé. Le rapport donne la borne haute de l'IC, qui borne le gain réel plausible |
 
-**Pourquoi 10 points** : sous 6 000 tokens, le v2 rate 23,3 % des appels (A, 16/11), contre 2,3 % au-dessus. 10 points, c'est réduire ces miss d'environ moitié. Un gain plus petit pèse peu : tous les miss de A sous 6 000 tokens valent environ 5 % de son coût rapporté (estimation du ticket 14).
+Au cas 3, d est forcément positif : une borne basse > 0 implique d > 0. `ya09-session-id-mesures.py` (fonction `verdict`) applique ces cas dans cet ordre.
 
-**Pourquoi un garde-fou à 3 points** : c'est le seuil de l'A/B du 16/11 pour un écart de miss global qui se voit en coût.
+### Taux de base de la métrique principale
 
-**Puissance (estimation par simulation)** : script `power.py` du scratchpad de la session, non versionné, gardé pour la PR si Yusuf le demande. Données : unités du bras A du 16/11 sous 6 000 tokens, 21/90, présentes dans les 20 unités. Effet de grappe mesuré ≈ 0,95 : l'écart type par bootstrap sur les unités, 4,3 points, est proche de l'écart type binomial, 4,5 points. Méthode : chaque bras tire 20 unités avec remise ; B garde chaque miss avec une probabilité 1 − r ; la règle est appliquée avec un bootstrap allégé de 400 tirages. Résultats, sur 600 simulations par cas à 4 passes et 500 à 6 et 8 passes :
+Run `ab-20261116T124625Z`, bras A (prompt v2, binaire `318f3e1`), appels hors premier dont le prompt précédent fait moins de 6 000 tokens : **21 miss sur 90 appels, 23,3 %**. Ces appels se trouvent dans les 20 unités retenues. L'IC 95 % par bootstrap sur les unités va de 15,7 à 32,6 % (10 000 tirages, graine 0). Au-dessus de 6 000 tokens, le même bras rate **4 appels sur 171 (2,3 %)**.
 
-| Réduction réelle des miss sous 6 000 (d réel) | 4 passes | 6 passes | 8 passes |
-|---|---|---|---|
-| 0 % (0 point) : faux « gain net » | 3 % | 1 % | 0 % |
-| 50 % (≈ 11,7 points) : « gain net » | 56 % | 65 % | 67 % |
-| 75 % (≈ 17,5 points) : « gain net » | 94 % | 98 % | 100 % |
-| 90 % (≈ 21 points) : « gain net » | 100 % | | |
+```bash
+python3 -I bench/smoke/ab/ya09-session-id-mesures.py --sans-trace bench/smoke/runs/ab-20261116T124625Z   # 21/90, 4/171
+python3 -I bench/smoke/tools/cache_causes.py --plan bench/smoke/runs/ab-20261116T124625Z/ab.json         # bras A : 16/52 (< 3k) + 5/38 (3k-6k)
+```
+
+L'IC du taux de base (15,7 à 32,6 %) vient d'un bootstrap sur les unités, calculé pour ce plan avec les fonctions de `bench/smoke/tools/power.py` (`base_units`, `rate`, graine 0). Il n'est pas affiché par l'outil.
+
+### Pourquoi 10 points
+
+- **Ordre de grandeur de l'excès** : sous 6 000 tokens, le v2 rate 23,3 % des appels, contre 2,3 % au-dessus. L'excès vaut environ 21 points. **10 points en retirent environ la moitié**, soit 43 % des miss de cette tranche. Un effet de cache d'affinité qui joue sur ces appels devrait atteindre cet ordre ; un effet plus faible ne changerait pas la décision de produit.
+- **Ce que le banc peut voir** : à 4 passes, l'écart type de d vaut environ 5,6 points, donc la demi-largeur de l'IC environ 11 points. C'est une estimation : 4,3 points d'écart type par bootstrap pour le bras A, environ 3,6 points pour un bras B à 12 % (même effet de grappe), combinés comme deux bras indépendants. Un écart de moins de 10 points ne peut pas exclure 0 à ce niveau de bruit : ce seuil est le plus bas que ce banc peut trancher à 4 passes.
+- **Ce qui est en jeu en coût** (estimation du ticket 14) : tous les miss de A sous 6 000 tokens valent environ 5 % de son coût rapporté. 10 points de moins en valent environ 2 % ; moins que cela est sous ce que le banc distingue en coût (environ 10 %, constat du journal du CDC du 14/11).
+
+**Pourquoi un garde-fou à 3 points** : c'est le seuil de l'A/B du 16/11 pour un écart de miss global qui se voit en coût. Les deux conditions sont exigées ensemble pour ne pas couper sur du bruit (d_global ≤ −3 avec un IC qui contient 0) ni sur un écart réel mais minime (IC qui exclut 0 avec d_global proche de 0).
+
+### Puissance (estimation par simulation)
+
+Outil versionné : `bench/smoke/tools/power.py`.
+
+```bash
+python3 -I bench/smoke/tools/power.py --plan bench/smoke/runs/ab-20261116T124625Z/ab.json --arm A
+```
+
+Paramètres par défaut, sortie reproductible : 600 A/B simulés par cas, bootstrap de 400 tirages, seuil 10 points, graine 1 ; durée 16 s.
+- **Données** : les unités du bras A du 16/11 sous 6 000 tokens.
+- **Effet de grappe mesuré** : 0,95. L'écart type par bootstrap sur les unités (4,3 points) est proche de l'écart type binomial (4,5 points).
+- **Méthode** : chaque bras tire 5 unités par passe, avec remise ; B garde chaque miss avec une probabilité 1 − r. La règle principale (cas 2 à 5) est appliquée ; le garde-fou n'est pas simulé.
+
+| Passes | Réduction réelle (d réel) | gain net | non concluant (cas 3 ou 4) | pas de gain net détecté |
+|---|---|---|---|---|
+| 4 | 0 % (0 point) | 3 % | 2 % | 94 % |
+| 4 | 50 % (11,7 points) | 56 % | 10 % | 33 % |
+| 4 | 75 % (17,5 points) | 94 % | 3 % | 3 % |
+| 4 | 90 % (21,0 points) | 100 % | 0 % | 0 % |
+| 6 | 0 % | 2 % | 2 % | 96 % |
+| 6 | 50 % | 64 % | 16 % | 20 % |
+| 6 | 75 % | 98 % | 2 % | 1 % |
+| 8 | 0 % | 0 % | 3 % | 96 % |
+| 8 | 50 % | 68 % | 22 % | 11 % |
+| 8 | 75 % | 99 % | 1 % | 0 % |
 
 Lecture :
 - À 4 passes, un en-tête qui supprime les trois quarts de ces miss sort « gain net » environ 9 fois sur 10.
-- Un en-tête qui en supprime la moitié sort « gain net » environ une fois sur deux. Plus de passes aident peu : le seuil de 10 points est proche de l'effet réel, et c'est le seuil qui limite.
+- Un en-tête qui en supprime la moitié sort « gain net » environ une fois sur deux. Plus de passes aident peu : le seuil de 10 points est proche de l'effet réel, et c'est le seuil qui limite. Les passes en plus déplacent surtout des cas vers « non concluant ».
+- Sans effet réel, la règle conclut à tort au « gain net » environ 3 fois sur 100 à 4 passes.
 - **Proposition : 4 passes**, comme le 16/11.
 - Un « pas de gain net détecté » n'exclut pas un effet réel : sa borne haute dit jusqu'où il peut aller.
 - Limite : on suppose que le bras A d'aujourd'hui ressemble au bras A du 16/11. Le binaire a changé depuis : ticket 13, et prompt v2 réaligné.
@@ -161,7 +203,7 @@ Contrôle à part de l'A/B, sans modification du code, à lancer après l'A/B.
 
 Calculé par `python3 -I bench/smoke/tools/cache_causes.py --plan <ab.json> --tasks node-koa-2029,node-tough-cookie-630,py-langextract-584,py-tldextract-368,py-tldextract-383` (14/11) et `--plan bench/smoke/runs/ab-20261116T124625Z/ab.json` (16/11).
 
-### Faisabilité : oui, par lecture du code. À confirmer par un run en mode capture
+### Faisabilité : oui, vérifiée par la lecture du code et par un run en mode capture (17/11)
 
 - **Binaire** : `~/.cache/yusagent-bin/80e20ea5f353ff3855e30d19c0df7cc7d1cc9632/prime-agent`, toujours présent. Son sha256, `099f54d354c3daab653ec9502ae82658d32224600b616e95c5ffe4e2212ffc8e` (`shasum -a 256`, 17/11), est celui que note `ab-20261114T201248Z/ab.json` (`binaries.A.sha256`). `models.bundled.json` est à côté.
 - **Réglages d'origine** : la baseline a tourné avec `settings/default.json` (`{}`). Ses seuls réglages hors défaut étaient `cacheRetention: short`, posé par le runner (`baseline/gpt-6-luna.json`, `header.settings_non_default`). Avec `{}`, ce binaire prend ses propres défauts, ceux du 14/11 : prompt v1, `reasoningSummary` `"auto"`, fenêtre `bash()` de 1 s, pas de keepalive. Le banc d'aujourd'hui écrit le même `settings.json`.
@@ -170,9 +212,14 @@ Calculé par `python3 -I bench/smoke/tools/cache_causes.py --plan <ab.json> --ta
   - `metrics.py` : la regex `EDIT_FAILURE` reconnaît plus de messages ; elle compte les échecs d'`edit()`, pas le cache.
   - Sandbox, proxies et hôtes autorisés : inchangés.
 - **Tâches** : aucun commit sur les 5 tâches depuis le 14/11 (`git log --since=2026-11-14T20:00 -- bench/smoke/tasks/<tâche>`, vide pour les 5).
-- **Non vérifié** :
-  - l'état hors du dépôt : venv du kernel du binaire dans le cache, login, versions de `uv` et `node`. Le rapport note `uv` et `node` (`header.tools`), à comparer à ceux du 14/11 ;
-  - un lancement réel du binaire par le banc d'aujourd'hui. Le run en mode capture ci-dessous le vérifie, sans modèle. Lancé pendant la préparation de ce plan, il a été refusé par le contrôle des permissions de la session : à lancer par Yusuf, ou à autoriser.
+- **Étape 0 faite, sans modèle** (autorisée par Yusuf le 17/11). Run `bench/smoke/runs/20261117T120533Z-80e20ea-gpt-6-luna` (mode `capture`, serveur de capture en amont, aucun appel au modèle) :
+  - binaire : sha256 `099f54d3…ffc8e`, commit du manifeste `80e20ea5f353`, version `0.10.2-continuous.80e20ea5f353`, comme le 14/11 ;
+  - réglages : `{}`, hors défaut `cacheRetention: short`, comme le 14/11 ;
+  - outils : Python 3.14.7, `node` v24.21.0, `uv` 0.12.17, identiques à ceux des rapports du 14/11 (`header.tools`) ;
+  - sonde : code 0, réseau coupé, 12 lectures interdites toutes refusées ; chauffe aboutie ;
+  - 5 tâches lancées, 4 appels chacune, tous en WebSocket, aucune erreur amont. Statut `failed` attendu : en mode capture, les tâches du banc jouent `smoke-fail` ;
+  - recherche de secrets : aucun fichier touché.
+- **Non vérifié** : le login réel et le venv du kernel en run réel, qui ne servent pas en mode capture. Le run réel s'arrête à la chauffe s'ils manquent.
 - **Différences de conditions** :
   - le 14/11, chaque tâche alternait avec le bras Codex CLI (A/B entrelacé, 3 passes) ;
   - ici, un seul bras : `run.py --runs 4` lance les 4 runs d'une tâche à la suite, puis passe à la tâche suivante ;
@@ -208,8 +255,16 @@ Taux du jour = relectures partielles / appels hors premier, sur les 20 sessions,
 
 Bornes :
 - **8,4 %** est le milieu entre 2,4 et 14,4 %.
-- **5,4 %** vaut 2,4 % plus 3 points. Avec 20 sessions, l'écart type par bootstrap sur les sessions vaut 0,8 point autour de 2,4 % et 3,2 points autour de 14,4 % (estimation par rééchantillonnage des sessions du 14/11 et du 16/11, script `drift_se.py` du scratchpad).
+- **5,4 %** vaut 2,4 % plus 3 points. Avec 20 sessions, l'écart type par bootstrap sur les sessions vaut 0,8 point autour de 2,4 % et 3,2 points autour de 14,4 % (estimation par rééchantillonnage des sessions du 14/11 et du 16/11, outil versionné `bench/smoke/tools/drift_se.py`, commandes ci-dessous).
 - Si le vrai taux est celui du 16/11, le taux du jour tombe sous 8,4 % environ 3 fois sur 100, et sous 5,4 % environ 1 fois sur 1 000.
 - Si le vrai taux est celui du 14/11, il ne dépasse 5,4 % dans aucun des 20 000 tirages.
 
 Le 15/11 (5,7 et 7,9 %, `7086711`) tombe dans la zone grise. Une dérive progressive donnerait aussi un taux intermédiaire.
+
+```bash
+T=node-koa-2029,node-tough-cookie-630,py-langextract-584,py-tldextract-368,py-tldextract-383
+python3 -I bench/smoke/tools/drift_se.py --plan bench/smoke/runs/ab-20261114T201248Z/ab.json --arm A --tasks $T
+# 7/297 (2,4 %) ; écart type 0,8 point ; sous 5,4 % : 100,0 % des tirages
+python3 -I bench/smoke/tools/drift_se.py --plan bench/smoke/runs/ab-20261116T124625Z/ab.json --arm B --tasks $T
+# 54/376 (14,4 %) ; écart type 3,2 points ; sous 8,4 % : 2,8 % ; sous 5,4 % : 0,1 %
+```

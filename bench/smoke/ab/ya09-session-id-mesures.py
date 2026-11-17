@@ -23,7 +23,7 @@ Sorties :
    (affichées sans décider), et ces deux taux sur les appels à prompt précédent ≥ 6 000.
 3. Coût rapporté par bras (Σ sur les unités retenues) et B / A − 1, affiché sans décider.
 4. Trace : `yaRequest.codexSessionIdHeader` de l'en-tête de chaque session (première ligne de
-   `sessions/*.jsonl`) : `true` dans toutes les sessions de B, absent dans toutes celles de A.
+   `sessions/*.jsonl`) : `true` dans toutes les sessions de B, `false` dans toutes celles de A.
    Sinon le verdict est suspendu (code 1). `--sans-trace` saute ce contrôle, pour vérifier
    l'outil sur un A/B antérieur au réglage.
 
@@ -144,15 +144,19 @@ def wire(plan: Path) -> int:
 
 
 def verdict(d, ci, guard_d, guard_ci) -> str:
+    """Règle du plan, dans l'ordre : garde-fou, puis les quatre cas de la métrique principale."""
     if guard_d is not None and guard_ci is not None and guard_d <= -GUARD and guard_ci[1] < 0:
-        return ("garde-fou : le miss global augmente nettement avec l'en-tête (d ≤ −3 points, "
-                "borne haute < 0) : pas d'activation, quel que soit le résultat principal")
+        return ("dégradation (garde-fou) : miss global d ≤ −3 points et borne haute de son IC < 0, "
+                "les deux à la fois : le réglage reste coupé, quel que soit le résultat principal")
     if d is None or ci is None:
         return "pas de verdict : un bras n'a aucun appel sous 6 000 tokens"
     if d >= THRESHOLD and ci[0] > 0:
         return "gain net : proposer l'activation par défaut (décision de Yusuf)"
+    if ci[0] > 0:
+        return ("non concluant : effet probable (borne basse > 0) mais sous le seuil de "
+                "10 points ; Yusuf décide")
     if d >= THRESHOLD:
-        return "non concluant : Yusuf décide (passes en plus, ou rien)"
+        return "non concluant : d ≥ 10 points mais l'IC contient 0 ; Yusuf décide"
     return (f"pas de gain net détecté : le réglage reste coupé ; gain réel plausible jusqu'à "
             f"{100 * ci[1]:+.1f} points (borne haute)")
 
@@ -180,7 +184,7 @@ def main(argv: list[str]) -> int:
     trace_ok = True
     if check_trace:
         print("\n## Trace (`yaRequest.codexSessionIdHeader`)\n")
-        for side, expected in (("A", None), ("B", True)):
+        for side, expected in (("A", False), ("B", True)):
             flags = [f for u in kept for f in header_flag(
                 ab_stats.task_dir(u["arms"][side]["run"], u["arms"][side]["result"]))]
             wrong = [f for f in flags if f != expected]
