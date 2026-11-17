@@ -1087,8 +1087,9 @@ async fn codex_bash_wait_changes_only_the_await_line() {
         1,
         "{upstream_prompt}"
     );
+    // The prompts are the system messages as JSON text: a newline is the escape `\n`.
     assert_eq!(
-        upstream_prompt.replacen(&format!("\n{upstream_line}"), "", 1),
+        upstream_prompt.replacen(&format!("\\n{upstream_line}"), "", 1),
         default_prompt,
         "only the await line differs"
     );
