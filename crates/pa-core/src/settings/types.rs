@@ -341,6 +341,9 @@ pub struct Settings {
     /// (the prompt of `main` before the lot), frozen per session
     /// (`crate::session_engine::ya_request`).
     pub prompt_version: Option<crate::session_engine::ya_request::PromptVersion>,
+    /// yusAgent (YA-09, ticket 14): `true` adds the `session-id` request header on the `ChatGPT`
+    /// provider (unset: off), frozen per session (`crate::session_engine::ya_session_id_header`).
+    pub codex_session_id_header: Option<bool>,
     pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,

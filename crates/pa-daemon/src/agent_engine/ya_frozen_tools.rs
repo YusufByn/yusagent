@@ -255,7 +255,7 @@ mod tests {
                 (
                     store.path,
                     REQUEST_KEY.to_string(),
-                    json!({"reasoningSummary": "off", "bashWaitSeconds": 30})
+                    json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
                 ),
             ]
         );
@@ -297,20 +297,24 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let off = json!({"reasoningSummary": "off"});
-        let auto = json!({"reasoningSummary": "auto"});
+        let auto = json!({"reasoningSummary": "auto", "codexSessionIdHeader": false});
 
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(dir.path(), None, "{}");
         assert_eq!(
             built_request(&engine),
-            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
+            Some(
+                json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+            )
         );
 
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(dir.path(), None, r#"{"reasoningSummary": "auto"}"#);
         assert_eq!(
             built_request(&engine),
-            Some(json!({"reasoningSummary": "auto", "bashWaitSeconds": 30}))
+            Some(
+                json!({"reasoningSummary": "auto", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+            )
         );
 
         let dir = tempfile::TempDir::new().unwrap();

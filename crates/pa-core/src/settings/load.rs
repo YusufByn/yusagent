@@ -76,6 +76,8 @@ const KNOWN_FIELDS: &[&str] = &[
     "bashWaitSeconds",
     "bashNoticeBatchSeconds",
     "promptVersion",
+    // yusAgent (YA-09, ticket 14): `session-id` header on the ChatGPT provider.
+    "codexSessionIdHeader",
 ];
 
 /// Extract each known field independently; ignore fields whose JSON type does not match the Rust
