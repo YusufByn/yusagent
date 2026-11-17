@@ -247,3 +247,41 @@ python3 -I bench/smoke/tools/cache_causes.py --plan bench/smoke/runs/ab-20261115
 - La 2ᵉ donne les écarts par sous-population, le coût du cache imparfait, les pertes par classe, les croisements avec le silence, le débit et le rang, et la perte des miss par taille.
 - La 3ᵉ donne les corps des chauffes v2.
 - Les 4ᵉ et 5ᵉ donnent le témoin Codex CLI et la dérive en v1.
+
+## Option A : en-tête `session-id` (17/11/2026)
+
+**Décision de Yusuf (17/11, 12h05)** : option A seule, derrière un réglage coupé par défaut tant que l'A/B n'a pas tranché. Branche `ya-14-session-id` depuis `main` à `13d931e87`.
+
+### Ce que fait Codex CLI
+
+Lu sans rien exécuter dans `/tmp/codex-0.169.0-ya14` (tag `rust-v0.169.0`, `d32063f96c2dff1dc96af839b3952abb6acfeda4`) et dans un clone superficiel de `main`, `/tmp/codex-main-ya14-sid` (`59ac39addbbcd3499319c805a916846ca8ac5fef`, 17/11/2026). Le code est identique dans les deux ; seules les lignes changent.
+- **Nom** : `insert_header(&mut headers, "session-id", &id);` (`codex-rs/codex-api/src/requests/headers.rs:8` au tag, `:28` sur `main`, fonction `build_session_headers`). La même fonction pose `thread-id`.
+- **Commentaire** : « ChatGPT derives cache affinity from the Responses session-id header. Keep the actual session identity in turn metadata, hooks, and history/notes requests. » (`codex-rs/core/src/client.rs:734-735` au tag, `:760-761` sur `main`).
+- **Valeur** : `responses_session_id`, juste en dessous. Pour une session racine, c'est `session_derived_cache_key` (`client.rs:720-732`) : l'id de session, comme `prompt_cache_key`.
+- **Transports** : poignée de main WebSocket (`client.rs:1571-1574`) et requête HTTP (`codex-api/src/endpoint/responses.rs:90`).
+- Codex n'envoie pas `session_id` (tiret bas) en en-tête : aucune occurrence hors des tests sous `codex-api` ni dans `client.rs`.
+
+### Ce qui change
+
+- Réglage `codexSessionIdHeader` (booléen, absent = coupé), module du fork `crates/pa-core/src/session_engine/ya_session_id_header.rs`.
+- À `true`, `session-id` = id de session s'ajoute aux en-têtes de requête du `stream_fn` (`add_session_id_header`, `:47-58`), seulement si le provider est `openai-codex` et l'API `openai-codex-responses` (`is_chatgpt`, `:40-42`). Le provider fusionne ces en-têtes sur la poignée de main WebSocket et sur la requête SSE (`crates/pa-ai/src/providers/openai_codex_responses/mod.rs:209-222`, `request.rs:76-78`, `:104-106`). `session_id` et `x-client-request-id` d'upstream restent.
+- **Couche providers non touchée** : aucun fichier sous `crates/pa-ai/` dans le diff.
+- Figé dans `yaRequest` (`crates/pa-core/src/session_engine/ya_request.rs:334-337`), écrit seulement à `true`.
+
+### Corps et préfixe
+
+**L'en-tête ne change ni le corps ni le préfixe des requêtes.** Le test `codex_websocket_session_id_header_follows_the_setting` (`crates/pa-core/tests/prefix_stability.rs`) fait tourner trois sessions du même projet sur le WebSocket Codex : réglage absent, `false`, puis `true`. Leurs trames `response.create` sont identiques octet pour octet, hors `prompt_cache_key` (l'id de session, propre à chaque session). La deuxième requête continue la première (`previous_response_id`) dans les trois cas. Le prompt système et les tools ne dépendent pas du réglage.
+
+### Preuve sur le fil
+
+Les serveurs locaux de `prefix_stability.rs` gardent désormais les en-têtes reçus. Les tests passent par une vraie session (`create_session`, adaptateur provider réel, kernel réel) :
+- `codex_websocket_session_id_header_follows_the_setting` : la requête d'upgrade WebSocket porte `session-id` égal à `session_id` et à `prompt_cache_key` quand le réglage est activé. Il est absent quand le réglage est absent ou à `false`.
+- `session_id_header_is_never_sent_to_other_providers` : réglage activé, aucune requête ne porte `session-id` pour Anthropic Messages ni pour `OpenAI` Responses (modèle hors famille Codex et `gpt-6.1-terra`). Les préfixes restent stables.
+
+Tests unitaires : `ya_session_id_header.rs` (providers, en-têtes existants gardés, `stream_fn` rendu tel quel quand coupé) et `ya_request.rs` (gel dans `yaRequest`, chargement du réglage).
+
+Le SSE du provider Codex n'a pas de test sur le fil : le chemin des en-têtes est le même (`additional_headers`, test upstream `additional_headers_override_model_headers`, `openai_codex_responses/mod.rs:872`). Sur le vrai binaire, le contrôle `--fil` du plan, en mode capture, vérifie chaque requête des tâches.
+
+### Plan d'A/B et contrôle de la dérive
+
+`bench/smoke/ab/ya09-session-id-plan.md`, à valider par Yusuf avant le run : bras réglage coupé contre activé, même binaire, 4 passes entrelacées. Métrique principale : taux de miss sous 6 000 tokens de prompt précédent. Le plan contient aussi le contrôle de la dérive des relectures partielles en v1 (binaire `80e20ea` relancé tel quel), faisable d'après la lecture du code.
