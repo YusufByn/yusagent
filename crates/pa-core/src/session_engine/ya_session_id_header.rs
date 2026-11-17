@@ -19,7 +19,7 @@
 //! body, the system prompt and the tools are unchanged.
 //!
 //! Frozen per session in `yaRequest` (`ya_request::FrozenRequest::codex_session_id_header`),
-//! written only when on, so a run's session header says which arm it ran. Listed in
+//! always written (`true` or `false`), so a run's session header says which arm it ran. Listed in
 //! `docs/fork-changes.md`.
 
 use std::collections::BTreeMap;

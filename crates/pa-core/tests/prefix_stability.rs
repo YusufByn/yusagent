@@ -1096,8 +1096,12 @@ async fn codex_bash_wait_changes_only_the_await_line() {
     assert_eq!(
         headers,
         [
-            Some(json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})),
-            Some(json!({"reasoningSummary": "off", "promptVersion": 2})),
+            Some(
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
+            ),
+            Some(
+                json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false})
+            ),
         ]
     );
     let bodies = server.bodies();
@@ -1159,7 +1163,8 @@ async fn resumed_session_from_before_bash_wait_keeps_one_second() {
     let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
-    let before = json!({"reasoningSummary": "off", "promptVersion": 2});
+    let before =
+        json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false});
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
 
@@ -1313,7 +1318,8 @@ async fn resumed_session_from_before_prompt_v2_keeps_the_v1_prompt() {
     let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
-    let before = json!({"reasoningSummary": "off", "bashWaitSeconds": 30});
+    let before =
+        json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false});
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
 
@@ -1374,7 +1380,9 @@ async fn resumed_legacy_session_keeps_summary_auto() {
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(
         header.rest.get("yaRequest"),
-        Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})),
+        Some(
+            &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
+        ),
         "{header:?}"
     );
 
@@ -1407,7 +1415,7 @@ async fn resumed_legacy_session_keeps_summary_auto() {
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(
         header.rest.get("yaRequest"),
-        Some(&json!({"reasoningSummary": "auto"})),
+        Some(&json!({"reasoningSummary": "auto", "codexSessionIdHeader": false})),
         "{header:?}"
     );
 }
@@ -1985,7 +1993,7 @@ fn frames_without_cache_key(requests: &[Value]) -> Vec<String> {
 /// - the request frames are identical in the three arms, byte for byte, but the prompt cache key:
 ///   the header changes neither the body nor the prefix, and the second request still continues
 ///   the first (`previous_response_id`);
-/// - the session header freezes `"codexSessionIdHeader": true` when on, and nothing otherwise.
+/// - the session header freezes `"codexSessionIdHeader"`: `true` when on, `false` otherwise.
 #[tokio::test]
 async fn codex_websocket_session_id_header_follows_the_setting() {
     let Some(fixture) = Fixture::new().await else {
@@ -2028,7 +2036,7 @@ async fn codex_websocket_session_id_header_follows_the_setting() {
             ya_request
                 .as_ref()
                 .and_then(|request| request.get("codexSessionIdHeader")),
-            on.then_some(&json!(true)),
+            Some(&json!(on)),
             "arm {index}: {ya_request:?}"
         );
     }

@@ -40,8 +40,9 @@
 //!
 //! `codexSessionIdHeader` in `settings.json` (ticket 14, option A): `true` adds the `session-id`
 //! request header on the `ChatGPT` provider (`super::ya_session_id_header`); unset or `false`,
-//! the default until its A/B decides, leaves the requests as upstream. The header stores it only
-//! when on: a `yaRequest` without it is off, what every session created before it ran with.
+//! the default until its A/B decides, leaves the requests as upstream. The header always stores
+//! it (`true` or `false`); a `yaRequest` without it is off, what every session created before it
+//! ran with.
 //!
 //! Frozen for the session at creation in the session header, field [`REQUEST_HEADER_KEY`]
 //! (kept by forks, `session::manager::ya_header::INHERITED_HEADER_KEYS`), and read back on
@@ -331,15 +332,11 @@ pub struct FrozenRequest {
         skip_serializing_if = "is_legacy_prompt_version"
     )]
     pub prompt_version: PromptVersion,
-    /// The `session-id` header on the `ChatGPT` provider (`codexSessionIdHeader`); absent from a
-    /// header: off.
-    #[serde(default, skip_serializing_if = "is_off")]
+    /// The `session-id` header on the `ChatGPT` provider (`codexSessionIdHeader`): always
+    /// written, `true` or `false`, so a session header says which it ran with; absent from a
+    /// header written before the field: off.
+    #[serde(default)]
     pub codex_session_id_header: bool,
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde's `skip_serializing_if` passes a reference.
-fn is_off(value: &bool) -> bool {
-    !*value
 }
 
 impl FrozenRequest {
@@ -787,15 +784,21 @@ mod tests {
     #[test]
     fn the_header_value_round_trips() {
         for (frozen, value) in [
-            (OFF, json!({"reasoningSummary": "off"})),
-            (FrozenRequest::LEGACY, json!({"reasoningSummary": "auto"})),
+            (
+                OFF,
+                json!({"reasoningSummary": "off", "codexSessionIdHeader": false}),
+            ),
+            (
+                FrozenRequest::LEGACY,
+                json!({"reasoningSummary": "auto", "codexSessionIdHeader": false}),
+            ),
             (
                 default_request(),
-                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2}),
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false}),
             ),
             (
                 v1_request(),
-                json!({"reasoningSummary": "off", "bashWaitSeconds": 30}),
+                json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false}),
             ),
         ] {
             assert_eq!(serde_json::to_value(frozen).unwrap(), value);
@@ -817,7 +820,7 @@ mod tests {
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
             Some(
-                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
             )
         );
         // A resume keeps it whatever the settings say.
@@ -841,7 +844,7 @@ mod tests {
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
             Some(
-                &json!({"reasoningSummary": "auto", "bashWaitSeconds": "full", "promptVersion": 2})
+                &json!({"reasoningSummary": "auto", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
             )
         );
 
@@ -856,7 +859,7 @@ mod tests {
         assert_eq!(frozen, FrozenRequest::LEGACY);
         assert_eq!(
             legacy.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "auto"}))
+            Some(&json!({"reasoningSummary": "auto", "codexSessionIdHeader": false}))
         );
     }
 
@@ -882,7 +885,7 @@ mod tests {
                 assert_eq!(frozen, FrozenRequest::LEGACY);
                 assert_eq!(
                     manager.ya_header_field(REQUEST_HEADER_KEY),
-                    Some(&json!({"reasoningSummary": "auto"}))
+                    Some(&json!({"reasoningSummary": "auto", "codexSessionIdHeader": false}))
                 );
             }
         }
@@ -900,7 +903,7 @@ mod tests {
                 Some(PromptVersion::V1)
             ))
             .unwrap(),
-            json!({"reasoningSummary": "off"})
+            json!({"reasoningSummary": "off", "codexSessionIdHeader": false})
         );
         assert_eq!(
             FrozenRequest::from_header_value(Some(&json!({"reasoningSummary": "off"}))),
@@ -1011,7 +1014,9 @@ mod tests {
         assert_eq!(frozen.prompt_version, PromptVersion::V1);
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
+            Some(
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+            )
         );
     }
 
@@ -1064,7 +1069,9 @@ mod tests {
         assert_eq!(frozen, v1_request());
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "off", "bashWaitSeconds": 30}))
+            Some(
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+            )
         );
     }
 
@@ -1193,11 +1200,12 @@ mod tests {
         assert_eq!(PromptVersion::default(), PromptVersion::V2);
     }
 
-    /// `codexSessionIdHeader` (ticket 14, option A): off by default and not written; on, written
-    /// as `true` in a new session's `yaRequest` and kept at resume; a `yaRequest` without it
-    /// (every session from before it) is off, whatever the settings say, with a warning.
+    /// `codexSessionIdHeader` (ticket 14, option A): off by default, written as `false` in a new
+    /// session's `yaRequest`; on, written as `true`; kept at resume either way. A `yaRequest`
+    /// without it (every session from before it) is off, whatever the settings say, with a
+    /// warning, and its header is left as is.
     #[test]
-    fn the_session_id_header_is_frozen_only_when_on() {
+    fn the_session_id_header_is_always_frozen() {
         let dir = tempfile::tempdir().unwrap();
         let current = |setting: Option<bool>| {
             FrozenRequest::of(None, None, None).with_codex_session_id_header(setting)
@@ -1225,13 +1233,30 @@ mod tests {
         assert_eq!(
             off.ya_header_field(REQUEST_HEADER_KEY),
             Some(
-                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2})
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
             )
         );
         assert_eq!(
             freeze_current_request(&mut off, current(Some(true))),
             default_request()
         );
+        assert_eq!(
+            off.ya_header_field(REQUEST_HEADER_KEY)
+                .and_then(|request| request.get("codexSessionIdHeader")),
+            Some(&json!(false)),
+            "kept at resume"
+        );
+
+        // A session from before the field: off, and its header is left as is.
+        let before =
+            json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2});
+        let mut old = SessionManager::in_memory(dir.path());
+        old.ya_set_header_field(REQUEST_HEADER_KEY, before.clone());
+        assert_eq!(
+            freeze_current_request(&mut old, current(Some(true))),
+            default_request()
+        );
+        assert_eq!(old.ya_header_field(REQUEST_HEADER_KEY), Some(&before));
 
         let resumed = session_request_from(Some(default_request()), false, current(Some(true)));
         assert_eq!(resumed.frozen, default_request());
