@@ -103,6 +103,7 @@ impl AgentTool for ToolDefinitionBridge {
                         content: convert_content_blocks(update.content),
                         details: update.details.unwrap_or(serde_json::Value::Null),
                         terminate: None,
+                        is_error: false,
                     });
                 }));
             let f = definition.execute.clone();
@@ -110,11 +111,11 @@ impl AgentTool for ToolDefinitionBridge {
                 f(&tool_call_id, params, Some(abort), tool_on_update).await?;
             let details = result.details.clone().unwrap_or(serde_json::Value::Null);
             let is_error = result.is_error;
-            let _ = is_error;
             Ok(AgentToolResult {
                 content: convert_content(result),
                 details,
                 terminate: None,
+                is_error,
             })
         })
     }
