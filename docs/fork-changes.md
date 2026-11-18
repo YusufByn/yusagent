@@ -816,6 +816,25 @@ Option A du ticket 14 (décision de Yusuf du 17/11/2026, 12h05).
 - **Préfixe et corps inchangés** : prompt système, tools et corps des requêtes identiques avec ou sans le réglage. Vérifié par `codex_websocket_session_id_header_follows_the_setting` (`crates/pa-core/tests/prefix_stability.rs`) : trames identiques octet pour octet hors `prompt_cache_key`, suite de conversation conservée. Le seul changement est un en-tête HTTP de plus.
 - **Non repris** : `thread-id`, que Codex envoie aussi (hors de l'option A).
 
+## Drapeau `isError` et messages des helpers (YA-09, ticket 15)
+
+Détail, inventaire et effet sur les requêtes : `docs/tickets/15-ya09-erreurs-visibles.md`.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-agent/src/types.rs` | modif. (fichier upstream, 6 lignes) | `AgentToolResult.is_error` (`#[serde(skip)]`), `false` dans `text()`, `true` dans `error()`. **Candidat à une PR upstream** (commit séparé). Forme reprise d'Unharnessed (`43f131ac6`). | YA-09 |
+| `crates/pa-agent/src/agent_loop/tool_call.rs` | modif. (fichier upstream, 1 ligne) | Un outil qui rend un résultat en échec donne `isError: true` (au lieu de `false` en dur). **Candidat à une PR upstream**. | YA-09 |
+| `crates/pa-core/src/session_engine/tool_bridge.rs` | modif. (fichier upstream, 3 lignes) | Le pont transmet `ToolExecutionResult.is_error` au lieu de le jeter (`let _ = is_error;`). **Candidat à une PR upstream**. | YA-09 |
+| `crates/pa-core/src/session_engine/telemetry/tests.rs` | modif. (test upstream, 1 ligne) | Littéral `AgentToolResult` : champ `is_error` ajouté, aucune assertion changée. | YA-09 |
+| `prime-agent-runtime/src/rlm/ya_hints.py` | ajout | Messages des mauvais usages de `BashHandle`/`BashResult` : `h.exit_code` avant `await`, attribut du handle lu sur un résultat, `h.output` utilisé sans appel. Usages valides et autres `AttributeError` inchangés. | YA-09 |
+| `prime-agent-runtime/src/rlm/bash.py` | modif. (fichier upstream, 2 lignes + commentaire) | Import de `ya_hints` et `ya_hints.install(BashHandle, BashResult)` en fin de module. | YA-09 |
+| `prime-agent-runtime/src/rlm/read.py` | modif. (fichier du fork) | `read()` rend un `ReadText` (`str` qui refuse `await` avec un message, sérialisé en `str` simple). | YA-09 |
+| `skills/edit/src/edit/__init__.py` | modif. (fichier upstream déjà modifié au ticket 11) | `run` vérifie ses arguments et nomme la forme d'appel (`edit(path, old_str, new_str): ...`) ; corps renommé `_edit`, signature publique inchangée (`functools.wraps`). | YA-09 |
+| `prime-agent-runtime/test/test_ya_hints.py` | ajout | Tests du runtime des messages de B. | YA-09 |
+| `crates/pa-core/tests/ya_tool_error_wire.rs` | ajout | Session réelle, vrai kernel, serveur local : `is_error` des `tool_result` Anthropic, `function_call_output` Responses sans champ d'erreur, messages de B dans les sorties, prompt/tools/paramètres stables. Machinerie copiée de `prefix_stability.rs` (non modifié). | YA-09 |
+| `bench/smoke/tools/helper_misuse.py`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Inventaire reproductible des mauvais usages des helpers par config de session ; note sur `isError` du README mise à jour. | YA-09 |
+| `.changes/ya-09-errors-visible.md` | ajout | Fragment de changelog. | YA-09 |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :
@@ -849,5 +868,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 |---|---|---|
 | `prime-agent-runtime/src/rlm/ya_timeout.py`, `prime-agent-runtime/src/rlm/bash.py` (paramètre `timeout`, `timeoutSeconds`) | `569284b36`, `unharnessed-runtime/src/rlm/bash.py` (`_DEFAULT_TIMEOUT`, `_arm_timeout`, `_time_out`, validation de `timeout`) ; réécrit dans un module séparé | YA-09 |
 | `crates/pa-core/src/session_engine/ya_bash_timeout.rs` | `569284b36`, `crates/uh-core/src/session_engine/messages.rs` (`mark_async_bash_timeout`) et `wakes.rs` (contrôle de `timeoutSeconds`) ; texte de l'avis repris, code réécrit | YA-09 |
+| `crates/pa-agent/src/types.rs`, `crates/pa-agent/src/agent_loop/tool_call.rs`, `crates/pa-core/src/session_engine/tool_bridge.rs` (drapeau `is_error`) | `43f131ac6` (lu à `53bdd8784`), `crates/uh-agent/src/types.rs`, `crates/uh-agent/src/agent_loop/tool_call.rs`, `crates/uh-core/src/session_engine/tool_bridge.rs` ; forme reprise telle quelle | YA-09 |
 | `crates/pa-core/src/prompts/ya_prompt_v2/core.md` | `fe2cf2815`, `crates/uh-core/src/prompts/layers/core.md` (structure, phrases de l'intro, de `BashHandle`/`BashResult` et des règles) ; adapté à notre API et complété (ticket 11, §3) | YA-09 |
 | `crates/pa-core/src/session_engine/ya_bash_notice_batch.rs` | `7dc73199e`, `crates/uh-core/src/session_engine/wakes.rs` (`NOTICE_BATCH_MS`, avis groupés à la fin de la dernière commande) ; règle reprise, code réécrit (écart : avis pendant une exécution gardés) | YA-09 |
