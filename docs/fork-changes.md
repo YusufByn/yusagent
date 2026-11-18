@@ -134,6 +134,7 @@ Toute modification d'un fichier upstream, et tout ajout dans une zone gérée pa
 | `crates/pa-core/src/kernel/bootstrap/runtime_code.rs` | modif. | Le bootstrap relie `read` à côté de `bash` ; le repli sans runtime accepte `env=` et définit `read`. | YA-03 |
 | `crates/pa-core/src/kernel/bootstrap/venv/probe.rs` | modif. (1 ligne + commentaire) | `RUNTIME_READY_CHECK` : la signature attendue de `rlm.bash` devient `['command', 'persistent', 'env']`, et `rlm.read` doit être appelable. Sans ce changement, le runtime de la branche est jugé « pas prêt » et le kernel ne démarre pas (run CI 43479147466 : 13 binaires de test en échec). | YA-03 |
 | `prime-agent-runtime/test/test_ya_read_env.py` | ajout | Tests de `read()` et de `bash(env=)`. | YA-03 |
+| `prime-agent-runtime/test/test_ya_bash_cwd.py` | ajout | Critère de YA-03 révisé le 18/11/2026 (ticket 16, option A0) : un `os.chdir()` du kernel vaut pour le `bash()` suivant ; un `cd` ou un `export` dans une commande ne lui survit pas. `os.environ` est couvert par `test_ya_read_env.py`. Aucun code du runtime modifié. | YA-03, YA-09 |
 | `crates/pa-core/src/session_engine/ya_tool_family.rs` | ajout | Famille de modèle (provider, API et modèle ; tableau des 12 modèles de `codex-rs/models-manager/models.json` au SHA `69231e1`), réglages `editTool` et `shellTool` figés dans l'en-tête du fichier de session (champ `yaTools`, relu à la reprise, avertissement si les réglages courants diffèrent), refus d'un natif explicite hors Codex et d'un changement de famille en cours de session. Voir « Tools natifs (YA-03, PR 2) ». | YA-03 |
 | `crates/pa-core/src/session/manager/ya_header.rs` | ajout | `SessionManager::ya_header_field`, `ya_set_header_field` (champ de l'en-tête, réécrit sur disque si le fichier existe déjà, sans effet sur une session fenêtrée), `ya_inherit_header_fields` et `inherit_header_fields` (copie des champs de `INHERITED_HEADER_KEYS`, aujourd'hui `yaTools`, depuis l'en-tête d'une autre session). Tests unitaires (reprise, fork, session matérialisée). | YA-03 |
 | `crates/pa-core/src/session/manager.rs` | modif. (2 lignes + commentaire) | Déclare `ya_header` (`pub`). | YA-03 |
@@ -498,6 +499,19 @@ Si ce test retombe : relancer le shard une fois, et noter le run ici.
 | 43756666927 | `7f3f8eafd` (`ya-09-bash`, PR #41) | 2 (relance du job seul, sans push, autorisée par Yusuf) | réussi (1,6 s) |
 
 Symptôme : `Timeout waiting for the provider selector panel (needle "Search providers")` à `login_panel_pty_e2e.rs:633`, après 30 s : le panneau des providers n'apparaît pas dans le PTY. La PR #41 ne touche dans `pa-cli` que `prompt_command.rs` (commande `prime-agent prompt`), hors du TUI de login. Hypothèse : rendu du PTY trop lent sur un runner chargé ; non vérifiée.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
+## Instabilité probable : `herdr::tests::the_seq_never_restarts_below_a_used_value` (YA-09)
+
+`crates/pa-daemon/src/herdr.rs`, test unitaire `the_seq_never_restarts_below_a_used_value` (`:1094`), shard 3/8 de `ci.yml` (unité `pa-daemon#lib:pa_daemon`). Test identique à `upstream/main` : `git diff upstream/main -- crates/pa-daemon/src/herdr.rs` (`upstream/main` à `b14426151` le 18/11/2026) ne montre que `temp_socket` (`:1189-1190`), hors de ce test.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 44288407647 | `920593a8b` (`ya-15-erreurs-visibles`, PR #52) | 1 (job 134747100221) | échec du shard 3/8 (1191 réussis, 1 échec) |
+| 44288407647 | `920593a8b` (`ya-15-erreurs-visibles`, PR #52) | 2 (job 134755788965, relance du job seul, sans push, autorisée par Yusuf le 18/11/2026) | réussi, aucun changement de code ; relance notée dans un commentaire de la PR #52 |
+
+Symptôme : `panicked at crates/pa-daemon/src/herdr.rs:1101:9: seeded at now_ms*1000`. Le commit `920593a8b` ne change qu'un fichier de `docs/` ; le même code avait passé ce shard sur `4fd1130c6` et `3e7294faf`. Hypothèse : course de temps sur la milliseconde. `next_report_seq()` prend son plancher `now_ms_x1000()` au moment de l'appel (`herdr.rs:180-194`) ; le test relit `now_ms_x1000()` après les trois appels et exige `first >= now_ms_x1000() - 1` (`:1101`). Si l'horloge passe à la milliseconde suivante entre les deux lectures et qu'aucun autre test du processus n'a avancé le compteur global, l'écart vaut 1 000 et l'assertion échoue. Non reproduit.
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
