@@ -480,6 +480,8 @@ Si ce test retombe : relancer le shard une fois, et noter le run ici.
 | 43499374052 | `bd9cccd18` (`ya-03-outils`) | 1 | échec du shard 6/8 |
 | 43501970149 | `25c56570c` (`ya-03-outils`) | 1 | réussi, aucun changement du daemon ni du test |
 | 43504367477 | `58f2542e4` (`ya-03-outils`) | 1 | réussi |
+| 44080414273 | `ac8315ba7` (`ya-14-session-id`, PR #50) | 1 (job 134029453827) | échec du shard 6/8, même symptôme (`rlm_children_delete_e2e.rs:195`) |
+| 44080414273 | `ac8315ba7` (`ya-14-session-id`, PR #50) | 2 (job 134044803529, relance du job seul, sans push, autorisée par Yusuf le 17/11) | réussi, aucun changement de code ; relance notée dans un commentaire de la PR #50 |
 
 Symptôme : `kernel cell receipt never appeared at /tmp/.../receipts/delete.json` à `rlm_children_delete_e2e.rs:195` : `await_receipt` (`:186-199`) attend une minute le reçu écrit par une cellule du kernel de l'enfant. Hypothèse : démarrage du kernel de l'enfant trop lent sur un runner chargé (le même shard échouait aussi sur `prefix_stability`). Les commits de la PR 2 de YA-03 ne touchent ni le daemon, ni les sous-agents, ni ce test.
 
