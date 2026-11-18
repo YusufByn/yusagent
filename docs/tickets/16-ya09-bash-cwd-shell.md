@@ -6,6 +6,17 @@ Le CDC a regroupé ces points avec YA-09 le 13/11/2026 : « `timeout=`, `cwd=` d
 
 Les sections 1 à 4 sont des constats. La section 5 contient les propositions.
 
+## Décision de Yusuf (18/11/2026) : option A0, ticket clos
+
+**Option A0 retenue** : statu quo, comme upstream et Unharnessed. Code du runtime et prompt inchangés, préfixe inchangé.
+
+Dans la PR #53 :
+- **CDC, YA-03** (`docs/yusAgent-cdc.md:256-258`) : signature `await bash(cmd, timeout=..., env=..., persistent=...)`, sans `cwd=`. Les puces « shell principal persistant » et « sous-process éphémère » sont remplacées : chaque `bash()` lance un nouveau processus dans le cwd et l'env du kernel ; un `cd` ou un `export` dans une commande ne survit pas à l'appel ; pour la suite, `os.chdir()` et `os.environ` dans le kernel. Le critère devient « un `os.chdir()` fait dans le kernel est visible dans le `bash()` suivant » (`:272`).
+- **Journal du CDC**, ligne du 18/11/2026 (`:83`) : shell principal persistant abandonné, aligné sur upstream et Unharnessed (`53bdd8784`). Raisons : conflit avec `kill()`, `timeout` et `[bash-done]` (section 5, option B, point 3), et aucun usage observé sur 2 829 cellules (section 1). `cwd=` n'est pas ajouté ; `env=` et `persistent=` sont gardés.
+- **Test du critère** : aucun test ne couvrait `os.chdir()` vers `bash()` (section 1). Ajout de `prime-agent-runtime/test/test_ya_bash_cwd.py`, un fichier du fork : `os.chdir()` vaut pour le `bash()` suivant ; un `cd` et un `export` dans une commande ne lui survivent pas. `os.environ` vers `bash()` était déjà couvert (`test_ya_read_env.py:92-98`). En local : `cd prime-agent-runtime && uv run --python 3.11 python -m unittest discover -s test -p 'test_ya_bash_cwd.py' -v`, 3 tests OK. En CI : job `runtime suite (python 3.11)`.
+
+Options A1, B, C et D non retenues ; leur description reste en section 5 pour mémoire.
+
 ## 1. Constat : notre `bash()` sur `main` (`1c1ac392c`)
 
 ### Signature
