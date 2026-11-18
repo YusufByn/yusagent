@@ -4,6 +4,20 @@ Demande de Yusuf du 18/11/2026. **Phase 1 : constat seulement.** Branche `ya-17-
 
 Ce ticket ne propose ni texte de prompt ni plan d'A/B : ils seront écrits hors de Claude Code, après lecture du constat.
 
+## Décision de Yusuf (18/11/2026) : clos sans changement du prompt
+
+Raisons :
+
+- **Gaspillage mesuré sous le seuil du banc** : 3,4 % du coût à cache théorique, 6,6 % au plus selon les seuils (section 4). Le seuil de détection du banc est d'environ 10 % (constat du 14/11/2026, `docs/yusAgent-cdc.md:58`).
+- **Règle 1 déjà en place** : elle est dans le prompt v2 (`ya_prompt_v2/core.md:19`), mot pour mot comme chez Unharnessed (`core.md:16`, `53bdd8784`).
+- **Règles 2 et 3 absentes chez Unharnessed** : les ajouter serait un écart à Unharnessed, qui exigerait un A/B que ce banc ne peut pas trancher.
+
+Conséquences :
+
+- Prompt, tools et code livré inchangés, préfixe inchangé.
+- Le détecteur `bench/smoke/tools/waste.py` est gardé, à relancer sur les traces de Terminal-Bench.
+- CDC : ligne du 18/11/2026 au journal. Elle précise l'effet sur la puce « Principes anti-gaspillage » de YA-09 et sur la ligne du 31/10/2026 : règle 1 en place, autres principes non ajoutés, à rejuger à Terminal-Bench.
+
 ## Contexte
 
 Repris du document de recherche (levier 6), **non vérifié par nous**. Une étude sur les agents de code relève trois comportements de gaspillage, présents dans 79 à 98 % des tâches et responsables de jusqu'à 22,75 % du coût :
