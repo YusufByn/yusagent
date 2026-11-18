@@ -136,6 +136,8 @@ fn assemble_breakdown(
                 ya_prompt_version,
             )),
             ya_prompt_version: Some(ya_prompt_version),
+            // yusAgent (YA-09, ticket 18): the rule on existing tests of the current settings.
+            ya_existing_tests_rule: settings.settings().existing_tests_rule,
             ..Default::default()
         },
     );
@@ -277,6 +279,26 @@ mod tests {
         std::fs::write(project.join("settings.json"), r#"{"promptVersion": 1}"#).unwrap();
         let (upstream, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
         assert!(upstream.assembled.starts_with("# prime-agent harness"));
+    }
+
+    /// yusAgent (YA-09, ticket 18): the rule on existing tests follows the settings in
+    /// version 2; unset, the prompt has no rule.
+    #[test]
+    fn shows_the_existing_tests_rule_of_the_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join(".prime/agent");
+        std::fs::create_dir_all(&project).unwrap();
+        let rule = "- Existing tests encode expected behavior:";
+        std::fs::write(project.join("settings.json"), r#"{"promptVersion": 2}"#).unwrap();
+        let (unset, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
+        assert!(!unset.assembled.contains(rule), "{}", unset.assembled);
+        std::fs::write(
+            project.join("settings.json"),
+            r#"{"promptVersion": 2, "existingTestsRule": true}"#,
+        )
+        .unwrap();
+        let (on, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
+        assert_eq!(on.assembled.matches(rule).count(), 1, "{}", on.assembled);
     }
 
     #[test]

@@ -168,7 +168,7 @@ fn a_version_two_session_edits_and_runs_commands() {
     assert_eq!(header["type"], "session", "{header}");
     assert_eq!(
         header["yaRequest"],
-        serde_json::json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
+        serde_json::json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
     );
     assert_eq!(
         header["yaTools"],

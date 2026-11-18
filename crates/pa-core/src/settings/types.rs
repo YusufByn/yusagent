@@ -344,6 +344,9 @@ pub struct Settings {
     /// yusAgent (YA-09, ticket 14): `true` adds the `session-id` request header on the `ChatGPT`
     /// provider (unset: off), frozen per session (`crate::session_engine::ya_session_id_header`).
     pub codex_session_id_header: Option<bool>,
+    /// yusAgent (YA-09, ticket 18): `true` adds the rule on existing tests to the version-2
+    /// prompt (unset: off), frozen per session (`crate::session_engine::ya_request`).
+    pub existing_tests_rule: Option<bool>,
     pub npm_command: Option<Vec<String>>,
     /// Execution reads this from global settings only; project overrides are ignored.
     pub mcp_servers: Option<serde_json::Map<String, serde_json::Value>>,

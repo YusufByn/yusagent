@@ -109,6 +109,10 @@ pub struct BuildSystemPromptOptions<'a> {
     /// yusAgent (YA-09, ticket 11): the session's prompt version; `None` or version 1 keeps the
     /// upstream layers (`super::ya_prompt_v2` for version 2).
     pub ya_prompt_version: Option<crate::session_engine::ya_request::PromptVersion>,
+    /// yusAgent (YA-09, ticket 18): the rule on existing tests in the version-2 prefix
+    /// (`existingTestsRule`); `None` or `false` leaves the prefix as before, and version 1 never
+    /// has it. An `Option` because a fourth `bool` fails `clippy::struct_excessive_bools`.
+    pub ya_existing_tests_rule: Option<bool>,
     /// Enabled user-configured generic MCP servers.
     pub generic_mcp_servers: Vec<String>,
 }
@@ -138,7 +142,10 @@ pub fn system_prompt_breakdown(options: &BuildSystemPromptOptions) -> SystemProm
             segments.push(PromptSegment::static_segment(
                 "core",
                 "prompts/ya_prompt_v2/core.md",
-                super::ya_prompt_v2::static_prefix(options.ya_tool_choice),
+                super::ya_prompt_v2::static_prefix(
+                    options.ya_tool_choice,
+                    options.ya_existing_tests_rule.unwrap_or(false),
+                ),
             ));
             if let Some(extras) = options.model_prompt_extras {
                 segments.push(PromptSegment::static_segment(
