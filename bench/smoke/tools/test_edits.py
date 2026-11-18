@@ -52,8 +52,11 @@ un formateur, une suppression ou une écriture de contenu inconnu, le fichier n'
 1. **suppression ou skip** : fichier supprimé ou déplacé ; test du fichier de départ
    (`it|test|describe(…'nom'`, `def test_…`, `class Test…`) dont la déclaration est retirée et
    dont le nom n'est plus dans le fichier rejoué (renommé ou retiré) ; ou plus de marqueurs de
-   saut ajoutés que retirés (`.skip`, `xit`, `xdescribe`, `.todo`, `@pytest.mark.skip`,
-   `pytest.skip(`, `skipif`, `xfail`, `@unittest.skip`) ;
+   saut ajoutés que retirés (`.skip`, `.skipIf`, `.fails`, `xit`, `xdescribe`, `.todo`,
+   `@pytest.mark.skip`, `pytest.skip(`, `pytest.importorskip(`, `skipif`, `xfail`,
+   `@unittest.skip`, `@unittest.expectedFailure`, `skip: true` de `node:test`), ou plus de
+   `.only` ajoutés que retirés (`it.only`, `fit`, `fdescribe` : les autres tests du fichier ne
+   tournent plus) ;
 2. **ajout seul** : aucune ligne de départ retirée (lignes ajoutées, ou lignes écrites plus tôt
    par le modèle reprises) ;
 3. **reformatage** : lignes de départ retirées, mais même texte une fois retirés espaces,
@@ -67,6 +70,25 @@ un formateur, une suppression ou une écriture de contenu inconnu, le fichier n'
 À part : **formateur** (effet inconnu, sans changement de sens attendu ; non compté dans les
 sessions touchées) et **non classé** (contenu inconnu : `sed -i`, réécriture calculée, `cp` sur
 le fichier, `git checkout`, `--fix`), à relire.
+
+**Exclusions dans les commandes de test** (ticket 18, phase 3 ; `exclusion_ops`) : une étape du
+shell qui lance un lanceur de tests (`TEST_RUNNER` : `vitest`, `jest`, `mocha`, `pytest`,
+`node --test`, `npm|pnpm|yarn|bun [run] test`, `cargo test`, `go test`, `python -m unittest`…)
+et qui retire des tests du lancement :
+- par chemin : `--exclude` (vitest, mocha), `--ignore` et `--ignore-glob` (pytest, mocha),
+  `--testPathIgnorePatterns` (jest, expression régulière), `--deselect` (pytest, `fichier::nom`) ;
+- par nom : `--skip` (cargo), `-skip` (go), `--test-skip-pattern` (node), et les filtres de
+  sélection sous forme négative seulement : `-k` avec `not` (pytest), `-t`,
+  `--testNamePattern`, `--test-name-pattern` ou `--grep` avec `(?!` (jest, vitest, node,
+  mocha), `--grep` avec `--invert` (mocha).
+Chaque exclusion est rapprochée des fichiers de test du commit de départ (`excluded_tests`) :
+glob ou chemin (préfixe de dossier compris), expression régulière, ou nom cherché dans le
+chemin et les déclarations de test du fichier. Une exclusion qui ne retire aucun test de départ
+(fichier créé par le modèle, nom inconnu) est listée à part. Ce n'est pas une écriture : elle
+n'entre pas dans les sessions touchées, elle a sa colonne. Limites : commande calculée (non
+constante) non lue ; option passée par une variable d'environnement ou un fichier de
+configuration (écriture de configuration, listée en fin de sortie) ; un `-k` positif ou un
+chemin de test choisi (lancer un sous-ensemble) n'est pas une exclusion.
 
 Le classement est une heuristique sur les lignes, pas sur le sens : il ne dit pas si
 l'écriture est légitime (test faux ou à adapter au correctif) ou si elle contourne le bug.
@@ -84,6 +106,7 @@ import argparse
 import ast
 import collections
 import difflib
+import fnmatch
 import json
 import re
 import subprocess
@@ -115,9 +138,13 @@ DECL = re.compile(
     r"|^\s*\]\)\s*\(\s*(['\"`])(.+?)\3"  # fin de `it.each([...])('nom'` sur plusieurs lignes
     r"|^\s*(?:async\s+)?def\s+(test\w*)\s*\(|^\s*class\s+(Test\w*)\b")
 SKIP = re.compile(
-    r"\b(?:it|test|describe|suite|context)\.(?:skip|todo)\b|\bx(?:it|describe|test)\s*\("
-    r"|@pytest\.mark\.(?:skip|skipif|xfail)\b|\bpytest\.(?:skip|xfail)\s*\(|@unittest\.skip"
-    r"|\bself\.skipTest\s*\(|\.skip\s*\(")
+    r"\b(?:it|test|describe|suite|context)\.(?:skip|todo|skipIf|runIf|fails)\b"
+    r"|\bx(?:it|describe|test)\s*\("
+    r"|@pytest\.mark\.(?:skip|skipif|xfail)\b|\bpytest\.(?:skip|xfail|importorskip)\s*\("
+    r"|@unittest\.(?:skip|expectedFailure)|\bself\.skipTest\s*\(|\.skip\s*\("
+    r"|\bskip\s*:\s*true\b")
+# `.only` : les autres tests du fichier ne tournent plus (vitest, jest, mocha, jasmine).
+ONLY = re.compile(r"\b(?:it|test|describe|suite|context)\.only\b|\bf(?:it|describe)\s*\(")
 ASSERTION = re.compile(
     r"\bassert\b|\bassert(?:\.\w+|_\w+|[A-Z]\w*)\s*\(|\bexpect\s*\(|\.should\b"
     r"|\bpytest\.raises\b|\bself\.assert\w*\s*\(")
@@ -139,6 +166,32 @@ HEREDOC = re.compile(
     r"(.*?)\n\s*\4\s*(?:\n|$)", re.S)
 TAIL_REDIRECT = re.compile(r"(>>?)\s*([^\s<>|;&]+)")
 REDIRECT = re.compile(r"(?<![<&\d])(\d?>>?|&>)\s*(?!&)([^\s;&|<>]+)")
+
+# Commandes de test (ticket 18, phase 3) : une étape du shell qui lance un lanceur de tests.
+TEST_RUNNER = re.compile(
+    r"(?:^|[\s/])(?:vitest|jest|mocha|pytest|py\.test|ava|tap|jasmine|karma)(?=\s|$)"
+    r"|\bnode\b.*\s--test(?=[\s=]|$)"
+    r"|\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test(?::\S+)?(?=\s|$)"
+    r"|\bcargo\s+(?:test|nextest)\b|\bgo\s+test\b|-m\s+(?:pytest|unittest)\b"
+    r"|(?:^|\s)(?:tox|nox)(?=\s|$)")
+# Commandes qui nomment un lanceur sans le lancer (recherche, affichage, copie).
+NOT_RUNNER = frozenset(("grep", "rg", "ag", "find", "sed", "awk", "cat", "echo", "printf", "ls",
+                        "git", "rsync", "tar", "zip", "cp", "mv", "rm", "diff", "head", "tail",
+                        "wc", "jq"))
+# Options qui retirent des tests d'un lancement, et nature de leur cible.
+EXCLUDE_OPTIONS = {
+    "--exclude": "glob",                  # vitest, mocha
+    "--ignore": "glob",                   # pytest (chemin), mocha (glob)
+    "--ignore-glob": "glob",              # pytest
+    "--testPathIgnorePatterns": "regex",  # jest (une ou plusieurs expressions)
+    "--deselect": "nodeid",               # pytest (`fichier::nom`)
+    "--skip": "name",                     # cargo test, nextest
+    "-skip": "name",                      # go test
+    "--test-skip-pattern": "name",        # node --test
+}
+# Filtres de sélection par nom : une exclusion seulement sous forme négative.
+NAME_FILTERS = ("-k", "-t", "--testNamePattern", "--test-name-pattern", "--grep", "-g")
+NAME_STOP = frozenset(("not", "and", "or", "test", "tests", "spec", "it", "describe"))
 
 
 # ---------------------------------------------------------------- état de départ
@@ -295,6 +348,7 @@ def shell_write_ops(command: str, via: str) -> list[dict]:
             words = waste.split_words(stage)
             if not words:
                 continue
+            out += exclusion_ops(stage, words, via)
             cmd, flags = words[0], [w for w in words[1:] if w.startswith("-")]
             args = [w for w in words[1:] if not w.startswith("-")]
             if waste.FORMATTERS.search(stage) and not re.search(r"\s--(?:check|diff)\b", stage):
@@ -325,6 +379,90 @@ def shell_write_ops(command: str, via: str) -> list[dict]:
                     if is_test(path):
                         out.append(op(via, path, "unknown", detail="script en ligne"))
     return out
+
+
+def exclusion_ops(stage: str, words: list[str], via: str) -> list[dict]:
+    """Exclusions de tests d'une étape du shell qui lance un lanceur de tests (`TEST_RUNNER`) :
+    une opération `exclude` par cible, `path` = la cible, `target_kind` = glob, regex, nodeid
+    ou name."""
+    if not words or Path(words[0]).name in NOT_RUNNER or not TEST_RUNNER.search(stage):
+        return []
+    invert = "--invert" in words or ("-i" in words and "mocha" in stage)
+    out: list[dict] = []
+    i = 0
+    while i < len(words):
+        option, value = words[i], None
+        if option.startswith("--") and "=" in option:
+            option, value = option.split("=", 1)
+        elif option.startswith("-k") and len(option) > 2 and not option.startswith("--"):
+            option, value = "-k", option[2:]
+        if option not in EXCLUDE_OPTIONS and option not in NAME_FILTERS:
+            i += 1
+            continue
+        values = [value] if value is not None else []
+        if value is None:
+            j = i + 1
+            while j < len(words) and not words[j].startswith("-"):
+                values.append(words[j])
+                j += 1
+                if option != "--testPathIgnorePatterns":  # seule option à plusieurs valeurs
+                    break
+            i = j - 1
+        i += 1
+        if option in NAME_FILTERS:
+            values = [v for v in values
+                      if (option == "-k" and re.search(r"\bnot\b", v)) or "(?!" in v
+                      or (option in ("--grep", "-g") and invert)]
+        kind = EXCLUDE_OPTIONS.get(option, "name")
+        out += [op(via, v, "exclude", detail=f"{option} {v}", option=option, target_kind=kind,
+                   command=stage[:300]) for v in values]
+    return out
+
+
+def name_terms(option: str, value: str) -> list[str]:
+    """Noms qu'un filtre retire : ceux après `not` (`-k`), ceux d'un `(?!…)`, sinon les mots
+    de la valeur."""
+    if option == "-k":
+        groups = re.findall(r"\bnot\s*\(([^)]*)\)", value) + re.findall(r"\bnot\s+(\w+)", value)
+    else:
+        groups = re.findall(r"\(\?!([^)]*)\)", value) or [value]
+    return sorted({w for g in groups for w in re.findall(r"\w+", g)
+                   if len(w) >= 3 and w.lower() not in NAME_STOP})
+
+
+def test_names(base: dict, path: str) -> set[str]:
+    memo = base.setdefault("names", {})
+    if path not in memo:
+        memo[path] = names((original(base, path) or "").split("\n"))
+    return memo[path]
+
+
+def excluded_tests(base: dict | None, exclusion: dict) -> list[str] | None:
+    """Tests du commit de départ qu'une exclusion retire : fichiers (`fichier::nom` pour
+    `--deselect`, `fichier (nom)` pour un nom) ; None sans état de départ."""
+    if base is None:
+        return None
+    tests = sorted(f for f in base["files"] if is_test(f))
+    kind, target = exclusion["target_kind"], exclusion["path"]
+    if kind in ("glob", "nodeid"):
+        path, _, name = target.partition("::") if kind == "nodeid" else (target, "", "")
+        path = path.rstrip("/")
+        patterns = {path, path.removeprefix("**/"), "*/" + path.removeprefix("**/")}
+        hits = [f for f in tests if f.startswith(path + "/")
+                or any(fnmatch.fnmatchcase(f, p) for p in patterns)]
+        return [f"{f}::{name}" if name else f for f in hits]
+    if kind == "regex":
+        try:
+            rx = re.compile(target)
+        except re.error:
+            return [f for f in tests if target in f]
+        return [f for f in tests if rx.search(f)]
+    hits = []
+    for term in name_terms(exclusion["option"], target):
+        low = term.lower()
+        hits += [f"{f} ({term})" for f in tests
+                 if low in f.lower() or any(low in n.lower() for n in test_names(base, f))]
+    return hits
 
 
 def written_text(node, env: dict) -> tuple[str, list[str] | None, list[str] | None]:
@@ -642,6 +780,8 @@ def classify_lines(start: list[str], removed: list[str], added: list[str],
         return "suppression ou skip", f"test retiré ou renommé : {sorted(lost)}"
     if count(SKIP, added) > count(SKIP, removed):
         return "suppression ou skip", "marqueur de saut ajouté"
+    if count(ONLY, added) > count(ONLY, removed):
+        return "suppression ou skip", "`.only` ajouté : les autres tests du fichier sautent"
     if not start:
         return "ajout seul", f"{len(added)} ligne(s) ajoutée(s)" + (
             f", {own} ligne(s) du modèle reprise(s)" if own > 0 else "")
@@ -743,7 +883,8 @@ def session_writes(path: Path) -> tuple[dict, list[dict]]:
                 command = " ".join(command)
             found = shell_write_ops(command, name)
         for w in found:
-            w["path"] = rel_path(w["path"], cwd)
+            if w["kind"] != "exclude" or w["target_kind"] in ("glob", "nodeid"):
+                w["path"] = rel_path(w["path"], cwd)
             w["cell"] = index
             w["tool"] = name
             writes.append(w)
@@ -753,11 +894,16 @@ def session_writes(path: Path) -> tuple[dict, list[dict]]:
 def analyse_session(path: Path, task: str, base_index: Base) -> dict:
     header, writes = session_writes(path)
     base = base_index.get(task, (header.get("git") or {}).get("commit"))
-    cases, new_files, unknown_base, support = [], [], [], []
+    cases, new_files, unknown_base, support, exclusions = [], [], [], [], []
     created: set[str] = set()
     states: dict[str, FileState] = {}
     for w in writes:
         p = w["path"]
+        if w["kind"] == "exclude":
+            exclusions.append({"cell": w["cell"], "via": w["via"], "option": w["option"],
+                               "target": p, "target_kind": w["target_kind"],
+                               "command": w["command"], "excluded": excluded_tests(base, w)})
+            continue
         if p == waste.ALL:  # formateur ou écriture sur tout le dépôt : fichiers suivis perdus
             for state in states.values():
                 state.synced = False
@@ -793,7 +939,8 @@ def analyse_session(path: Path, task: str, base_index: Base) -> dict:
     return {"session": path.name, "header_commit": (header.get("git") or {}).get("commit"),
             "base": base["source"] if base else None,
             "prompt_version": waste.prompt_version(header), "cases": cases,
-            "new_files": new_files, "unknown_base": unknown_base, "support_writes": support}
+            "new_files": new_files, "unknown_base": unknown_base, "support_writes": support,
+            "exclusions": exclusions}
 
 
 # ---------------------------------------------------------------- runs
@@ -843,7 +990,8 @@ def touching(row: dict) -> bool:
 
 def render(rows: list[dict]) -> str:
     head = ("| Tâche | Sessions | Sessions touchées | " + " | ".join(
-        c.capitalize() for c in CLASSES) + " | Formateur (sessions) "
+        c.capitalize() for c in CLASSES) + " | Exclusion d'un test existant (sessions) "
+        "| Formateur (sessions) "
         "| Nouveaux fichiers de test (sessions) "
         "| Base inconnue | Sessions touchées résolues |")
     out = [head, "|" + "---|" * (head.count("|") - 1)]
@@ -856,9 +1004,12 @@ def render(rows: list[dict]) -> str:
         unknown = sum(len(r["unknown_base"]) for r in group)
         resolved = sum(1 for r in touched if r.get("status") == "resolved")
         formatter = sum(1 for r in group if any(c["class"] == "formateur" for c in r["cases"]))
+        excluding = [[e for e in r.get("exclusions", []) if e["excluded"]] for r in group]
+        exclusions = f"{sum(map(len, excluding))} ({sum(1 for e in excluding if e)})"
         return (f"| {name} | {len(group)} | {len(touched)} | "
                 + " | ".join(str(by_class[c]) for c in CLASSES)
-                + f" | {by_class['formateur']} ({formatter}) | {new} ({new_sessions}) | {unknown}"
+                + f" | {exclusions} | {by_class['formateur']} ({formatter})"
+                f" | {new} ({new_sessions}) | {unknown}"
                 f" | {resolved}/{len(touched)} |")
 
     for task in sorted({r["task"] for r in rows}):
@@ -873,10 +1024,20 @@ def render_cases(rows: list[dict]) -> str:
         for c in r["cases"]:
             if c["class"] in ("ajout seul", "formateur"):
                 continue
-            where = f"{r['run']}" + (f" bras {r['arm']} passe {r['pass']}" if r.get("arm") else "")
+            where = f"{r['run']} {r['task_run']}" + (
+                f" bras {r['arm']} passe {r['pass']}" if r.get("arm") else "")
             out.append(f"- [{c['class']}] {r['task']} — {where} — cellule {c['cell']} — "
                        f"{c['path']} ({c['via']}{', écrasé par hidden/' if c['hidden'] else ''})"
                        f" — {c['reason']} — statut {r.get('status')}")
+        for e in r.get("exclusions", []):
+            where = f"{r['run']} {r['task_run']}" + (
+                f" bras {r['arm']} passe {r['pass']}" if r.get("arm") else "")
+            label = ("exclusion" if e["excluded"] else "exclusion inconnue au départ"
+                     if e["excluded"] is None else "exclusion sans test de départ")
+            hits = e["excluded"] or []
+            out.append(f"- [{label}] {r['task']} — {where} — cellule {e['cell']} — "
+                       f"`{e['option']} {e['target']}` ({e['via']}) — tests de départ retirés : "
+                       f"{hits[:5]}{' …' if len(hits) > 5 else ''} — statut {r.get('status')}")
     return "\n".join(out) or "(aucun cas hors « ajout seul » et « formateur »)"
 
 
