@@ -501,6 +501,19 @@ Symptôme : `Timeout waiting for the provider selector panel (needle "Search pro
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
+## Instabilité probable : `herdr::tests::the_seq_never_restarts_below_a_used_value` (YA-09)
+
+`crates/pa-daemon/src/herdr.rs`, test unitaire `the_seq_never_restarts_below_a_used_value` (`:1094`), shard 3/8 de `ci.yml` (unité `pa-daemon#lib:pa_daemon`). Test identique à `upstream/main` : `git diff upstream/main -- crates/pa-daemon/src/herdr.rs` (`upstream/main` à `b14426151` le 18/11/2026) ne montre que `temp_socket` (`:1189-1190`), hors de ce test.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 44288407647 | `920593a8b` (`ya-15-erreurs-visibles`, PR #52) | 1 (job 134747100221) | échec du shard 3/8 (1191 réussis, 1 échec) |
+| 44288407647 | `920593a8b` (`ya-15-erreurs-visibles`, PR #52) | 2 (job 134755788965, relance du job seul, sans push, autorisée par Yusuf le 18/11/2026) | réussi, aucun changement de code ; relance notée dans un commentaire de la PR #52 |
+
+Symptôme : `panicked at crates/pa-daemon/src/herdr.rs:1101:9: seeded at now_ms*1000`. Le commit `920593a8b` ne change qu'un fichier de `docs/` ; le même code avait passé ce shard sur `4fd1130c6` et `3e7294faf`. Hypothèse : course de temps sur la milliseconde. `next_report_seq()` prend son plancher `now_ms_x1000()` au moment de l'appel (`herdr.rs:180-194`) ; le test relit `now_ms_x1000()` après les trois appels et exige `first >= now_ms_x1000() - 1` (`:1101`). Si l'horloge passe à la milliseconde suivante entre les deux lectures et qu'aucun autre test du processus n'a avancé le compteur global, l'écart vaut 1 000 et l'assertion échoue. Non reproduit.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
 ## Désactivations par défaut (YA-01)
 
 Session lancée sans `settings.json` ni variable d'environnement. Chaque ligne se réactive dans `settings.json` (global, `~/.prime/agent/settings.json`).
