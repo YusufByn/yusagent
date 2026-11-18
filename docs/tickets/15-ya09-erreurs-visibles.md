@@ -2,6 +2,12 @@
 
 Demande de Yusuf du 18/11/2026. Branche `ya-15-erreurs-visibles`, depuis `main` à `ddbf1c91b`. Une PR, pas de merge sans son accord. Aucun appel à un vrai modèle ; aucune chauffe lancée.
 
+## État (18/11/2026)
+
+- PR #52 ouverte, relue par Yusuf (« bonne sur le fond »). CI : 14 checks requis verts sur `4fd1130c6`.
+- Unharnessed relu au commit **`53bdd8784617fa9f2171abababd0b0f95618bfeb`** (17/11/2026), clone jetable hors du dépôt, rien exécuté ni compilé (§ B.2).
+- Avant merge, demandé par Yusuf : définition d'« outil en échec » pour `python_repl` (§ A.3) ; chauffe `node-tough-cookie-630` lancée par Yusuf lui-même, commandes au § « Chauffe ». **Pas de merge sans son accord.**
+
 ## A. `isError`
 
 ### A.1 Upstream
@@ -16,7 +22,31 @@ Origine : le portage Rust (`39bc99a91`, #2524) a reproduit le TS. Le TS ignorait
 - Le pont le transmet (`crates/pa-core/src/session_engine/tool_bridge.rs:113`, `:118`). Les mises à jour en cours d'exécution restent à `false` (`:106`).
 - Test upstream touché : le littéral de `crates/pa-core/src/session_engine/telemetry/tests.rs:195` reçoit le champ (une ligne, sans changement d'assertion).
 
-Qui passe à `isError: true` : une cellule `python_repl` en `status` `error` ou `aborted` (`crates/pa-core/src/tools/ipython.rs:511`), un `apply_patch` non appliqué (`tools/ya_apply_patch.rs:69`), un refus de `exec_command`/`write_stdin` (`tools/ya_exec.rs:195`, `:651`). Ces tools posaient le drapeau, que le pont jetait.
+Qui passe à `isError: true` : une cellule `python_repl` en `status` `error` ou `aborted` (`crates/pa-core/src/tools/ipython.rs:511`, définition au § A.3), un `apply_patch` non appliqué (`tools/ya_apply_patch.rs:69`), un refus de `exec_command`/`write_stdin` (`tools/ya_exec.rs:195`, `:651`). Ces tools posaient le drapeau, que le pont jetait.
+
+### A.3 « Outil en échec » pour `python_repl` : définition exacte
+
+**Règle** : le résultat d'une cellule a `isError: true` si et seulement si son `details.status` vaut `error` ou `aborted` (`crates/pa-core/src/tools/ipython.rs:511`), **ou** si l'outil sort en erreur sans résultat de cellule (chemin `Err` de la boucle, `crates/pa-agent/src/agent_loop/tool_call.rs:201-222`, résultat construit par `error_tool_result` `:304-322` avec `{status: "error"|"aborted"}`, déjà `isError: true` avant ce ticket). Un `status` `ok` donne toujours `isError: false`, quoi que contienne la sortie.
+
+Le `status` vient du kernel (`crates/pa-core/src/kernel/manager/`) :
+- `error` : un événement `error` du runtime pour la cellule (`events.rs:70-86`), ou une fin de cellule `done` avec un statut autre que `ok` (`events.rs:113-123`), ou une image jointe trop grosse (`events.rs:196-209`).
+- `aborted` : le signal d'abandon de la cellule a été déclenché (`execution.rs:186-192`), ou le kernel ne l'a pas terminée dans la fenêtre de grâce après l'interruption (`force_abort`, `execution.rs:42-52`, appelé par `requests.rs:345`), ou le signal était déjà déclenché avant l'envoi (`requests.rs:180-184`, `mod.rs:128-145`).
+
+| Cas | `status` | `isError` (avant → après) | Preuve |
+|---|---|---|---|
+| Exception non rattrapée dans la cellule (`1/0`, `raise`, `AttributeError` d'un mauvais usage de B, refus d'`edit()`) | `error` | `false` → **`true`** | `events.rs:70-86` ; test `ya_tool_error_wire.rs` (`1/0`, `h.exit_code`, `await read`) |
+| `SyntaxError` (la cellule ne compile pas) | `error` | `false` → **`true`** | même événement `error` (`prime-agent-runtime/src/rlm/repl.py:569-583`, `_error_event`) ; constaté : les 22 cellules `SyntaxError` de l'inventaire du § B.1 sont en `status` `error` ; comptées à part par `metrics.py` |
+| Exception rattrapée par le code de la cellule (`try/except`) | `ok` | `false` → `false` | aucune erreur ne remonte au kernel |
+| Cellule plus longue que le budget du watchdog (`cell_timeout_ms`) | `ok` si elle finit sans erreur | `false` → `false` | le watchdog n'arrête pas la cellule : il ajoute une note `[watchdog]` en stderr (`execution.rs:193-206`, `cell_watchdog_note` `:301`). Aucun délai dur n'est passé pour `python_repl` (`session_engine/runtime_wiring.rs:416-428` appelle `execute`, qui passe `execution_timeout_ms: None`, `kernel/manager/mod.rs:585-587`) |
+| Interruption par l'utilisateur (Échap, abandon du tour) pendant la cellule | `aborted`, mais la boucle répond d'abord `Tool execution aborted` | `true` → `true` (inchangé) | `race_with_abort` rend l'erreur de la boucle (`tool_call.rs:304-322`, `{status: "aborted"}`) |
+| `KeyboardInterrupt` dans la cellule (levé par le code, ou interruption du kernel sans abandon du tour) | `error` | `false` → **`true`** | événement `error` du runtime (`repl.py:569-583` ; `_interrupt_event` `:587-595` pour une cellule suspendue sur un `await`) |
+| Mort du kernel pendant la cellule | sortie en erreur du gestionnaire (`Kernel has been shut down`, ou erreur de protocole), avec la notice `[python-kernel-restarted]` | `true` → `true` (inchangé) | `teardown.rs:182`, `repair.rs:28` (`reject_active_execution`) ; notice ajoutée au message d'erreur par `ya_kernel_restart.rs:97-102` |
+| `await bash(cmd)` dont la commande sort avec un code non nul | `ok` | `false` → `false` | le code est dans `BashResult.exit_code` ; le détail `bashFailedExit` est posé (`events.rs:245`) mais ne change pas le `status`. Le masquage (YA-05) le compte comme échec à part (`masking.rs:316-317`), pas le drapeau |
+| `bash(cmd)` arrêté par son `timeout` (SIGTERM puis SIGKILL) | `ok` | `false` → `false` | ligne `[yusagent: killed, ...]` dans la sortie et code de sortie non nul ; la cellule elle-même réussit (`ya_timeout.py`) |
+| Commande `bash()` en arrière-plan qui échoue après la fin de la cellule | sans objet | sans objet | arrive comme avis `[bash-done]` (message custom), pas comme résultat d'outil |
+| `print()` sur stderr, `RuntimeWarning` (coroutine jamais attendue) | `ok` | `false` → `false` | sortie seulement |
+
+Donc, pour `python_repl` : **échec = exception non rattrapée (y compris `SyntaxError` et `KeyboardInterrupt`), abandon de la cellule, ou mort du kernel**. Ne sont **pas** des échecs : un délai de watchdog dépassé, un code de sortie non nul ou un timeout d'un `bash()`, une sortie sur stderr.
 
 ### A.2 Ce qui change sur le fil
 
@@ -88,10 +118,55 @@ Fichiers upstream touchés par les tests : `crates/pa-core/src/session_engine/te
 
 ## Chauffe
 
-**Pas utile pour valider A ni B ; aucune lancée.**
-- A ne change rien sur le fil Codex (seul provider réel du banc). Une chauffe Codex ne peut donc pas montrer A. Le côté Anthropic est couvert par le test de fil.
-- B ne se déclenche que sur un mauvais usage, ce que le modèle ne fait pas à coup sûr. Les messages sont couverts par les tests du runtime et le test de fil.
-- Si Yusuf veut un garde-fou de non-régression sur le binaire de la branche : **une chauffe `node-tough-cookie-630`** (`gpt-6-luna`, effort high, `default.json`, `--log-bodies`), la tâche où `await read()` revient le plus. Elle vérifierait que le premier corps est identique à celui de `main`, hors `prompt_cache_key`, et que les cellules en erreur ont `isError: true` dans la session. Le message de `read()` n'apparaîtra que si le modèle refait l'erreur.
+Ni A ni B n'ont besoin d'une chauffe pour être validés : A ne change rien sur le fil Codex (seul provider réel du banc), le côté Anthropic est couvert par le test de fil, et B ne se déclenche que sur un mauvais usage. **Garde-fou de non-régression demandé par Yusuf le 18/11/2026 : une chauffe `node-tough-cookie-630`**, la tâche où `await read()` revient le plus, **lancée par Yusuf dans un Terminal à part**. Rien n'a été lancé dans cette session.
+
+Binaires (artefacts de `ya-build-macos-arm64`) :
+- **branche** : run `44280651267`, commit `4fd1130c69468b185dc9e22a3499a17a58335d00`. Les commits suivants de la branche ne touchent que la doc et `bench/` : le binaire a les sources du dernier commit ;
+- **`main`** : run `44086728262`, commit `bf88ebc4a5a2c586c4cc3756aeeb64216a49cfe8`. Entre ce commit et `main` (`ddbf1c91b`), seuls `CLAUDE.md`, `docs/` et `bench/` changent (`git diff --name-only bf88ebc4a ddbf1c91b`).
+
+La référence `main` est un run en mode capture (`--capture`, serveur local, **aucun appel au modèle**). Le premier corps part avant toute réponse du modèle, il ne dépend donc pas du serveur. Les deux runs se lancent **le même jour UTC** : le bloc `<environment>` de l'`input` porte la date.
+
+Commandes, depuis la racine du dépôt, sur la branche à jour :
+
+```bash
+cd ~/Desktop/yusagent && git switch ya-15-erreurs-visibles && git pull --ff-only
+BR=$(bash bench/smoke/runs/install-bin.sh 44280651267 4fd1130c69468b185dc9e22a3499a17a58335d00)
+MAIN=$(bash bench/smoke/runs/install-bin.sh 44086728262 bf88ebc4a5a2c586c4cc3756aeeb64216a49cfe8)
+
+# 1. Référence main, mode capture (aucun appel au modèle)
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/smoke/run.py \
+  --binary "$MAIN/prime-agent" --model gpt-6-luna --effort high \
+  --settings bench/smoke/settings/default.json --tasks node-tough-cookie-630 --runs 1 \
+  --capture --log-bodies
+
+# 2. Chauffe réelle, binaire de la branche (appel au modèle)
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short caffeinate -i python3 -I bench/smoke/run.py \
+  --binary "$BR/prime-agent" --model gpt-6-luna --effort high \
+  --settings bench/smoke/settings/default.json --tasks node-tough-cookie-630 --runs 1 \
+  --log-bodies
+```
+
+Vérification (lecture seule) :
+
+```bash
+REF=$(ls -d bench/smoke/runs/*-bf88ebc-gpt-6-luna | tail -1)/tasks/node-tough-cookie-630/run-1
+NEW=$(ls -d bench/smoke/runs/*-4fd1130-gpt-6-luna | tail -1)/tasks/node-tough-cookie-630/run-1
+python3 -I bench/smoke/tools/check_ya15.py "$REF" "$NEW"; echo "code de sortie : $?"
+```
+
+`bench/smoke/tools/check_ya15.py` contrôle trois choses :
+1. Le premier corps : toutes les clés sauf `prompt_cache_key` doivent être identiques en JSON trié. Pour `input`, le script montre le premier écart.
+2. Dans la session de la branche, `isError` de chaque résultat `python_repl` doit valoir `true` exactement quand `details.status` vaut `error` ou `aborted` (§ A.3).
+3. Il ne doit y avoir aucune mention de `1011` dans `out.jsonl` ni dans `err.log` (même règle que `check_warmup.py`). Le script affiche aussi les transports au proxy.
+
+Codes de sortie : `0` si tout passe ; `1` si un contrôle échoue ; `3` si 1 et 3 passent mais que le run n'a aucune cellule en erreur (critère 2 non vérifiable sur ce run, A reste couvert par `ya_tool_error_wire.rs`).
+
+Script essayé sur les journaux existants (sans nouveau run) :
+- Il signale la fermeture en 1011 connue de `20261116T080936Z-1c9ecf4` (`node-testsprite-356`).
+- Il signale l'`isError: false` d'une cellule en erreur sous un binaire d'avant ce ticket (`20261117T075921Z-713ba4b`, `py-silence-002`).
+- Il signale l'`input` différent de deux tâches différentes.
+
+Si une clé autre que `input` diffère entre la capture et le run réel, cet écart viendrait du mode capture et non de la branche. Il faudrait alors une seconde chauffe réelle sur le binaire de `main`, à décider par Yusuf.
 
 ## Points ouverts
 

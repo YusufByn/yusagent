@@ -834,6 +834,7 @@ Détail, inventaire et effet sur les requêtes : `docs/tickets/15-ya09-erreurs-v
 | `crates/pa-core/tests/ya_tool_error_wire.rs` | ajout | Session réelle, vrai kernel, serveur local : `is_error` des `tool_result` Anthropic, `function_call_output` Responses sans champ d'erreur, messages de B dans les sorties, prompt/tools/paramètres stables. Machinerie copiée de `prefix_stability.rs` (non modifié). | YA-09 |
 | `bench/smoke/tools/helper_misuse.py`, `bench/smoke/README.md` | ajout, modif. (fichiers du fork) | Inventaire reproductible des mauvais usages des helpers par config de session ; note sur `isError` du README mise à jour. | YA-09 |
 | `.changes/ya-09-errors-visible.md` | ajout | Fragment de changelog. | YA-09 |
+| `bench/smoke/tools/check_ya15.py` | ajout | Contrôle de la chauffe du ticket 15 : premier corps identique à une référence hors `prompt_cache_key`, `isError` des cellules `python_repl` cohérent avec `details.status`, aucune mention de 1011. Lecture seule. | YA-09 |
 
 ## Code repris d'Unharnessed
 
