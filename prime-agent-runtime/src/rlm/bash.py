@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, NoReturn, cast
 
-from . import _winjob, ya_timeout
+from . import _winjob, ya_hints, ya_timeout
 
 _IS_POSIX = os.name == "posix"
 
@@ -1895,3 +1895,7 @@ def activity_request(action: str, activity_id: str | None = None, lines: int = 5
         handle.kill()
         return {"activityId": activity_id, "killed": True}
     raise ValueError("Unknown kernel bash action")
+
+
+# yusAgent (YA-09, ticket 15): a misuse of BashHandle/BashResult fails with what to do.
+ya_hints.install(BashHandle, BashResult)

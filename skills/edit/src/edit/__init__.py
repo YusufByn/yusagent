@@ -5,11 +5,17 @@ file, the result shows the changed lines with a few lines of context, numbered l
 and every refusal says why (missing text, several occurrences, a path outside the workspace).
 The workspace is the directory the kernel started in (the session's working directory); the
 check is a clear error, not a security boundary (the sandbox of YA-11 is).
+
+Ticket 15 (YA-09): a wrong argument names the call shape (`edit(old=..., new=...)` gave
+"run() got an unexpected keyword argument 'old'"); `run` keeps the signature below.
 """
 
 from __future__ import annotations
 
+import functools
+import inspect
 from pathlib import Path
+from typing import Any
 
 # yusAgent (YA-09): the session's working directory, where the kernel starts.
 _WORKSPACE = Path.cwd().resolve()
@@ -17,7 +23,7 @@ _WORKSPACE = Path.cwd().resolve()
 _CONTEXT_LINES = 3
 
 
-async def run(path: str, old_str: str, new_str: str) -> str:
+async def _edit(path: str, old_str: str, new_str: str) -> str:
     """Replace a unique string in a file, or create a new file.
 
     ``old_str`` must appear exactly once in the file at ``path``; that match is
@@ -76,6 +82,22 @@ async def run(path: str, old_str: str, new_str: str) -> str:
     _emit_diff(resolved_path, old_str, new_str, start_line)
     end_line = start_line + new_str.count("\n")
     return f"Edited {resolved_path}\n{_numbered(updated, start_line, end_line)}"
+
+
+_SIGNATURE = inspect.signature(_edit)
+
+
+@functools.wraps(_edit)
+async def run(*args: Any, **kwargs: Any) -> str:
+    # An unknown keyword first, as Python reports it (`old=` also leaves `old_str` missing).
+    unknown = next((name for name in kwargs if name not in _SIGNATURE.parameters), None)
+    try:
+        if unknown is not None:
+            raise TypeError(f"got an unexpected keyword argument {unknown!r}")
+        _SIGNATURE.bind(*args, **kwargs)
+    except TypeError as error:
+        raise TypeError(f"edit(path, old_str, new_str): {error}") from None
+    return await _edit(*args, **kwargs)
 
 
 def _numbered(text: str, first: int, last: int) -> str:
