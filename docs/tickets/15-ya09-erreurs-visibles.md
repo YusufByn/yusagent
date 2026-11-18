@@ -6,7 +6,8 @@ Demande de Yusuf du 18/11/2026. Branche `ya-15-erreurs-visibles`, depuis `main` 
 
 - PR #52 ouverte, relue par Yusuf (« bonne sur le fond »). CI : 14 checks requis verts sur `4fd1130c6`.
 - Unharnessed relu au commit **`53bdd8784617fa9f2171abababd0b0f95618bfeb`** (17/11/2026), clone jetable hors du dépôt, rien exécuté ni compilé (§ B.2).
-- Avant merge, demandé par Yusuf : définition d'« outil en échec » pour `python_repl` (§ A.3) ; chauffe `node-tough-cookie-630` lancée par Yusuf lui-même, commandes au § « Chauffe ». **Pas de merge sans son accord.**
+- Avant merge, demandé par Yusuf : définition d'« outil en échec » pour `python_repl` (§ A.3) ; chauffe `node-tough-cookie-630` lancée par Yusuf lui-même, commandes au § « Chauffe ».
+- **Chauffe faite par Yusuf le 18/11/2026** : `check_ya15.py` sort en 3 (premier corps identique hors `prompt_cache_key`, aucun 1011, 17 requêtes en WebSocket, 0 cellule en erreur, tâche résolue). Résultat au § « Résultat de la chauffe ». Merge autorisé par Yusuf sous condition de CI verte sur le dernier commit.
 
 ## A. `isError`
 
@@ -167,6 +168,23 @@ Script essayé sur les journaux existants (sans nouveau run) :
 - Il signale l'`input` différent de deux tâches différentes.
 
 Si une clé autre que `input` diffère entre la capture et le run réel, cet écart viendrait du mode capture et non de la branche. Il faudrait alors une seconde chauffe réelle sur le binaire de `main`, à décider par Yusuf.
+
+## Résultat de la chauffe (18/11/2026)
+
+Lancée par Yusuf avec les commandes ci-dessus. Contrôle relu dans cette session, en lecture seule :
+
+```bash
+python3 -I bench/smoke/tools/check_ya15.py \
+  bench/smoke/runs/20261118T104144Z-bf88ebc-gpt-6-luna/tasks/node-tough-cookie-630/run-1 \
+  bench/smoke/runs/20261118T104154Z-4fd1130-gpt-6-luna/tasks/node-tough-cookie-630/run-1
+```
+
+- **Code de sortie 3.**
+- **Premier corps** : identique à la référence `main` (mode capture, `bf88ebc`) pour toutes les clés hors `prompt_cache_key` : `include`, `input`, `instructions`, `model`, `parallel_tool_calls`, `reasoning`, `store`, `stream`, `text`, `tool_choice`, `tools`, `type`.
+- **1011** : aucune mention dans `out.jsonl` ni `err.log`. Les 17 requêtes au proxy sont parties en WebSocket.
+- **`isError`** : non vérifiable sur ce run. Les 17 cellules `python_repl` de la session sont en `status` `ok`, et toutes ont `isError: false`. Le drapeau d'une cellule en erreur reste couvert par `crates/pa-core/tests/ya_tool_error_wire.rs` (CI).
+- **Tâche** : `resolved` (`report.json`, `results`).
+- Runs dans `bench/smoke/runs/` (non versionnés).
 
 ## Points ouverts
 
