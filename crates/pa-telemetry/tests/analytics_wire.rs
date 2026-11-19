@@ -45,6 +45,7 @@ fn ts_body(events: &[TelemetryEvent]) -> serde_json::Value {
 }
 
 #[tokio::test]
+#[ignore = "yusAgent (YA-16, ticket 19): remote telemetry is cut at the sink transport (`REMOTE_TELEMETRY`)"]
 async fn batch_posts_the_exact_ts_request() {
     // The binary's runtime version (a beta restamps only the packaged
     // manifest) rides the User-Agent and every event, not the crate's.
@@ -83,6 +84,7 @@ async fn batch_posts_the_exact_ts_request() {
 }
 
 #[tokio::test]
+#[ignore = "yusAgent (YA-16, ticket 19): remote telemetry is cut at the sink transport (`REMOTE_TELEMETRY`)"]
 async fn the_client_batches_through_the_sink() {
     let (base, rx) = spawn_stub(vec![(202, json!({ "accepted": 2 }))]);
     let mut config = TelemetryClientConfig::new(INSTALL_ID);
@@ -105,6 +107,7 @@ async fn the_client_batches_through_the_sink() {
 }
 
 #[tokio::test]
+#[ignore = "yusAgent (YA-16, ticket 19): remote telemetry is cut at the sink transport (`REMOTE_TELEMETRY`)"]
 async fn failures_drop_the_batch() {
     let (base, rx) = spawn_stub(vec![
         (500, json!({ "detail": "boom" })),
