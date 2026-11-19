@@ -8,15 +8,19 @@ use serde_json::Value;
 
 use crate::theme::{Theme, ThemeBg, ThemeColor};
 
-/// The compact 7-row brand butterfly.
+/// The compact 7-row brand area.
+///
+/// yusAgent (YA-16, ticket 19): the Prime Intellect butterfly is removed. Every glyph is a
+/// space and each row keeps its width, so the splash geometry (metadata column, row count) is
+/// unchanged until the yusAgent art direction brings its own mark.
 pub const PRIME_COMPACT_BUTTERFLY_LOGO: &str = concat!(
-    "                 \u{2597}\u{2584}\u{2584}\u{2588}\u{2580}\n",
-    "   \u{2588}\u{2588}\u{2588}\u{2584}       \u{2597}\u{2584}\u{2588}\u{2588}\u{2588}\u{2580}\n",
-    "  \u{2597}\u{2588}\u{259b}\u{2590}\u{2588}\u{2599}   \u{2597}\u{2584}\u{2588}\u{2580}\u{2597}\u{2588}\u{2580}\n",
-    " \u{2597}\u{2588}\u{259b} \u{259f}\u{2588}\u{2588}\u{2599}\u{2584}\u{2588}\u{2588}\u{259b} \u{259f}\u{259b}\n",
-    " \u{2597}\u{259f}\u{258c} \u{2590}\u{2588}\u{2588}\u{2588}\u{259b}\u{2598}\u{2597}\u{2584}\u{2588}\u{2596}\n",
-    "\u{259f}\u{2588}\u{2588}\u{2588}\u{2584}  \u{2584}\u{2584}\u{259f}\u{2588}\u{2588}\u{2588}\u{2580}\n",
-    "\u{259c}\u{2588}\u{259b}\u{2580}\u{2598}  \u{259c}\u{2588}\u{259b}\u{2580}\u{2598}",
+    "                      \n",
+    "                    \n",
+    "                  \n",
+    "                \n",
+    "               \n",
+    "              \n",
+    "            ",
 );
 
 /// Truncate a plain string to a visible width (cut on grapheme
@@ -41,7 +45,7 @@ fn truncate_to_width(value: &str, max_width: usize, ellipsis: &str) -> String {
 /// Where a session runs; drives labels that depend on persistence.
 #[derive(Debug, Clone, Default)]
 pub struct ChromeState {
-    /// Product version shown in the splash (`prime agent vX`).
+    /// Product version shown in the splash (`yusAgent vX`).
     pub version: String,
     /// Session working directory (splash `cwd` line; `~`-compressed).
     pub cwd: String,
@@ -375,7 +379,7 @@ pub fn render_splash(state: &ChromeState, theme: &Theme, width: usize) -> Vec<Li
     let text = theme.fg_style(ThemeColor::Text);
     let muted = theme.fg_style(ThemeColor::Muted);
     let dim = theme.fg_style(ThemeColor::Dim);
-    let title = "prime agent";
+    let title = "yusAgent";
     let version = format!("v{}", state.version);
     let mut meta_lines: Vec<Line> = Vec::new();
     if str_width(&format!("{title} {version}")) <= meta_width {
