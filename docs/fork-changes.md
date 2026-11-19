@@ -863,6 +863,55 @@ Détail, inventaire et effet sur les requêtes : `docs/tickets/15-ya09-erreurs-v
 | `.changes/ya-09-errors-visible.md` | ajout | Fragment de changelog. | YA-09 |
 | `bench/smoke/tools/check_ya15.py` | ajout | Contrôle de la chauffe du ticket 15 : premier corps identique à une référence hors `prompt_cache_key`, `isError` des cellules `python_repl` cohérent avec `details.status`, aucune mention de 1011. Lecture seule. | YA-09 |
 
+## Renommage du CLI, PR 1 : interface (YA-16, ticket 19)
+
+Décisions et inventaire : `docs/tickets/19-ya16-cli-yusagent.md`. Ni prompt, ni tools, ni requêtes modèle touchés.
+
+**Partage de traces coupé.** Fichier du fork : `crates/pa-core/src/agent_traces/ya_sharing_off.rs` (constantes `TRACE_SHARING = false`, `TRACE_SHARING_OFF`, et deux tests : `agentTraces.enabled: true` + identifiant + serveur local, envoi manuel et automatique refusés sans connexion ni nouvelle tentative, une ligne de journal par envoi ; mode continu avec consentement, trois tours, aucune connexion, aucune ligne de journal).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-core/src/agent_traces/ya_sharing_off.rs` | ajout | Voir ci-dessus. | YA-16 |
+| `crates/pa-core/src/agent_traces.rs` | modif. (fichier upstream, 3 lignes + commentaire) | Déclare `ya_sharing_off`, réexporte les deux constantes. | YA-16 |
+| `crates/pa-core/src/agent_traces/http.rs` | modif. (fichier upstream, 6 lignes + commentaires) | **Point de coupure** : `ReqwestTraceHttp::put`, seul chemin par lequel une trace quitte la machine, refuse sans ouvrir de connexion (`TraceHttpError::SharingOff`, non rejouable : `is_retriable_transport_error` ne retient que `TimedOut` et `Transport`). | YA-16 |
+| `crates/pa-core/src/agent_traces/continuous.rs` | modif. (fichier upstream, 3 lignes + commentaire) | `run_service` ne démarre ni la livraison ni la reprise : sans cela, un `agentTraces.enabled: true` relancerait l'envoi toutes les 60 s et écrirait une ligne de journal à chaque tour (`Schedule::settle` rejoue un `Failed` sans statut). | YA-16 |
+| `crates/pa-cli/src/client_traces.rs` | modif. (fichier upstream, 7 lignes) | `/traces` : l'état lu est faux quel que soit le réglage, `on` est refusé avec `TRACE_SHARING_OFF`. | YA-16 |
+| `crates/pa-cli/src/interactive_mode/onboarding.rs` | modif. (fichier upstream, 2 lignes) | La question de partage de traces n'est plus posée. | YA-16 |
+
+**Marque et logo.** Remplacements de texte, une ligne chacun sauf mention :
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-tui/src/chrome.rs` | modif. (fichier upstream) | Splash : titre `yusAgent` ; papillon remplacé par des espaces de même largeur, ligne par ligne (géométrie du splash inchangée). | YA-16 |
+| `crates/pa-tui/src/onboarding.rs` | modif. (fichier upstream) | Écran d'accueil : « Welcome to **yusAgent** » ; les cellules du papillon restent posées (même ton, même priorité) mais vides, donc mêmes spans. Question d'équipe : « Which account should yusAgent use? ». | YA-16 |
+| `crates/pa-daemon/src/acp/types.rs` | modif. (fichier upstream) | `agentInfo` : `yusagent` / `yusAgent`. Espace de noms `_meta` inchangé. Fixtures `crates/pa-daemon/testdata/acp/` non modifiées : aucun test ne les lit (enregistrements historiques). | YA-16 |
+| `crates/pa-cli/src/daemon_client.rs`, `crates/pa-cli/src/interactive_mode/daemon.rs`, `crates/pa-tui/src/daemon_client.rs`, `crates/pa-tui/src/daemon_client/errors.rs`, `crates/pa-tui/src/session_ui.rs`, `crates/pa-tui/src/session_ui/{apply,factory,heartbeats,prompt}.rs`, `crates/pa-tui/src/interactive/{reconnect,run}.rs`, `crates/pa-tui/src/update_restart_wait.rs` | modif. (fichiers upstream) | « Prime Agent daemon » → « yusAgent daemon » dans les messages **et** dans les fonctions qui les reconnaissent (début de texte, ou texte en minuscules : « yusagent daemon »). Motifs d'incident (`crates/pa-types/src/incident/patterns.rs`) non modifiés : ils lisent d'anciens journaux, aucun code Rust actuel n'émet ces lignes. | YA-16 |
+| `crates/pa-daemon/src/journal.rs`, `crates/pa-tui/src/exit_guard.rs`, `crates/pa-tui/src/exit_restore.rs`, `crates/pa-types/src/platform/terminal.rs` | modif. (fichiers upstream) | Préfixe « yusAgent: » des messages du terminal et du journal. | YA-16 |
+| `crates/pa-cli/src/command_registry.rs`, `crates/pa-cli/src/telemetry_notice.rs`, `crates/pa-tui/src/session_ui/notes.rs` | modif. (fichiers upstream) | Texte de la télémétrie. | YA-16 |
+| `crates/pa-types/src/slash_commands.rs` | modif. (fichier upstream) | Description de `/quit`. | YA-16 |
+| `crates/pa-cli/src/incident/report.rs` | modif. (fichier upstream) | En-tête du rapport d'incident. | YA-16 |
+| `crates/pa-daemon/src/hold_refusal.rs` | modif. (fichier upstream) | « another build of yusAgent » (le cas TypeScript nomme toujours Prime Agent : c'est bien ce produit). | YA-16 |
+| `crates/pa-core/src/kernel/bootstrap/{mod,dir_lock}.rs`, `crates/pa-core/src/kernel/bootstrap/venv/runtime_source.rs` | modif. (fichiers upstream) | Messages d'installation du kernel. | YA-16 |
+| `crates/pa-core/src/mcp/oauth_callback.rs`, `crates/pa-core/src/mcp/oauth_discovery.rs` | modif. (fichiers upstream) | Pages de fin de login MCP ; `client_name` de l'enregistrement dynamique auprès des serveurs MCP. | YA-16 |
+| `crates/pa-ai/src/oauth/callback.rs` | modif. (couche providers, 2 lignes) | Pages de fin de login OAuth générique. `anthropic_callback.rs` non modifié (règle 7). | YA-16 |
+| `prime-agent-runtime/src/rlm/mcp_base.py`, `skills/websearch/src/websearch/websearch.py`, `skills/websearch/SKILL.md` | modif. (fichiers upstream) | Consignes « in yusAgent » (sortie d'outil et corps du `SKILL.md`, hors prompt : l'inventaire ne reprend que la description, inchangée). Le changement du runtime reconstruit le venv du kernel une fois. | YA-16 |
+| `scripts/check_factory_navigation.py` | modif. (script upstream, 1 ligne) | Attend le nouveau message de délai du démon. | YA-16 |
+| `.changes/ya-16-interface-yusagent.md` | ajout | Fragment de changelog. | YA-16 |
+
+Laissés tels quels : messages de mise à jour (PR 2, `update` désactivée), nom du service « Prime Agent Traces » de Prime Intellect, login Claude (règle 7), prompts de `/refine` et de reprise après mise à jour (texte envoyé au modèle), docstrings Python, `README.md` (hors ticket).
+
+### Tests upstream touchés (YA-16, ticket 19, PR 1)
+
+| Fichier | Test | Nature | Changement |
+|---|---|---|---|
+| `crates/pa-cli/src/client_traces.rs` | `the_setting_writes_and_reads_the_agent_traces_flag` | défaut | `set_enabled(true)` refusé avec `TRACE_SHARING_OFF` ; un réglage écrit à la main ne rallume pas l'état. |
+| `crates/pa-cli/src/interactive_mode/tests.rs` | `settings_sink_persists_the_fresh_home_answer_with_the_flag` | défaut | Un dossier neuf déclare le choix fait : la question n'est plus posée. Reste du test inchangé. |
+| `crates/pa-tui/src/chrome/tests.rs` | `splash_renders_logo_version_model_and_cwd` | marque | `yusAgent v0.0.0` ; vérifie l'**absence** du papillon et de « prime agent ». |
+| `crates/pa-tui/src/onboarding.rs` | `trace_question_render_is_unchanged` | marque | Golden transformé mécaniquement : chaque glyphe du papillon (76) devient une espace dans son span, « PRIME » + « Agent » devient un span « yusAgent » en gras. Aucun autre span ne bouge. |
+| `crates/pa-cli/tests/acp_mode_e2e.rs` | `acp_initialize_matches_the_ts_golden` | marque | `agentInfo` attendu `yusagent` / `yusAgent`. |
+| `crates/pa-tui/src/view/{tests,lazy_tests}.rs`, `crates/pa-tui/tests/chat_open_first_frame_headless.rs`, `crates/pa-cli/tests/{chat_open_first_frame_pty_e2e,input_live_open_pty_e2e}.rs` | splash présent ou absent | marque | Cherchent `yusAgent` au lieu de `prime agent`. |
+| `crates/pa-cli/tests/{daemon_commands_e2e,interactive_daemon_e2e,continue_guard_e2e}.rs`, `crates/pa-daemon/tests/hold_refusal_e2e.rs`, `crates/pa-tui/tests/{daemon_rejection_headless,daemon_shutdown_reconnect_headless,daemon_shutdown_turn_end_headless,telemetry_command_headless}.rs`, `crates/pa-tui/src/agents_view/tests/notices.rs`, `crates/pa-cli/src/incident/report_tests.rs` | messages attendus | marque | Même remplacement que dans le code. |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

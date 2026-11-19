@@ -21,6 +21,17 @@ Prises sur le constat ci-dessous ; elles remplacent les options non retenues.
   3. **PR 3, dossier** : `~/.yusagent`, `<cwd>/.yusagent/`, socket, venv du kernel, runtime Python.
 - **Vérification après les PR 2 et 3** : build macOS de la branche (`ya-build-macos-arm64.yml`), puis run du banc en `--capture` sur une tâche, pour vérifier `-p`, l'isolement du banc et le préfixe (`crates/pa-core/tests/prefix_stability.rs`). Yusuf lance la commande ; Claude la lui donne, exacte.
 - **Avant chaque push** : dire ce qui change dans les requêtes (préfixe, cache), même si rien ne change.
+- **`--version`** (19/11/2026) : inchangé. Il n'affiche que la version, sans mention de Prime Agent (`crates/pa-cli/src/lib.rs:151-153`), et `scripts/release/verify_release.py:211` compare cette sortie à l'identique. Un numéro de version propre à yusAgent viendra avec la distribution (YA-16).
+
+## PR 1 : interface (19/11/2026)
+
+Branche `ya-19-interface`, depuis `main` à `9d53d3775`. Fichiers et tests touchés : `docs/fork-changes.md`, section « Renommage du CLI, PR 1 ».
+
+- **Marque** : « Prime Agent » remplacé par « yusAgent » dans les textes affichés (splash, accueil, messages du démon et leurs fonctions de reconnaissance, terminal, télémétrie, `/quit`, rapport d'incident, installation du kernel, pages de login MCP et OAuth générique, consignes MCP du runtime et de `websearch`). Les mentions de la **commande** `prime-agent` (`APP_NAME`, « Run: prime-agent shutdown --force », « Attach instead: prime-agent … ») restent pour la PR 2, avec le nom du binaire.
+- **Logo** : le papillon est retiré du splash (`crates/pa-tui/src/chrome.rs`) et de l'écran d'accueil (`crates/pa-tui/src/onboarding.rs`). Sa zone reste **vide, à la même taille** : la géométrie ne change pas (nombre de lignes du splash, colonne des métadonnées), donc les tests de mise en page restent valides sans compilation locale, et la place attend la marque de la DA yusAgent. Effet visible à l'accueil : le fond animé ne dessine pas sur les anciennes cellules du papillon, une silhouette vide peut se deviner parmi les points.
+- **ACP** : `agentInfo` = `yusagent` / `yusAgent` ; `_meta` inchangé.
+- **Traces** : coupure dans le transport réel `ReqwestTraceHttp::put` (choix de Yusuf, option 1), seul chemin par lequel une trace quitte la machine ; refus sans connexion, non rejoué. En plus, `run_service` ne démarre ni la livraison ni la reprise du mode continu : sans cela, `agentTraces.enabled: true` relancerait l'envoi toutes les 60 s et écrirait une ligne de journal à chaque tour (`crates/pa-core/src/agent_traces/continuous.rs:44-60`, `crates/pa-core/src/agent_traces.rs:714-722`). `/traces on` est refusé, l'état affiché est « off », la question de l'onboarding n'est plus posée.
+- **Laissés** : messages de la mise à jour (PR 2), nom du service « Prime Agent Traces » (provider Prime Intellect), login Claude (règle 7), prompts de `/refine` et de reprise après mise à jour (texte envoyé au modèle), docstrings Python, thème intégré nommé `prime`.
 
 ## Décision de référence
 
