@@ -7,6 +7,8 @@
 # continuous.yml ne se déclenche que sur un push vers main et construit les
 # 4 cibles ; ce workflow ne construit que la cible utile aux mesures.
 # Aucun secret : seul github.token (lecture) est utilisé.
+# YA-16 (ticket 19) : la cible Cargo reste `prime-agent` ; le binaire de l'archive s'appelle
+# `yusagent` (`--binary-name`), l'artefact `yusagent-<cible>-<sha>`. L'archive garde son nom.
 name: ya-build-macos-arm64
 
 on:
@@ -73,6 +75,7 @@ jobs:
             --target "${TARGET}" \
             --sha "${GITHUB_SHA}" \
             --binary "target/${TARGET}/release/prime-agent" \
+            --binary-name yusagent \
             --catalog-assets "target/${TARGET}/catalog-assets" \
             --out-dir "target/${TARGET}/dist"
           cat "target/${TARGET}/dist/manifest.json"
@@ -84,11 +87,12 @@ jobs:
             --dist-dir "target/${TARGET}/dist" \
             --version "${version}" \
             --target "${TARGET}" \
-            --sha "${GITHUB_SHA}"
+            --sha "${GITHUB_SHA}" \
+            --binary-name yusagent
       - name: Upload artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: prime-agent-aarch64-apple-darwin-${{ github.sha }}
+          name: yusagent-aarch64-apple-darwin-${{ github.sha }}
           path: |
             target/aarch64-apple-darwin/dist/prime-agent-*
             target/aarch64-apple-darwin/dist/SHA256SUMS

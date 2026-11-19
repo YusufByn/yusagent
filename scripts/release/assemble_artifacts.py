@@ -212,6 +212,10 @@ def parse_args() -> argparse.Namespace:
                         help="directory with models.bundled.json + "
                              "mcp-services.bundled.json (see "
                              "scripts/release/bundle_catalog.py)")
+    # yusAgent (YA-16, ticket 19): the binary's name inside the archive.
+    parser.add_argument("--binary-name", default=None,
+                        help="name of the binary inside the archive "
+                             "(default: prime-agent; .exe added on Windows)")
     return parser.parse_args()
 
 
@@ -284,6 +288,10 @@ def stage_tree(staging: Path, args: argparse.Namespace, stamped_version: str | N
     """
     binary_name = binary_name_for_target(args.target)
     binary = resolve_binary(args)
+    # yusAgent (YA-16, ticket 19): the shipped file can carry another name.
+    if getattr(args, "binary_name", None):
+        binary_name = args.binary_name + (".exe" if binary_name.endswith(".exe") else "")
+        EXECUTABLE_ENTRIES.add(binary_name)
     runtime_dir = args.runtime_dir or (args.repo_root / "prime-agent-runtime")
     sources = {
         binary_name: binary,
@@ -360,6 +368,10 @@ def stage_tree(staging: Path, args: argparse.Namespace, stamped_version: str | N
     }
 
 
+# The archive entries that keep their exec bit (yusAgent, YA-16: plus `--binary-name`).
+EXECUTABLE_ENTRIES = {"prime-agent", "prime-agent.exe"}
+
+
 def _deterministic_member(member: tarfile.TarInfo) -> tarfile.TarInfo:
     """tarfile `filter`: fixed mtime/owner, deterministic modes, no links.
 
@@ -378,7 +390,7 @@ def _deterministic_member(member: tarfile.TarInfo) -> tarfile.TarInfo:
     member.mtime = 0
     if member.isdir():
         member.mode = 0o755
-    elif member.name == "prime-agent" or member.name == "prime-agent.exe":
+    elif member.name in EXECUTABLE_ENTRIES:
         member.mode = 0o755
     else:
         member.mode = 0o644

@@ -96,6 +96,10 @@ def main() -> int:
     parser.add_argument("--expect-package-json", default=None, metavar="VERSION",
                         help="the consume-route restamp shape: a package.json "
                              "carrying exactly this release version")
+    # yusAgent (YA-16, ticket 19): the binary's name inside the archive.
+    parser.add_argument("--binary-name", default=None,
+                        help="name of the binary inside the archive "
+                             "(default: prime-agent; .exe added on Windows)")
     args = parser.parse_args()
     if args.sha is not None:
         args.sha = args.sha.lower()
@@ -107,6 +111,11 @@ def main() -> int:
     expected_top_level = (EXPECTED_TOP_LEVEL - {"prime-agent"}) | {binary_name}
     if binary_name != "prime-agent.exe":
         expected_top_level |= NATIVE_COMPAT_TOP_LEVEL
+    # yusAgent (YA-16, ticket 19): the shipped binary can carry another name.
+    if args.binary_name:
+        shipped = args.binary_name + (".exe" if binary_name.endswith(".exe") else "")
+        expected_top_level = (expected_top_level - {binary_name}) | {shipped}
+        binary_name = shipped
     expected_top_level |= (
         CONTINUOUS_EXTRA_TOP_LEVEL if (args.sha or args.expect_package_json)
         else set()
@@ -119,7 +128,10 @@ def main() -> int:
     if not archive.is_file():
         fail(f"archive {archive} not found; run assemble_artifacts.py first")
 
-    validate_compatibility_archive(archive)
+    # yusAgent (YA-16, ticket 19): a renamed binary is never served to the TS native updater,
+    # whose contract this check guards.
+    if not args.binary_name:
+        validate_compatibility_archive(archive)
 
     # 1. Deterministic tarball shape: exact top-level payload, no link entries.
     with tarfile.open(archive) as tar:
