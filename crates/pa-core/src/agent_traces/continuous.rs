@@ -563,6 +563,11 @@ async fn run_service() {
             acknowledge_replacements(&mut current, &registrations);
         }
         for registration in registrations {
+            // yusAgent (YA-16, ticket 19): with sharing off, neither the delivery nor the
+            // recovery task starts: no retry every minute, no trace-log line every turn.
+            if !TRACE_SHARING {
+                continue;
+            }
             let weak = registration.controller;
             if let Some(controller) = weak.upgrade() {
                 if controller.consent.lock().unwrap().0

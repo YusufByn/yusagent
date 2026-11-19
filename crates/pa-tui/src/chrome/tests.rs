@@ -802,12 +802,14 @@ fn splash_renders_logo_version_model_and_cwd() {
     let lines = render_splash(&state, &theme(), 120);
     assert_eq!(lines[0], Vec::new());
     let text = |line: &Line| line.iter().map(|s| s.content.as_str()).collect::<String>();
-    assert!(lines.iter().any(|l| text(l).contains("prime agent v0.0.0")));
+    assert!(lines.iter().any(|l| text(l).contains("yusAgent v0.0.0")));
     assert!(lines.iter().any(|l| text(l).contains("model faux-1")));
     assert!(lines.iter().any(|l| text(l).contains("cwd /tmp/project")));
-    assert!(lines
+    // yusAgent (YA-16, ticket 19): the butterfly is gone, its area stays blank.
+    assert!(!lines
         .iter()
         .any(|l| text(l).contains("\u{2597}\u{2584}\u{2584}")));
+    assert!(!lines.iter().any(|l| text(l).contains("prime agent")));
 }
 
 #[test]

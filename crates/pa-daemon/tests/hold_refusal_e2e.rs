@@ -269,7 +269,7 @@ fn a_foreign_lease_holder_rejects_the_create_with_the_hold_refusal() {
     // This test process runs a build of this product, so the holder classification
     // reads as another Rust build, never the TypeScript product.
     assert!(
-        error.starts_with("This session is currently open in another Rust build of Prime Agent"),
+        error.starts_with("This session is currently open in another build of yusAgent"),
         "the holder is classified, not guessed: {error}"
     );
     assert!(

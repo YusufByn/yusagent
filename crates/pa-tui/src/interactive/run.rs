@@ -1657,7 +1657,7 @@ async fn run_interactive_surface(
                             // The daemon never came back within the reconnect timeout — the
                             // saved-transcript close (the session file survives on disk).
                             session.note(
-                                "The Prime Agent daemon shut down while this window was attached. The session transcript remains saved; restart Prime Agent and reopen it from Agents View.",
+                                "The yusAgent daemon shut down while this window was attached. The session transcript remains saved; restart yusAgent and reopen it from Agents View.",
                                 &mut view,
                             );
                             session.exit_reason = "daemon_closed";
@@ -1728,7 +1728,7 @@ async fn run_interactive_surface(
                             // The daemon never came back within the reconnect timeout — the
                             // saved-transcript close (the session file survives on disk).
                             session.note(
-                                "The Prime Agent daemon shut down while this window was attached. The session transcript remains saved; restart Prime Agent and reopen it from Agents View.",
+                                "The yusAgent daemon shut down while this window was attached. The session transcript remains saved; restart yusAgent and reopen it from Agents View.",
                                 &mut view,
                             );
                             session.exit_reason = "daemon_closed";

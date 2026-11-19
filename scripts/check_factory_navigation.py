@@ -158,7 +158,7 @@ def observe(binary, root, observed):
         snap('returned_page_closes', lambda text: 'FACTORY_CLOSED_INPUT_BARRIER' in text
              and RUN not in text)
         snap('child_stop_timeout_survives_page_close', lambda text:
-             'timed out waiting for the Prime Agent daemon response' in text
+             'timed out waiting for the yusAgent daemon response' in text
              and RUN not in text)
         assert not server.prompts, 'navigation submitted a prompt'
         assert all(c.get('action') in ('graph', 'watch') for c in server.commands

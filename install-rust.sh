@@ -387,7 +387,8 @@ function field(frame,   x, y, k, hash, cx, cy, contour, hy, si, seg, t, base, wa
     n = split(LOGO[y], parts, "|")
     for (i = 1; i <= n; i++) {
       eq = index(parts[i], "=")
-      put(LI + substr(parts[i], 1, eq - 1), y, substr(parts[i], eq + 1), "T", 8)
+      # yusAgent (YA-16, ticket 19): the butterfly cells stay blank, as in pa-tui onboarding.rs
+      put(LI + substr(parts[i], 1, eq - 1), y, " ", "T", 8)
     }
   }
 }

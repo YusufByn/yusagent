@@ -103,7 +103,7 @@ impl EnsureKernelPythonOptions {
 fn format_bootstrap_failure(error: &anyhow::Error) -> anyhow::Error {
     let mut message = format!(
         "Failed to set up the Python kernel runtime. {error:#}\n\
-         First-time setup needs the bundled local runtime and internet to install uv, Python, and default Python packages; once set up, Prime Agent runs offline. \
+         First-time setup needs the bundled local runtime and internet to install uv, Python, and default Python packages; once set up, yusAgent runs offline. \
          An interrupted runtime upgrade needs network once more, so re-run this while online. \
          Set PRIME_AGENT_KERNEL_PYTHON to a Python with a current prime-agent-runtime and default Python packages installed to skip auto-bootstrap."
     );

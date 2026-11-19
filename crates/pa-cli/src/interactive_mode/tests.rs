@@ -443,9 +443,11 @@ fn settings_sink_persists_the_fresh_home_answer_with_the_flag() {
         !sink.onboarding_shown(),
         "a fresh home has no completion flag yet"
     );
+    // yusAgent (YA-16, ticket 19): with trace sharing off the question never mounts, so the
+    // sink reports a choice even on a fresh home.
     assert!(
-        !sink.agent_traces_choice_written(),
-        "a fresh home carries no trace choice (sharing stays off until a choice is made)"
+        sink.agent_traces_choice_written(),
+        "the trace question never mounts while sharing is off"
     );
     sink.set_agent_traces_enabled(true).expect("answer Share");
     sink.mark_onboarding_complete()

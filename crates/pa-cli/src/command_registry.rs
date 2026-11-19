@@ -121,7 +121,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         "Show or change usage telemetry",
     )
     .description(
-        "Prime Agent sends pseudonymous usage and performance metrics, never prompts, responses, tool content, file paths, or repository data. status (the default) shows whether telemetry is on and why, where it sends, and the installation id; on and off save the choice in settings.",
+        "yusAgent sends pseudonymous usage and performance metrics, never prompts, responses, tool content, file paths, or repository data. status (the default) shows whether telemetry is on and why, where it sends, and the installation id; on and off save the choice in settings.",
     ),
     CommandSpec::new(
         &["doctor"],

@@ -18,6 +18,8 @@ pub enum TraceHttpError {
     TimedOut { timeout_ms: u64 },
     Cancelled,
     Transport(String),
+    // yusAgent (YA-16, ticket 19): the production transport refuses every send; not retried.
+    SharingOff,
 }
 
 impl TraceHttpError {
@@ -29,6 +31,7 @@ impl TraceHttpError {
             }
             TraceHttpError::Cancelled => "Trace upload cancelled".to_string(),
             TraceHttpError::Transport(message) => message.clone(),
+            TraceHttpError::SharingOff => super::TRACE_SHARING_OFF.to_string(),
         }
     }
 }
@@ -57,6 +60,10 @@ impl TraceHttp for ReqwestTraceHttp {
         timeout_ms: u64,
         cancel: Option<&'a TraceUploadCancel>,
     ) -> Pin<Box<dyn Future<Output = Result<TraceHttpResponse, TraceHttpError>> + Send + 'a>> {
+        // yusAgent (YA-16, ticket 19): no trace leaves the machine; no connection is opened.
+        if !super::TRACE_SHARING {
+            return Box::pin(async { Err::<TraceHttpResponse, _>(TraceHttpError::SharingOff) });
+        }
         Box::pin(async move {
             let client = pa_ai::utils::tls::http_client_builder()
                 .timeout(std::time::Duration::from_millis(timeout_ms))

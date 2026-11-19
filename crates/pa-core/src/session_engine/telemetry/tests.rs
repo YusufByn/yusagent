@@ -947,6 +947,7 @@ async fn bot_edges_the_trigger_lands_and_terminal_outcome_maps() {
 /// with a tool call, end) posts TS-shaped bodies, and every legacy event
 /// carries the full TS property set in the TS vocabulary.
 #[tokio::test]
+#[ignore = "yusAgent (YA-16, ticket 19): remote telemetry is cut at the sink transport (`REMOTE_TELEMETRY`)"]
 async fn legacy_events_reach_the_analytics_endpoint_in_the_ts_shape() {
     use std::io::{Read, Write};
 

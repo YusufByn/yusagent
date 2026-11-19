@@ -99,7 +99,7 @@ pub async fn ensure_daemon_running_with(
         }
         if Instant::now() > deadline {
             return Err(anyhow!(
-                "Timed out waiting for the Prime Agent daemon to start on {}. Run: prime-agent shutdown --force, then retry the original command.",
+                "Timed out waiting for the yusAgent daemon to start on {}. Run: prime-agent shutdown --force, then retry the original command.",
                 socket_path.display()
             ));
         }
@@ -134,7 +134,7 @@ async fn shutdown_stale_daemon(
     client.close();
     if busy {
         return Err(anyhow!(
-            "An incompatible Prime Agent daemon is running on {}.\n\nRun:\n  prime-agent shutdown --force\n\nThen retry the original command (the running daemon has active work).",
+            "An incompatible yusAgent daemon is running on {}.\n\nRun:\n  prime-agent shutdown --force\n\nThen retry the original command (the running daemon has active work).",
             socket_path.display()
         ));
     }
@@ -186,6 +186,6 @@ fn spawn_supervisor_detached(socket_path: &Path, spawn_cwd: &Path, exe: &Path) -
     pa_core::platform::process::set_new_process_group(&mut command);
     command
         .spawn()
-        .with_context(|| format!("spawn the Prime Agent daemon on {}", socket_path.display()))?;
+        .with_context(|| format!("spawn the yusAgent daemon on {}", socket_path.display()))?;
     Ok(())
 }

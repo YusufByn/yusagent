@@ -321,7 +321,7 @@ fn print_resume_refuses_a_foreign_lease_holder() {
         .unwrap_or_default();
     let expected = format!(
         concat!(
-            "Error: This session is currently open in another Rust build of Prime Agent ",
+            "Error: This session is currently open in another build of yusAgent ",
             "(active in foreign01ab3c) — another daemon or window of this product holds the file's ",
             "runtime lease.\n",
             "\n",

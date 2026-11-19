@@ -421,7 +421,7 @@ fn the_report_layout_matches_the_ts_shape() {
     let text = build_incident_report(&entries(&lines), &options).text;
     let severity = format!("{:<8}", "info");
     let expected = [
-        "Prime Agent incident timeline",
+        "yusAgent incident timeline",
         "Window: 09-10 20:00:00 → 09-10 20:30:00 UTC (30m)",
         "",
         "Supervisor events",

@@ -32,6 +32,10 @@ mod upload;
 use upload::perform_agent_trace_upload;
 pub use upload::{upload_trace_file, TraceUploadOptions};
 
+// yusAgent (YA-16, ticket 19): trace sharing to Prime Intellect is off.
+mod ya_sharing_off;
+pub use ya_sharing_off::{TRACE_SHARING, TRACE_SHARING_OFF};
+
 pub const MAX_TRACE_BYTES: u64 = 20 * 1024 * 1024;
 pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 15_000;
 const TRACE_UPLOAD_RETRY_BASE_DELAY_MS: u64 = 500;

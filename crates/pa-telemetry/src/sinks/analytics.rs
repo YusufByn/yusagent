@@ -19,6 +19,10 @@ use crate::sink::{SinkOutcome, TelemetrySink};
 /// The TS product's endpoint: the one destination for product telemetry.
 pub const ANALYTICS_ENDPOINT: &str = "https://api.primeintellect.ai/api/v1/agent-analytics/events";
 
+/// yusAgent (YA-16, ticket 19): remote telemetry to Prime Intellect is off, with no switch;
+/// `telemetry.enabled` does not read it. Unharnessed removed it (`de437b6e2`).
+pub const REMOTE_TELEMETRY: bool = false;
+
 /// TS parity: requests time out after 1.5s so telemetry never holds the agent.
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_millis(1500);
 
@@ -96,6 +100,10 @@ impl TelemetrySink for AnalyticsSink {
         install_id: &'a str,
         events: Vec<TelemetryEvent>,
     ) -> Pin<Box<dyn Future<Output = SinkOutcome> + Send + 'a>> {
+        // yusAgent (YA-16, ticket 19): no batch leaves the machine; no connection is opened.
+        if !REMOTE_TELEMETRY {
+            return Box::pin(async { SinkOutcome::Dropped });
+        }
         Box::pin(async move {
             if events.is_empty() {
                 return SinkOutcome::Sent;

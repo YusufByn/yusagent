@@ -31,7 +31,7 @@ fn mode_with_notice(notice: &str) -> AgentsViewMode {
 /// the panel: the full text stays visible, and any key dismisses it.
 #[test]
 fn a_multiline_refusal_notice_renders_as_a_dismissible_panel() {
-    let refusal = "This session is currently open in another Rust build of Prime Agent \
+    let refusal = "This session is currently open in another build of yusAgent \
 (active in 6b558be357e3) — another daemon or window of this product holds the file's \
 runtime lease.\n\n• Continue where you left off:\n  prime-agent --daemon-socket \
 <socket> --resume 'sess-1'\n  (<socket> is that instance's daemon socket, from the \
