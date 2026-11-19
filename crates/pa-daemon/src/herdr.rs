@@ -892,7 +892,8 @@ pub(crate) fn valid_resume_argv(target: Option<&str>) -> Option<Vec<String>> {
     if target.is_empty() || target.contains('\'') || target.chars().any(char::is_control) {
         return None;
     }
-    let argv = ["prime-agent", "--resume", target]
+    // yusAgent (YA-16, ticket 19): the shipped binary is named `yusagent`.
+    let argv = ["yusagent", "--resume", target]
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<String>>();
@@ -1069,7 +1070,7 @@ mod tests {
         assert_eq!(
             argv,
             Some(vec![
-                "prime-agent".to_string(),
+                "yusagent".to_string(),
                 "--resume".to_string(),
                 "019e71ec-e08a-75a9-b573-000000000001.jsonl".to_string(),
             ])
@@ -1077,7 +1078,7 @@ mod tests {
         assert_eq!(
             valid_resume_argv(Some("  trimmed-id  ")),
             Some(vec![
-                "prime-agent".into(),
+                "yusagent".into(),
                 "--resume".into(),
                 "trimmed-id".into()
             ])

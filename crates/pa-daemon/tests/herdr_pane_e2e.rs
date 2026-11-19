@@ -325,7 +325,7 @@ fn the_session_reports_its_payload_pane_across_the_lifecycle() {
     assert_eq!(params["agent_session_path"], session_file);
     assert_eq!(
         params["resume_argv"],
-        json!(["prime-agent", "--resume", session_file])
+        json!(["yusagent", "--resume", session_file])
     );
     assert!(params["seq"].as_u64().expect("seq") > 0);
     assert_no_boot_pane(&requests, "w1:payload");
