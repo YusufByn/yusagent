@@ -398,9 +398,11 @@ pub fn initialize_result(product_version: &str) -> InitializeResult {
                 close: CloseCapability::default(),
             },
         },
+        // yusAgent (YA-16, ticket 19): the agent's own name; the `_meta` namespace below stays
+        // upstream's (decision of 19/11/2026), fork additions go under `_yus/*`.
         agent_info: AgentInfo {
-            name: "prime-agent".to_string(),
-            title: "Prime Agent".to_string(),
+            name: "yusagent".to_string(),
+            title: "yusAgent".to_string(),
             version: product_version.to_string(),
         },
         meta: super::meta::prime_agent_meta(&super::meta::PrimeAgentSessionMeta::default()),
@@ -425,7 +427,7 @@ mod tests {
                     "mcpCapabilities": { "http": true },
                     "sessionCapabilities": { "close": {} },
                 },
-                "agentInfo": { "name": "prime-agent", "title": "Prime Agent", "version": "9.9.9" },
+                "agentInfo": { "name": "yusagent", "title": "yusAgent", "version": "9.9.9" },
                 "_meta": { "ai.primeintellect.prime-agent": {} },
             })
         );

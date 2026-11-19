@@ -311,8 +311,8 @@ fn acp_initialize_matches_the_ts_golden() {
     // ACP MCP server admission is served, so the http capability is advertised.
     assert_eq!(capabilities["mcpCapabilities"], json!({ "http": true }));
     let info = &result["agentInfo"];
-    assert_eq!(info["name"], "prime-agent");
-    assert_eq!(info["title"], "Prime Agent");
+    assert_eq!(info["name"], "yusagent");
+    assert_eq!(info["title"], "yusAgent");
     assert_eq!(
         result["_meta"],
         json!({ "ai.primeintellect.prime-agent": {} })
@@ -861,7 +861,7 @@ fn acp_mode_daemon_unreachable_exits_1_without_fallback() {
         "the startup failure is an error line: {stderr}"
     );
     assert!(
-        stderr.contains("Timed out waiting for the Prime Agent daemon to start"),
+        stderr.contains("Timed out waiting for the yusAgent daemon to start"),
         "the daemon never became reachable: {stderr}"
     );
 }
