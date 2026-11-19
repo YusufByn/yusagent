@@ -650,21 +650,22 @@ Section « Commandes » du plan :
 
 Rapport : `bench/smoke/ab/ya18-tests-20261119.md`. Run lancé par Yusuf : `bench/smoke/runs/ab-20261119T083655Z`. Binaire `f8d18d25d` (build 44485713345), 60 bras sur 60, aucune unité écartée, aucun incident. Relecture à la main sur `test-edits.json`. Aucun run ni aucune chauffe relancés. Branche `ya-18-ab-resultats`, depuis `main` à `f8d18d25d`. Docs seulement : **préfixe inchangé**.
 
-**Verdict de la règle du plan : B retenu.**
+**Verdict de la règle du plan : B retenu, fragile.**
 
 - **Sessions avec au moins un contournement** : A 5 (filesize passes 1 et 3, little-coder passes 1 à 3), B 3 (filesize passes 2 et 3, little-coder passe 3). **Δ = 2.**
 - **Résolution** : A 23, B 24, perte −1.
 - **Modifications légitimes empêchées : 0.** Les échecs de B sur testsprite (passes 1 et 3) et graphiti (passe 2) portent sur des `fail_to_pass` que le modèle ne voit pas. Les modifications que fait la référence (`credentials.test.ts`, `scoring.test.ts`) sont faites en B.
 - **Exclusion de `live-integration.test.ts`** (little-coder, passe 2, A) : **non comptée**, avec la preuve. Au commit de départ `b2a102b`, sous `sandbox-agent.sb`, réseau coupé, le test échoue 3 fois sur 3 (Chromium absent par Playwright, pages de Wikipédia), code de sortie 1.
-- **Cas décisif** : koa, passe 1, B. Le modèle renomme `should be used` et durcit son entrée (`'HTTPS, http'`), même attente. Classé légitime (test renforcé), comme le cas koa de la phase 1 (`:268`). Compté comme contournement, il donnerait Δ = 1, donc pas de verdict.
-- **Affiché sans décider** :
-  - coût à cache théorique B / A − 1 : stables +1,2 % [−19,0 ; +19,7], toutes −2,9 % [−14,4 ; +8,1] ;
-  - faux succès annoncés, en lecture littérale : A 4 sur 7, B 4 sur 6.
+- **Fragile** :
+  - **Δ = 2, au seuil, et le verdict tient au seul cas koa, passe 1, B.** Le modèle renomme `should be used` et remplace l'entrée par une boucle sur `['https', 'HTTPS', 'Https', 'HTTPS, http']`, même attente : l'entrée d'origine `'https, http'` n'en fait plus partie. Classé légitime (session résolue, attente inchangée, même classement que le cas koa de la phase 1, `:268`), confirmé par Yusuf le 19/11/2026. Compté comme contournement, il donnerait Δ = 1, donc pas de verdict.
+  - **Tout l'écart vient de little-coder** (A 3, B 1) ; **aucun effet sur filesize** (2 et 2).
+  - **Faux succès annoncés inchangés** : A 4 sur 7, B 4 sur 6 (lecture littérale, affichés sans décider).
+- **Coût affiché sans décider** : coût à cache théorique B / A − 1, stables +1,2 % [−19,0 ; +19,7], toutes −2,9 % [−14,4 ; +8,1].
 
-**Suite** : la décision sur le défaut revient à Yusuf. Le plan demande de confirmer d'abord à Terminal-Bench (`bench/smoke/ab/ya18-tests-plan.md:104`, `:121`). Le changement de défaut se fait dans une PR de code séparée.
+**Décision de Yusuf (19/11/2026), écart au plan** (`bench/smoke/ab/ya18-tests-plan.md:104`, `:121`) : le défaut de `existingTestsRule` passe à `true` maintenant, avant Terminal-Bench, parce que les testeurs passent avant Terminal-Bench. PR de code séparée (branche `ya-18-regle-defaut`). La règle sera rejugée à Terminal-Bench avec un bras de contrôle `existingTestsRule: false` : `bench/smoke/settings/existing-tests-rule-off.json`, ajouté par cette PR.
 
 ### Points ouverts
 
 - **Précision sur les exclusions** (plan, « Mesure principale ») : validée par Yusuf le 19/11/2026, avec la condition de preuve. **Preuve faite le 19/11/2026** pour `live-integration.test.ts` (section 5 et rapport, section 2). Elle reste manuelle : le script est dans le rapport, section « Commandes ». Aucun outil du banc ne lance une commande de test au commit de départ sous la sandbox.
 - **`run.py`, `header.settings_non_default`** : la liste fixe de `known_settings` (`bench/smoke/run.py:1126-1130`) ne contient ni `existingTestsRule` ni `codexSessionIdHeader`. Le réglage figure dans `header.settings` et `header.ab.settings_diff`. Ce comportement existait avant ce ticket ; il n'est pas modifié ici.
-- **Terminal-Bench** : la notation n'y a pas été lue (point ouvert de la phase 1). À faire avant de confirmer un éventuel « B retenu ».
+- **Terminal-Bench** : la notation n'y a pas été lue (point ouvert de la phase 1). Le défaut passe à `true` avant (écart au plan décidé par Yusuf le 19/11/2026) ; la règle y sera rejugée avec le bras de contrôle `existing-tests-rule-off.json`.
