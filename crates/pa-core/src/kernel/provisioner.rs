@@ -1400,7 +1400,7 @@ mod tests {
         let agent_dir = dir.path().join("agent");
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&agent_dir).unwrap();
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         // Project settings override the global setting before the session captures it.
         let global = executable_shell(dir.path(), "global-bash");
         let project = executable_shell(dir.path(), "project-bash");
@@ -1410,7 +1410,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(
-            cwd.join(".prime/agent/settings.json"),
+            cwd.join(".yusagent/settings.json"),
             serde_json::json!({ "shellPath": format!("  {}  ", project.to_string_lossy()) })
                 .to_string(),
         )
@@ -1425,7 +1425,7 @@ mod tests {
         let agent_dir = dir.path().join("agent");
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&agent_dir).unwrap();
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         std::fs::write(
             agent_dir.join("settings.json"),
             serde_json::json!({ "shellCommandPrefix": "shopt -s expand_aliases" }).to_string(),
@@ -1444,7 +1444,7 @@ mod tests {
         let agent_dir = dir.path().join("agent");
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&agent_dir).unwrap();
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         std::fs::write(
             agent_dir.join("auth.json"),
             r#"{ "serper": { "type": "api_key", "key": "!printf key-from-cmd" } }"#,
@@ -1483,7 +1483,7 @@ mod tests {
         let agent_dir = dir.path().join("agent");
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&agent_dir).unwrap();
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         std::fs::write(
             agent_dir.join("auth.json"),
             r#"{ "serper": { "type": "api_key", "key": "!printf key-from-cmd" } }"#,
@@ -1502,7 +1502,7 @@ mod tests {
         let agent_dir = dir.path().join("agent");
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&agent_dir).unwrap();
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         let engine = shell_test_session(cwd, agent_dir).await.unwrap();
         assert_eq!(
             engine
@@ -1523,7 +1523,7 @@ mod tests {
         let agent_dir = dir.path().join("agent");
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&agent_dir).unwrap();
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         std::fs::write(
             agent_dir.join("settings.json"),
             serde_json::json!({ "bundledSkills": { "websearch": false } }).to_string(),
@@ -1552,10 +1552,10 @@ mod tests {
         let agent_dir = dir.path().join("agent");
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&agent_dir).unwrap();
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         let missing = cwd.join("no-such-shell");
         std::fs::write(
-            cwd.join(".prime/agent/settings.json"),
+            cwd.join(".yusagent/settings.json"),
             serde_json::json!({ "shellPath": missing.to_string_lossy() }).to_string(),
         )
         .unwrap();

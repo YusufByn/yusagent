@@ -38,7 +38,7 @@ fn kernel_python() -> PathBuf {
     let python = std::env::var_os("PA_E2E_KERNEL_PYTHON").map_or_else(
         || {
             PathBuf::from(std::env::var("HOME").expect("HOME"))
-                .join(".prime/agent/kernel-venv/bin/python")
+                .join(".yusagent/kernel-venv/bin/python")
         },
         PathBuf::from,
     );

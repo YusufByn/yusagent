@@ -156,7 +156,7 @@ fn harness_refinements_persist_without_clobbering_other_settings() {
 fn harness_refinements_ignore_project_overrides_and_resolve_global_wrong_types() {
     let dir = tempfile::tempdir().unwrap();
     let agent_dir = dir.path().join("agent");
-    let project_dir = dir.path().join(".prime/agent");
+    let project_dir = dir.path().join(".yusagent");
     std::fs::create_dir_all(&agent_dir).unwrap();
     std::fs::create_dir_all(&project_dir).unwrap();
     std::fs::write(

@@ -53,12 +53,8 @@ fn live_worker_descriptors_roundtrip_losslessly() {
     let dir = std::env::var_os("PA_TYPES_WORKERS_DIR")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME").map(|h| {
-                PathBuf::from(h)
-                    .join(".prime")
-                    .join("agent")
-                    .join("daemon-workers")
-            })
+            std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".yusagent").join("daemon-workers"))
         })
         .unwrap_or_else(|| panic!("PA_TYPES_LIVE_WORKERS=1 but no workers dir configured"));
     assert!(dir.is_dir(), "workers dir not found: {}", dir.display());

@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn loads_real_session() {
-        let dir = std::path::Path::new("/home/ubuntu/.prime/agent/sessions");
+        let dir = std::path::Path::new("/home/ubuntu/.yusagent/sessions");
         if !dir.is_dir() {
             return; // sandbox without agent state
         }

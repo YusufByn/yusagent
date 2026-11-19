@@ -252,7 +252,7 @@ mod tests {
             "{}",
             default.assembled
         );
-        let project = dir.path().join(".prime/agent");
+        let project = dir.path().join(".yusagent");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("settings.json"), r#"{"bashWaitSeconds": 1}"#).unwrap();
         let (upstream, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn shows_the_prompt_version_of_the_settings() {
         let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join(".prime/agent");
+        let project = dir.path().join(".yusagent");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("settings.json"), r#"{"promptVersion": 2}"#).unwrap();
         let (short, _) = assemble_breakdown(dir.path(), Some("mock/mock-1")).unwrap();
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn shows_the_existing_tests_rule_of_the_settings() {
         let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join(".prime/agent");
+        let project = dir.path().join(".yusagent");
         std::fs::create_dir_all(&project).unwrap();
         let rule = "- Existing tests encode expected behavior:";
         std::fs::write(project.join("settings.json"), r#"{"promptVersion": 2}"#).unwrap();

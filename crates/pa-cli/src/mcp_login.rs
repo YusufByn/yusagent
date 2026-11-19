@@ -306,7 +306,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().join("project");
         let agent_dir = dir.path().join("agent");
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         std::fs::create_dir_all(&agent_dir).unwrap();
         let mut global: serde_json::Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -327,7 +327,7 @@ mod tests {
             "/../pa-core/tests/fixtures/mcp/project-services.json"
         )]);
         std::fs::write(agent_dir.join("settings.json"), global.to_string()).unwrap();
-        std::fs::write(cwd.join(".prime/agent/settings.json"), project.to_string()).unwrap();
+        std::fs::write(cwd.join(".yusagent/settings.json"), project.to_string()).unwrap();
         let mut manager = cli_mcp_manager(&cwd, &agent_dir);
         for _ in 0..2 {
             assert_eq!(

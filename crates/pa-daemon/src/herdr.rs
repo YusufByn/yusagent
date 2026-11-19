@@ -1209,7 +1209,7 @@ mod tests {
         let (requests, server) = fake_herdr(&socket_path);
         let config = HerdrConfig::from_env(&pane_env(&socket_path, "w1:p1")).unwrap();
         let session_ref = HerdrSessionRef::new(
-            Some("/home/me/.prime/agent/sessions/s1.jsonl".to_string()),
+            Some("/home/me/.yusagent/sessions/s1.jsonl".to_string()),
             Some("s1".to_string()),
         );
         let (reporter, _generation) = start_reporter(config, session_ref.clone());
@@ -1227,14 +1227,14 @@ mod tests {
         assert_eq!(params["state"], "idle");
         assert_eq!(
             params["agent_session_path"],
-            "/home/me/.prime/agent/sessions/s1.jsonl"
+            "/home/me/.yusagent/sessions/s1.jsonl"
         );
         assert_eq!(
             params["resume_argv"],
             json!([
                 "yusagent",
                 "--resume",
-                "/home/me/.prime/agent/sessions/s1.jsonl"
+                "/home/me/.yusagent/sessions/s1.jsonl"
             ])
         );
         // The id carries the source prefix; the seq is a number.

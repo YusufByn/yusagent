@@ -513,14 +513,7 @@ fn package_manager_corpus_matches_ts_binary() {
 
     // Rust sandbox state assertions (the verifier half).
     let project_settings: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            rust_sandbox
-                .cwd
-                .join(".prime")
-                .join("agent")
-                .join("settings.json"),
-        )
-        .unwrap(),
+        &std::fs::read_to_string(rust_sandbox.cwd.join(".yusagent").join("settings.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -543,7 +536,7 @@ fn package_manager_corpus_matches_ts_binary() {
     );
 
     // Project npm prefix survives the earlier npm --local round trip.
-    let npm_root = rust_sandbox.cwd.join(".prime").join("agent").join("npm");
+    let npm_root = rust_sandbox.cwd.join(".yusagent").join("npm");
     assert!(npm_root.join("package.json").exists());
     assert!(npm_root.join(".gitignore").exists());
     // Git installs are fully pruned, leaving only the gitignore guard file.

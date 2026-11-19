@@ -60,8 +60,8 @@ impl RpcChild {
             return explicit;
         }
         let candidate = std::path::PathBuf::from(std::env::var("HOME").map_or_else(
-            |_| "/home/ubuntu/.prime/agent/kernel-venv/bin/python".to_string(),
-            |home| format!("{home}/.prime/agent/kernel-venv/bin/python"),
+            |_| "/home/ubuntu/.yusagent/kernel-venv/bin/python".to_string(),
+            |home| format!("{home}/.yusagent/kernel-venv/bin/python"),
         ));
         assert!(
             candidate.exists(),

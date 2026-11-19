@@ -84,8 +84,8 @@ mod tests {
             "$PRIME_AGENT_BUNDLED_SKILLS_DIR/edit/SKILL.md"
         );
         assert_eq!(
-            location_under(Path::new("/home/u/.prime/agent/skills/x/SKILL.md"), root),
-            "/home/u/.prime/agent/skills/x/SKILL.md"
+            location_under(Path::new("/home/u/.yusagent/skills/x/SKILL.md"), root),
+            "/home/u/.yusagent/skills/x/SKILL.md"
         );
     }
 
