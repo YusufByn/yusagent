@@ -13,6 +13,12 @@ pub struct ClientUpdate;
 
 impl pa_tui::update_command::UpdateCommands for ClientUpdate {
     fn run_update(&self) -> pa_tui::update_command::UpdateRunFuture {
+        // yusAgent (YA-16, ticket 19): self-update is disabled, before any download.
+        if !crate::ya_update_off::SELF_UPDATE {
+            return Box::pin(async {
+                Err::<String, _>(crate::ya_update_off::SELF_UPDATE_OFF.to_string())
+            });
+        }
         Box::pin(async {
             if let Some(kind) = std::env::current_exe()
                 .ok()

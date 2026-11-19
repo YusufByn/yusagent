@@ -157,6 +157,7 @@ fn prime_agent(args: &[&str], sandbox: &Sandbox) -> Command {
 }
 
 #[test]
+#[ignore = "yusAgent (YA-16, ticket 19): self-update is disabled (`ya_update_off`)"]
 fn update_runs_the_downloaded_installer_and_preserves_the_session_store() {
     let sandbox = Sandbox::new();
     let url = serve(MOCK_INSTALLER);
@@ -193,6 +194,7 @@ fn update_runs_the_downloaded_installer_and_preserves_the_session_store() {
 /// the download base (no installer override): the domain only forwards
 /// the stable `install.sh`, so nightly updates go to the bucket directly.
 #[test]
+#[ignore = "yusAgent (YA-16, ticket 19): self-update is disabled (`ya_update_off`)"]
 fn a_nightly_update_fetches_install_beta_from_the_download_base() {
     let sandbox = Sandbox::new();
     let share = sandbox.prefix.join("share/prime-agent");
@@ -228,6 +230,7 @@ fn a_nightly_update_fetches_install_beta_from_the_download_base() {
 
 /// A failing installer reports the error and keeps the previous install.
 #[test]
+#[ignore = "yusAgent (YA-16, ticket 19): self-update is disabled (`ya_update_off`)"]
 fn a_failing_installer_keeps_the_previous_install() {
     let sandbox = Sandbox::new();
     // A previous install exists; the funnel must leave it in place.
@@ -358,6 +361,7 @@ fn live_version(sandbox: &Sandbox) -> String {
 /// replaces), so a second `--rollback` undoes the first; the session store
 /// is untouched throughout.
 #[test]
+#[ignore = "yusAgent (YA-16, ticket 19): self-update is disabled (`ya_update_off`)"]
 fn update_archive_and_rollback_swap_installer_payloads() {
     let sandbox = Sandbox::new();
     // This build, published as an installer payload.
@@ -418,6 +422,7 @@ fn update_archive_and_rollback_swap_installer_payloads() {
 /// hands the real run off, so its exit code is honest for the
 /// deterministic refusals).
 #[test]
+#[ignore = "yusAgent (YA-16, ticket 19): self-update is disabled (`ya_update_off`)"]
 fn rollback_check_answers_synchronously_without_touching_the_payload() {
     let sandbox = Sandbox::new();
     let live = sandbox.prefix.join("share/prime-agent");
@@ -487,6 +492,7 @@ fn rollback_check_answers_synchronously_without_touching_the_payload() {
 /// (and the rollback later reports), so a name/payload mismatch would
 /// publish a lie.
 #[test]
+#[ignore = "yusAgent (YA-16, ticket 19): self-update is disabled (`ya_update_off`)"]
 fn update_archive_refuses_a_misnamed_payload_version() {
     let sandbox = Sandbox::new();
     let live = sandbox.prefix.join("share/prime-agent");
@@ -539,6 +545,7 @@ fn update_archive_refuses_a_misnamed_payload_version() {
 /// generations record, so the CLI's rollback must fall back to that
 /// slot — a ps1-updated machine's only automated rollback path.
 #[test]
+#[ignore = "yusAgent (YA-16, ticket 19): self-update is disabled (`ya_update_off`)"]
 fn update_rollback_reads_the_unsuffixed_installer_slot() {
     let sandbox = Sandbox::new();
     let live = sandbox.prefix.join("share/prime-agent");
@@ -589,6 +596,7 @@ fn update_rollback_reads_the_unsuffixed_installer_slot() {
 /// A fresh installer install has nothing to roll back: the run fails with
 /// the reason and the live payload stays.
 #[test]
+#[ignore = "yusAgent (YA-16, ticket 19): self-update is disabled (`ya_update_off`)"]
 fn update_rollback_without_a_kept_version_changes_nothing() {
     let sandbox = Sandbox::new();
     let live = sandbox.prefix.join("share/prime-agent");

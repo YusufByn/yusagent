@@ -662,6 +662,10 @@ fn check_invocation(args: &[String]) -> Option<crate::installer_update::UpdateOp
 }
 
 fn run_update(args: &[String]) -> PublicCommandResult {
+    // yusAgent (YA-16, ticket 19): self-update is disabled, before any download.
+    if !crate::ya_update_off::SELF_UPDATE {
+        return fail(crate::ya_update_off::SELF_UPDATE_OFF, None);
+    }
     // `--check` (alias `--version`) reports without installing, optionally
     // for one channel flag; mixed with anything else the parse below
     // rejects it.
