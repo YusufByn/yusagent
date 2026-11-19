@@ -45,12 +45,14 @@
 //! ran with.
 //!
 //! `existingTestsRule` in `settings.json` (ticket 18, phase 3): `true` adds the rule on existing
-//! tests to the static prefix of the version-2 prompt (`prompts::ya_prompt_v2`); unset or
-//! `false`, the default until its A/B decides, leaves the prompt byte for byte as before. A
-//! version-1 session with it set to `true` is refused ([`check_existing_tests_rule`]): the
-//! version-1 layers have no place for it, and a setting that would do nothing would make an
-//! A/B arm look like the other. The header always stores it (`true` or `false`); a `yaRequest`
-//! without it is off, what every session created before it ran with.
+//! tests to the static prefix of the version-2 prompt (`prompts::ya_prompt_v2`); `false` leaves
+//! the prompt byte for byte as before the rule. **Unset is on in a version-2 session** (verdict
+//! of its A/B, `bench/smoke/ab/ya18-tests-20261119.md`) **and off in a version-1 session**
+//! ([`resolve_existing_tests_rule`]). An explicit `true` in a version-1
+//! session is refused ([`check_existing_tests_rule`]): the version-1 layers have no place for
+//! it, and a setting that would do nothing would make an A/B arm look like the other. The header
+//! always stores it (`true` or `false`); a `yaRequest` without it is off, what every session
+//! created before it ran with, so its prompt does not change when it is resumed.
 //!
 //! Frozen for the session at creation in the session header, field [`REQUEST_HEADER_KEY`]
 //! (kept by forks, `session::manager::ya_header::INHERITED_HEADER_KEYS`), and read back on
@@ -321,11 +323,20 @@ pub fn check_bash_wait(
     Ok(())
 }
 
+/// The rule on existing tests of the setting `existingTestsRule` for a session of prompt
+/// `version`: its value, else on in version 2 and off in version 1 (the rule is part of the
+/// version-2 prompt only).
+#[must_use]
+pub fn resolve_existing_tests_rule(setting: Option<bool>, version: PromptVersion) -> bool {
+    setting.unwrap_or(version == PromptVersion::V2)
+}
+
 /// Refuses a session that would run prompt version 1 with `existingTestsRule` on: the rule is
-/// part of the version-2 prompt only (ticket 18, phase 3). `current` holds the resolved current
-/// settings; a resumed session is checked on its frozen settings (a header without the field is
-/// off), so only a new session can be refused. Checked before the request settings are frozen,
-/// so a refused session keeps nothing in its header.
+/// part of the version-2 prompt only (ticket 18, phase 3). The default never gives this pair
+/// ([`resolve_existing_tests_rule`]): only an explicit `true` does. `current` holds the resolved
+/// current settings; a resumed session is checked on its frozen settings (a header without the
+/// field is off), so only a new session can be refused. Checked before the request settings are
+/// frozen, so a refused session keeps nothing in its header.
 ///
 /// # Errors
 ///
@@ -386,8 +397,8 @@ impl FrozenRequest {
 
     /// The request settings of the current settings. An unset `bashWaitSeconds` follows the
     /// prompt version ([`resolve_bash_wait`]); `codexSessionIdHeader` and `existingTestsRule` are
-    /// off (see [`FrozenRequest::with_codex_session_id_header`] and
-    /// [`FrozenRequest::with_existing_tests_rule`]).
+    /// off here, and set from the settings by [`FrozenRequest::with_codex_session_id_header`] and
+    /// [`FrozenRequest::with_existing_tests_rule`] (which gives the default of the latter).
     #[must_use]
     pub fn of(
         reasoning_summary: Option<ReasoningSummarySetting>,
@@ -413,11 +424,12 @@ impl FrozenRequest {
         }
     }
 
-    /// `self` with the `existingTestsRule` setting (unset: off).
+    /// `self` with the `existingTestsRule` setting (unset: on in version 2, off in version 1,
+    /// [`resolve_existing_tests_rule`]).
     #[must_use]
     pub fn with_existing_tests_rule(self, setting: Option<bool>) -> Self {
         FrozenRequest {
-            existing_tests_rule: setting.unwrap_or(false),
+            existing_tests_rule: resolve_existing_tests_rule(setting, self.prompt_version),
             ..self
         }
     }
@@ -1340,21 +1352,35 @@ mod tests {
         }
     }
 
-    /// `existingTestsRule` (ticket 18, phase 3): off by default, written as `false` in a new
-    /// session's `yaRequest`; on, written as `true`; kept at resume either way. A `yaRequest`
-    /// without it (every session from before it) is off, whatever the settings say, with a
-    /// warning, and its header is left as is.
+    /// `existingTestsRule` (ticket 18, phase 3): on by default in version 2 (verdict of its
+    /// A/B, 19/11/2026), off by default in version 1; written as `true` or `false` in a new
+    /// session's `yaRequest`; kept at resume either way. A `yaRequest` without it (every session
+    /// from before it) is off, whatever the settings say, with a warning, and its header is left
+    /// as is.
     #[test]
     fn the_existing_tests_rule_is_always_frozen() {
         let dir = tempfile::tempdir().unwrap();
         let current = |setting: Option<bool>| {
             FrozenRequest::of(None, None, None).with_existing_tests_rule(setting)
         };
-        assert_eq!(current(None), default_request());
+        let rule_on = FrozenRequest {
+            existing_tests_rule: true,
+            ..default_request()
+        };
+        assert_eq!(current(None), rule_on);
+        assert_eq!(current(Some(true)), rule_on);
         assert_eq!(current(Some(false)), default_request());
+        assert_eq!(
+            FrozenRequest::of(None, None, Some(PromptVersion::V1)).with_existing_tests_rule(None),
+            v1_request()
+        );
+        assert!(resolve_existing_tests_rule(None, PromptVersion::V2));
+        assert!(!resolve_existing_tests_rule(None, PromptVersion::V1));
+        assert!(!resolve_existing_tests_rule(Some(false), PromptVersion::V2));
+        assert!(resolve_existing_tests_rule(Some(true), PromptVersion::V1));
 
         let mut on = SessionManager::in_memory(dir.path());
-        let frozen = freeze_current_request(&mut on, current(Some(true)));
+        let frozen = freeze_current_request(&mut on, current(None));
         assert!(frozen.existing_tests_rule);
         assert_eq!(
             on.ya_header_field(REQUEST_HEADER_KEY),
@@ -1364,15 +1390,18 @@ mod tests {
                 "existingTestsRule": true,
             }))
         );
-        assert_eq!(freeze_current_request(&mut on, current(None)), frozen);
+        assert_eq!(
+            freeze_current_request(&mut on, current(Some(false))),
+            frozen
+        );
 
         let mut off = SessionManager::in_memory(dir.path());
         assert_eq!(
-            freeze_current_request(&mut off, current(None)),
+            freeze_current_request(&mut off, current(Some(false))),
             default_request()
         );
         assert_eq!(
-            freeze_current_request(&mut off, current(Some(true))),
+            freeze_current_request(&mut off, current(None)),
             default_request()
         );
         assert_eq!(
@@ -1387,12 +1416,17 @@ mod tests {
         let mut old = SessionManager::in_memory(dir.path());
         old.ya_set_header_field(REQUEST_HEADER_KEY, before.clone());
         assert_eq!(
+            freeze_current_request(&mut old, current(None)),
+            default_request()
+        );
+        assert_eq!(
             freeze_current_request(&mut old, current(Some(true))),
             default_request()
         );
         assert_eq!(old.ya_header_field(REQUEST_HEADER_KEY), Some(&before));
 
-        let resumed = session_request_from(Some(default_request()), false, current(Some(true)));
+        // The new default differs from a session frozen without the rule: a warning at resume.
+        let resumed = session_request_from(Some(default_request()), false, current(None));
         assert_eq!(resumed.frozen, default_request());
         let warning = resumed.warning.expect("warning");
         assert!(warning.contains("existingTestsRule true"), "{warning}");

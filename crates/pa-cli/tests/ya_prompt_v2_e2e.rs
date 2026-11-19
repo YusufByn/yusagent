@@ -158,6 +158,14 @@ fn a_version_two_session_edits_and_runs_commands() {
     assert!(stdout.contains("timeout: float | None = 600"), "{stdout}");
     assert!(!stdout.contains("Recursive agent depth: 0"), "{stdout}");
     assert!(!stdout.contains("<available_skills>"), "{stdout}");
+    // The rule on existing tests, on by default in version 2 (ticket 18, 19/11/2026).
+    assert_eq!(
+        stdout
+            .matches("- Existing tests encode expected behavior:")
+            .count(),
+        1,
+        "{stdout}"
+    );
 
     assert_eq!(
         std::fs::read_to_string(lane.home.path().join("notes.txt")).unwrap(),
@@ -168,7 +176,7 @@ fn a_version_two_session_edits_and_runs_commands() {
     assert_eq!(header["type"], "session", "{header}");
     assert_eq!(
         header["yaRequest"],
-        serde_json::json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
+        serde_json::json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": true})
     );
     assert_eq!(
         header["yaTools"],

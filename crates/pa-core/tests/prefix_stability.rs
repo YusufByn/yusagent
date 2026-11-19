@@ -116,9 +116,10 @@ const CODEX_SESSION_ID_HEADER: Variant = Variant {
     ..CODEX_DEFAULT
 };
 
-/// yusAgent (YA-09, ticket 18, phase 3): `existingTestsRule` on, the arm B of its A/B.
-const CODEX_EXISTING_TESTS_RULE: Variant = Variant {
-    settings: Some(r#"{"existingTestsRule": true}"#),
+/// yusAgent (YA-09, ticket 18, phase 3): `existingTestsRule` off, the prompt without the rule
+/// (the rule is on by default in version 2 since the verdict of its A/B, 19/11/2026).
+const CODEX_EXISTING_TESTS_RULE_OFF: Variant = Variant {
+    settings: Some(r#"{"existingTestsRule": false}"#),
     ..CODEX_DEFAULT
 };
 /// The line `existingTestsRule` adds to the version-2 prompt (text fixed by Yusuf).
@@ -1105,10 +1106,10 @@ async fn codex_bash_wait_changes_only_the_await_line() {
         headers,
         [
             Some(
-                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": true})
             ),
             Some(
-                json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
+                json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": true})
             ),
         ]
     );
@@ -1151,11 +1152,11 @@ async fn codex_bash_wait_changes_only_the_await_line() {
     );
 }
 
-/// yusAgent (YA-09, ticket 18, phase 3): two sessions of one project, the default settings (arm
-/// A) then `existingTestsRule: true` (arm B). Each prefix is stable across its requests; the
-/// default prompt has no rule; the two prompts differ only by the rule's line, right after the
-/// rule on the smallest change; the tools and every other parameter are identical. The headers
-/// freeze `existingTestsRule`: `false`, then `true`.
+/// yusAgent (YA-09, ticket 18, phase 3): two sessions of one project, the default settings
+/// (the rule on, since 19/11/2026) then `existingTestsRule: false`. Each prefix is stable across
+/// its requests; the default prompt has the rule once, right after the rule on the smallest
+/// change; the two prompts differ only by the rule's line; the tools and every other parameter
+/// are identical. The headers freeze `existingTestsRule`: `true`, then `false`.
 #[tokio::test]
 async fn codex_existing_tests_rule_adds_only_its_line() {
     let api = Api::OpenAiResponses;
@@ -1166,7 +1167,7 @@ async fn codex_existing_tests_rule_adds_only_its_line() {
     let sessions = agent_dir.join("sessions");
     let server = ModelServer::start(api).await;
     let mut headers = Vec::new();
-    for variant in [CODEX_DEFAULT, CODEX_EXISTING_TESTS_RULE] {
+    for variant in [CODEX_DEFAULT, CODEX_EXISTING_TESTS_RULE_OFF] {
         std::fs::write(
             agent_dir.join("settings.json"),
             variant.settings.unwrap_or("{}"),
@@ -1186,26 +1187,23 @@ async fn codex_existing_tests_rule_adds_only_its_line() {
         headers,
         [
             Some(
-                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": true})
             ),
             Some(
-                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": true})
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
             ),
         ]
     );
     let bodies = server.bodies();
     assert_eq!(bodies.len(), 2 * EXPECTED_REQUESTS, "two sessions");
-    let (default, rule) = bodies.split_at(EXPECTED_REQUESTS);
-    assert_prefix_stable(api, default);
+    let (rule, off) = bodies.split_at(EXPECTED_REQUESTS);
     assert_prefix_stable(api, rule);
-    let (default_prompt, rule_prompt) = (
-        responses_system_prompt(&default[0]),
+    assert_prefix_stable(api, off);
+    let (rule_prompt, off_prompt) = (
         responses_system_prompt(&rule[0]),
+        responses_system_prompt(&off[0]),
     );
-    assert!(
-        !default_prompt.contains("Existing tests"),
-        "{default_prompt}"
-    );
+    assert!(!off_prompt.contains("Existing tests"), "{off_prompt}");
     assert_eq!(
         rule_prompt.matches(EXISTING_TESTS_RULE_LINE).count(),
         1,
@@ -1220,19 +1218,19 @@ async fn codex_existing_tests_rule_adds_only_its_line() {
     );
     assert_eq!(
         rule_prompt.replacen(&format!("\\n{EXISTING_TESTS_RULE_LINE}"), "", 1),
-        default_prompt,
+        off_prompt,
         "only the rule's line differs"
     );
-    let (mut fixed_default, _) = split_request(api, &request_object(api, 1, &default[0]));
     let (mut fixed_rule, _) = split_request(api, &request_object(api, 1, &rule[0]));
+    let (mut fixed_off, _) = split_request(api, &request_object(api, 1, &off[0]));
     // The prompt cache key is the session id: one per session.
     for key in ["prompt_cache_key", "input[0] (system)"] {
-        fixed_default.remove(key);
         fixed_rule.remove(key);
+        fixed_off.remove(key);
     }
     assert_eq!(
-        Value::Object(fixed_default).to_string(),
         Value::Object(fixed_rule).to_string(),
+        Value::Object(fixed_off).to_string(),
         "tools and parameters are identical"
     );
 }
@@ -1296,7 +1294,7 @@ async fn resumed_session_from_before_bash_wait_keeps_one_second() {
     let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
-    let before = json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false});
+    let before = json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": true});
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
 
@@ -1512,7 +1510,7 @@ async fn resumed_legacy_session_keeps_summary_auto() {
     assert_eq!(
         header.rest.get("yaRequest"),
         Some(
-            &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
+            &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": true})
         ),
         "{header:?}"
     );
