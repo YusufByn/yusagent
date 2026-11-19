@@ -1,8 +1,26 @@
 # Ticket 19 : YA-16, CLI renommé yusAgent (phase 1 : constat)
 
-Demande de Yusuf du 19/11/2026. **Phase 1 : constat seulement.** Branche `ya-19-cli-yusagent`, depuis `main` à `eb6548f49`. Aucun code modifié, rien compilé, aucun appel de modèle. La PR ne contient que ce fichier : **préfixe inchangé**, aucun fichier upstream touché. Pas de merge sans « merge » de Yusuf.
+Demande de Yusuf du 19/11/2026. **Phase 1 : constat seulement.** Branche `ya-19-cli-yusagent`, depuis `main` à `eb6548f49`. Aucun code modifié, rien compilé, aucun appel de modèle. La PR contient ce fichier et une ligne du journal du CDC : **préfixe inchangé**, aucun fichier upstream touché. Pas de merge sans « merge » de Yusuf.
 
-Ce ticket ne tranche aucune option. Il dit où se trouve le nom hérité et ce que coûterait chaque façon de le changer.
+Le constat (sections 1 à 8 et « Options ») ne tranche aucune option. Les choix de Yusuf sont dans la section suivante.
+
+## Décisions de Yusuf (19/11/2026)
+
+Prises sur le constat ci-dessous ; elles remplacent les options non retenues.
+
+- **Dossier** : `~/.yusagent` pour l'utilisateur, `<cwd>/.yusagent/` pour le projet. **Pas de migration** : une commande `cp` documentée. Le dossier des sockets `$TMPDIR/prime-agent-<uid>` est renommé aussi. Le venv du kernel et le runtime Python suivent le chemin passé par l'hôte : plus de repli sur `~/.prime/agent` (`layout.rs:28`, `:36` et les 5 replis Python du § 2).
+- **Binaire** : cible Cargo `prime-agent` **gardée** ; fichier renommé `yusagent` à l'assemblage de l'archive (option (b)). `is_product_binary` (`crates/pa-daemon/src/boot_reap.rs:370-377`) corrigé. **Pas d'alias.**
+- **Commande `update` désactivée**, avec un message clair. Précédent : Unharnessed a retiré la sous-commande `update` dans `75cfc357fe501a46f4a01a345457c0897eb88d89` (01/10/2026, « unharnessed step 1a: drop the terminal client subcommands » : « the self-update and package manager commands (update, package) […] go »), puis le module de mise à jour dans `09f760dfa4b9fbb205443f6fcf7736256ccc226f` (01/10/2026, « unharnessed step 7: drop auto-update and the package manager »). Ici, on désactive au lieu de supprimer, pour garder les cherry-picks faciles.
+- **Variables `PRIME_AGENT_*` et prompt v1 : inchangés.**
+- **Interface** : logo et marque Prime Agent retirés. Noms du provider Prime Intellect gardés. Login Claude laissé tel quel (règle 7). **Partage de traces vers Prime Intellect désactivé.**
+- **README** : hors du ticket 19. Il sera refait en entier plus tard, avec la direction artistique de yusAgent.
+- **ACP** : espace de noms `_meta` `ai.primeintellect.prime-agent` gardé. Nom d'agent dans `initialize` : yusAgent. Les ajouts futurs vont sous `_yus/*`.
+- **Découpage** :
+  1. **PR 1, interface** : textes, logo, `agentInfo` ACP, partage de traces.
+  2. **PR 2, binaire** : archive, artefact CI, `install-bin.sh`, `ab.py`, `is_product_binary`, `update` ; le banc dans le même push.
+  3. **PR 3, dossier** : `~/.yusagent`, `<cwd>/.yusagent/`, socket, venv du kernel, runtime Python.
+- **Vérification après les PR 2 et 3** : build macOS de la branche (`ya-build-macos-arm64.yml`), puis run du banc en `--capture` sur une tâche, pour vérifier `-p`, l'isolement du banc et le préfixe (`crates/pa-core/tests/prefix_stability.rs`). Yusuf lance la commande ; Claude la lui donne, exacte.
+- **Avant chaque push** : dire ce qui change dans les requêtes (préfixe, cache), même si rien ne change.
 
 ## Décision de référence
 
