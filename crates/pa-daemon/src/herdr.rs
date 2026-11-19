@@ -1232,7 +1232,7 @@ mod tests {
         assert_eq!(
             params["resume_argv"],
             json!([
-                "prime-agent",
+                "yusagent",
                 "--resume",
                 "/home/me/.prime/agent/sessions/s1.jsonl"
             ])

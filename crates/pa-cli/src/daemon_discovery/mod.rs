@@ -193,7 +193,16 @@ pub(crate) fn is_worker_socket_path(socket_path: &Path, socket_dir: &Path) -> bo
 /// directory even when the root is pinned elsewhere.
 pub(crate) fn scan_listening_daemons(root: &DaemonStateRoot) -> Vec<DiscoveredDaemonProcess> {
     let worker_socket_dir = pa_daemon::platform::socket_dir();
-    scan::scan_all_listening_daemons(config::APP_NAME, root)
+    // yusAgent (YA-16, ticket 19): a daemon runs under the file name of the binary that spawned
+    // it (`current_exe`): `yusagent` when shipped, `prime-agent` from a Cargo build.
+    let process_name = std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| config::APP_NAME.to_string());
+    scan::scan_all_listening_daemons(&process_name, root)
         .into_iter()
         .filter(|daemon| !is_worker_socket_path(&daemon.socket_path, &worker_socket_dir))
         .collect()
