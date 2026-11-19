@@ -182,8 +182,10 @@ impl pa_tui::interactive::OnboardingSink for SettingsOnboardingSink {
     }
 
     fn agent_traces_choice_written(&self) -> bool {
-        pa_core::settings::SettingsManager::create(&self.cwd, &self.agent_dir)
-            .agent_traces_choice_written()
+        // yusAgent (YA-16, ticket 19): with sharing off the trace question never mounts.
+        !pa_core::agent_traces::TRACE_SHARING
+            || pa_core::settings::SettingsManager::create(&self.cwd, &self.agent_dir)
+                .agent_traces_choice_written()
     }
 
     fn set_agent_traces_enabled(&self, enabled: bool) -> Result<()> {

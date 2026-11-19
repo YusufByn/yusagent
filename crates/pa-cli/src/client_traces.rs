@@ -117,10 +117,18 @@ fn map_preview_result(result: TracePreviewResult) -> TracePreviewOutcome {
 impl TracesCommands for ClientTraces {
     fn enabled(&self) -> TracesFuture<bool> {
         let settings = self.settings();
-        Box::pin(async move { settings.get_agent_traces_enabled() })
+        // yusAgent (YA-16, ticket 19): sharing is off whatever the setting says.
+        Box::pin(async move {
+            pa_core::agent_traces::TRACE_SHARING && settings.get_agent_traces_enabled()
+        })
     }
 
     fn set_enabled(&self, enabled: bool) -> TracesFuture<anyhow::Result<()>> {
+        if enabled && !pa_core::agent_traces::TRACE_SHARING {
+            return Box::pin(async {
+                Err::<(), _>(anyhow::anyhow!(pa_core::agent_traces::TRACE_SHARING_OFF))
+            });
+        }
         let provider = self.clone();
         // The settings write is file IO; keep it off the async workers.
         Box::pin(async move {
@@ -259,13 +267,27 @@ mod tests {
         // Sharing defaults OFF (opt-in); nothing is written until a choice
         // is made — the onboarding question or this command.
         assert!(!traces.enabled().await, "the default is off");
-        traces
+        // yusAgent (YA-16, ticket 19): the opt-in is refused and writes nothing; a setting
+        // written by hand does not turn sharing on either.
+        let refused = traces
             .set_enabled(true)
             .await
-            .expect("the opt-in write persists");
+            .expect_err("the opt-in is refused");
+        assert_eq!(
+            refused.to_string(),
+            pa_core::agent_traces::TRACE_SHARING_OFF
+        );
+        traces
+            .set_enabled(false)
+            .await
+            .expect("the opt-out write persists");
+        let mut settings = pa_core::settings::SettingsManager::create("/tmp", &agent);
+        settings
+            .set_agent_traces_enabled(true)
+            .expect("hand-written opt-in");
         // A fresh manager over the same directories reads the write.
         let traces = ClientTraces::new("/tmp", agent.clone());
-        assert!(traces.enabled().await);
+        assert!(!traces.enabled().await);
     }
 
     #[tokio::test]
