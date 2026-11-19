@@ -327,7 +327,7 @@ the same daemon, so this build cannot open the file while that process holds it.
         }
         HolderFlavor::ThisBuild => {
             lines.push(format!(
-                "This session is currently open in another Rust build of Prime Agent \
+                "This session is currently open in another build of yusAgent \
 (active in {holder_id}) — another daemon or window of this product holds the file's \
 runtime lease."
             ));

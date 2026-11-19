@@ -540,7 +540,7 @@ impl SessionUi {
             .await
             .map_err(|_| {
                 anyhow!(
-                    "timed out after {}ms waiting for the Prime Agent daemon response",
+                    "timed out after {}ms waiting for the yusAgent daemon response",
                     timeout.as_millis()
                 )
             })?

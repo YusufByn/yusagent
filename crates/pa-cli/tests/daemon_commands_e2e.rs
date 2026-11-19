@@ -656,7 +656,7 @@ fn cli_connect_error_matches_ts_golden() {
 
     let text = stderr(&output).trim_end().to_string();
     let expected_prefix = format!(
-        "Error: Failed to connect to the Prime Agent daemon: connect ENOENT {missing}. Socket: {missing}. Daemon log: ",
+        "Error: Failed to connect to the yusAgent daemon: connect ENOENT {missing}. Socket: {missing}. Daemon log: ",
         missing = missing.display()
     );
     assert!(
@@ -750,7 +750,7 @@ fn schedule_usage_errors_and_valid_invocations() {
         assert_eq!(out.status.code(), Some(1), "{args:?}");
         let err = stderr(&out);
         assert!(
-            err.starts_with("Error: Failed to connect to the Prime Agent daemon:"),
+            err.starts_with("Error: Failed to connect to the yusAgent daemon:"),
             "{args:?}: {err}"
         );
     }

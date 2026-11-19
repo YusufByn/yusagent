@@ -494,7 +494,7 @@ fn the_first_run_telemetry_notice_renders_as_a_row() {
     });
     let all = run_plan(Arc::clone(&settings), submit("/telemetry status")).join("\n");
     assert!(
-        all.contains("Prime Agent sends pseudonymous usage"),
+        all.contains("yusAgent sends pseudonymous usage"),
         "the disclosure row rendered:\n{all}"
     );
     assert!(
@@ -512,7 +512,7 @@ fn the_first_run_telemetry_notice_renders_as_a_row() {
     // installation draws no second row.
     let again = run_plan(Arc::clone(&settings), submit("/telemetry status")).join("\n");
     assert!(
-        !again.contains("Prime Agent sends pseudonymous usage"),
+        !again.contains("yusAgent sends pseudonymous usage"),
         "no second disclosure row:\n{again}"
     );
 }
@@ -524,7 +524,7 @@ fn an_already_disclosed_installation_renders_no_notice_row() {
     let settings = Arc::new(StubSettings::default());
     let all = run_plan(Arc::clone(&settings), submit("/telemetry status")).join("\n");
     assert!(
-        !all.contains("Prime Agent sends pseudonymous usage"),
+        !all.contains("yusAgent sends pseudonymous usage"),
         "no disclosure row on an already-shown install:\n{all}"
     );
 }

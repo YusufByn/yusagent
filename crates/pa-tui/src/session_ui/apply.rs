@@ -246,7 +246,7 @@ impl SessionUi {
                     self.update_subagent_summary(view);
                     match reason.as_str() {
                         "shutdown" => self.error_row(
-                            "The Prime Agent daemon shut down while this window was attached. The session transcript remains saved; restart Prime Agent and reopen it from Agents View.",
+                            "The yusAgent daemon shut down while this window was attached. The session transcript remains saved; restart yusAgent and reopen it from Agents View.",
                             view,
                         ),
                         "replaced" => self.error_row(
