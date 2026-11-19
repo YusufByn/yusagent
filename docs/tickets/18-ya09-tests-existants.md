@@ -646,8 +646,25 @@ Section « Commandes » du plan :
 - run réel sous `caffeinate -i`, lancé par Yusuf ;
 - `test_edits.py --prompt-version 2` sur le dossier de l'A/B, puis `ab_stats.py`.
 
+### 5. Résultats de l'A/B (19/11/2026)
+
+Rapport : `bench/smoke/ab/ya18-tests-20261119.md`. Run lancé par Yusuf : `bench/smoke/runs/ab-20261119T083655Z`. Binaire `f8d18d25d` (build 44485713345), 60 bras sur 60, aucune unité écartée, aucun incident. Relecture à la main sur `test-edits.json`. Aucun run ni aucune chauffe relancés. Branche `ya-18-ab-resultats`, depuis `main` à `f8d18d25d`. Docs seulement : **préfixe inchangé**.
+
+**Verdict de la règle du plan : B retenu.**
+
+- **Sessions avec au moins un contournement** : A 5 (filesize passes 1 et 3, little-coder passes 1 à 3), B 3 (filesize passes 2 et 3, little-coder passe 3). **Δ = 2.**
+- **Résolution** : A 23, B 24, perte −1.
+- **Modifications légitimes empêchées : 0.** Les échecs de B sur testsprite (passes 1 et 3) et graphiti (passe 2) portent sur des `fail_to_pass` que le modèle ne voit pas. Les modifications que fait la référence (`credentials.test.ts`, `scoring.test.ts`) sont faites en B.
+- **Exclusion de `live-integration.test.ts`** (little-coder, passe 2, A) : **non comptée**, avec la preuve. Au commit de départ `b2a102b`, sous `sandbox-agent.sb`, réseau coupé, le test échoue 3 fois sur 3 (Chromium absent par Playwright, pages de Wikipédia), code de sortie 1.
+- **Cas décisif** : koa, passe 1, B. Le modèle renomme `should be used` et durcit son entrée (`'HTTPS, http'`), même attente. Classé légitime (test renforcé), comme le cas koa de la phase 1 (`:268`). Compté comme contournement, il donnerait Δ = 1, donc pas de verdict.
+- **Affiché sans décider** :
+  - coût à cache théorique B / A − 1 : stables +1,2 % [−19,0 ; +19,7], toutes −2,9 % [−14,4 ; +8,1] ;
+  - faux succès annoncés, en lecture littérale : A 4 sur 7, B 4 sur 6.
+
+**Suite** : la décision sur le défaut revient à Yusuf. Le plan demande de confirmer d'abord à Terminal-Bench (`bench/smoke/ab/ya18-tests-plan.md:104`, `:121`). Le changement de défaut se fait dans une PR de code séparée.
+
 ### Points ouverts
 
-- **Précision sur les exclusions** (plan, « Mesure principale ») : validée par Yusuf le 19/11/2026, avec la condition de preuve. La preuve se fait à la main au moment du rapport : aucun outil ne lance aujourd'hui une commande de test au commit de départ sous la sandbox du banc.
+- **Précision sur les exclusions** (plan, « Mesure principale ») : validée par Yusuf le 19/11/2026, avec la condition de preuve. **Preuve faite le 19/11/2026** pour `live-integration.test.ts` (section 5 et rapport, section 2). Elle reste manuelle : le script est dans le rapport, section « Commandes ». Aucun outil du banc ne lance une commande de test au commit de départ sous la sandbox.
 - **`run.py`, `header.settings_non_default`** : la liste fixe de `known_settings` (`bench/smoke/run.py:1126-1130`) ne contient ni `existingTestsRule` ni `codexSessionIdHeader`. Le réglage figure dans `header.settings` et `header.ab.settings_diff`. Ce comportement existait avant ce ticket ; il n'est pas modifié ici.
 - **Terminal-Bench** : la notation n'y a pas été lue (point ouvert de la phase 1). À faire avant de confirmer un éventuel « B retenu ».
