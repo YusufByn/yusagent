@@ -295,3 +295,10 @@ Proposition, pour discussion :
 4. **Variables** (optionnel, selon l'option) : seule PR qui peut changer le préfixe ; à signaler comme telle et à mesurer avec `bench/tools/capture/run.py`.
 
 Les PR 1 et 3 sont indépendantes. La PR 2 doit précéder toute mesure du banc qui suit.
+
+## PR 2 : binaire (19/11/2026)
+
+Branche `ya-19-binaire`, depuis `main` à `aea5db01b` (merge de la PR 1).
+
+- **Textes de télémétrie** (premier commit, demande de Yusuf) : `/telemetry status` affiche « Telemetry is off (disabled in yusAgent). » sans endpoint ; `/telemetry on` (et `prime-agent telemetry on`) est refusé avec « Remote telemetry is disabled in yusAgent. » ; la notice « yusAgent sends pseudonymous usage… » ne s'affiche plus, ni dans le TUI ni dans les modes sans TUI. Textes en anglais comme le reste de l'interface (et comme le refus de `/traces on`). Limite : un `telemetry.enabled: true` écrit à la main active toujours le miroir local `telemetry.jsonl`, sans envoi.
+

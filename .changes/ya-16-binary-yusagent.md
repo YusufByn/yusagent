@@ -1,0 +1,1 @@
+- yusAgent: `/telemetry status` says telemetry is off (disabled in yusAgent) without naming an endpoint, `/telemetry on` is refused, and the telemetry notice no longer shows.

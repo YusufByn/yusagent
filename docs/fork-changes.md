@@ -922,6 +922,31 @@ Laissés tels quels : messages de mise à jour (PR 2, `update` désactivée), no
 | `crates/pa-tui/src/view/{tests,lazy_tests}.rs`, `crates/pa-tui/tests/chat_open_first_frame_headless.rs`, `crates/pa-cli/tests/{chat_open_first_frame_pty_e2e,input_live_open_pty_e2e}.rs` | splash présent ou absent | marque | Cherchent `yusAgent` au lieu de `prime agent`. |
 | `crates/pa-cli/tests/{daemon_commands_e2e,interactive_daemon_e2e,continue_guard_e2e}.rs`, `crates/pa-daemon/tests/hold_refusal_e2e.rs`, `crates/pa-tui/tests/{daemon_rejection_headless,daemon_shutdown_reconnect_headless,daemon_shutdown_turn_end_headless,telemetry_command_headless}.rs`, `crates/pa-tui/src/agents_view/tests/notices.rs`, `crates/pa-cli/src/incident/report_tests.rs` | messages attendus | marque | Même remplacement que dans le code. |
 
+## Renommage du CLI, PR 2 : binaire (YA-16, ticket 19)
+
+Décisions : `docs/tickets/19-ya16-cli-yusagent.md`. Ni prompt, ni tools, ni requêtes modèle touchés.
+
+**Textes de télémétrie alignés sur la coupure de la PR 1** (premier commit). La télémétrie distante ne part plus (`REMOTE_TELEMETRY`, PR 1) ; ces textes le disent.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-core/src/session_engine/telemetry/status.rs` | modif. (fichier upstream, 11 lignes + commentaires) | `/telemetry status` et `prime-agent telemetry` : « Telemetry is off (disabled in yusAgent). » et l'id d'installation, sans endpoint. `on` refusé avec « Remote telemetry is disabled in yusAgent. », rien n'est écrit. `off` inchangé. | YA-16 |
+| `crates/pa-cli/src/telemetry_notice.rs` | modif. (fichier upstream, 1 ligne + commentaire) | La notice des modes sans TUI ne s'imprime plus. | YA-16 |
+| `crates/pa-cli/src/client_settings.rs` | modif. (fichier upstream, 1 ligne + commentaire) | La notice du TUI ne s'affiche plus. | YA-16 |
+| `crates/pa-telemetry/src/sinks/mod.rs`, `crates/pa-telemetry/src/lib.rs` | modif. (fichiers upstream, 1 réexport chacun) | Exportent `REMOTE_TELEMETRY`. | YA-16 |
+
+Limite : un `telemetry.enabled: true` écrit à la main active toujours le miroir local `telemetry.jsonl` (rien ne sort), alors que l'état affiché est « off ».
+
+### Tests upstream touchés (YA-16, ticket 19, PR 2)
+
+| Fichier | Test | Nature | Changement |
+|---|---|---|---|
+| `crates/pa-core/src/session_engine/telemetry/status.rs` | `on_and_off_round_trip_through_the_ts_settings_key` | défaut | `on` refusé avec le message, le réglage reste `false`. |
+| `crates/pa-core/src/session_engine/telemetry/status.rs` | `status_names_the_endpoint_and_the_installation_id` | défaut | État « disabled in yusAgent », aucune ligne `Endpoint:`. |
+| `crates/pa-core/src/session_engine/telemetry/tests.rs` | `a_disable_lands_even_when_the_telemetry_state_is_unusable` | défaut | La réactivation est refusée et laisse la désactivation en place. |
+| `crates/pa-cli/src/telemetry_notice.rs` | `headless_discloses_immediately_and_once` | défaut | La notice ne s'imprime plus. |
+| `crates/pa-cli/tests/telemetry_command_e2e.rs` | `status_on_and_off_round_trip` | défaut | État « disabled in yusAgent » sans endpoint ; `telemetry on` sort en code 1 et n'écrit rien. |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

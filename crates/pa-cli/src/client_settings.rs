@@ -294,7 +294,9 @@ impl ClientSettings for CliClientSettings {
         // onboarding screen; the notice surfaces on the next launch),
         // and the notice not yet shown.
         let manager = self.manager();
-        pa_core::session_engine::telemetry::telemetry_switch(&manager).enabled()
+        // yusAgent (YA-16, ticket 19): nothing is sent, so the disclosure never shows.
+        pa_telemetry::REMOTE_TELEMETRY
+            && pa_core::session_engine::telemetry::telemetry_switch(&manager).enabled()
             && manager.get_onboarding_shown()
             && !manager.get_telemetry_notice_shown()
     }

@@ -39,8 +39,12 @@ fn status_on_and_off_round_trip() {
 
     let (code, out) = run(sandbox, &["telemetry"], &[]);
     assert_eq!(code, Some(0), "{out}");
-    // yusAgent (YA-01): off until a setting turns it on.
-    assert!(out.contains("Telemetry is off (off by default)."), "{out}");
+    // yusAgent (YA-16, ticket 19): remote telemetry is off with no switch.
+    assert!(
+        out.contains("Telemetry is off (disabled in yusAgent)."),
+        "{out}"
+    );
+    assert!(!out.contains("Endpoint:"), "{out}");
     assert!(out.contains("Installation id: not created yet"), "{out}");
 
     let (code, out) = run(sandbox, &["telemetry", "off"], &[]);
@@ -49,19 +53,14 @@ fn status_on_and_off_round_trip() {
     assert_eq!(saved_switch(sandbox), serde_json::json!(false));
     let (_, out) = run(sandbox, &["telemetry", "status"], &[]);
     assert!(
-        out.contains("Telemetry is off (turned off in settings)."),
+        out.contains("Telemetry is off (disabled in yusAgent)."),
         "{out}"
     );
 
-    let (code, out) = run(sandbox, &["telemetry", "on"], &[("DO_NOT_TRACK", "1")]);
-    assert_eq!(code, Some(0), "{out}");
-    assert_eq!(saved_switch(sandbox), serde_json::json!(true));
-    assert!(
-        out.contains(
-            "Saved telemetry on in settings, but it stays off (forced off by DO_NOT_TRACK)."
-        ),
-        "{out}"
-    );
+    // yusAgent (YA-16, ticket 19): `on` is refused and writes nothing.
+    let (code, out) = run(sandbox, &["telemetry", "on"], &[]);
+    assert_eq!(code, Some(1), "{out}");
+    assert_eq!(saved_switch(sandbox), serde_json::json!(false));
 
     let (code, _) = run(sandbox, &["telemetry", "maybe"], &[]);
     assert_eq!(code, Some(1));
