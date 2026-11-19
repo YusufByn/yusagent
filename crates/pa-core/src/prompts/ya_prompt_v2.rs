@@ -61,6 +61,12 @@ const RULE_OUTPUT_SHELL: &str = "- Output of one `python_repl` or `exec_command`
 const RULE_POLL: &str = "- Do not hold the turn with `sleep` or long blocking awaits: end the turn and wait for the notification.";
 const RULE_POLL_SHELL: &str = "- Do not poll with `sleep`; follow a command still running when `exec_command` returns with `write_stdin` and empty `chars`.";
 
+/// yusAgent (YA-09, ticket 18, phase 3): the rule on existing tests (`existingTestsRule`, off by
+/// default), added after [`RULE_SMALLEST_CHANGE`] when on. Its text was fixed by Yusuf on
+/// 18/11/2026, word for word; Unharnessed has no such rule.
+const RULE_EXISTING_TESTS: &str = "- Existing tests encode expected behavior: if one fails after your change, fix your change; do not edit, skip or exclude that test unless the task explicitly asks to change the behavior it checks.\n";
+const RULE_SMALLEST_CHANGE: &str = "- Make the smallest change that solves the problem at the right layer: no speculative fallbacks, compatibility shims, defensive code or extra tests.\n";
+
 // --- tail ---
 const SKILLS_HEADER: &str = "## Skills\n\nWhen a task matches a skill, read its SKILL.md first. A skill with an import name is already imported in the REPL. Resolve a relative path in a skill against the skill's directory.";
 const SKILLS_BUNDLED_NOTE: &str =
@@ -105,9 +111,10 @@ const PYTHON_REPL_DESCRIPTION: &str =
     "Run Python code in the persistent REPL. Top-level `await` works; variables persist across calls.";
 const PYTHON_REPL_DESCRIPTION_SHELL: &str = "Run Python code in the persistent REPL. Top-level `await` works; variables persist across calls. Run shell commands with the `exec_command` tool.";
 
-/// The static prefix of version 2 for the session's tools.
+/// The static prefix of version 2 for the session's tools; `existing_tests_rule` adds
+/// [`RULE_EXISTING_TESTS`] (off: the prefix is the one before ticket 18, byte for byte).
 #[must_use]
-pub fn static_prefix(choice: ToolChoice) -> String {
+pub fn static_prefix(choice: ToolChoice, existing_tests_rule: bool) -> String {
     let mut text = CORE.trim().to_string();
     let intro = match (choice.apply_patch, choice.native_shell) {
         (false, false) => INTRO_ONE_TOOL,
@@ -134,6 +141,13 @@ pub fn static_prefix(choice: ToolChoice) -> String {
             .replacen(RULES_BASH, RULES_SHELL, 1)
             .replacen(RULE_OUTPUT, RULE_OUTPUT_SHELL, 1)
             .replacen(RULE_POLL, RULE_POLL_SHELL, 1);
+    }
+    if existing_tests_rule {
+        text = text.replacen(
+            RULE_SMALLEST_CHANGE,
+            &format!("{RULE_SMALLEST_CHANGE}{RULE_EXISTING_TESTS}"),
+            1,
+        );
     }
     text
 }
@@ -245,6 +259,7 @@ mod tests {
             RULE_EDIT,
             RULE_OUTPUT,
             RULE_POLL,
+            RULE_SMALLEST_CHANGE,
         ] {
             assert_eq!(CORE.matches(marker).count(), 1, "{marker}");
         }
@@ -252,7 +267,7 @@ mod tests {
 
     #[test]
     fn the_default_documents_one_tool_and_the_kernel_functions() {
-        let text = static_prefix(KERNEL);
+        let text = static_prefix(KERNEL, false);
         assert!(text.starts_with("# yusAgent"));
         assert!(text.contains("You have one tool, `python_repl`"));
         assert!(text.contains("timeout: float | None = 600"));
@@ -265,7 +280,7 @@ mod tests {
 
     #[test]
     fn apply_patch_edits_files_and_edit_is_for_batches() {
-        let text = static_prefix(PATCH);
+        let text = static_prefix(PATCH, false);
         assert!(text.contains(INTRO_PATCH));
         assert!(text.contains(EDIT_FUNCTION_PATCH));
         assert!(text.contains(RULE_EDIT_PATCH));
@@ -277,7 +292,7 @@ mod tests {
     #[test]
     fn a_native_shell_has_no_bash() {
         for choice in [SHELL, BOTH] {
-            let text = static_prefix(choice);
+            let text = static_prefix(choice, false);
             assert!(!text.contains("bash("), "{text}");
             assert!(text.contains(RULES_SHELL));
             assert!(text.contains(RULE_OUTPUT_SHELL));
@@ -288,10 +303,10 @@ mod tests {
                 "{text}"
             );
         }
-        assert!(static_prefix(SHELL).contains(GROUPING_SHELL));
-        assert!(static_prefix(SHELL).contains(EDIT_FUNCTION));
-        assert!(static_prefix(BOTH).contains(GROUPING_PATCH_SHELL));
-        assert!(static_prefix(BOTH).contains(INTRO_PATCH_SHELL));
+        assert!(static_prefix(SHELL, false).contains(GROUPING_SHELL));
+        assert!(static_prefix(SHELL, false).contains(EDIT_FUNCTION));
+        assert!(static_prefix(BOTH, false).contains(GROUPING_PATCH_SHELL));
+        assert!(static_prefix(BOTH, false).contains(INTRO_PATCH_SHELL));
     }
 
     /// The static prefix stays far under the YA-09 bound (2,000 tokens of the base prompt):
@@ -299,8 +314,76 @@ mod tests {
     #[test]
     fn the_static_prefix_is_short() {
         for choice in [KERNEL, PATCH, SHELL, BOTH] {
-            let length = static_prefix(choice).chars().count();
-            assert!(length < 4_000, "{choice:?}: {length} chars");
+            for rule in [false, true] {
+                let length = static_prefix(choice, rule).chars().count();
+                assert!(length < 4_000, "{choice:?}, rule {rule}: {length} chars");
+            }
+        }
+    }
+
+    /// Ticket 18, phase 3: without the rule (the default), the static prefix is the one of `main`
+    /// before the ticket, byte for byte, for every tool choice. The digests were computed on
+    /// `main` at `0c0c11a63` (`docs/tickets/18-ya09-tests-existants.md`, section « Phase 3 »);
+    /// the default tools (`KERNEL`) give `core.md` itself, trimmed.
+    #[test]
+    fn without_the_rule_the_prefix_is_the_one_of_main() {
+        use sha2::{Digest, Sha256};
+        for (choice, bytes, digest) in [
+            (
+                KERNEL,
+                3269,
+                "db63ab6b645ddabe3738002365e90bfa6b412a5340527241c902ab73fdf8edcd",
+            ),
+            (
+                PATCH,
+                3354,
+                "67cc4b23a22396b74f6c8a5bde0ebbf418131f56aacefecbd047bd95dfc1411b",
+            ),
+            (
+                SHELL,
+                2590,
+                "03549bc0dd0a4aa068d35cc03ffd95e30c207829fde9259ffcd3905a97ddcc11",
+            ),
+            (
+                BOTH,
+                2553,
+                "acad8df9275a2155934261d991d548a90620c71e7ad4337f780b30a552674ab4",
+            ),
+        ] {
+            let text = static_prefix(choice, false);
+            assert_eq!(text.len(), bytes, "{choice:?}");
+            assert_eq!(
+                format!("{:x}", Sha256::digest(text.as_bytes())),
+                digest,
+                "{choice:?}"
+            );
+            assert!(!text.contains("Existing tests"), "{choice:?}");
+        }
+        assert_eq!(static_prefix(KERNEL, false), CORE.trim());
+    }
+
+    /// Ticket 18, phase 3: the rule is the sentence fixed by Yusuf, as one line right after the
+    /// rule on the smallest change, for every tool choice; nothing else changes.
+    #[test]
+    fn the_existing_tests_rule_adds_one_line_after_the_smallest_change() {
+        let sentence = "Existing tests encode expected behavior: if one fails after your change, fix your change; do not edit, skip or exclude that test unless the task explicitly asks to change the behavior it checks.";
+        assert_eq!(RULE_EXISTING_TESTS, format!("- {sentence}\n"));
+        for choice in [KERNEL, PATCH, SHELL, BOTH] {
+            let with = static_prefix(choice, true);
+            let without = static_prefix(choice, false);
+            assert_eq!(with.matches(sentence).count(), 1, "{choice:?}");
+            assert!(
+                with.contains(&format!(
+                    "{RULE_SMALLEST_CHANGE}{RULE_EXISTING_TESTS}- On long work"
+                )),
+                "{with}"
+            );
+            assert_eq!(
+                with.replacen(RULE_EXISTING_TESTS, "", 1),
+                without,
+                "{choice:?}"
+            );
+            assert_eq!(with.len(), without.len() + RULE_EXISTING_TESTS.len());
         }
     }
 

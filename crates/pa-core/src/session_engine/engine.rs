@@ -289,6 +289,7 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     let ya_bash_wait_seconds = settings.settings().bash_wait_seconds;
     let ya_prompt_version = settings.settings().prompt_version;
     let ya_session_id_header = settings.settings().codex_session_id_header;
+    let ya_existing_tests_rule = settings.settings().existing_tests_rule;
     let ya_notice_window =
         super::ya_bash_notice_batch::batch_window(settings.settings().bash_notice_batch_seconds);
     // yusAgent (T03, YA-04): `cacheRetention`, unless `PI_CACHE_RETENTION` is set.
@@ -356,14 +357,21 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         ya_prompt_version,
     )?;
     // yusAgent (YA-09, ticket 14): `codexSessionIdHeader` frozen with them.
+    // yusAgent (YA-09, ticket 18): `existingTestsRule` too; on in a version-1 session: refused.
+    let ya_current_request = super::ya_request::FrozenRequest::of(
+        ya_reasoning_summary,
+        ya_bash_wait_seconds,
+        ya_prompt_version,
+    )
+    .with_codex_session_id_header(ya_session_id_header)
+    .with_existing_tests_rule(ya_existing_tests_rule);
+    super::ya_request::check_existing_tests_rule(
+        &*wiring.session.lock().await,
+        ya_current_request,
+    )?;
     let ya_request = super::ya_request::freeze_current_request(
         &mut *wiring.session.lock().await,
-        super::ya_request::FrozenRequest::of(
-            ya_reasoning_summary,
-            ya_bash_wait_seconds,
-            ya_prompt_version,
-        )
-        .with_codex_session_id_header(ya_session_id_header),
+        ya_current_request,
     );
     let stream_fn = super::ya_request::scoped_stream_fn(stream_fn, ya_request);
     // yusAgent (YA-03): the native tools of the model's family, frozen for the session in its
@@ -771,6 +779,8 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             ya_bash_wait_seconds: Some(ya_request.bash_wait_seconds),
             // yusAgent (YA-09, ticket 11): the prompt version of the session.
             ya_prompt_version: Some(ya_request.prompt_version),
+            // yusAgent (YA-09, ticket 18): the rule on existing tests (version 2 only).
+            ya_existing_tests_rule: Some(ya_request.existing_tests_rule),
             ..Default::default()
         },
     );

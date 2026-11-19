@@ -116,6 +116,14 @@ const CODEX_SESSION_ID_HEADER: Variant = Variant {
     ..CODEX_DEFAULT
 };
 
+/// yusAgent (YA-09, ticket 18, phase 3): `existingTestsRule` on, the arm B of its A/B.
+const CODEX_EXISTING_TESTS_RULE: Variant = Variant {
+    settings: Some(r#"{"existingTestsRule": true}"#),
+    ..CODEX_DEFAULT
+};
+/// The line `existingTestsRule` adds to the version-2 prompt (text fixed by Yusuf).
+const EXISTING_TESTS_RULE_LINE: &str = "- Existing tests encode expected behavior: if one fails after your change, fix your change; do not edit, skip or exclude that test unless the task explicitly asks to change the behavior it checks.";
+
 /// Process env is shared by the tests of this binary: one scenario at a time.
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -1097,10 +1105,10 @@ async fn codex_bash_wait_changes_only_the_await_line() {
         headers,
         [
             Some(
-                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
             ),
             Some(
-                json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false})
+                json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
             ),
         ]
     );
@@ -1143,6 +1151,131 @@ async fn codex_bash_wait_changes_only_the_await_line() {
     );
 }
 
+/// yusAgent (YA-09, ticket 18, phase 3): two sessions of one project, the default settings (arm
+/// A) then `existingTestsRule: true` (arm B). Each prefix is stable across its requests; the
+/// default prompt has no rule; the two prompts differ only by the rule's line, right after the
+/// rule on the smallest change; the tools and every other parameter are identical. The headers
+/// freeze `existingTestsRule`: `false`, then `true`.
+#[tokio::test]
+async fn codex_existing_tests_rule_adds_only_its_line() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let mut headers = Vec::new();
+    for variant in [CODEX_DEFAULT, CODEX_EXISTING_TESTS_RULE] {
+        std::fs::write(
+            agent_dir.join("settings.json"),
+            variant.settings.unwrap_or("{}"),
+        )
+        .expect("settings.json");
+        let mut session = SessionManager::in_memory(&cwd);
+        let path = session.materialize_session_file(Some(sessions.clone()));
+        let engine = engine_for(api, &server, &agent_dir, &cwd, variant, session).await;
+        for prompt in PROMPTS {
+            run_prompt(&engine, prompt).await;
+        }
+        drop(engine);
+        let header = pa_core::session::manager::read_session_header(&path).expect("header");
+        headers.push(header.rest.get("yaRequest").cloned());
+    }
+    assert_eq!(
+        headers,
+        [
+            Some(
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
+            ),
+            Some(
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": true})
+            ),
+        ]
+    );
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2 * EXPECTED_REQUESTS, "two sessions");
+    let (default, rule) = bodies.split_at(EXPECTED_REQUESTS);
+    assert_prefix_stable(api, default);
+    assert_prefix_stable(api, rule);
+    let (default_prompt, rule_prompt) = (
+        responses_system_prompt(&default[0]),
+        responses_system_prompt(&rule[0]),
+    );
+    assert!(
+        !default_prompt.contains("Existing tests"),
+        "{default_prompt}"
+    );
+    assert_eq!(
+        rule_prompt.matches(EXISTING_TESTS_RULE_LINE).count(),
+        1,
+        "{rule_prompt}"
+    );
+    // The prompts are the system messages as JSON text: a newline is the escape `\n`.
+    assert!(
+        rule_prompt.contains(&format!(
+            "or extra tests.\\n{EXISTING_TESTS_RULE_LINE}\\n- On long work"
+        )),
+        "{rule_prompt}"
+    );
+    assert_eq!(
+        rule_prompt.replacen(&format!("\\n{EXISTING_TESTS_RULE_LINE}"), "", 1),
+        default_prompt,
+        "only the rule's line differs"
+    );
+    let (mut fixed_default, _) = split_request(api, &request_object(api, 1, &default[0]));
+    let (mut fixed_rule, _) = split_request(api, &request_object(api, 1, &rule[0]));
+    // The prompt cache key is the session id: one per session.
+    for key in ["prompt_cache_key", "input[0] (system)"] {
+        fixed_default.remove(key);
+        fixed_rule.remove(key);
+    }
+    assert_eq!(
+        Value::Object(fixed_default).to_string(),
+        Value::Object(fixed_rule).to_string(),
+        "tools and parameters are identical"
+    );
+}
+
+/// yusAgent (YA-09, ticket 18, phase 3): `existingTestsRule: true` with `promptVersion: 1` is
+/// refused at creation with a message that names `promptVersion: 2`, and the header keeps no
+/// request settings.
+#[tokio::test]
+async fn existing_tests_rule_is_refused_in_prompt_version_one() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"promptVersion": 1, "existingTestsRule": true}"#,
+    )
+    .expect("settings.json");
+    let mut session = SessionManager::in_memory(&cwd);
+    let path = session.materialize_session_file(Some(sessions));
+    let Err(error) = try_engine_with_model(
+        &model_json(api, server.port, CODEX_DEFAULT),
+        "prefix-test-placeholder",
+        &agent_dir,
+        &cwd,
+        session,
+        None,
+    )
+    .await
+    else {
+        panic!("a version-1 session with existingTestsRule must be refused");
+    };
+    let message = format!("{error:#}");
+    assert!(message.contains("existingTestsRule"), "{message}");
+    assert!(message.contains("\"promptVersion\": 2"), "{message}");
+    if let Some(header) = pa_core::session::manager::read_session_header(&path) {
+        assert_eq!(header.rest.get("yaRequest"), None, "{header:?}");
+    }
+}
+
 /// yusAgent (YA-09, lever `bash()`): a session created before `bashWaitSeconds` existed (its
 /// `yaRequest` has no field, as the one written with a window of 1) keeps the 1-second line when
 /// resumed with the default settings (`"full"`): the request after the resume extends the one
@@ -1163,8 +1296,7 @@ async fn resumed_session_from_before_bash_wait_keeps_one_second() {
     let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
-    let before =
-        json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false});
+    let before = json!({"reasoningSummary": "off", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false});
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
 
@@ -1318,8 +1450,7 @@ async fn resumed_session_from_before_prompt_v2_keeps_the_v1_prompt() {
     let engine = engine_for(api, &server, &agent_dir, &cwd, CODEX_DEFAULT, session).await;
     run_prompt(&engine, PROMPTS[1]).await;
     drop(engine);
-    let before =
-        json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false});
+    let before = json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false, "existingTestsRule": false});
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(header.rest.get("yaRequest"), Some(&before), "{header:?}");
 
@@ -1381,7 +1512,7 @@ async fn resumed_legacy_session_keeps_summary_auto() {
     assert_eq!(
         header.rest.get("yaRequest"),
         Some(
-            &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
+            &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
         ),
         "{header:?}"
     );
@@ -1415,7 +1546,9 @@ async fn resumed_legacy_session_keeps_summary_auto() {
     let header = pa_core::session::manager::read_session_header(&path).expect("header");
     assert_eq!(
         header.rest.get("yaRequest"),
-        Some(&json!({"reasoningSummary": "auto", "codexSessionIdHeader": false})),
+        Some(
+            &json!({"reasoningSummary": "auto", "codexSessionIdHeader": false, "existingTestsRule": false})
+        ),
         "{header:?}"
     );
 }

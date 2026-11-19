@@ -1,5 +1,5 @@
 //! yusAgent (YA-09): request settings frozen per session, today `reasoningSummary`,
-//! `bashWaitSeconds`, `promptVersion` and `codexSessionIdHeader`.
+//! `bashWaitSeconds`, `promptVersion`, `codexSessionIdHeader` and `existingTestsRule`.
 //!
 //! `reasoningSummary` in `settings.json`:
 //! - unset (the default since the CDC decision of 15/11/2026) or `"off"`: `reasoning.summary`
@@ -43,6 +43,14 @@
 //! the default until its A/B decides, leaves the requests as upstream. The header always stores
 //! it (`true` or `false`); a `yaRequest` without it is off, what every session created before it
 //! ran with.
+//!
+//! `existingTestsRule` in `settings.json` (ticket 18, phase 3): `true` adds the rule on existing
+//! tests to the static prefix of the version-2 prompt (`prompts::ya_prompt_v2`); unset or
+//! `false`, the default until its A/B decides, leaves the prompt byte for byte as before. A
+//! version-1 session with it set to `true` is refused ([`check_existing_tests_rule`]): the
+//! version-1 layers have no place for it, and a setting that would do nothing would make an
+//! A/B arm look like the other. The header always stores it (`true` or `false`); a `yaRequest`
+//! without it is off, what every session created before it ran with.
 //!
 //! Frozen for the session at creation in the session header, field [`REQUEST_HEADER_KEY`]
 //! (kept by forks, `session::manager::ya_header::INHERITED_HEADER_KEYS`), and read back on
@@ -313,6 +321,28 @@ pub fn check_bash_wait(
     Ok(())
 }
 
+/// Refuses a session that would run prompt version 1 with `existingTestsRule` on: the rule is
+/// part of the version-2 prompt only (ticket 18, phase 3). `current` holds the resolved current
+/// settings; a resumed session is checked on its frozen settings (a header without the field is
+/// off), so only a new session can be refused. Checked before the request settings are frozen,
+/// so a refused session keeps nothing in its header.
+///
+/// # Errors
+///
+/// The refusal, which names the settings to change.
+pub fn check_existing_tests_rule(
+    manager: &SessionManager,
+    current: FrozenRequest,
+) -> anyhow::Result<()> {
+    let frozen = pending_session_request(manager, current).frozen;
+    if frozen.prompt_version == PromptVersion::V1 && frozen.existing_tests_rule {
+        anyhow::bail!(
+            "existingTestsRule needs the version-2 system prompt: version 1 has no place for it. Remove \"existingTestsRule\" from settings.json, or use \"promptVersion\": 2."
+        );
+    }
+    Ok(())
+}
+
 /// The effective request settings of a session, written to its header at creation and read
 /// back on every resume: an unset setting is stored as the value it resolved to, except
 /// `bashWaitSeconds` at 1 (the value of a header without it), left out.
@@ -337,21 +367,27 @@ pub struct FrozenRequest {
     /// header written before the field: off.
     #[serde(default)]
     pub codex_session_id_header: bool,
+    /// The rule on existing tests in the version-2 prompt (`existingTestsRule`): always
+    /// written, `true` or `false`; absent from a header written before the field: off.
+    #[serde(default)]
+    pub existing_tests_rule: bool,
 }
 
 impl FrozenRequest {
     /// The settings a session created before the field was sent with: `"auto"`, 1 second,
-    /// prompt version 1, no `session-id` header.
+    /// prompt version 1, no `session-id` header, no rule on existing tests.
     pub const LEGACY: FrozenRequest = FrozenRequest {
         reasoning_summary: ReasoningSummarySetting::Auto,
         bash_wait_seconds: BashWait::Seconds(LEGACY_BASH_WAIT_SECONDS),
         prompt_version: PromptVersion::V1,
         codex_session_id_header: false,
+        existing_tests_rule: false,
     };
 
     /// The request settings of the current settings. An unset `bashWaitSeconds` follows the
-    /// prompt version ([`resolve_bash_wait`]); `codexSessionIdHeader` is off (see
-    /// [`FrozenRequest::with_codex_session_id_header`]).
+    /// prompt version ([`resolve_bash_wait`]); `codexSessionIdHeader` and `existingTestsRule` are
+    /// off (see [`FrozenRequest::with_codex_session_id_header`] and
+    /// [`FrozenRequest::with_existing_tests_rule`]).
     #[must_use]
     pub fn of(
         reasoning_summary: Option<ReasoningSummarySetting>,
@@ -364,6 +400,7 @@ impl FrozenRequest {
             bash_wait_seconds: resolve_bash_wait(bash_wait_seconds, prompt_version),
             prompt_version,
             codex_session_id_header: false,
+            existing_tests_rule: false,
         }
     }
 
@@ -372,6 +409,15 @@ impl FrozenRequest {
     pub fn with_codex_session_id_header(self, setting: Option<bool>) -> Self {
         FrozenRequest {
             codex_session_id_header: setting.unwrap_or(false),
+            ..self
+        }
+    }
+
+    /// `self` with the `existingTestsRule` setting (unset: off).
+    #[must_use]
+    pub fn with_existing_tests_rule(self, setting: Option<bool>) -> Self {
+        FrozenRequest {
+            existing_tests_rule: setting.unwrap_or(false),
             ..self
         }
     }
@@ -402,8 +448,13 @@ fn label(request: FrozenRequest) -> String {
     } else {
         ""
     };
+    let rule = if request.existing_tests_rule {
+        ", existingTestsRule true"
+    } else {
+        ""
+    };
     format!(
-        "reasoningSummary {summary}, bashWaitSeconds {}, promptVersion {}{header}",
+        "reasoningSummary {summary}, bashWaitSeconds {}, promptVersion {}{header}{rule}",
         request.bash_wait_seconds,
         u8::from(request.prompt_version)
     )
@@ -665,6 +716,7 @@ mod tests {
         bash_wait_seconds: BashWait::Seconds(LEGACY_BASH_WAIT_SECONDS),
         prompt_version: PromptVersion::V1,
         codex_session_id_header: false,
+        existing_tests_rule: false,
     };
 
     fn seconds(value: u32) -> BashWait {
@@ -678,6 +730,7 @@ mod tests {
             bash_wait_seconds: BashWait::Full,
             prompt_version: PromptVersion::V2,
             codex_session_id_header: false,
+            existing_tests_rule: false,
         }
     }
 
@@ -688,6 +741,7 @@ mod tests {
             bash_wait_seconds: BashWait::Full,
             prompt_version: PromptVersion::V2,
             codex_session_id_header: false,
+            existing_tests_rule: false,
         }
     }
 
@@ -698,6 +752,7 @@ mod tests {
             bash_wait_seconds: seconds(30),
             prompt_version: PromptVersion::V1,
             codex_session_id_header: false,
+            existing_tests_rule: false,
         }
     }
 
@@ -786,19 +841,19 @@ mod tests {
         for (frozen, value) in [
             (
                 OFF,
-                json!({"reasoningSummary": "off", "codexSessionIdHeader": false}),
+                json!({"reasoningSummary": "off", "codexSessionIdHeader": false, "existingTestsRule": false}),
             ),
             (
                 FrozenRequest::LEGACY,
-                json!({"reasoningSummary": "auto", "codexSessionIdHeader": false}),
+                json!({"reasoningSummary": "auto", "codexSessionIdHeader": false, "existingTestsRule": false}),
             ),
             (
                 default_request(),
-                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false}),
+                json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false}),
             ),
             (
                 v1_request(),
-                json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false}),
+                json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false, "existingTestsRule": false}),
             ),
         ] {
             assert_eq!(serde_json::to_value(frozen).unwrap(), value);
@@ -820,7 +875,7 @@ mod tests {
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
             Some(
-                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
             )
         );
         // A resume keeps it whatever the settings say.
@@ -844,7 +899,7 @@ mod tests {
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
             Some(
-                &json!({"reasoningSummary": "auto", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
+                &json!({"reasoningSummary": "auto", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
             )
         );
 
@@ -859,7 +914,9 @@ mod tests {
         assert_eq!(frozen, FrozenRequest::LEGACY);
         assert_eq!(
             legacy.ya_header_field(REQUEST_HEADER_KEY),
-            Some(&json!({"reasoningSummary": "auto", "codexSessionIdHeader": false}))
+            Some(
+                &json!({"reasoningSummary": "auto", "codexSessionIdHeader": false, "existingTestsRule": false})
+            )
         );
     }
 
@@ -885,7 +942,9 @@ mod tests {
                 assert_eq!(frozen, FrozenRequest::LEGACY);
                 assert_eq!(
                     manager.ya_header_field(REQUEST_HEADER_KEY),
-                    Some(&json!({"reasoningSummary": "auto", "codexSessionIdHeader": false}))
+                    Some(
+                        &json!({"reasoningSummary": "auto", "codexSessionIdHeader": false, "existingTestsRule": false})
+                    )
                 );
             }
         }
@@ -903,7 +962,7 @@ mod tests {
                 Some(PromptVersion::V1)
             ))
             .unwrap(),
-            json!({"reasoningSummary": "off", "codexSessionIdHeader": false})
+            json!({"reasoningSummary": "off", "codexSessionIdHeader": false, "existingTestsRule": false})
         );
         assert_eq!(
             FrozenRequest::from_header_value(Some(&json!({"reasoningSummary": "off"}))),
@@ -1015,7 +1074,7 @@ mod tests {
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
             Some(
-                &json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false, "existingTestsRule": false})
             )
         );
     }
@@ -1070,7 +1129,7 @@ mod tests {
         assert_eq!(
             manager.ya_header_field(REQUEST_HEADER_KEY),
             Some(
-                &json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false, "existingTestsRule": false})
             )
         );
     }
@@ -1221,6 +1280,7 @@ mod tests {
             Some(&json!({
                 "reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2,
                 "codexSessionIdHeader": true,
+                "existingTestsRule": false,
             }))
         );
         assert_eq!(freeze_current_request(&mut on, current(None)), frozen);
@@ -1233,7 +1293,7 @@ mod tests {
         assert_eq!(
             off.ya_header_field(REQUEST_HEADER_KEY),
             Some(
-                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false})
+                &json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false, "existingTestsRule": false})
             )
         );
         assert_eq!(
@@ -1272,6 +1332,106 @@ mod tests {
         let load = |value: Value| {
             crate::settings::load::from_value_lenient(&json!({ "codexSessionIdHeader": value }))
                 .codex_session_id_header
+        };
+        assert_eq!(load(json!(true)), Some(true));
+        assert_eq!(load(json!(false)), Some(false));
+        for bad in [json!(1), json!("true"), json!(null)] {
+            assert_eq!(load(bad.clone()), None, "{bad}");
+        }
+    }
+
+    /// `existingTestsRule` (ticket 18, phase 3): off by default, written as `false` in a new
+    /// session's `yaRequest`; on, written as `true`; kept at resume either way. A `yaRequest`
+    /// without it (every session from before it) is off, whatever the settings say, with a
+    /// warning, and its header is left as is.
+    #[test]
+    fn the_existing_tests_rule_is_always_frozen() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = |setting: Option<bool>| {
+            FrozenRequest::of(None, None, None).with_existing_tests_rule(setting)
+        };
+        assert_eq!(current(None), default_request());
+        assert_eq!(current(Some(false)), default_request());
+
+        let mut on = SessionManager::in_memory(dir.path());
+        let frozen = freeze_current_request(&mut on, current(Some(true)));
+        assert!(frozen.existing_tests_rule);
+        assert_eq!(
+            on.ya_header_field(REQUEST_HEADER_KEY),
+            Some(&json!({
+                "reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2,
+                "codexSessionIdHeader": false,
+                "existingTestsRule": true,
+            }))
+        );
+        assert_eq!(freeze_current_request(&mut on, current(None)), frozen);
+
+        let mut off = SessionManager::in_memory(dir.path());
+        assert_eq!(
+            freeze_current_request(&mut off, current(None)),
+            default_request()
+        );
+        assert_eq!(
+            freeze_current_request(&mut off, current(Some(true))),
+            default_request()
+        );
+        assert_eq!(
+            off.ya_header_field(REQUEST_HEADER_KEY)
+                .and_then(|request| request.get("existingTestsRule")),
+            Some(&json!(false)),
+            "kept at resume"
+        );
+
+        // A session from before the field: off, and its header is left as is.
+        let before = json!({"reasoningSummary": "off", "bashWaitSeconds": "full", "promptVersion": 2, "codexSessionIdHeader": false});
+        let mut old = SessionManager::in_memory(dir.path());
+        old.ya_set_header_field(REQUEST_HEADER_KEY, before.clone());
+        assert_eq!(
+            freeze_current_request(&mut old, current(Some(true))),
+            default_request()
+        );
+        assert_eq!(old.ya_header_field(REQUEST_HEADER_KEY), Some(&before));
+
+        let resumed = session_request_from(Some(default_request()), false, current(Some(true)));
+        assert_eq!(resumed.frozen, default_request());
+        let warning = resumed.warning.expect("warning");
+        assert!(warning.contains("existingTestsRule true"), "{warning}");
+        let legacy = session_request(None, true, None, None, None);
+        assert!(!legacy.frozen.existing_tests_rule);
+    }
+
+    /// `existingTestsRule: true` in a new version-1 session is refused before anything is
+    /// written, with the settings to change; version 2, or the rule off, is not. A session
+    /// frozen without the rule is not refused at resume, even in version 1.
+    #[test]
+    fn the_existing_tests_rule_is_refused_in_version_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = SessionManager::in_memory(dir.path());
+        let v1 = |rule: Option<bool>| {
+            FrozenRequest::of(None, None, Some(PromptVersion::V1)).with_existing_tests_rule(rule)
+        };
+        let refused = check_existing_tests_rule(&manager, v1(Some(true)))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("existingTestsRule"), "{refused}");
+        assert!(refused.contains("\"promptVersion\": 2"), "{refused}");
+        assert_eq!(manager.ya_header_field(REQUEST_HEADER_KEY), None);
+        assert!(check_existing_tests_rule(&manager, v1(Some(false))).is_ok());
+        assert!(check_existing_tests_rule(&manager, v1(None)).is_ok());
+        let v2 = FrozenRequest::of(None, None, None).with_existing_tests_rule(Some(true));
+        assert!(check_existing_tests_rule(&manager, v2).is_ok());
+
+        let mut frozen = SessionManager::in_memory(dir.path());
+        freeze_current_request(&mut frozen, v1(None));
+        assert!(check_existing_tests_rule(&frozen, v1(Some(true))).is_ok());
+    }
+
+    /// `existingTestsRule` in `settings.json`: a boolean; anything else is dropped at load.
+    #[test]
+    fn the_existing_tests_rule_setting_loads_booleans_only() {
+        let load = |value: Value| {
+            crate::settings::load::from_value_lenient(&json!({ "existingTestsRule": value }))
+                .existing_tests_rule
         };
         assert_eq!(load(json!(true)), Some(true));
         assert_eq!(load(json!(false)), Some(false));

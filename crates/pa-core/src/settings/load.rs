@@ -78,6 +78,8 @@ const KNOWN_FIELDS: &[&str] = &[
     "promptVersion",
     // yusAgent (YA-09, ticket 14): `session-id` header on the ChatGPT provider.
     "codexSessionIdHeader",
+    // yusAgent (YA-09, ticket 18): rule on existing tests in the version-2 prompt.
+    "existingTestsRule",
 ];
 
 /// Extract each known field independently; ignore fields whose JSON type does not match the Rust

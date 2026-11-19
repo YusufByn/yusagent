@@ -255,7 +255,7 @@ mod tests {
                 (
                     store.path,
                     REQUEST_KEY.to_string(),
-                    json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+                    json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false, "existingTestsRule": false})
                 ),
             ]
         );
@@ -297,14 +297,14 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let off = json!({"reasoningSummary": "off"});
-        let auto = json!({"reasoningSummary": "auto", "codexSessionIdHeader": false});
+        let auto = json!({"reasoningSummary": "auto", "codexSessionIdHeader": false, "existingTestsRule": false});
 
         let dir = tempfile::TempDir::new().unwrap();
         let engine = build_with_settings(dir.path(), None, "{}");
         assert_eq!(
             built_request(&engine),
             Some(
-                json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+                json!({"reasoningSummary": "off", "bashWaitSeconds": 30, "codexSessionIdHeader": false, "existingTestsRule": false})
             )
         );
 
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(
             built_request(&engine),
             Some(
-                json!({"reasoningSummary": "auto", "bashWaitSeconds": 30, "codexSessionIdHeader": false})
+                json!({"reasoningSummary": "auto", "bashWaitSeconds": 30, "codexSessionIdHeader": false, "existingTestsRule": false})
             )
         );
 

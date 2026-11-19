@@ -148,6 +148,21 @@ class Lines(unittest.TestCase):
         label, _ = te.classify_lines([], [], ["@pytest.mark.skip(reason='flaky')"])
         self.assertEqual(label, "suppression ou skip")
 
+    def test_only_added(self):
+        start = ["  it('keeps zeros', () => {"]
+        label, reason = te.classify_lines(start, start, ["  it.only('keeps zeros', () => {"],
+                                          known={"keeps zeros"})
+        self.assertEqual(label, "suppression ou skip")
+        self.assertIn(".only", reason)
+        for line in ("  fit('x', () => {", "  test.skipIf(isCI)('x', () => {",
+                     "  it.fails('x', () => {", "test('x', { skip: true }, () => {})",
+                     "pytest.importorskip('numpy')", "@unittest.expectedFailure"):
+            self.assertEqual(te.classify_lines([], [], [line])[0], "suppression ou skip", line)
+
+    def test_skip_option_of_the_code_is_not_a_skip(self):
+        line = 'expect(await checkForUpdate("1.0.0", { skip: "notice-only" })).toBe(false);'
+        self.assertEqual(te.classify_lines([], [], [line])[0], "ajout seul")
+
 
 class Writers(unittest.TestCase):
     def kinds(self, ops):
@@ -190,6 +205,88 @@ class Writers(unittest.TestCase):
 
     def test_unparsable_cell(self):
         self.assertIsNone(te.python_write_ops("def ("))
+
+
+class Exclusions(unittest.TestCase):
+    """Exclusions de tests dans les commandes de test (ticket 18, phase 3)."""
+
+    def targets(self, command: str) -> list[tuple[str, str, str]]:
+        return [(o["option"], o["path"], o["target_kind"])
+                for o in te.shell_write_ops(command, "shell") if o["kind"] == "exclude"]
+
+    def test_runner_options(self):
+        cases = {
+            # little-coder, phase 2, passe 3, cellule 19
+            "npx vitest run --exclude a/live.test.ts --exclude a/parser.test.ts && npm run "
+            "typecheck": [("--exclude", "a/live.test.ts", "glob"),
+                          ("--exclude", "a/parser.test.ts", "glob")],
+            "npm test -- --exclude='**/parser.test.ts'": [
+                ("--exclude", "**/parser.test.ts", "glob")],
+            "npx jest --testPathIgnorePatterns parser legacy --ci": [
+                ("--testPathIgnorePatterns", "parser", "regex"),
+                ("--testPathIgnorePatterns", "legacy", "regex")],
+            "uv run pytest --ignore=tests/test_a.py --ignore-glob '*_int.py' -q": [
+                ("--ignore", "tests/test_a.py", "glob"), ("--ignore-glob", "*_int.py", "glob")],
+            "python -m pytest --deselect tests/test_a.py::test_zero": [
+                ("--deselect", "tests/test_a.py::test_zero", "nodeid")],
+            "pytest -k 'not zero and not (slow or net)'": [
+                ("-k", "not zero and not (slow or net)", "name")],
+            "pytest -k 'zero or one'": [],
+            "cargo test -- --skip parser::nested": [("--skip", "parser::nested", "name")],
+            "go test ./... -skip TestNested": [("-skip", "TestNested", "name")],
+            "node --test --test-skip-pattern=nested test/": [
+                ("--test-skip-pattern", "nested", "name")],
+            "npx vitest run -t '^(?!.*nested).*$'": [("-t", "^(?!.*nested).*$", "name")],
+            "npx vitest run -t 'nested'": [],
+            "npx mocha --grep nested --invert": [("--grep", "nested", "name")],
+            "npx mocha --grep nested": [],
+            # commandes qui ne lancent pas de tests
+            "grep -rn --exclude=*.test.ts vitest src": [],
+            "rsync -a --exclude tests src/ dst/": [],
+            "tar czf a.tgz --exclude=node_modules .": [],
+            "npx tsc --noEmit --exclude tests": [],
+        }
+        for command, expected in cases.items():
+            self.assertEqual(self.targets(command), expected, command)
+
+    def test_python_cell(self):
+        ops = te.python_write_ops(
+            "r = await bash('npx vitest run --exclude t/a.test.ts', timeout=120)\n"
+            "subprocess.run('pytest --ignore tests/b.py', shell=True)\n")
+        self.assertEqual([(o["kind"], o["path"]) for o in ops],
+                         [("exclude", "t/a.test.ts"), ("exclude", "tests/b.py")])
+
+    def test_excluded_tests(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {"tests/test_a.py": "def test_zero():\n    pass\n",
+                     "tests/int/test_b.py": "def test_net():\n    pass\n",
+                     "src/p.test.ts": "it('extracts nested json', () => {})\n",
+                     "src/a.py": ""}
+            for name, text in files.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(text)
+            base = {"files": set(files), "root": root, "repo": None, "commit": None}
+
+            def hits(option, target, kind):
+                return te.excluded_tests(base, {"option": option, "path": target,
+                                                "target_kind": kind})
+
+            self.assertEqual(hits("--exclude", "src/p.test.ts", "glob"), ["src/p.test.ts"])
+            self.assertEqual(hits("--exclude", "**/p.test.ts", "glob"), ["src/p.test.ts"])
+            self.assertEqual(hits("--ignore", "tests/int/", "glob"), ["tests/int/test_b.py"])
+            self.assertEqual(hits("--ignore-glob", "*test_b.py", "glob"),
+                             ["tests/int/test_b.py"])
+            self.assertEqual(hits("--exclude", "src/new.test.ts", "glob"), [])
+            self.assertEqual(hits("--testPathIgnorePatterns", r"p\.test", "regex"),
+                             ["src/p.test.ts"])
+            self.assertEqual(hits("--deselect", "tests/test_a.py::test_zero", "nodeid"),
+                             ["tests/test_a.py::test_zero"])
+            self.assertEqual(hits("-k", "not zero", "name"), ["tests/test_a.py (zero)"])
+            self.assertEqual(hits("-t", "^(?!.*nested)", "name"), ["src/p.test.ts (nested)"])
+            self.assertEqual(hits("--skip", "unknown_name", "name"), [])
+            self.assertIsNone(te.excluded_tests(None, {"option": "--exclude", "path": "x",
+                                                       "target_kind": "glob"}))
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -258,6 +355,36 @@ class FullRun(unittest.TestCase):
             self.assertIn("[modification] t1", te.render_cases(rows))
             self.assertEqual(row["support_writes"], [])
             self.assertIn("non remplacés par hidden/ : 0", te.render_grading(rows))
+
+    def test_exclusion_in_a_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            tasks = tmp / "tasks"
+            repo = tasks / "t1" / "repo"
+            (repo / "tests").mkdir(parents=True)
+            (repo / "tests" / "a.test.js").write_text(START)
+            (tasks / "t1" / "task.toml").write_text('[source]\npath = "repo"\n')
+            run = tmp / "run"
+            sessions = run / "tasks" / "t1" / "run-1" / "sessions"
+            sessions.mkdir(parents=True)
+            (sessions / "s.jsonl").write_text("\n".join(json.dumps(e) for e in [
+                {"type": "session", "cwd": "/ws", "yaRequest": {"promptVersion": 2}},
+                {"type": "message", "message": {"role": "assistant", "content": [
+                    {"type": "toolCall", "id": "c1", "name": "exec_command",
+                     "arguments": {"cmd": "npx vitest run --exclude /ws/tests/a.test.js "
+                                          "--exclude tests/new.test.js"}}]}},
+            ]))
+            rows = te.analyse([run], 2, te.Base(tmp / "cache", tasks))
+            exclusions = rows[0]["exclusions"]
+            self.assertEqual([(e["cell"], e["target"], e["excluded"]) for e in exclusions],
+                             [(0, "tests/a.test.js", ["tests/a.test.js"]),
+                              (0, "tests/new.test.js", [])])
+            self.assertEqual(rows[0]["cases"], [])
+            self.assertIn("| 0 | 1 (1) | 0 (0) |", te.render(rows))
+            cases = te.render_cases(rows)
+            self.assertIn("[exclusion] t1 — run run-1 — cellule 0 — "
+                          "`--exclude tests/a.test.js`", cases)
+            self.assertIn("[exclusion sans test de départ] t1", cases)
 
     def test_support_write(self):
         with tempfile.TemporaryDirectory() as tmp:
