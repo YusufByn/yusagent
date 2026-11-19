@@ -1,0 +1,1 @@
+- yusAgent: the agent directory is `~/.yusagent` (project directory `<cwd>/.yusagent/`), the kernel venv `~/.yusagent/kernel-venv`, and the daemon socket directory `$TMPDIR/yusagent-<uid>`. `~/.prime/agent` is no longer read; no automatic migration (see the ticket for a manual copy command).

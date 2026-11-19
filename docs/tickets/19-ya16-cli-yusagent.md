@@ -307,4 +307,28 @@ Branche `ya-19-binaire`, depuis `main` à `aea5db01b` (merge de la PR 1).
 - **Banc** : `install-bin.sh` et `ab.py` acceptent `yusagent` et, pour les builds d'avant le ticket 19, `prime-agent` ; chemins des README, de `CLAUDE.md` et du `Makefile` mis à jour. Options de `bench/smoke/run.py` inchangées.
 - **Laissés** : `package update` (partie « mise à jour de soi » déjà refusée hors installation gérée), texte de la confirmation de `/update` (figé par un test e2e), code de mise à jour (inatteignable), nom de l'archive, `package.json` de l'archive (`name`, `bin`), outils de dev (`pa-perf`, `pa-tui-replay`).
 - **À reprendre (refonte du CLI après YA-10, et YA-16 distribution)** : la confirmation de `/update` est encore demandée **avant** le refus (son texte, figé par `clipboard_auth_commands_e2e.rs:1815`, parle toujours de la migration TypeScript vers Rust) ; l'archive garde le nom `prime-agent-<version>-<plateforme>.tar.gz` (le binaire qu'elle contient s'appelle `yusagent`).
+- **Contrôle en capture après la PR 2** (Yusuf, 19/11/2026) : `py-example-001`, binaires `7e2be841b` (avant le ticket), `aea5db01b` (PR 1) et `9ce92d3d0` (PR 2) : 3 runs `resolved`, code de sortie 0 ; rien d'écrit dans `~/.yusagent` ni `~/.prime/agent` ; `compare_capture_prompts.py` `TOUT IDENTIQUE` avant le ticket contre PR 1, puis PR 1 contre PR 2 (9 requêtes).
+
+## PR 3 : dossier (19/11/2026)
+
+Branche `ya-19-dossier`, depuis `main` à `d0eaab8bc` (merge de la PR 2).
+
+- **Dossiers** : `~/.yusagent` (agent) et `<cwd>/.yusagent/` (projet), cinq constantes `CONFIG_DIR_NAME`. Surcharge `PRIME_AGENT_CODING_AGENT_DIR` inchangée (variables `PRIME_AGENT_*` gardées). **Pas de migration**.
+- **Venv du kernel** : `~/.yusagent/kernel-venv` (repli XDG `~/.local/share/yusagent/kernel-venv`). Écart à la décision « suit le chemin passé par l'hôte » : le venv reste sous le dossier personnel, comme upstream, et ne suit pas `PRIME_AGENT_CODING_AGENT_DIR` ; sinon chaque test qui pointe cette variable vers un dossier temporaire reconstruirait un venv. `PRIME_AGENT_KERNEL_VENV` le déplace toujours (le banc le fixe).
+- **Runtime Python** : l'hôte passe déjà `PRIME_AGENT_CODING_AGENT_DIR` au kernel (`crates/pa-core/src/session_engine/runtime_wiring.rs:272`). Les cinq replis Python sans cette variable pointent sur `~/.yusagent` : plus aucun repli sur `~/.prime/agent`.
+- **Sockets** : `$TMPDIR/yusagent-<uid>/` (Unix). Les noms Windows ne changent pas (pas d'exécution native).
+- **Effet** : un `~/.prime/agent` existant n'est plus lu (réglages, `auth.json`, `models.json`, sessions, skills, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`) ; un `<projet>/.prime/agent/` non plus (réglages et skills de projet, `SYSTEM.md`, `APPEND_SYSTEM.md`, modèles de prompts). `~/.prime/config.json` (CLI `prime`) reste lu pour Prime Inference.
+
+### Migration manuelle (commande documentée, rien d'automatique)
+
+À lancer une fois, yusAgent arrêté (`yusagent shutdown`), sans écraser un `~/.yusagent` existant. Le venv du kernel n'est pas copié (chemins absolus, il se reconstruit) ni l'état d'exécution (`daemon-workers`, `session-leases`, `worker-snapshot-cache`, `logs`). `cp -p` garde les droits de `auth.json` (0600).
+
+```sh
+mkdir -m 700 ~/.yusagent
+cd ~/.prime/agent && for f in settings.json auth.json models.json keybindings.json mcp-services.json AGENTS.md SYSTEM.md APPEND_SYSTEM.md skills prompts themes sessions session-artifacts harness; do [ -e "$f" ] && cp -Rp "$f" ~/.yusagent/; done
+# par projet, si besoin :
+git mv .prime/agent .yusagent   # ou mv, selon que le dossier est suivi
+```
+
+Limite : une session reprise peut encore citer des chemins absolus de `~/.prime/agent` (sessions de sous-agents, shells persistants).
 
