@@ -2,7 +2,7 @@
 """Smoke bench local (T06, YA-14) : tâches courtes, vrai modèle par abonnement, rapport.
 
 Usage (voir README.md) :
-    python3 -I bench/smoke/run.py --binary <dossier>/prime-agent [--model gpt-6.1-sol] ...
+    python3 -I bench/smoke/run.py --binary <dossier>/yusagent [--model gpt-6.1-sol] ...
     python3 -I bench/smoke/run.py --binary ... --capture        # validation sans modèle
     python3 -I bench/smoke/run.py --rereport <run>              # rapport recalculé
 

@@ -10,12 +10,14 @@ if [ "${1:-}" = --force ]; then FORCE=1; shift; fi
 RUN=${1:?id du run CI}
 EXPECTED=${2:-}
 REPO=YusufByn/yusagent
-# Cible de la machine : seul darwin arm64 est installable (archive prime-agent-*-darwin-arm64).
+# Cible de la machine : seul darwin arm64 est installable (archive prime-agent-*-darwin-arm64 ;
+# l'archive garde ce nom, le binaire qu'elle contient s'appelle yusagent depuis le ticket 19).
 [ "$(uname -s)/$(uname -m)" = "Darwin/arm64" ] || { echo "cible non prise en charge : $(uname -s)/$(uname -m)" >&2; exit 1; }
 TARGET=aarch64-apple-darwin
-# Artefact de la cible, seul : artifacts-<cible> (continuous) ou prime-agent-<cible>-<sha> (ya-build-macos-arm64).
+# Artefact de la cible, seul : artifacts-<cible> (continuous), yusagent-<cible>-<sha> ou, avant le
+# ticket 19, prime-agent-<cible>-<sha> (ya-build-macos-arm64).
 NAMES=$(gh api "repos/$REPO/actions/runs/$RUN/artifacts?per_page=100" \
-  --jq ".artifacts[] | select(.expired | not) | .name | select(. == \"artifacts-$TARGET\" or startswith(\"prime-agent-$TARGET-\"))")
+  --jq ".artifacts[] | select(.expired | not) | .name | select(. == \"artifacts-$TARGET\" or startswith(\"yusagent-$TARGET-\") or startswith(\"prime-agent-$TARGET-\"))")
 [ -n "$NAMES" ] || { echo "run $RUN : pas d'artefact $TARGET (absent ou expiré)" >&2; exit 1; }
 [ "$(printf '%s\n' "$NAMES" | wc -l)" -eq 1 ] || { echo "run $RUN : plusieurs artefacts $TARGET : $NAMES" >&2; exit 1; }
 TMP=$(mktemp -d)
@@ -30,17 +32,20 @@ field() { python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); print(
 SHA=$(field "$ART/manifest.json" commit)
 [ -n "$SHA" ] || { echo "artefact $NAMES : commit absent du manifeste" >&2; exit 1; }
 [ -z "$EXPECTED" ] || [ "$SHA" = "$EXPECTED" ] || { echo "commit $SHA ≠ attendu $EXPECTED" >&2; exit 1; }
+# Binaire d'un dossier : yusagent (depuis le ticket 19), sinon prime-agent (builds antérieurs).
+binary_of() { if [ -f "$1/yusagent" ]; then echo "$1/yusagent"; else echo "$1/prime-agent"; fi; }
 # Contrôles d'un dossier installé : fichiers présents, commit du manifeste,
 # sha256 de l'exécutable, --version.
 check() {
-  local d=$1 want got
-  [ -f "$d/prime-agent" ] && [ -f "$d/manifest.json" ] && [ -f "$d/SHA256SUMS" ] || { echo "$d : prime-agent, manifest.json ou SHA256SUMS absent" >&2; return 1; }
+  local d=$1 want got bin
+  bin=$(binary_of "$d")
+  [ -f "$bin" ] && [ -f "$d/manifest.json" ] && [ -f "$d/SHA256SUMS" ] || { echo "$d : yusagent (ou prime-agent), manifest.json ou SHA256SUMS absent" >&2; return 1; }
   got=$(field "$d/manifest.json" commit)
   [ "$got" = "$SHA" ] || { echo "$d : commit du manifeste '$got' ≠ $SHA" >&2; return 1; }
   want=$(field "$d/manifest.json" exe)
-  got=$(shasum -a 256 "$d/prime-agent" | cut -d' ' -f1)
+  got=$(shasum -a 256 "$bin" | cut -d' ' -f1)
   [ -n "$want" ] && [ "$want" = "$got" ] || { echo "$d : sha256 de l'exécutable $got ≠ manifeste $want" >&2; return 1; }
-  "$d/prime-agent" --version 2>/dev/null | grep -q "$SHA" || { echo "$d : version ≠ $SHA" >&2; return 1; }
+  "$bin" --version 2>/dev/null | grep -q "$SHA" || { echo "$d : version ≠ $SHA" >&2; return 1; }
 }
 BASE="$HOME/.cache/yusagent-bin"
 DEST="$BASE/$SHA"

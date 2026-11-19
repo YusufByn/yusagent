@@ -1,11 +1,11 @@
 # Banc de capture (YA-00)
 
-Lance le binaire `prime-agent` contre un serveur HTTP local qui enregistre chaque requête modèle et renvoie des réponses factices, puis analyse le préambule, le préfixe N/N+1 et les variations entre sessions. Aucun vrai modèle, aucune clé, aucun login.
+Lance le binaire `yusagent` (`prime-agent` avant le ticket 19) contre un serveur HTTP local qui enregistre chaque requête modèle et renvoie des réponses factices, puis analyse le préambule, le préfixe N/N+1 et les variations entre sessions. Aucun vrai modèle, aucune clé, aucun login.
 
 ## Commande unique
 
 ```bash
-python3 bench/tools/capture/run.py --binary /chemin/vers/prime-agent
+python3 bench/tools/capture/run.py --binary /chemin/vers/yusagent
 ```
 
 Résultat : `bench/tools/capture/runs/<horodatage UTC>/report.md` (lisible) et `report.json` (complet), à côté des captures brutes.
@@ -20,7 +20,7 @@ Prérequis : macOS (`sandbox-exec`), `python3` ≥ 3.11, `uv`, `git`. Bibliothè
   gh run download <run-id> --repo YusufByn/yusagent --dir /tmp/pa-head
   ```
 
-  Puis vérifier `SHA256SUMS` et extraire le `.tar.gz` (le binaire `prime-agent` est à la racine de l'archive, avec `prime-agent-runtime/` et `skills/`).
+  Puis vérifier `SHA256SUMS` et extraire le `.tar.gz` (le binaire `yusagent`, `prime-agent` avant le ticket 19, est à la racine de l'archive, avec `prime-agent-runtime/` et `skills/`).
 - **Release upstream (pour développer le banc)** : `gh release download v0.10.2 --repo PrimeIntellect-ai/prime-agent -p 'prime-agent-0.10.2-darwin-arm64.tar.gz' -p SHA256SUMS`.
 
 ## Déroulé
