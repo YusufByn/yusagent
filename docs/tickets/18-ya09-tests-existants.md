@@ -601,7 +601,7 @@ python3 -I bench/smoke/tools/test_edits.py --prompt-version 2 --json /tmp/test-e
   - `--ignore` des tests d'intégration de graphiti (`tests/*_int.py`, `tests/driver/`, `tests/evals/`) ;
   - `--exclude …/live-integration.test.ts` (little-coder).
 
-  Seule `--exclude …/parser.test.ts` (phase 2, passe 3) vise un test que le changement fait échouer. D'où la précision sur les exclusions du plan, **à valider par Yusuf**.
+  Seule `--exclude …/parser.test.ts` (phase 2, passe 3) vise un test que le changement fait échouer. D'où la précision sur les exclusions du plan, validée par Yusuf le 19/11/2026 avec une condition de preuve : échec du test au commit de départ, dans les conditions du banc (réseau coupé), noté dans le rapport.
 - **Écritures reclassées par les nouveaux marqueurs** : 2 sur l'ensemble, toutes deux testsprite (`20261106T221035Z` et `20261106T222846Z`). L'écriture passe de « ajout seul » à « suppression ou skip » : `it.skipIf(…getuid…)` sur un test ajouté par le modèle. Totaux avant/après : ajout seul 1 096 → 1 094, modification 173 → 173, suppression ou skip 69 → 71. Version d’avant : `git show 7c1ce52:bench/smoke/tools/test_edits.py`.
 
 ### 3. Plan de l'A/B
@@ -611,7 +611,7 @@ python3 -I bench/smoke/tools/test_edits.py --prompt-version 2 --json /tmp/test-e
 - **Bras et protocole** : A = `default.json`, B = `bench/smoke/settings/existing-tests-rule.json`, même binaire, 10 tâches × 3 passes entrelacées, graine 1649173621 tirée le 18/11 à 19:20Z, ordre calculé, `gpt-6-luna`, effort high, 60 bras.
 - **Mesures et règle de verdict** : critère de contournement, mesure de garde, règle, affichages sans décision et limites.
 - **Tâches où la correction officielle modifie une attente de départ** : little-coder (`scoring.test.ts`, −22 lignes) et testsprite (`credentials.test.ts`, −9 lignes). Les 8 autres n'ajoutent que des lignes (hors deux imports retirés). Calcul : chaque fichier de `hidden/` comparé au même fichier du dernier `pristine-*` du cache (`test_edits.Base`, `test_edits.original`, `difflib.ndiff`, lignes non vides retirées et ajoutées).
-- **Ajout à valider par Yusuf** : la précision sur les exclusions de tests qui ne peuvent pas tourner dans le banc.
+- **Ajout validé par Yusuf le 19/11/2026** : la précision sur les exclusions de tests qui ne peuvent pas tourner dans le banc, à condition de le prouver par l'échec du test au commit de départ, dans les conditions du banc (réseau coupé), et de le noter dans le rapport.
 
 ### 4. Vérification en `--capture` (sans modèle)
 
@@ -648,6 +648,6 @@ Section « Commandes » du plan :
 
 ### Points ouverts
 
-- **Précision sur les exclusions** (plan, « Mesure principale ») : à valider par Yusuf avant le run.
+- **Précision sur les exclusions** (plan, « Mesure principale ») : validée par Yusuf le 19/11/2026, avec la condition de preuve. La preuve se fait à la main au moment du rapport : aucun outil ne lance aujourd'hui une commande de test au commit de départ sous la sandbox du banc.
 - **`run.py`, `header.settings_non_default`** : la liste fixe de `known_settings` (`bench/smoke/run.py:1126-1130`) ne contient ni `existingTestsRule` ni `codexSessionIdHeader`. Le réglage figure dans `header.settings` et `header.ab.settings_diff`. Ce comportement existait avant ce ticket ; il n'est pas modifié ici.
 - **Terminal-Bench** : la notation n'y a pas été lue (point ouvert de la phase 1). À faire avant de confirmer un éventuel « B retenu ».
