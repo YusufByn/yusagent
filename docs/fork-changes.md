@@ -619,6 +619,36 @@ Aucune dépendance de la messagerie aux réglages coupés par YA-01 :
 
 Si ce test retombe sur une PR suivante : enquête.
 
+## Instabilité probable : `agent_family_e2e`, passivation (YA-16)
+
+`crates/pa-daemon/tests/agent_family_e2e.rs`, test `passivated_child_recent_messages_reads_its_file_end_to_end` (`:1359`), shard 1 de `ci.yml`. C'est le troisième test instable de ce fichier (voir la section précédente), avec un autre symptôme.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 44601054912 | `8efe27bdf` | 1 | réussi |
+| 44604335224 | `74137ca47` | 1 | échec du shard 1 (3 réussis, 1 échec) |
+| 44604335224 | `74137ca47` | 2 | réussi, aucun changement de code (relance du shard seul, accord de Yusuf, commentée dans la PR #63) |
+
+Symptôme : « the passivation stopped kid-a's worker » à `agent_family_e2e.rs:1500`. `worker_idle_passivation` répond `success`, mais le `list` qui suit (`:1343-1352`) contient encore la session de kid-a. `74137ca47` ne change que la doc par rapport à `8efe27bdf`. Dans ce fichier, la PR #63 ne change que le chemin du venv du kernel (`:219-220`).
+
+Hypothèse non vérifiée : le superviseur répond `success` avant d'avoir retiré le worker des sessions résidentes (`DaemonCommand::WorkerIdlePassivation`, `crates/pa-daemon/src/protocol.rs:954`, traité à `crates/pa-daemon/src/supervisor/clients.rs:688`). Point ouvert dans le ticket 19, à vérifier avant YA-10.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
+## Instabilité probable : `rpc_mode_e2e` (YA-16)
+
+`crates/pa-cli/tests/rpc_mode_e2e.rs`, test `rpc_compact_flush_is_bounded_against_a_stalled_reader` (`:1368`), shard 8 de `ci.yml`.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 44593768562 | `897b0f758` | 1 | test réussi (le run a échoué sur d'autres tests) |
+| 44601054912 | `8efe27bdf` | 1 | échec du shard 8 (job 135832457352) |
+| 44604335224 | `74137ca47` | 1 | réussi, aucun changement de code (le push de la passation compte comme la relance, accord de Yusuf, commenté dans la PR #63) |
+
+Symptôme : « the compaction never ran behind the stalled reader: the flush wedged the command on the reader » à `rpc_mode_e2e.rs:1399`. Le test attend au plus 4 s la ligne `"compaction"` dans le fichier de session, lecteur de sortie bloqué (`:1385-1397`). Hypothèse : borne de temps trop courte sur un runner chargé. Entre `897b0f758` et `8efe27bdf`, aucun code du produit ne change. Dans ce fichier, la PR #63 ne change que le chemin du venv de test (`:61-62`).
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
 Le shard 1 de `ci.yml` téléchargeait la release `v0.9.8` depuis `${GITHUB_REPOSITORY}`. Le fork n'a pas de release, l'étape échouait et faisait échouer tout le shard.
