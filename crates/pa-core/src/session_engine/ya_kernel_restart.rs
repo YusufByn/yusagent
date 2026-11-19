@@ -163,7 +163,7 @@ mod tests {
             return Some(std::path::PathBuf::from(explicit));
         }
         let home = std::env::var("HOME").ok()?;
-        let candidate = std::path::PathBuf::from(home).join(".prime/agent/kernel-venv/bin/python");
+        let candidate = std::path::PathBuf::from(home).join(".yusagent/kernel-venv/bin/python");
         if candidate.exists() {
             return Some(candidate);
         }

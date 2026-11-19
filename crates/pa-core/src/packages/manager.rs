@@ -826,7 +826,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             project["packages"],
-            serde_json::json!(["../../project-pkg"])
+            // yusAgent (YA-16, ticket 19): `.yusagent/` is one level, `.prime/agent/` was two.
+            serde_json::json!(["../project-pkg"])
         );
         // Global settings are never created by a project-scoped install.
         assert!(!dir.path().join("agent").join("settings.json").exists());

@@ -1062,10 +1062,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().join("cwd");
         let agent_dir = dir.path().join("agent");
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::write(
-            cwd.join(".prime/agent/settings.json"),
+            cwd.join(".yusagent/settings.json"),
             r#"{ "factory": { "enabled": true } }"#,
         )
         .unwrap();

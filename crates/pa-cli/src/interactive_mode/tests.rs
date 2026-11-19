@@ -1059,9 +1059,9 @@ async fn startup_flush_never_blocks_the_first_frame() {
 fn interactive_resume_restores_saved_cwd_and_project_settings_unless_overridden() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("saved-project");
-    std::fs::create_dir_all(project.join(".prime/agent")).unwrap();
+    std::fs::create_dir_all(project.join(".yusagent")).unwrap();
     std::fs::write(
-        project.join(".prime/agent/settings.json"),
+        project.join(".yusagent/settings.json"),
         r#"{"markdown":{"codeBlockIndent":"    "}}"#,
     )
     .unwrap();

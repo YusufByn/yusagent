@@ -128,7 +128,7 @@ mod tests {
     fn telemetry_needs_every_setting_scope_to_agree() {
         let dir = tempfile::tempdir().unwrap();
         let agent_dir = dir.path().join("agent");
-        let project_dir = dir.path().join(".prime/agent");
+        let project_dir = dir.path().join(".yusagent");
         std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::create_dir_all(&project_dir).unwrap();
         std::fs::write(

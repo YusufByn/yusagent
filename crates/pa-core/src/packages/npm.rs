@@ -199,7 +199,7 @@ mod tests {
         );
         assert_eq!(
             npm_install_path(&source, SourceScope::Project, cwd, global_root),
-            PathBuf::from("/work/.prime/agent/npm/node_modules/pkg")
+            PathBuf::from("/work/.yusagent/npm/node_modules/pkg")
         );
         assert_eq!(
             npm_install_root(SourceScope::User, cwd, global_root),

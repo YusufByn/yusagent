@@ -18,7 +18,8 @@ pub fn socket_dir() -> PathBuf {
 /// can re-anchor deep paths through /proc; other Unix platforms need a short path.
 #[cfg(unix)]
 fn socket_dir_for(tmp: &Path, uid: u32) -> PathBuf {
-    let name = format!("prime-agent-{uid}");
+    // yusAgent (YA-16, ticket 19): `yusagent-<uid>`, apart from an upstream install.
+    let name = format!("yusagent-{uid}");
     let dir = tmp.join(&name);
     #[cfg(not(target_os = "linux"))]
     if std::os::unix::net::SocketAddr::from_pathname(
@@ -112,9 +113,9 @@ mod tests {
             let worker = dir.join("worker-000000000000-000000000000.sock");
             assert!(SocketAddr::from_pathname(&worker).is_ok());
             if length >= 65 {
-                assert_eq!(dir, Path::new("/tmp/prime-agent-501"));
+                assert_eq!(dir, Path::new("/tmp/yusagent-501"));
             } else {
-                assert_eq!(dir, tmp.join("prime-agent-501"));
+                assert_eq!(dir, tmp.join("yusagent-501"));
             }
         }
     }
@@ -124,7 +125,7 @@ mod tests {
     fn short_tmpdir_keeps_the_original_socket_directory() {
         assert_eq!(
             socket_dir_for(Path::new("/tmp"), 501),
-            Path::new("/tmp/prime-agent-501")
+            Path::new("/tmp/yusagent-501")
         );
     }
 

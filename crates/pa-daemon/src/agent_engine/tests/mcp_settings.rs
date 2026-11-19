@@ -26,8 +26,8 @@ fn mcp_settings_stay_global_after_refresh_and_cwd_rebind() {
     )]);
     std::fs::write(agent_dir.join("settings.json"), global.to_string()).unwrap();
     for cwd in [dir.path().to_path_buf(), dir.path().join("other-project")] {
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
-        std::fs::write(cwd.join(".prime/agent/settings.json"), project.to_string()).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
+        std::fs::write(cwd.join(".yusagent/settings.json"), project.to_string()).unwrap();
     }
     let engine = bare_engine(dir.path());
     let mut handlers = HostRequestHandlers::default();

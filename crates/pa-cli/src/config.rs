@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 pub const APP_NAME: &str = "yusagent";
 
-pub const CONFIG_DIR_NAME: &str = ".prime/agent";
+pub const CONFIG_DIR_NAME: &str = ".yusagent";
 
 pub const ENV_AGENT_DIR: &str = "PRIME_AGENT_CODING_AGENT_DIR";
 

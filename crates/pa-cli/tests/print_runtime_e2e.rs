@@ -131,7 +131,7 @@ fn run_in_home(
 }
 
 fn session_files(home: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let dir = home.join(".prime/agent/sessions");
+    let dir = home.join(".yusagent/sessions");
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
         .map(|entries| {
             entries
@@ -187,7 +187,7 @@ fn print_mode_goal_cap_reports_the_reason_and_exits_one() {
 /// under the agent dir's `session-leases`).
 fn leased_session_files(home: &std::path::Path) -> Vec<String> {
     let mut leased = Vec::new();
-    let Ok(entries) = std::fs::read_dir(home.join(".prime/agent/session-leases")) else {
+    let Ok(entries) = std::fs::read_dir(home.join(".yusagent/session-leases")) else {
         return leased;
     };
     for entry in entries.flatten() {
@@ -387,7 +387,7 @@ fn print_mode_thinking_clamps_to_off_for_non_reasoning_models() {
 
 /// Compaction settings into the isolated home's agent dir.
 fn write_compaction_settings(home: &std::path::Path, settings: &serde_json::Value) {
-    let agent = home.join(".prime/agent");
+    let agent = home.join(".yusagent");
     std::fs::create_dir_all(&agent).unwrap();
     std::fs::write(agent.join("settings.json"), settings.to_string()).unwrap();
 }
@@ -688,7 +688,7 @@ fn print_mode_stale_overflow_recovers_before_the_next_prompt_after_a_resume() {
 fn print_mode_json_streams_the_harness_digest_pair() {
     let home = isolated_home();
     // yusAgent (YA-01): the digest needs harness refinements on.
-    let agent_dir = home.path().join(".prime").join("agent");
+    let agent_dir = home.path().join(".yusagent");
     std::fs::create_dir_all(&agent_dir).unwrap();
     std::fs::write(
         agent_dir.join("settings.json"),
@@ -1039,7 +1039,7 @@ fn print_mode_fork_imports_a_global_session_into_this_cwd() {
 fn print_mode_fork_rejects_empty_sources_and_conflicting_flags() {
     let home = isolated_home();
     // An empty session file, addressed by path.
-    let sessions = home.path().join(".prime/agent/sessions");
+    let sessions = home.path().join(".yusagent/sessions");
     std::fs::create_dir_all(&sessions).expect("sessions dir");
     let empty = sessions.join("empty-session.jsonl");
     std::fs::write(&empty, "").expect("empty session");

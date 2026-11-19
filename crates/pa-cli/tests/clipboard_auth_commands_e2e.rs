@@ -1729,7 +1729,7 @@ async fn tui_update_runs_out_of_band_during_a_turn() {
         "the out-of-band update has no busy guard:\n{rendered}"
     );
     assert!(
-        rendered.contains("your sessions and configuration (~/.prime/agent) are never touched"),
+        rendered.contains("your sessions and configuration (~/.yusagent) are never touched"),
         "the confirm carries the preserve invariant:\n{rendered}"
     );
     assert!(

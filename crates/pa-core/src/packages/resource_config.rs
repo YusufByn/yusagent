@@ -469,7 +469,7 @@ mod tests {
                 true,
             ),
             resource(
-                "/work/.prime/agent/skills/project-skill/SKILL.md",
+                "/work/.yusagent/skills/project-skill/SKILL.md",
                 metadata(
                     MetadataSource::Local,
                     SourceScope::Project,
@@ -498,7 +498,7 @@ mod tests {
             labels,
             vec![
                 "npm:foo/bar (user)",
-                "User (~/.prime/agent/)",
+                "User (~/.yusagent/)",
                 "Built-in",
                 "Project settings"
             ]
@@ -525,7 +525,7 @@ mod tests {
     #[test]
     fn prompt_display_names_show_the_file_name() {
         let item = resource(
-            "/work/.prime/agent/prompts/fix.md",
+            "/work/.yusagent/prompts/fix.md",
             metadata(
                 MetadataSource::Local,
                 SourceScope::Project,

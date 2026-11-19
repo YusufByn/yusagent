@@ -176,7 +176,7 @@ def invoke(binary, args, tree):
 def run_case(binary, root, mode, observed):
     shared_tmp = root / 'shared-tmp'
     shared_tmp.mkdir(parents=True)
-    default_socket = shared_tmp / f'prime-agent-{os.getuid()}' / 'daemon.sock'
+    default_socket = shared_tmp / f'yusagent-{os.getuid()}' / 'daemon.sock'
     default_socket.parent.mkdir()
     pins = root / 'pins'
     pins.mkdir()

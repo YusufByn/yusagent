@@ -16,7 +16,7 @@ async fn assert_prompt_case(case: PromptCase) {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path().join("project");
         let agent_dir = tmp.path().join("agent");
-        std::fs::create_dir_all(cwd.join(".prime/agent")).unwrap();
+        std::fs::create_dir_all(cwd.join(".yusagent")).unwrap();
         std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::write(cwd.join("AGENTS.md"), "PROJECT_CONTEXT_SENTINEL").unwrap();
         std::fs::write(agent_dir.join("AGENTS.md"), "GLOBAL_CONTEXT_SENTINEL").unwrap();
@@ -27,7 +27,7 @@ async fn assert_prompt_case(case: PromptCase) {
             std::fs::write(agent_dir.join("APPEND_SYSTEM.md"), content).unwrap();
         }
         if let Some(content) = case.project {
-            std::fs::write(cwd.join(".prime/agent/APPEND_SYSTEM.md"), content).unwrap();
+            std::fs::write(cwd.join(".yusagent/APPEND_SYSTEM.md"), content).unwrap();
         }
         let model = Model {
             id: "m".into(),

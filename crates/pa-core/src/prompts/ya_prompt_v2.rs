@@ -433,7 +433,7 @@ mod tests {
             skill(
                 "deploy",
                 None,
-                "/home/user/.prime/agent/skills/deploy/SKILL.md",
+                "/home/user/.yusagent/skills/deploy/SKILL.md",
             ),
         ]
     }
@@ -453,7 +453,7 @@ mod tests {
         assert!(text.contains("- `attach-image` (import `attach_image`): see an image file (PNG, JPEG, GIF, WebP); needs a vision-capable model. `$PRIME_AGENT_BUNDLED_SKILLS_DIR/attach-image/SKILL.md`"), "{text}");
         assert!(text.contains("- `mcp`: call tools on the user's MCP services. `$PRIME_AGENT_BUNDLED_SKILLS_DIR/mcp/SKILL.md`"), "{text}");
         // A user skill keeps its own description.
-        assert!(text.contains("- `deploy`: Upstream description of deploy. `/home/user/.prime/agent/skills/deploy/SKILL.md`"), "{text}");
+        assert!(text.contains("- `deploy`: Upstream description of deploy. `/home/user/.yusagent/skills/deploy/SKILL.md`"), "{text}");
         assert!(text.contains(SKILLS_BUNDLED_NOTE));
         // With subagents, `agent-message` is listed.
         let text = skills_inventory(&all_skills(), true, location);

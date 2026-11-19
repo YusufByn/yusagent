@@ -307,4 +307,89 @@ Branche `ya-19-binaire`, depuis `main` à `aea5db01b` (merge de la PR 1).
 - **Banc** : `install-bin.sh` et `ab.py` acceptent `yusagent` et, pour les builds d'avant le ticket 19, `prime-agent` ; chemins des README, de `CLAUDE.md` et du `Makefile` mis à jour. Options de `bench/smoke/run.py` inchangées.
 - **Laissés** : `package update` (partie « mise à jour de soi » déjà refusée hors installation gérée), texte de la confirmation de `/update` (figé par un test e2e), code de mise à jour (inatteignable), nom de l'archive, `package.json` de l'archive (`name`, `bin`), outils de dev (`pa-perf`, `pa-tui-replay`).
 - **À reprendre (refonte du CLI après YA-10, et YA-16 distribution)** : la confirmation de `/update` est encore demandée **avant** le refus (son texte, figé par `clipboard_auth_commands_e2e.rs:1815`, parle toujours de la migration TypeScript vers Rust) ; l'archive garde le nom `prime-agent-<version>-<plateforme>.tar.gz` (le binaire qu'elle contient s'appelle `yusagent`).
+- **Contrôle en capture après la PR 2** (Yusuf, 19/11/2026) : `py-example-001`, binaires `7e2be841b` (avant le ticket), `aea5db01b` (PR 1) et `9ce92d3d0` (PR 2) : 3 runs `resolved`, code de sortie 0 ; rien d'écrit dans `~/.yusagent` ni `~/.prime/agent` ; `compare_capture_prompts.py` `TOUT IDENTIQUE` avant le ticket contre PR 1, puis PR 1 contre PR 2 (9 requêtes).
 
+## PR 3 : dossier (19/11/2026)
+
+Branche `ya-19-dossier`, depuis `main` à `d0eaab8bc` (merge de la PR 2).
+
+- **Dossiers** : `~/.yusagent` (agent) et `<cwd>/.yusagent/` (projet), cinq constantes `CONFIG_DIR_NAME`. Surcharge `PRIME_AGENT_CODING_AGENT_DIR` inchangée (variables `PRIME_AGENT_*` gardées). **Pas de migration**.
+- **Venv du kernel** : `~/.yusagent/kernel-venv` (repli XDG `~/.local/share/yusagent/kernel-venv`). Écart à la décision « suit le chemin passé par l'hôte » : le venv reste sous le dossier personnel, comme upstream, et ne suit pas `PRIME_AGENT_CODING_AGENT_DIR` ; sinon chaque test qui pointe cette variable vers un dossier temporaire reconstruirait un venv. `PRIME_AGENT_KERNEL_VENV` le déplace toujours (le banc le fixe). **Écart accepté par Yusuf le 19/11/2026** (journal du CDC).
+- **Identifiants du banc** (vérifié avant le push) : jamais lus ni copiés depuis `~/.prime/agent` ou le dossier par défaut du binaire. `bench/smoke/run.py` et `continue_session.py` lisent `auth.json` dans le dossier agent dédié `~/.cache/yusagent-smoke/agent` (`Cache.agent`, `run.py:247` ; contrôle `run.py:1760`, `continue_session.py:56`), que le README fait remplir par un login lancé avec `PRIME_AGENT_CODING_AGENT_DIR` explicite ; le binaire y rafraîchit le jeton par la même variable (`run.py:292`). Le bras Codex CLI lit `~/.cache/yusagent-smoke/codex-home/auth.json` (`CODEX_HOME`, refus de `~/.codex` : `codex_arm.py:217-229`). `ab.py` passe par `run.py`. La sonde et le mode capture écrivent des identifiants factices (`run.py:517`, `:1759`). Rien ne casse après la PR 3, aucune correction nécessaire.
+- **Runtime Python** : l'hôte passe déjà `PRIME_AGENT_CODING_AGENT_DIR` au kernel (`crates/pa-core/src/session_engine/runtime_wiring.rs:272`). Les cinq replis Python sans cette variable pointent sur `~/.yusagent` : plus aucun repli sur `~/.prime/agent`.
+- **Sockets** : `$TMPDIR/yusagent-<uid>/` (Unix). Les noms Windows ne changent pas (pas d'exécution native).
+- **CLI TypeScript d'upstream** (vérifié pour le test `ts_daemon_differential_cli_output`) : ni livrée ni utilisée par le fork. L'archive de `ya-build-macos-arm64.yml` ne contient que `yusagent`, le runtime, les skills, les catalogues et les fichiers de compatibilité (`scripts/release/assemble_artifacts.py:72-84`, `scripts/release/native_compat.py:43`) ; l'extension n'existe pas encore (YA-10). Le binaire TS v0.9.8 n'est téléchargé que par `ci.yml` (shard 1) pour les tests différentiels (`daemon_commands_e2e.rs`, `differential_cli.rs`, `export_live_differential.rs`, `lock_compat_e2e.rs`, `package_e2e.rs`). Seul autre usage, dormant : `release.yml` d'upstream, déclenché par un tag `v*`, empaquette un repli TS dans le paquet npm de migration (`.github/workflows/release.yml:810-822`) ; le fork n'a aucun tag `v*` et ce workflow n'a jamais tourné. À trancher avec la distribution (YA-16).
+- **Effet** : un `~/.prime/agent` existant n'est plus lu (réglages, `auth.json`, `models.json`, sessions, skills, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`) ; un `<projet>/.prime/agent/` non plus (réglages et skills de projet, `SYSTEM.md`, `APPEND_SYSTEM.md`, modèles de prompts). `~/.prime/config.json` (CLI `prime`) reste lu pour Prime Inference.
+
+### Migration manuelle (commande documentée, rien d'automatique)
+
+À lancer une fois, l'ancien démon arrêté **avec l'ancien binaire** (`<binaire d'avant la PR 3> shutdown` : ce démon écoute sur `$TMPDIR/prime-agent-<uid>`, qu'un `yusagent` de la PR 3 ne voit plus), sans écraser un `~/.yusagent` existant. Le venv du kernel n'est pas copié (chemins absolus, il se reconstruit) ni l'état d'exécution (`daemon-workers`, `session-leases`, `worker-snapshot-cache`, `logs`). `cp -p` garde les droits de `auth.json` (0600).
+
+```sh
+mkdir -m 700 ~/.yusagent
+cd ~/.prime/agent && for f in settings.json auth.json models.json keybindings.json mcp-services.json AGENTS.md SYSTEM.md APPEND_SYSTEM.md skills prompts themes git sessions session-artifacts harness; do [ -e "$f" ] && cp -Rp "$f" ~/.yusagent/; done
+# par projet, si besoin :
+git mv .prime/agent .yusagent   # ou mv, selon que le dossier est suivi
+```
+
+**Attention, chemins relatifs dans `settings.json`.** Quatre champs sont résolus depuis le dossier des réglages, pas depuis le répertoire courant : les sources locales de `packages`, et les entrées de `skills`, `prompts` et `themes` (`crates/pa-core/src/packages/resolve/mod.rs:28-31`, `crates/pa-core/src/packages/resolve/manager.rs:158-176`, `crates/pa-core/src/packages/manager.rs:429-435` et `:506-512`). Le dossier global passe de `~/.prime/agent` (deux niveaux sous le dossier personnel) à `~/.yusagent` (un niveau), le dossier de projet de `<projet>/.prime/agent` à `<projet>/.yusagent` : un chemin relatif comme `../x` désignait `~/.prime/x` (ou `<projet>/.prime/x`) et désigne `~/x` (ou `<projet>/x`) après copie. Après la copie, relire ces quatre champs dans le `settings.json` global et dans ceux des projets, et réécrire chaque chemin relatif en absolu ou en `~/…`. Les chemins absolus et en `~/…` ne changent pas. Non concernés : `sessionDir` (relatif au répertoire courant ou en `~/`, `crates/pa-core/src/settings/manager.rs:875-883`) et `shellPath` (absolu). Les paquets npm s'installent hors du dossier (racine npm globale) ; les paquets git sont dans `git/`, copié par la commande.
+
+Limite : une session reprise peut encore citer des chemins absolus de `~/.prime/agent` (sessions de sous-agents, shells persistants).
+
+
+## Passation du 19/11
+
+**PR #63** (`ya-19-dossier`, PR 3 : dossier). HEAD avant ce commit de passation : `8efe27bdf30c77c6bcf8269afb0d77f1c939f7fa`. Commits depuis `897b0f758` :
+
+- `ab0215863` : tests alignés sur `.yusagent` (profondeur du dossier de projet `../project-pkg`, dossier des sessions `.yusagent/sessions`, premier essai du lien de socket du différentiel TS) ;
+- `5e18efa7a` : ticket (chemins relatifs des réglages avant copie, CLI TS hors livraison), écart sur le venv dans `fork-changes.md` ;
+- `8efe27bdf` : différentiel TS : le démon TS écoute dans son vrai dossier `prime-agent-<uid>`, le défaut Rust `yusagent-<uid>` est un lien vers lui (le lien inverse échouait : les workers TS ne créaient pas leur socket dans un dossier lié) ;
+- puis ce commit de passation (doc seule).
+
+**CI 44601054912 sur `8efe27bdf` : échec.** 13 checks requis verts, `test shard 8/8` en échec sur `rpc_compact_flush_is_bounded_against_a_stalled_reader` (`crates/pa-cli/tests/rpc_mode_e2e.rs:1399`) : « the compaction never ran behind the stalled reader: the flush wedged the command on the reader ». Raisons de penser à une instabilité (non démontrée, rien reproduit en local, règle 8) :
+
+- le test attend au plus 4 s la ligne `"compaction"` dans le fichier de session (`rpc_mode_e2e.rs:1385`), lecteur de sortie bloqué : borne de temps ;
+- il passait sur `897b0f758` (run 44593768562, 19:05:34 UTC) et sur la PR 2 (run 44556147792) ;
+- entre `897b0f758` et `8efe27bdf`, aucun code du produit ne change : seulement `acp_mode_e2e.rs`, `daemon_commands_e2e.rs`, `package_e2e.rs`, le test de `crates/pa-core/src/packages/manager.rs`, et la doc ;
+- la PR ne change dans `rpc_mode_e2e.rs` que le chemin du venv de test (`:61-62`), déjà présent sur `897b0f758`.
+
+Le test n'est pas dans les sections « Instabilité probable » de `docs/fork-changes.md`. **Accord de Yusuf (19/11)** : la CI lancée par le push de cette passation compte comme la relance unique de ce test hors liste ; noté en commentaire de la PR #63. S'il échoue encore : bloquant, s'arrêter et montrer l'erreur.
+
+**Builds macOS** :
+
+- `main` 44591269796, tentative 2 (relance unique pour panne d'infrastructure, commentée dans la PR #63) : succès sur `d0eaab8bce9cc1baf52d8220e8b93b11a02c9971`, binaire de référence (`main` après la PR 2) ;
+- branche 44596828506 : succès sur `ab0215863af9840cb9b741f7eab7ecbd9de0413f`, **binaire à contrôler** (code identique à HEAD ; les commits suivants ne touchent que des tests et la doc) ;
+- builds plus récents de la branche (44601041583 sur `8efe27bdf`, et celui que lance la passation si `crates/` est touché, ce qui n'est pas le cas) : non utilisés pour le contrôle.
+
+**Commande du contrôle en capture** (Yusuf ; filtre de `RUN_BR` sur le SHA du binaire, pas sur HEAD) :
+
+```sh
+cd ~/Desktop/yusagent
+git fetch -q origin && git checkout ya-19-dossier && git merge --ff-only origin/ya-19-dossier   # HEAD : commit de passation (ou plus récent)
+export DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short
+BIN_SHA=ab0215863af9840cb9b741f7eab7ecbd9de0413f
+RUN_BR=$(gh run list --repo YusufByn/yusagent --workflow ya-build-macos-arm64.yml --branch ya-19-dossier --limit 10 --json databaseId,headSha,conclusion --jq '.[] | select(.headSha=="'"$BIN_SHA"'" and .conclusion=="success") | .databaseId' | head -1); echo "run branche : $RUN_BR"   # attendu : 44596828506
+bash bench/smoke/tools/install-bin.sh 44591269796 d0eaab8bce9cc1baf52d8220e8b93b11a02c9971
+bash bench/smoke/tools/install-bin.sh "$RUN_BR" "$BIN_SHA"
+MAIN=~/.cache/yusagent-bin/d0eaab8bce9cc1baf52d8220e8b93b11a02c9971
+BR=~/.cache/yusagent-bin/$BIN_SHA
+ls "$MAIN" "$BR"
+MARK=$(mktemp); ls -ld ~/.yusagent ~/.prime/agent 2>&1
+python3 -I bench/smoke/run.py --binary "$MAIN/yusagent" --model gpt-6.1-sol --tasks py-example-001 --capture
+RUN_MAIN=$(ls -td bench/smoke/runs/*-gpt-6.1-sol | head -1)
+python3 -I bench/smoke/run.py --binary "$BR/yusagent" --model gpt-6.1-sol --tasks py-example-001 --capture
+RUN_BRD=$(ls -td bench/smoke/runs/*-gpt-6.1-sol | head -1)
+for R in "$RUN_MAIN" "$RUN_BRD"; do python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1]+"/report.json")); print(sys.argv[1], r["header"]["mode"], [(x["task"], x["status"], x["agent"]["exit"]) for x in r["results"]])' "$R"; done
+find ~/.yusagent ~/.prime/agent -newer "$MARK" -print 2>/dev/null
+python3 -I bench/smoke/tools/compare_capture_prompts.py "$RUN_MAIN" "$RUN_BRD"
+```
+
+Attendu : `run branche : 44596828506` ; `capture` et `('py-example-001', <statut>, 0)` pour les deux runs (ni `agent_error`, ni `harness_error`, ni `timeout`) ; `find` ne liste rien ; `TOUT IDENTIQUE` en dernière ligne.
+
+**Ce qui reste** :
+
+1. CI verte sur le commit de passation (14 checks requis, aucun sauté, `gh pr checks 63 --required`) ; si `rpc_compact_flush_is_bounded_against_a_stalled_reader` échoue encore : bloquant.
+2. Contrôle en capture par Yusuf (commande ci-dessus), résultat noté dans ce ticket.
+3. « merge » de Yusuf, puis `gh pr merge 63 --merge --match-head-commit <HEAD>`.
+4. `gh workflow run ya-build-macos-arm64.yml --ref main`, SHA de `main`, numéro et statut du run.
+5. Donner à Yusuf la commande de migration manuelle de la section « Migration manuelle » ci-dessus (arrêt de l'ancien démon avec l'ancien binaire, `mkdir -m 700 ~/.yusagent`, boucle `cp -Rp`, avertissement sur les chemins relatifs de `packages`, `skills`, `prompts`, `themes`).

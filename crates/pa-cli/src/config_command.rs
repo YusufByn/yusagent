@@ -103,7 +103,7 @@ mod tests {
         };
         let group = resource_config::ResourceGroup {
             key: "g".to_string(),
-            label: "User (~/.prime/agent/)".to_string(),
+            label: "User (~/.yusagent/)".to_string(),
             scope: pa_core::packages::SourceScope::User,
             origin: ResourceOrigin::TopLevel,
             source: MetadataSource::Auto,
@@ -115,7 +115,7 @@ mod tests {
         };
         let (rows, items) = selector_rows(&[group]);
         assert_eq!(rows.len(), 3);
-        assert!(matches!(&rows[0], SelectorRow::Group(label) if label == "User (~/.prime/agent/)"));
+        assert!(matches!(&rows[0], SelectorRow::Group(label) if label == "User (~/.yusagent/)"));
         assert!(matches!(&rows[1], SelectorRow::Subgroup(label) if label == "Skills"));
         match &rows[2] {
             SelectorRow::Item {

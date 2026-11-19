@@ -804,10 +804,23 @@ fn ts_daemon_differential_cli_output() {
     .expect("fixture model settings");
     // `schedule` cannot take --daemon-socket (TS parity); the daemon uses the default path.
     std::env::set_var("TMPDIR", dir.path());
-    let socket = pa_daemon::socket::default_daemon_socket_path();
+    // yusAgent (YA-16, ticket 19): the Rust default socket dir is `yusagent-<uid>`, the TS one
+    // `prime-agent-<uid>`. The TS daemon (and its workers) use the real TS directory; in this
+    // scratch TMPDIR the Rust default directory is a link to it, so both CLIs reach that daemon.
+    let rust_socket = pa_daemon::socket::default_daemon_socket_path();
+    let rust_socket_dir = rust_socket.parent().expect("socket parent");
+    let ts_socket_dir = rust_socket_dir.with_file_name(
+        rust_socket_dir
+            .file_name()
+            .expect("socket dir name")
+            .to_string_lossy()
+            .replacen("yusagent-", "prime-agent-", 1),
+    );
+    let socket = ts_socket_dir.join("daemon.sock");
     // The TS daemon does not create the socket's parent on bind (the Rust
     // supervisor does), so the parent must exist first.
     std::fs::create_dir_all(socket.parent().expect("socket parent")).expect("socket parent dir");
+    std::os::unix::fs::symlink(&ts_socket_dir, rust_socket_dir).expect("Rust default socket dir");
     let mut daemon_command = Command::new(&ts);
     daemon_command
         .arg("--mode")

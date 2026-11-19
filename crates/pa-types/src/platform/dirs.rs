@@ -35,7 +35,7 @@ pub fn home_dir() -> Option<PathBuf> {
 pub const ENV_AGENT_DIR: &str = "PRIME_AGENT_CODING_AGENT_DIR";
 
 /// The agent state directory name (TS `CONFIG_DIR_NAME`, `.prime/agent`).
-pub const CONFIG_DIR_NAME: &str = ".prime/agent";
+pub const CONFIG_DIR_NAME: &str = ".yusagent";
 
 /// The agent state directory: the env override with a leading `~`/`~/` expanded, else
 /// `<home>/.prime/agent`; `None` when the home directory does not resolve (each caller owns its
@@ -135,10 +135,7 @@ mod tests {
                 ("PRIME_AGENT_CODING_AGENT_DIR", None),
             ],
             || {
-                assert_eq!(
-                    agent_dir(),
-                    Some(PathBuf::from("/home/tester/.prime/agent"))
-                );
+                assert_eq!(agent_dir(), Some(PathBuf::from("/home/tester/.yusagent")));
             },
         );
     }

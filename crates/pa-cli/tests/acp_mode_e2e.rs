@@ -238,7 +238,7 @@ fn daemon_attached_command(
 
 /// The sandbox's single worker descriptor.
 fn worker_descriptor(home: &std::path::Path) -> Value {
-    std::fs::read_dir(home.join(".prime/agent/daemon-workers"))
+    std::fs::read_dir(home.join(".yusagent/daemon-workers"))
         .expect("descriptor instances")
         .flatten()
         .flat_map(|instance| {
@@ -1106,7 +1106,7 @@ fn acp_daemon_attached_default_session_persists_and_resumes() {
     assert!(
         std::path::Path::new(&session_file)
             .parent()
-            .is_some_and(|dir| dir.ends_with("agent/sessions")),
+            .is_some_and(|dir| dir.ends_with(".yusagent/sessions")),
         "the session is saved in the session dir: {session_file}"
     );
     assert!(std::fs::read_to_string(&session_file)
@@ -2069,9 +2069,9 @@ fn spawn_with_compaction_settings(
     keep_recent_tokens: u64,
 ) -> AcpChild {
     let home = tempfile::TempDir::new().unwrap();
-    std::fs::create_dir_all(home.path().join(".prime/agent")).expect("agent dir");
+    std::fs::create_dir_all(home.path().join(".yusagent")).expect("agent dir");
     std::fs::write(
-        home.path().join(".prime/agent/settings.json"),
+        home.path().join(".yusagent/settings.json"),
         json!({
             "compaction": {
                 "enabled": true,
@@ -2291,8 +2291,8 @@ fn kernel_python() -> Option<std::path::PathBuf> {
         return Some(explicit);
     }
     let candidate = std::path::PathBuf::from(std::env::var("HOME").map_or_else(
-        |_| "/home/ubuntu/.prime/agent/kernel-venv/bin/python".to_string(),
-        |home| format!("{home}/.prime/agent/kernel-venv/bin/python"),
+        |_| "/home/ubuntu/.yusagent/kernel-venv/bin/python".to_string(),
+        |home| format!("{home}/.yusagent/kernel-venv/bin/python"),
     ));
     if candidate.exists() {
         return Some(candidate);
