@@ -1003,7 +1003,7 @@ Corrigés après le run `ci` 44593768562 :
 | `crates/pa-core/src/packages/manager.rs` | `project_scope_persists_against_project_settings_base` | profondeur | Chemin relatif du paquet depuis `.yusagent/` (un niveau) : `../project-pkg` au lieu de `../../project-pkg`. |
 | `crates/pa-cli/tests/package_e2e.rs` | `package_manager_corpus_matches_ts_binary` (moitié Rust) | profondeur | Même raison : `../local-pkg`. |
 | `crates/pa-cli/tests/acp_mode_e2e.rs` | `acp_daemon_attached_default_session_persists_and_resumes` | dossier | Le dossier des sessions par défaut se termine par `.yusagent/sessions`. |
-| `crates/pa-cli/tests/daemon_commands_e2e.rs` | `ts_daemon_differential_cli_output` | socket | Dans le `TMPDIR` jetable du test, `prime-agent-<uid>` (défaut de la CLI TS) est un lien vers `yusagent-<uid>` (défaut Rust) : les deux CLI joignent le même démon TS. |
+| `crates/pa-cli/tests/daemon_commands_e2e.rs` | `ts_daemon_differential_cli_output` | socket | Dans le `TMPDIR` jetable du test, le démon TS écoute dans le vrai dossier `prime-agent-<uid>` (son défaut, où il crée aussi ses workers) et `yusagent-<uid>` (défaut de la CLI Rust) est un lien vers ce dossier : les deux CLI joignent le même démon. Le lien dans l'autre sens échouait : les workers TS ne créaient pas leur socket dans un dossier lié (`connect ENOENT …/prime-agent-1001/worker-….sock`, run 44598183340). |
 
 ## Code repris d'Unharnessed
 
