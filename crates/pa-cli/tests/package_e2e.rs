@@ -518,7 +518,8 @@ fn package_manager_corpus_matches_ts_binary() {
     .unwrap();
     assert_eq!(
         project_settings["packages"],
-        serde_json::json!(["../../local-pkg"])
+        // yusAgent (YA-16, ticket 19): `.yusagent/` is one level, `.prime/agent/` was two.
+        serde_json::json!(["../local-pkg"])
     );
     let global_settings: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(rust_sandbox.agent_dir.join("settings.json")).unwrap(),

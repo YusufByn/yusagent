@@ -996,6 +996,15 @@ Non modifiés : `~/.prime/config.json` (CLI `prime` de Prime Intellect), `~/.pri
 
 Remplacement mécanique de `.prime/agent` par `.yusagent` (et `join(".prime").join("agent")`, `Path.home() / ".prime" / "agent"`) dans les lignes hors commentaires de 62 fichiers de tests : chemins de fixtures, dossiers de projet créés par les tests, venv amorcé par la CI (`{home}/.yusagent/kernel-venv/bin/python` dans une trentaine de tests e2e du démon et du cœur), dossier par défaut attendu (`crates/pa-types/src/platform/dirs.rs`, `agent_dir_default_under_home`). Dossier des sockets attendu : `crates/pa-daemon/src/platform/paths.rs` (deux tests), `crates/pa-cli/tests/daemon_discovery_e2e.rs:735`. Aucune assertion changée sur le fond. `crates/pa-types/tests/{daemon_wire_roundtrip,session_jsonl_roundtrip}.rs` : balayages du vrai dossier, seulement avec `PA_TYPES_LIVE_*=1`.
 
+Corrigés après le run `ci` 44593768562 :
+
+| Fichier | Test | Nature | Changement |
+|---|---|---|---|
+| `crates/pa-core/src/packages/manager.rs` | `project_scope_persists_against_project_settings_base` | profondeur | Chemin relatif du paquet depuis `.yusagent/` (un niveau) : `../project-pkg` au lieu de `../../project-pkg`. |
+| `crates/pa-cli/tests/package_e2e.rs` | `package_manager_corpus_matches_ts_binary` (moitié Rust) | profondeur | Même raison : `../local-pkg`. |
+| `crates/pa-cli/tests/acp_mode_e2e.rs` | `acp_daemon_attached_default_session_persists_and_resumes` | dossier | Le dossier des sessions par défaut se termine par `.yusagent/sessions`. |
+| `crates/pa-cli/tests/daemon_commands_e2e.rs` | `ts_daemon_differential_cli_output` | socket | Dans le `TMPDIR` jetable du test, `prime-agent-<uid>` (défaut de la CLI TS) est un lien vers `yusagent-<uid>` (défaut Rust) : les deux CLI joignent le même démon TS. |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

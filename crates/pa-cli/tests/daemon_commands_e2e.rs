@@ -808,6 +808,17 @@ fn ts_daemon_differential_cli_output() {
     // The TS daemon does not create the socket's parent on bind (the Rust
     // supervisor does), so the parent must exist first.
     std::fs::create_dir_all(socket.parent().expect("socket parent")).expect("socket parent dir");
+    // yusAgent (YA-16, ticket 19): the Rust default socket dir is `yusagent-<uid>`, the TS one
+    // `prime-agent-<uid>`; in this scratch TMPDIR both resolve to the same daemon.
+    let socket_dir = socket.parent().expect("socket parent");
+    let ts_socket_dir = socket_dir.with_file_name(
+        socket_dir
+            .file_name()
+            .expect("socket dir name")
+            .to_string_lossy()
+            .replacen("yusagent-", "prime-agent-", 1),
+    );
+    std::os::unix::fs::symlink(socket_dir, &ts_socket_dir).expect("TS default socket dir");
     let mut daemon_command = Command::new(&ts);
     daemon_command
         .arg("--mode")
