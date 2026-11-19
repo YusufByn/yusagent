@@ -937,6 +937,28 @@ Décisions : `docs/tickets/19-ya16-cli-yusagent.md`. Ni prompt, ni tools, ni req
 
 Limite : un `telemetry.enabled: true` écrit à la main active toujours le miroir local `telemetry.jsonl` (rien ne sort), alors que l'état affiché est « off ».
 
+**Binaire `yusagent`.** La cible Cargo reste `prime-agent` (les 62 `CARGO_BIN_EXE_prime-agent` des tests upstream ne bougent pas) ; le fichier livré dans l'archive s'appelle `yusagent`. L'archive garde son nom (`prime-agent-<version>-<plateforme>.tar.gz`) et les workflows de release upstream (`continuous.yml`, `release.yml`) sont inchangés : sans l'option, rien ne change.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `scripts/release/assemble_artifacts.py` | modif. (script upstream, option + 5 lignes) | `--binary-name` : nom du binaire dans l'archive (`.exe` ajouté sous Windows), gardé exécutable (`EXECUTABLE_ENTRIES`). Absente : comportement upstream. | YA-16 |
+| `scripts/release/verify_release.py` | modif. (script upstream, option + 7 lignes) | `--binary-name` : contenu attendu et `--version` lus sur ce nom ; le contrôle du contrat de l'installateur TS natif (`validate_compatibility_archive`, qui exige `prime-agent`) est sauté pour une archive renommée, jamais servie à cet installateur. Vérifié en local : archive assemblée avec un faux binaire, avec et sans l'option. | YA-16 |
+| `.github/workflows/ya-build-macos-arm64.yml` | modif. (fichier du fork) | `--binary-name yusagent` à l'assemblage et à la vérification ; artefact `yusagent-aarch64-apple-darwin-<sha>`. | YA-16 |
+| `crates/pa-daemon/src/boot_reap.rs` | modif. (fichier upstream, 1 ligne + commentaire, 1 test ajouté) | `is_product_binary` reconnaît `yusagent` : les workers orphelins d'un démon `yusagent` sont récupérés au démarrage. | YA-16 |
+| `crates/pa-daemon/src/herdr.rs` | modif. (fichier upstream, 1 ligne + commentaire) | Commande de reprise transmise à herdr : `yusagent --resume …` (le nom d'agent `prime-agent` du protocole herdr est inchangé). | YA-16 |
+| `crates/pa-cli/src/config.rs` | modif. (fichier upstream, 1 ligne) | `APP_NAME = "yusagent"` : aide, usages, messages. | YA-16 |
+| `crates/pa-cli/src/{public_command,args,daemon_command,factory_command,prompt_command,print_runtime}.rs`, `crates/pa-cli/src/daemon_discovery/{plan,stop}.rs`, `crates/pa-cli/src/interactive_mode/daemon.rs`, `crates/pa-core/src/models/resolver.rs`, `crates/pa-daemon/src/acp/{daemon,mod}.rs`, `crates/pa-daemon/src/hold_refusal.rs`, `crates/pa-tui/src/{session_open_error,incident_notices}.rs`, `crates/pa-tui/src/interactive/run.rs`, `crates/pa-tui/src/session_ui/stream.rs`, `crates/pa-tui/src/settings_menu/mod.rs` | modif. (fichiers upstream) | Commande citée dans les messages : `prime-agent <commande>` devient `yusagent <commande>` (usages, « Use … », « Attach instead: … », `shutdown --force`, `attach`, `incident`, mode ACP). Remplacement limité aux lignes hors commentaires et aux mots de commande ; prompts, identifiants de protocole (`prime-agent.*`, `clientInfo` MCP, agent herdr), cas du produit TypeScript et code de mise à jour exclus. | YA-16 |
+| `crates/pa-cli/src/ya_update_off.rs` | ajout | `SELF_UPDATE = false` et le message de refus. Unharnessed a retiré la commande (`75cfc357fe501a46f4a01a345457c0897eb88d89`) et le module (`09f760dfa4b9fbb205443f6fcf7736256ccc226f`). | YA-16 |
+| `crates/pa-cli/src/lib.rs` | modif. (fichier upstream, 1 ligne + commentaire) | Déclare `ya_update_off`. | YA-16 |
+| `crates/pa-cli/src/public_command.rs` | modif. (fichier upstream, 3 lignes + commentaire) | `update` (toutes options, `--check` compris) refusé avant tout téléchargement, code 1. | YA-16 |
+| `crates/pa-cli/src/client_update.rs` | modif. (fichier upstream, 3 lignes + commentaire) | `/update` du TUI refusé avant tout téléchargement (sinon, hors installation gérée, il lançait l'installateur upstream de `app.primeintellect.ai`). La confirmation du TUI garde son texte (un test e2e le fige) ; le refus arrive après. | YA-16 |
+| `crates/pa-cli/src/command_registry.rs`, `crates/pa-types/src/slash_commands.rs` | modif. (fichiers upstream) | Aide de `update` et description de `/update` : « Self-update (disabled in yusAgent) ». | YA-16 |
+| `crates/pa-cli/tests/ya_update_off_e2e.rs` | ajout | `update`, `update --check`, `--nightly`, `--rollback` : code 1, message exact, rien sur la sortie standard. | YA-16 |
+| `bench/smoke/tools/install-bin.sh`, `bench/smoke/tools/ab.py` | modif. (fichiers du fork) | Artefact `yusagent-<cible>-<sha>` ou `prime-agent-<cible>-<sha>` ; binaire `yusagent`, sinon `prime-agent` (builds d'avant le ticket 19, pour les A/B sur d'anciens SHA). | YA-16 |
+| `CLAUDE.md`, `Makefile`, `bench/smoke/README.md`, `bench/smoke/run.py`, `bench/smoke/continue_session.py`, `bench/smoke/tools/notice-batch-repro.sh`, `bench/tools/capture/{README.md,run.py,analyze.py}` | modif. | Chemin du binaire : `<dossier>/yusagent`. Options de `run.py` inchangées. | YA-16 |
+
+Non modifiés : `package update` (sa partie « mise à jour de soi » refuse déjà une installation non gérée par l'installateur upstream ; `package_e2e` compare cette commande avec le binaire TS), le texte de la confirmation de `/update`, le code de mise à jour lui-même (inatteignable).
+
 ### Tests upstream touchés (YA-16, ticket 19, PR 2)
 
 | Fichier | Test | Nature | Changement |
@@ -946,6 +968,10 @@ Limite : un `telemetry.enabled: true` écrit à la main active toujours le miroi
 | `crates/pa-core/src/session_engine/telemetry/tests.rs` | `a_disable_lands_even_when_the_telemetry_state_is_unusable` | défaut | La réactivation est refusée et laisse la désactivation en place. |
 | `crates/pa-cli/src/telemetry_notice.rs` | `headless_discloses_immediately_and_once` | défaut | La notice ne s'imprime plus. |
 | `crates/pa-cli/tests/telemetry_command_e2e.rs` | `status_on_and_off_round_trip` | défaut | État « disabled in yusAgent » sans endpoint ; `telemetry on` sort en code 1 et n'écrit rien. |
+| `crates/pa-cli/tests/installer_update_e2e.rs` | 8 tests qui lancent `update` | ignoré (`#[ignore]`, 1 ligne chacun) | La commande est désactivée. `archive_check_answers_synchronously_without_publishing` (qui lance `install-rust.sh` seul) tourne toujours. |
+| `crates/pa-cli/tests/daemon_commands_e2e.rs` | `normalize_token` (différentiel contre le binaire TS) | normalisation (3 lignes) | Le mot `yusagent` est ramené à `prime-agent` avant la comparaison avec la CLI TS. Usages attendus de `schedule_usage_errors_and_valid_invocations` : `yusagent`. |
+| `crates/pa-daemon/src/herdr.rs`, `crates/pa-daemon/tests/herdr_pane_e2e.rs` | `the_resume_argv_rides_only_valid_targets`, reprise herdr | marque | `yusagent --resume`. |
+| `crates/pa-daemon/src/hold_refusal.rs`, `crates/pa-tui/src/session_open_error.rs`, `crates/pa-daemon/src/acp/mod.rs`, `crates/pa-cli/src/{factory_command,interactive_mode/tests}.rs`, `crates/pa-tui/src/{interactive/tests,agents_view/tests/notices}.rs`, `crates/pa-cli/tests/{acp_mode_e2e,continue_guard_e2e,daemon_discovery_e2e,print_runtime_e2e}.rs`, `crates/pa-daemon/tests/hold_refusal_e2e.rs`, `crates/pa-tui/tests/agents_view_incident_notice_e2e.rs` | messages attendus | marque | Même remplacement que dans le code. Dans `hold_refusal.rs`, l'assertion du cas TypeScript (« no bare `prime-agent --resume` ») est gardée telle quelle. |
 
 ## Code repris d'Unharnessed
 

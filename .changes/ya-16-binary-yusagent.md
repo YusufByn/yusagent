@@ -1,1 +1,2 @@
 - yusAgent: `/telemetry status` says telemetry is off (disabled in yusAgent) without naming an endpoint, `/telemetry on` is refused, and the telemetry notice no longer shows.
+- yusAgent: the shipped binary is named `yusagent` (help, usage and hints follow); `update` and `/update` are disabled with a clear message, before any download.
