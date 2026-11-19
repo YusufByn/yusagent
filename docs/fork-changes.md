@@ -865,7 +865,7 @@ Détail, inventaire et effet sur les requêtes : `docs/tickets/15-ya09-erreurs-v
 
 ## Renommage du CLI, PR 1 : interface (YA-16, ticket 19)
 
-Décisions et inventaire : `docs/tickets/19-ya16-cli-yusagent.md`. Ni prompt, ni tools, ni requêtes modèle touchés.
+Décisions et inventaire : `docs/tickets/19-ya16-cli-yusagent.md`. Ni prompt, ni tools, ni requêtes modèle touchés. Unharnessed a retiré télémétrie et traces dans `de437b6e2` (voir plus bas) ; ici, elles sont coupées.
 
 **Partage de traces coupé.** Fichier du fork : `crates/pa-core/src/agent_traces/ya_sharing_off.rs` (constantes `TRACE_SHARING = false`, `TRACE_SHARING_OFF`, et deux tests : `agentTraces.enabled: true` + identifiant + serveur local, envoi manuel et automatique refusés sans connexion ni nouvelle tentative, une ligne de journal par envoi ; mode continu avec consentement, trois tours, aucune connexion, aucune ligne de journal).
 
@@ -877,6 +877,13 @@ Décisions et inventaire : `docs/tickets/19-ya16-cli-yusagent.md`. Ni prompt, ni
 | `crates/pa-core/src/agent_traces/continuous.rs` | modif. (fichier upstream, 3 lignes + commentaire) | `run_service` ne démarre ni la livraison ni la reprise : sans cela, un `agentTraces.enabled: true` relancerait l'envoi toutes les 60 s et écrirait une ligne de journal à chaque tour (`Schedule::settle` rejoue un `Failed` sans statut). | YA-16 |
 | `crates/pa-cli/src/client_traces.rs` | modif. (fichier upstream, 7 lignes) | `/traces` : l'état lu est faux quel que soit le réglage, `on` est refusé avec `TRACE_SHARING_OFF`. | YA-16 |
 | `crates/pa-cli/src/interactive_mode/onboarding.rs` | modif. (fichier upstream, 2 lignes) | La question de partage de traces n'est plus posée. | YA-16 |
+
+**Télémétrie distante coupée.** Comme les traces, sans réglage pour la rallumer. Unharnessed a retiré la télémétrie et l'envoi de traces dans `de437b6e2d3e945d4f56dbb675f5da692c5726ab` (01/10/2026, « unharnessed step 6: drop telemetry and trace upload »). Ici, coupure au lieu de suppression, pour garder les cherry-picks faciles.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-telemetry/src/sinks/analytics.rs` | modif. (fichier upstream, 7 lignes + commentaires) | **Point de coupure** : constante `REMOTE_TELEMETRY = false` ; `AnalyticsSink::send_batch`, seul envoi vers `api.primeintellect.ai/api/v1/agent-analytics/events`, rend `SinkOutcome::Dropped` sans ouvrir de connexion. `telemetry.enabled` ne la lit pas. Le miroir local (`FileSink`, `telemetry.jsonl`) suit toujours le réglage, inchangé. Le journal d'usage YA-13 (`<id>.usage.ndjson`) ne passe pas par les sinks : écriture directe (`crates/pa-core/src/session_engine/usage_log.rs:539-547`). | YA-16 |
+| `crates/pa-core/tests/ya_remote_telemetry_off.rs` | ajout | `telemetry.enabled: true`, sink pointé sur un serveur local : le sink seul et le client à lots (gaté sur le réglage) n'ouvrent aucune connexion. Le client lit le réglage directement (`DO_NOT_TRACK=1` de `.cargo/config.toml` couperait sinon l'interrupteur à lui seul). | YA-16 |
 
 **Marque et logo.** Remplacements de texte, une ligne chacun sauf mention :
 
@@ -904,6 +911,8 @@ Laissés tels quels : messages de mise à jour (PR 2, `update` désactivée), no
 
 | Fichier | Test | Nature | Changement |
 |---|---|---|---|
+| `crates/pa-telemetry/tests/analytics_wire.rs` | `batch_posts_the_exact_ts_request`, `the_client_batches_through_the_sink`, `failures_drop_the_batch` | ignoré (`#[ignore]`, 1 ligne chacun) | Ils exigent une vraie requête vers un serveur local ; la coupure n'en émet plus. `an_unreachable_endpoint_times_out_as_a_drop` passe toujours (`Dropped`). |
+| `crates/pa-core/src/session_engine/telemetry/tests.rs` | `legacy_events_reach_the_analytics_endpoint_in_the_ts_shape` | ignoré (`#[ignore]`, 1 ligne) | Même raison. Les autres tests de télémétrie utilisent des sinks factices ou le miroir local. |
 | `crates/pa-cli/src/client_traces.rs` | `the_setting_writes_and_reads_the_agent_traces_flag` | défaut | `set_enabled(true)` refusé avec `TRACE_SHARING_OFF` ; un réglage écrit à la main ne rallume pas l'état. |
 | `crates/pa-cli/src/interactive_mode/tests.rs` | `settings_sink_persists_the_fresh_home_answer_with_the_flag` | défaut | Un dossier neuf déclare le choix fait : la question n'est plus posée. Reste du test inchangé. |
 | `crates/pa-tui/src/chrome/tests.rs` | `splash_renders_logo_version_model_and_cwd` | marque | `yusAgent v0.0.0` ; vérifie l'**absence** du papillon et de « prime agent ». |
