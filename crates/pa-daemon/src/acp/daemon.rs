@@ -1092,7 +1092,7 @@ async fn handle_session_new(
         {
             let _ = tx.send(super::internal_error(
                 &id,
-                "prime-agent ACP mode hosts one session per connection; start another prime-agent process for a second session",
+                "yusagent ACP mode hosts one session per connection; start another yusagent process for a second session",
             ));
             return;
         }
@@ -1517,7 +1517,7 @@ async fn prompt_turn(
         return super::turn_failure_error(
             &id,
             &failure,
-            &format!("prime-agent turn failed: {failure}"),
+            &format!("yusagent turn failed: {failure}"),
         );
     }
     // The autonomous accounting for the completion envelope: the daemon's

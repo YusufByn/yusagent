@@ -1481,7 +1481,7 @@ fn stored_session_cwd(
 
 pub(crate) fn render_selector_error(error: &SessionSelectorError) -> String {
     format!(
-        "{}.{}\nOpen prime-agent and press left-arrow to browse sessions.",
+        "{}.{}\nOpen yusagent and press left-arrow to browse sessions.",
         error.message(),
         error.suggestion().unwrap_or_default()
     )

@@ -99,7 +99,7 @@ mod tests {
     /// The error-data view of one failed prompt arm, as the #200 host
     /// contract reads it.
     fn error_data(failure: &str) -> Value {
-        turn_failure_error(&json!(1), failure, "prime-agent turn failed")["error"]["data"].clone()
+        turn_failure_error(&json!(1), failure, "yusagent turn failed")["error"]["data"].clone()
     }
 
     #[test]
@@ -112,7 +112,7 @@ mod tests {
             let data = error_data(failure);
             assert_eq!(data["kind"], "model_transport", "{failure}: {data}");
             assert_eq!(data["retryable"], true, "{failure}: {data}");
-            assert_eq!(data["details"], "prime-agent turn failed");
+            assert_eq!(data["details"], "yusagent turn failed");
         }
         // The fine #2117 category rides separately.
         let network = error_data("ECONNRESET: model connection reset mid-stream");

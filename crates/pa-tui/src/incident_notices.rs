@@ -25,7 +25,7 @@ pub const INCIDENT_NOTICE_MAX_WINDOW_ENTRIES: usize = 20_000;
 pub const INCIDENT_NOTICE_POLL_INTERVAL_MS: u64 = 30_000;
 
 /// The pointer to the full timeline.
-pub const INCIDENT_NOTICE_POINTER: &str = "— run prime-agent incident for the timeline";
+pub const INCIDENT_NOTICE_POINTER: &str = "— run yusagent incident for the timeline";
 
 const NEWLINE_BYTE: u8 = 0x0a;
 

@@ -277,6 +277,10 @@ fn normalize(text: &str) -> String {
 }
 
 fn normalize_token(token: &str) -> String {
+    // yusAgent (YA-16, ticket 19): the Rust CLI names itself `yusagent`, the TS one `prime-agent`.
+    if token == "yusagent" {
+        return "prime-agent".to_string();
+    }
     if let Some((key, value)) = token.split_once('=') {
         return format!("{key}={}", normalize_token(value));
     }
@@ -703,19 +707,19 @@ fn schedule_usage_errors_and_valid_invocations() {
     let usage_shapes = [
         (
             vec!["schedule", "cancel"],
-            "Error: Usage: prime-agent schedule cancel <job-id>\n",
+            "Error: Usage: yusagent schedule cancel <job-id>\n",
         ),
         (
             vec!["schedule", "cancel", "a", "b"],
-            "Error: Usage: prime-agent schedule cancel <job-id>\n",
+            "Error: Usage: yusagent schedule cancel <job-id>\n",
         ),
         (
             vec!["schedule", "list", "--bogus-flag"],
-            "Error: Usage: prime-agent schedule list [--all] [agent] [--json]\n",
+            "Error: Usage: yusagent schedule list [--all] [agent] [--json]\n",
         ),
         (
             vec!["--daemon-socket", rotated_socket, "schedule", "list"],
-            "Error: Usage: prime-agent schedule list [--all] [agent] [--json]\n",
+            "Error: Usage: yusagent schedule list [--all] [agent] [--json]\n",
         ),
         (
             vec![
@@ -725,7 +729,7 @@ fn schedule_usage_errors_and_valid_invocations() {
                 "cancel",
                 "id",
             ],
-            "Error: Usage: prime-agent schedule cancel <job-id>\n",
+            "Error: Usage: yusagent schedule cancel <job-id>\n",
         ),
     ];
     for (args, golden) in usage_shapes {

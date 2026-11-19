@@ -391,7 +391,7 @@ fn shutdown_without_force_requires_confirmation_and_harms_nothing() {
     assert_eq!(tty_error.status.code(), Some(1));
     assert!(
         stderr(&tty_error).contains(
-            "Shutdown requires confirmation in an interactive terminal. Use \"prime-agent shutdown --force\"."
+            "Shutdown requires confirmation in an interactive terminal. Use \"yusagent shutdown --force\"."
         ),
         "router error mismatch: {}{}",
         stdout(&tty_error),
@@ -414,7 +414,7 @@ fn shutdown_without_force_requires_confirmation_and_harms_nothing() {
     );
     assert_eq!(
         failed[0].get("reason").and_then(Value::as_str),
-        Some("confirmation required; use \"prime-agent shutdown --force --json\"")
+        Some("confirmation required; use \"yusagent shutdown --force --json\"")
     );
     assert!(
         report

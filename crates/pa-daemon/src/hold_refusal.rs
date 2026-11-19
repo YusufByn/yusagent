@@ -323,7 +323,7 @@ the same daemon, so this build cannot open the file while that process holds it.
                 }
             }
             lines.push(String::new());
-            lines.extend(take_over_lines(hold, "prime-agent", holder_exe));
+            lines.extend(take_over_lines(hold, "yusagent", holder_exe));
         }
         HolderFlavor::ThisBuild => {
             lines.push(format!(
@@ -335,7 +335,7 @@ runtime lease."
             lines.push("• Continue where you left off:".to_string());
             if let Some(id) = id {
                 lines.push(format!(
-                    "  prime-agent --daemon-socket <socket> --resume {}",
+                    "  yusagent --daemon-socket <socket> --resume {}",
                     shell_quote(&single_line(id))
                 ));
                 lines.push(
@@ -344,7 +344,7 @@ you started it — that daemon owns this session)"
                         .to_string(),
                 );
             } else {
-                lines.push("  prime-agent --resume".to_string());
+                lines.push("  yusagent --resume".to_string());
                 lines.push(
                     "  (switch to the window or shell where that instance is running — its \
 daemon owns this session)"
@@ -352,7 +352,7 @@ daemon owns this session)"
                 );
             }
             lines.push(String::new());
-            lines.extend(take_over_lines(hold, "prime-agent", holder_exe));
+            lines.extend(take_over_lines(hold, "yusagent", holder_exe));
         }
         HolderFlavor::AnotherProcess => {
             lines.push(format!(
@@ -361,7 +361,7 @@ daemon owns this session)"
 runtime lease."
             ));
             lines.push(String::new());
-            lines.extend(take_over_lines(hold, "prime-agent", holder_exe));
+            lines.extend(take_over_lines(hold, "yusagent", holder_exe));
         }
     }
     lines.push(String::new());
@@ -508,7 +508,7 @@ Session: ts01ab";
         };
         let message = refusal_for_flavor(HolderFlavor::ThisBuild, &hold, None, None);
         assert!(
-            message.contains("prime-agent --daemon-socket <socket> --resume 'rs01cd'"),
+            message.contains("yusagent --daemon-socket <socket> --resume 'rs01cd'"),
             "the attach command names the flag and the session: {message}"
         );
         assert!(
@@ -530,7 +530,7 @@ Session: ts01ab";
             "the anonymous holder id renders: {message}"
         );
         assert!(
-            message.contains("prime-agent shutdown --force"),
+            message.contains("yusagent shutdown --force"),
             "without a pid the sweep command is the take-over path: {message}"
         );
     }
