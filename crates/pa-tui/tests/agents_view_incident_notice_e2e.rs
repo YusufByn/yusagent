@@ -281,7 +281,7 @@ async fn renders_the_collapsed_worker_crash_notice_line() {
         "{frames_text}"
     );
     assert!(
-        frames_text.contains("run prime-agent incident for the timeline"),
+        frames_text.contains("run yusagent incident for the timeline"),
         "{frames_text}"
     );
     assert!(frames_text.contains("⚠"), "{frames_text}");
@@ -341,12 +341,12 @@ async fn dismisses_with_esc_and_the_dismissal_survives_reentry() {
         "{last_frame}"
     );
     assert!(
-        !last_frame.contains("prime-agent incident for the timeline"),
+        !last_frame.contains("yusagent incident for the timeline"),
         "{last_frame}"
     );
     assert!(outcome.frames.iter().any(|frame| {
         frame.contains("worker 5b1d3aeb91ee crashed at")
-            && frame.contains("prime-agent incident for the timeline")
+            && frame.contains("yusagent incident for the timeline")
     }));
 
     // Re-entry with the carried state: the dismissal horizon hides the same incident; no poll
@@ -371,7 +371,7 @@ async fn dismisses_with_esc_and_the_dismissal_survives_reentry() {
 
     let frames_text = second.frames.join("\n");
     assert!(
-        !frames_text.contains("prime-agent incident for the timeline"),
+        !frames_text.contains("yusagent incident for the timeline"),
         "{frames_text}"
     );
     assert!(

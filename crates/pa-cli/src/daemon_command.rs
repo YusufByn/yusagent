@@ -308,7 +308,7 @@ fn run_rename(client: &mut DaemonClient, args: &[String], json: bool) -> Result<
     let active_session_id = require_active_session_id(args)?;
     let name = args[1..].join(" ").trim().to_string();
     if name.is_empty() {
-        bail!("Usage: prime-agent rename <agent> <name>");
+        bail!("Usage: yusagent rename <agent> <name>");
     }
     let response = client.request(DaemonCommand::Rename {
         id: None,
@@ -431,14 +431,14 @@ fn parse_send_args(args: &[String]) -> Result<DaemonCommand> {
         message_parts.push(arg.to_string());
     }
     if explicit_message.is_some() && !message_parts.is_empty() {
-        bail!("Usage: prime-agent send [--from <agent>] <agent> [--message <message>|<message>]");
+        bail!("Usage: yusagent send [--from <agent>] <agent> [--message <message>|<message>]");
     }
     let message = explicit_message
         .unwrap_or_else(|| message_parts.join(" "))
         .trim()
         .to_string();
     if target_active_session_id.is_none() || message.is_empty() {
-        bail!("Usage: prime-agent send [--from <agent>] <agent> [--message <message>|<message>]");
+        bail!("Usage: yusagent send [--from <agent>] <agent> [--message <message>|<message>]");
     }
     Ok(DaemonCommand::SendMessage {
         id: None,
@@ -497,7 +497,7 @@ fn run_cron_list(client: &mut DaemonClient, args: &[String], json: bool) -> Resu
 }
 
 fn run_cron_add(client: &mut DaemonClient, args: &[String], json: bool) -> Result<()> {
-    let usage = "Usage: prime-agent schedule add <agent> <schedule> -- <message>";
+    let usage = "Usage: yusagent schedule add <agent> <schedule> -- <message>";
     let separator = args
         .iter()
         .position(|arg| arg == "--")
@@ -535,7 +535,7 @@ fn run_cron_add(client: &mut DaemonClient, args: &[String], json: bool) -> Resul
 
 fn run_cron_cancel(client: &mut DaemonClient, args: &[String], json: bool) -> Result<()> {
     let Some(job_id) = args.get(1) else {
-        bail!("Usage: prime-agent schedule cancel <job-id>");
+        bail!("Usage: yusagent schedule cancel <job-id>");
     };
     let response = client.request(DaemonCommand::CronCancel {
         id: None,

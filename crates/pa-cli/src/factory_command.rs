@@ -93,13 +93,13 @@ fn parse_factory_command(args: &[String]) -> Result<FactoryCommand, String> {
     match subcommand.as_str() {
         "list" => {
             if !operands.is_empty() {
-                return Err("Usage: prime-agent factory list [--json]".to_string());
+                return Err("Usage: yusagent factory list [--json]".to_string());
             }
             Ok(FactoryCommand::List { json })
         }
         "import" => {
             if operands.len() != 1 {
-                return Err("Usage: prime-agent factory import <path> [--json]".to_string());
+                return Err("Usage: yusagent factory import <path> [--json]".to_string());
             }
             Ok(FactoryCommand::Import {
                 path: operands.remove(0),
@@ -109,12 +109,12 @@ fn parse_factory_command(args: &[String]) -> Result<FactoryCommand, String> {
         "export" => {
             if operands.len() != 1 {
                 return Err(
-                    "Usage: prime-agent factory export <name> --out <path> [--json]".to_string(),
+                    "Usage: yusagent factory export <name> --out <path> [--json]".to_string(),
                 );
             }
             let Some(out) = out else {
                 return Err(
-                    "Usage: prime-agent factory export <name> --out <path> [--json]".to_string(),
+                    "Usage: yusagent factory export <name> --out <path> [--json]".to_string(),
                 );
             };
             Ok(FactoryCommand::Export {
@@ -133,12 +133,12 @@ pub fn run_factory_command(args: &[String]) -> i32 {
         Ok(command) => command,
         Err(empty_hint) if empty_hint.is_empty() => {
             eprintln!("Missing factory command.");
-            eprintln!("Run \"prime-agent help factory\" for usage.");
+            eprintln!("Run \"yusagent help factory\" for usage.");
             return 1;
         }
         Err(error) => {
             eprintln!("Error: {error}");
-            eprintln!("Run `prime-agent help factory` for usage.");
+            eprintln!("Run `yusagent help factory` for usage.");
             return 1;
         }
     };
@@ -442,7 +442,7 @@ mod tests {
         assert!(missing_out.is_err());
         assert!(missing_out
             .unwrap_err()
-            .starts_with("Usage: prime-agent factory export"));
+            .starts_with("Usage: yusagent factory export"));
         let dangling_out = parse_factory_command(&arg(&["export", "sweep", "--out"]));
         assert!(dangling_out.is_err());
         assert!(dangling_out

@@ -2,7 +2,7 @@
 """Mesures de l'audit YA-00 : lance le harness contre le serveur de capture et analyse.
 
 Usage (commande unique) :
-    python3 bench/tools/capture/run.py --binary /chemin/vers/prime-agent
+    python3 bench/tools/capture/run.py --binary /chemin/vers/yusagent
 
 Deux phases bien séparées :
   1. Préparation (réseau autorisé, une fois par binaire) : création du venv du
@@ -330,7 +330,7 @@ def acp_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -
         except subprocess.TimeoutExpired:
             proc.kill()
         err.close()
-        # `prime-agent shutdown` ne vise que le socket par défaut : on termine le
+        # `yusagent shutdown` ne vise que le socket par défaut : on termine le
         # superviseur de ce socket, qui arrête ses workers et leurs kernels.
         subprocess.run(["pkill", "-TERM", "-f", "--", f"--daemon-socket {socket}"])
         deadline = time.monotonic() + 30

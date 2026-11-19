@@ -7,7 +7,7 @@ Le premier run réel est lancé par Yusuf (CLAUDE.md, règle 6). Tout l'outillag
 ## Prérequis
 
 - macOS (`sandbox-exec`), `python3` ≥ 3.11 (bibliothèque standard seule), `uv`, `git`, `curl`, `node` ≥ 22 (tâches Node : `node --test` avec motif et rapport JUnit).
-- Un binaire de la branche : artefact de `ya-build-macos-arm64.yml`, extrait avec `models.bundled.json` à côté de `prime-agent` (voir `bench/tools/capture/README.md`). Le catalogue des modèles est ce fichier, son sha256 est noté dans le rapport.
+- Un binaire de la branche : artefact de `ya-build-macos-arm64.yml`, extrait avec `models.bundled.json` à côté de `yusagent` (`prime-agent` pour les builds d'avant le ticket 19) (voir `bench/tools/capture/README.md`). Le catalogue des modèles est ce fichier, son sha256 est noté dans le rapport.
 - Cache : `~/.cache/yusagent-smoke` (`--cache` pour le déplacer). Dépôts de tâche, venvs, venv du kernel (`PRIME_AGENT_KERNEL_VENV`, un par binaire), `HOME` isolé. Rien de cela n'est dans le dépôt.
 
 ## Login (une fois, par Yusuf)
@@ -15,7 +15,7 @@ Le premier run réel est lancé par Yusuf (CLAUDE.md, règle 6). Tout l'outillag
 Le banc utilise un dossier agent dédié : `~/.cache/yusagent-smoke/agent`. Y faire le login ChatGPT une fois, en interactif :
 
 ```bash
-PRIME_AGENT_CODING_AGENT_DIR=~/.cache/yusagent-smoke/agent HOME=~/.cache/yusagent-smoke/home <dossier>/prime-agent
+PRIME_AGENT_CODING_AGENT_DIR=~/.cache/yusagent-smoke/agent HOME=~/.cache/yusagent-smoke/home <dossier>/yusagent
 ```
 
 puis le panneau d'authentification, provider « ChatGPT Plus/Pro (Codex Subscription) » (`openai-codex`). Le runner ne lit jamais `auth.json` sauf pour une chose : rechercher ses valeurs dans le dossier de run à la fin (le rapport ne donne que des noms de fichiers et des comptes). Il réécrit `models.json` et `settings.json` de ce dossier à chaque session : ne rien y mettre à la main.
@@ -25,7 +25,7 @@ puis le panneau d'authentification, provider « ChatGPT Plus/Pro (Codex Subscrip
 Le proxy CONNECT n'accepte que les hôtes de `hosts/openai-codex.txt` (rafraîchissement du jeton). La liste s'établit au run de chauffe, pas de mémoire :
 
 ```bash
-DO_NOT_TRACK=1 PI_OFFLINE=1 python3 -I bench/smoke/run.py --binary <dossier>/prime-agent --model gpt-6.1-sol --record-hosts
+DO_NOT_TRACK=1 PI_OFFLINE=1 python3 -I bench/smoke/run.py --binary <dossier>/yusagent --model gpt-6.1-sol --record-hosts
 ```
 
 C'est un appel réel au modèle. Le proxy CONNECT accepte alors tout hôte sur le port 443 et écrit ceux qu'il a vus dans `hosts/openai-codex.txt`, à relire avant de le committer. Un rafraîchissement n'a lieu que si le jeton est près d'expirer : si aucun hôte n'est vu, le fichier reste vide, à refaire plus tard.
@@ -33,12 +33,12 @@ C'est un appel réel au modèle. Le proxy CONNECT accepte alors tout hôte sur l
 ## Commandes
 
 ```bash
-make smoke BINARY=<dossier>/prime-agent PROVIDER=openai-codex MODEL=<id> EFFORT=high [SETTINGS=bench/smoke/settings/<x>.json] [RUNS=1] [TASKS=id1,id2]
+make smoke BINARY=<dossier>/yusagent PROVIDER=openai-codex MODEL=<id> EFFORT=high [SETTINGS=bench/smoke/settings/<x>.json] [RUNS=1] [TASKS=id1,id2]
 python3 -I bench/smoke/compare.py <run A> <run B> [--baseline bench/smoke/baseline/<modèle>.json] --out <fichier>.md
 python3 -I bench/smoke/baseline.py <run> [<run> ...] [--exclude <run>:<tâche>[,<tâche>...]]   # écrit bench/smoke/baseline/<modèle>.json
 python3 -I bench/smoke/metrics.py <run> [<run> ...]    # miss serveur et taux évitable, runs déjà faits
 python3 -I bench/smoke/run.py --rereport <run>         # rapport recalculé depuis les journaux du run
-python3 -I bench/smoke/continue_session.py --binary <dossier>/prime-agent --task <id> --out <run>/tasks/<id>/continue-1 "<prompt>"   # appel réel : --continue de la dernière session de la tâche, nouveau processus, mêmes sandbox et proxies
+python3 -I bench/smoke/continue_session.py --binary <dossier>/yusagent --task <id> --out <run>/tasks/<id>/continue-1 "<prompt>"   # appel réel : --continue de la dernière session de la tâche, nouveau processus, mêmes sandbox et proxies
 # --log-bodies (run.py, continue_session.py) : corps JSON de chaque requête de la tâche dans proxy-bodies.ndjson, jamais les en-têtes ; désactivé par défaut, refusé avec --ab (jamais pendant un A/B) ; `client_metadata.x-codex-installation-id` (Codex) y est remplacé par `<masqué>`
 # continue_session.py : scan de secrets de son dossier --out (secret-scan.json, mêmes valeurs que run.py), le scan de run.py étant fait avant la reprise
 python3 -I bench/smoke/metrics.py --theory-check <run> [<run> ...]   # validation du cache théorique

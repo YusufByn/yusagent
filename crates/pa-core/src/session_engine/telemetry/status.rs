@@ -89,6 +89,14 @@ pub fn telemetry_endpoint() -> Option<&'static str> {
 /// The `status` report: state and why, the endpoint, the installation id.
 #[must_use]
 pub fn telemetry_status_text(settings: &SettingsManager, agent_dir: &Path) -> String {
+    // yusAgent (YA-16, ticket 19): remote telemetry is off with no switch; no endpoint shown.
+    if !pa_telemetry::REMOTE_TELEMETRY {
+        let installation_id = pa_telemetry::existing_install_id(agent_dir)
+            .unwrap_or_else(|| "not created yet".to_string());
+        return format!(
+            "Telemetry is off (disabled in yusAgent).\nInstallation id: {installation_id}"
+        );
+    }
     let switch = telemetry_switch(settings);
     let state = if switch.enabled() { "on" } else { "off" };
     let endpoint = telemetry_endpoint().unwrap_or("nowhere (development build)");
@@ -117,6 +125,10 @@ pub fn set_telemetry_enabled_text(
     agent_dir: &Path,
     enabled: bool,
 ) -> anyhow::Result<String> {
+    // yusAgent (YA-16, ticket 19): turning it on is refused and writes nothing.
+    if enabled && !pa_telemetry::REMOTE_TELEMETRY {
+        anyhow::bail!("Remote telemetry is disabled in yusAgent.");
+    }
     // The opt-out is the settings write itself and cannot fail on
     // telemetry state: the recording seams re-check the live switch at
     // turn boundaries and the client drops every queued event while the
@@ -217,10 +229,15 @@ mod tests {
         assert_eq!(reread.telemetry_enabled_setting(), Some(false));
         assert!(!reread.get_telemetry_enabled());
 
-        set_telemetry_enabled_text(&mut settings, &agent_dir, true).unwrap();
+        // yusAgent (YA-16, ticket 19): turning it on is refused and writes nothing.
+        let refused = set_telemetry_enabled_text(&mut settings, &agent_dir, true).unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "Remote telemetry is disabled in yusAgent."
+        );
         let reread = SettingsManager::create(dir.path(), &agent_dir);
-        assert_eq!(reread.telemetry_enabled_setting(), Some(true));
-        assert!(reread.get_telemetry_enabled());
+        assert_eq!(reread.telemetry_enabled_setting(), Some(false));
+        assert!(!reread.get_telemetry_enabled());
     }
 
     #[test]
@@ -251,6 +268,8 @@ mod tests {
         let id = pa_telemetry::install_id(&agent_dir).unwrap();
         let after = telemetry_status_text(&settings, &agent_dir);
         assert!(after.contains(&format!("Installation id: {id}")));
-        assert!(after.contains("Endpoint: nowhere (development build)"));
+        // yusAgent (YA-16, ticket 19): remote telemetry is off, no endpoint is named.
+        assert!(after.starts_with("Telemetry is off (disabled in yusAgent).\n"));
+        assert!(!after.contains("Endpoint:"));
     }
 }

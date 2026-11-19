@@ -295,3 +295,16 @@ Proposition, pour discussion :
 4. **Variables** (optionnel, selon l'option) : seule PR qui peut changer le préfixe ; à signaler comme telle et à mesurer avec `bench/tools/capture/run.py`.
 
 Les PR 1 et 3 sont indépendantes. La PR 2 doit précéder toute mesure du banc qui suit.
+
+## PR 2 : binaire (19/11/2026)
+
+Branche `ya-19-binaire`, depuis `main` à `aea5db01b` (merge de la PR 1).
+
+- **Textes de télémétrie** (premier commit, demande de Yusuf) : `/telemetry status` affiche « Telemetry is off (disabled in yusAgent). » sans endpoint ; `/telemetry on` (et `prime-agent telemetry on`) est refusé avec « Remote telemetry is disabled in yusAgent. » ; la notice « yusAgent sends pseudonymous usage… » ne s'affiche plus, ni dans le TUI ni dans les modes sans TUI. Textes en anglais comme le reste de l'interface (et comme le refus de `/traces on`). Limite : un `telemetry.enabled: true` écrit à la main active toujours le miroir local `telemetry.jsonl`, sans envoi.
+- **Binaire** : la cible Cargo reste `prime-agent` ; l'archive de `ya-build-macos-arm64.yml` livre `yusagent` (option `--binary-name` d'`assemble_artifacts.py` et `verify_release.py`, absente par défaut : release upstream inchangée). L'archive garde son nom `prime-agent-<version>-<plateforme>.tar.gz` ; l'artefact devient `yusagent-aarch64-apple-darwin-<sha>`. `is_product_binary` reconnaît `yusagent`.
+- **Commande** : `APP_NAME = "yusagent"` ; les commandes citées dans les messages (usages, `shutdown --force`, `attach`, `--resume`, `incident`…) disent `yusagent`. La reprise herdr lance `yusagent --resume`.
+- **`update` désactivée** : `update` (CLI, toutes options) et `/update` (TUI) refusent avant tout téléchargement avec « Self-update is disabled in yusAgent. Install a newer yusAgent build to update. ». Précédent : Unharnessed, `75cfc357fe501a46f4a01a345457c0897eb88d89` (commande) et `09f760dfa4b9fbb205443f6fcf7736256ccc226f` (module). Sans ce refus, `/update` hors installation gérée lançait l'installateur upstream de `app.primeintellect.ai`.
+- **Banc** : `install-bin.sh` et `ab.py` acceptent `yusagent` et, pour les builds d'avant le ticket 19, `prime-agent` ; chemins des README, de `CLAUDE.md` et du `Makefile` mis à jour. Options de `bench/smoke/run.py` inchangées.
+- **Laissés** : `package update` (partie « mise à jour de soi » déjà refusée hors installation gérée), texte de la confirmation de `/update` (figé par un test e2e), code de mise à jour (inatteignable), nom de l'archive, `package.json` de l'archive (`name`, `bin`), outils de dev (`pa-perf`, `pa-tui-replay`).
+- **À reprendre (refonte du CLI après YA-10, et YA-16 distribution)** : la confirmation de `/update` est encore demandée **avant** le refus (son texte, figé par `clipboard_auth_commands_e2e.rs:1815`, parle toujours de la migration TypeScript vers Rust) ; l'archive garde le nom `prime-agent-<version>-<plateforme>.tar.gz` (le binaire qu'elle contient s'appelle `yusagent`).
+

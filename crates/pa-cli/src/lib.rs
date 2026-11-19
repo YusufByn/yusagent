@@ -51,6 +51,8 @@ pub(crate) mod sessions_table_format;
 pub(crate) mod subscription_login;
 pub(crate) mod telemetry_notice;
 pub(crate) mod traces_login;
+// yusAgent (YA-16, ticket 19): self-update is disabled.
+pub(crate) mod ya_update_off;
 
 /// The runtime boundary: everything a mode-runner crate implements to plug
 /// into the `prime-agent` binary, plus the entry point that drives it.

@@ -330,7 +330,7 @@ pub fn parse_args(args: &[String]) -> Args {
             "--export" => {
                 if !internal_runtime_command {
                     result.diagnostics.push(Diagnostic::error(
-                        "--export was removed. Use \"prime-agent session export <file> [output]\".",
+                        "--export was removed. Use \"yusagent session export <file> [output]\".",
                     ));
                     if let Some(next) = args.get(i + 1) {
                         if !next.starts_with('-') {
@@ -427,7 +427,7 @@ pub fn parse_args(args: &[String]) -> Args {
                     .is_some_and(|next| !next.starts_with('-') && !next.starts_with('@'));
                 if !internal_runtime_command {
                     result.diagnostics.push(Diagnostic::error(
-                        "--list-models was removed. Use \"prime-agent model list [search]\".",
+                        "--list-models was removed. Use \"yusagent model list [search]\".",
                     ));
                     if has_search {
                         i += 1;
@@ -451,12 +451,12 @@ pub fn parse_args(args: &[String]) -> Args {
             }
             _ if arg.starts_with("--export=") => {
                 result.diagnostics.push(Diagnostic::error(
-                    "--export was removed. Use \"prime-agent session export <file> [output]\".",
+                    "--export was removed. Use \"yusagent session export <file> [output]\".",
                 ));
             }
             _ if arg.starts_with("--list-models=") => {
                 result.diagnostics.push(Diagnostic::error(
-                    "--list-models was removed. Use \"prime-agent model list [search]\".",
+                    "--list-models was removed. Use \"yusagent model list [search]\".",
                 ));
             }
             _ if arg.starts_with('@') => {
@@ -565,7 +565,7 @@ mod tests {
         let parsed = parse(&["--export", "foo"]);
         assert_eq!(
             last_error(&parsed),
-            "--export was removed. Use \"prime-agent session export <file> [output]\"."
+            "--export was removed. Use \"yusagent session export <file> [output]\"."
         );
         let marker: Vec<String> = vec![
             INTERNAL_RUNTIME_COMMAND_MARKER.into(),

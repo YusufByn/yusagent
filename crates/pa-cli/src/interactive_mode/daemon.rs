@@ -61,7 +61,7 @@ pub async fn ensure_daemon_running(socket_path: &Path, spawn_cwd: &Path) -> Resu
         DaemonProbe::Stale(client) => shutdown_stale_daemon(*client, socket_path).await?,
         DaemonProbe::Absent => {}
     }
-    let exe = std::env::current_exe().context("resolve the prime-agent executable")?;
+    let exe = std::env::current_exe().context("resolve the yusagent executable")?;
     ensure_daemon_running_with(&exe, socket_path, spawn_cwd).await
 }
 
@@ -99,7 +99,7 @@ pub async fn ensure_daemon_running_with(
         }
         if Instant::now() > deadline {
             return Err(anyhow!(
-                "Timed out waiting for the yusAgent daemon to start on {}. Run: prime-agent shutdown --force, then retry the original command.",
+                "Timed out waiting for the yusAgent daemon to start on {}. Run: yusagent shutdown --force, then retry the original command.",
                 socket_path.display()
             ));
         }
@@ -134,7 +134,7 @@ async fn shutdown_stale_daemon(
     client.close();
     if busy {
         return Err(anyhow!(
-            "An incompatible yusAgent daemon is running on {}.\n\nRun:\n  prime-agent shutdown --force\n\nThen retry the original command (the running daemon has active work).",
+            "An incompatible yusAgent daemon is running on {}.\n\nRun:\n  yusagent shutdown --force\n\nThen retry the original command (the running daemon has active work).",
             socket_path.display()
         ));
     }

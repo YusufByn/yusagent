@@ -278,7 +278,7 @@ def render(report: dict) -> str:
                        f"{p['digest_chars']} | {fmt(p['digest_tokens_est'])} | "
                        f"{p['cache_control_count']} | {p['reserialisation_octet_identique']} |")
     if report.get("layers"):
-        out += ["", "## Couches du prompt système (`prime-agent prompt --json`)", "",
+        out += ["", "## Couches du prompt système (`yusagent prompt --json`)", "",
                 "| Couche | Type | Source | Octets | Tokens est. |", "|---|---|---|---|---|"]
         for layer in report["layers"]:
             out.append(f"| {layer['name']} | {layer['kind']} | {layer['source']} | "

@@ -373,7 +373,8 @@ fn socket_spelling_of(pid: u32, value: &str) -> String {
 pub(crate) fn is_product_binary(exe: &str) -> bool {
     matches!(
         Path::new(exe).file_name().and_then(|name| name.to_str()),
-        Some("prime-agent" | "pa-daemon")
+        // yusAgent (YA-16, ticket 19): the shipped binary is named `yusagent`.
+        Some("prime-agent" | "yusagent" | "pa-daemon")
     )
 }
 
@@ -934,6 +935,20 @@ mod tests {
             !is_worker_argv(&foreign_worker_arg),
             "a foreign binary with a worker argument never matches"
         );
+    }
+
+    /// yusAgent (YA-16, ticket 19): the shipped binary is named `yusagent`.
+    #[test]
+    fn the_renamed_binary_is_a_product_binary() {
+        assert!(is_product_binary(
+            "/Users/u/.cache/yusagent-bin/abc/yusagent"
+        ));
+        let worker = ["/opt/yusagent/yusagent", "worker"]
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(is_worker_argv(&worker), "the renamed worker role");
+        assert!(!is_product_binary("/usr/local/bin/yusagent-helper"));
     }
 
     #[cfg(target_os = "linux")]

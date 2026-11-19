@@ -86,9 +86,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def harness_binary(bin_dir: Path) -> Path:
+    """Binaire yusAgent d'un dossier : `yusagent` (depuis le ticket 19), sinon `prime-agent`
+    (builds antérieurs)."""
+    renamed = bin_dir / "yusagent"
+    return renamed if renamed.is_file() else bin_dir / "prime-agent"
+
+
 def check_binary(bin_dir: Path) -> str:
     """Contrôles du binaire ; rend le sha du manifeste."""
-    binary = bin_dir / "prime-agent"
+    binary = harness_binary(bin_dir)
     if not (binary.is_file() and os.access(binary, os.X_OK)):
         fail(f"binaire absent : {binary}")
     manifest = json.loads((bin_dir / "manifest.json").read_text())
@@ -154,10 +161,11 @@ def rel(path: Path) -> str:
 
 
 def arm_binary(args, bin_dir: Path, settings: dict) -> Path:
-    """Binaire d'un bras : `prime-agent` du dossier yusAgent, ou `codex` de `--codex-dir`."""
+    """Binaire d'un bras : `yusagent` (ou `prime-agent`) du dossier yusAgent, ou `codex` de
+    `--codex-dir`."""
     codex = codex_arm.settings_of(settings)
     if codex is None:
-        return bin_dir / "prime-agent"
+        return harness_binary(bin_dir)
     if args.codex_dir is None:
         fail("bras Codex CLI : --codex-dir requis (tools/install-codex.sh)")
     binary = args.codex_dir.expanduser().resolve() / "codex"
@@ -254,7 +262,7 @@ def write_md(path: Path, ab: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("bin_dir", type=Path, help="dossier du binaire (prime-agent, manifest.json)")
+    parser.add_argument("bin_dir", type=Path, help="dossier du binaire (yusagent ou prime-agent, manifest.json)")
     parser.add_argument("ref", help="sha de référence (sources livrées identiques au binaire)")
     parser.add_argument("--a", type=Path, default=SMOKE / "settings" / "default.json",
                         help="réglages du bras A")
@@ -295,7 +303,7 @@ def main() -> None:
     started = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = args.out.resolve() / f"ab-{started}"
     ab = {"started": started, "dir": rel(out_dir), "mode": "capture" if args.capture else "réel",
-          "binary": str(bin_dir / "prime-agent"), "binary_sha": sha, "ref": args.ref,
+          "binary": str(harness_binary(bin_dir)), "binary_sha": sha, "ref": args.ref,
           "shipped_note": note, "model": args.model, "effort": args.effort,
           "idle_timeout_s": args.idle_timeout, "settings": settings, "settings_diff": diff,
           "harness": harness,

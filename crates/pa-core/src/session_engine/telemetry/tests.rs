@@ -1371,10 +1371,11 @@ fn a_disable_lands_even_when_the_telemetry_state_is_unusable() {
         !crate::settings::SettingsManager::create(dir.path(), &agent_dir).get_telemetry_enabled(),
         "the disable lands regardless of the telemetry state"
     );
-    super::set_telemetry_enabled_text(&mut settings, &agent_dir, true).unwrap();
+    // yusAgent (YA-16, ticket 19): the re-enable is refused and writes nothing.
+    assert!(super::set_telemetry_enabled_text(&mut settings, &agent_dir, true).is_err());
     assert!(
-        crate::settings::SettingsManager::create(dir.path(), &agent_dir).get_telemetry_enabled(),
-        "the re-enable lands the same way"
+        !crate::settings::SettingsManager::create(dir.path(), &agent_dir).get_telemetry_enabled(),
+        "the refused re-enable leaves the opt-out in place"
     );
 }
 

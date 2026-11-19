@@ -48,7 +48,7 @@ pub fn run_prompt_command(args: &[String]) -> i32 {
         Err(help_request) if help_request.is_empty() => return 0,
         Err(error) => {
             eprintln!("Error: {error}");
-            eprintln!("Run `prime-agent help prompt` for usage.");
+            eprintln!("Run `yusagent help prompt` for usage.");
             return 1;
         }
     };
@@ -151,7 +151,7 @@ fn assemble_breakdown(
 }
 
 fn print_text(breakdown: &pa_core::prompts::SystemPromptBreakdown) {
-    println!("# prime-agent system prompt breakdown");
+    println!("# yusagent system prompt breakdown");
     println!();
     println!("cached prefix (static layers, byte-stable across sessions):");
     for segment in &breakdown.segments {

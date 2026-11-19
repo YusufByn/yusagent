@@ -6,11 +6,11 @@
 # de réveil (une seule ligne `assistant:WOKEN`). Avec `bashNoticeBatchSeconds: 0` (troisième
 # argument `0`) : un réveil par avis.
 #
-# Usage : bash bench/smoke/tools/notice-batch-repro.sh <binaire prime-agent> <python du kernel> [fenêtre]
+# Usage : bash bench/smoke/tools/notice-batch-repro.sh <binaire yusagent> <python du kernel> [fenêtre]
 # Python du kernel : un venv avec le runtime du binaire, par exemple celui que le banc prépare
 # (~/.cache/yusagent-smoke/kernel-venv/<16 premiers caractères du sha256 du binaire>/bin/python).
 set -euo pipefail
-BIN=${1:?binaire prime-agent}
+BIN=${1:?binaire yusagent}
 PY=${2:?python du kernel}
 WINDOW=${3:-}
 DIR=$(mktemp -d)

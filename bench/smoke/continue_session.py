@@ -4,7 +4,7 @@ le dossier agent de `run.py`. Le workspace de la tâche n'est pas restauré : le
 la session par son cwd. C'est un appel réel au modèle.
 
     DO_NOT_TRACK=1 PI_OFFLINE=1 python3 -I bench/smoke/continue_session.py \\
-        --binary <dossier>/prime-agent --task <id> --out <run>/tasks/<id>/continue-1 \\
+        --binary <dossier>/yusagent --task <id> --out <run>/tasks/<id>/continue-1 \\
         [--model gpt-6.1-terra] [--effort high] [--settings bench/smoke/settings/<x>.json] \\
         [--log-bodies] "<prompt>"
 

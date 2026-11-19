@@ -12,7 +12,8 @@ use crate::mode::RuntimeConfig;
 /// telemetry enabled (env override, then settings — the `RunOptions`
 /// resolution) and not yet shown.
 pub(crate) fn print_if_due(config: &RuntimeConfig) {
-    if config.telemetry_disabled {
+    // yusAgent (YA-16, ticket 19): nothing is sent, so the disclosure never prints.
+    if config.telemetry_disabled || !pa_telemetry::REMOTE_TELEMETRY {
         return;
     }
     let mut settings = pa_core::settings::SettingsManager::create(&config.cwd, &config.agent_dir);
@@ -51,10 +52,11 @@ mod tests {
         let dir = tempfile::TempDir::new().expect("temp dir");
         let config = config_for(dir.path(), false);
         print_if_due(&config);
-        assert!(notice_shown(dir.path()), "the first headless run discloses");
-        print_if_due(&config);
-        // The once-per-installation gate is the settings flag, so the
-        // second call is a no-op by construction.
+        // yusAgent (YA-16, ticket 19): remote telemetry is off, the disclosure never prints.
+        assert!(
+            !notice_shown(dir.path()),
+            "nothing is sent, nothing is disclosed"
+        );
     }
 
     #[test]

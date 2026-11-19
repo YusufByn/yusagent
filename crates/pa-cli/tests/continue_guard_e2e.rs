@@ -240,7 +240,7 @@ fn print_continue_refuses_an_active_daemon_session() {
     );
     assert!(
         stderr.contains(&format!(
-            "Attach to it instead: prime-agent --resume '{active_session_id}'\n"
+            "Attach to it instead: yusagent --resume '{active_session_id}'\n"
         )),
         "the refusal suggests attaching to the live session (the holder id rides shell-quoted): {stderr}"
     );
@@ -326,7 +326,7 @@ fn print_resume_refuses_a_foreign_lease_holder() {
             "runtime lease.\n",
             "\n",
             "• Continue where you left off:\n",
-            "  prime-agent --daemon-socket <socket> --resume 'foreign01ab3c'\n",
+            "  yusagent --daemon-socket <socket> --resume 'foreign01ab3c'\n",
             "  (<socket> is that instance's daemon socket, from the shell where you started ",
             "it — that daemon owns this session)\n",
             "\n",
