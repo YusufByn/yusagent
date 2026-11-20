@@ -11,10 +11,12 @@
 //!    declined, it does not run, its result is the `[permission-denied]` text and the turn ends.
 //!    Both decisions are journaled in the worker's session file.
 //! b. `session/cancel` while a request waits: the turn answers `cancelled`, the cell does not run,
-//!    the decision is journaled as `cancelled`.
+//!    its tool call ends `failed`, the decision is journaled as `cancelled`. The same answer
+//!    without `session/cancel` withdraws the request too: the turn ends, the call ends `failed`.
 //! c. The client disconnects while a request waits: the cell does not run, its result is an error
 //!    (the refusal text, or the abort text when the bridge's teardown aborts the turn first) and
-//!    the turn stops (the model gets no other request); journaled as `cancelled`.
+//!    the turn stops (the model gets no other request); journaled as `cancelled`. A second client
+//!    stays attached without answering (as the TUI does): it does not keep the request waiting.
 //! d. The `permissions` selector: `auto` runs a cell without a request, back to `manual` asks
 //!    again; both changes are journaled.
 //!
@@ -165,6 +167,28 @@ impl Client {
         self.wait_for(|frame| frame["method"] == "session/request_permission")
     }
 
+    /// The final status (`completed` or `failed`) of the tool call `id`, from `frames` or the
+    /// frames that follow.
+    fn wait_final_status(&mut self, frames: &[Value], id: &str) -> String {
+        fn final_status(frame: &Value, id: &str) -> Option<String> {
+            let update = &frame["params"]["update"];
+            if update["sessionUpdate"] != "tool_call_update" || update["toolCallId"] != id {
+                return None;
+            }
+            match update["status"].as_str() {
+                Some(status @ ("completed" | "failed")) => Some(status.to_string()),
+                _ => None,
+            }
+        }
+        for frame in frames {
+            if let Some(status) = final_status(frame, id) {
+                return status;
+            }
+        }
+        let (frame, _) = self.wait_for(|frame| final_status(frame, id).is_some());
+        final_status(&frame, id).unwrap_or_default()
+    }
+
     /// Answers a `session/request_permission` with `outcome`.
     fn answer(&mut self, request: &Value, outcome: &Value) {
         let id = request["id"].clone();
@@ -272,6 +296,51 @@ fn session_lines(dir: &Path) -> Vec<Value> {
         }
     }
     lines
+}
+
+/// A second client on the daemon socket, attached to the (only) session without
+/// `yaPermissionAsker`, as the TUI attaches. The connection stays open while it is held.
+fn attach_watcher(
+    socket: &Path,
+) -> Box<dyn pa_types::platform::transport::BlockingTransportStream> {
+    let mut writer =
+        pa_types::platform::transport::connect_blocking(socket).expect("daemon socket");
+    let reader = writer.try_clone_box().expect("daemon socket clone");
+    let _ = reader.set_read_timeout(TIMEOUT);
+    let mut lines = BufReader::new(reader).lines();
+    let mut call = |id: &str, command: Value| -> Value {
+        let frame = json!({
+            "type": "command", "id": id, "clientId": "watcher",
+            "protocol": { "name": "prime-agent.daemon", "version": pa_types::daemon::DAEMON_PROTOCOL_VERSION },
+            "command": command,
+        });
+        writeln!(writer, "{frame}").expect("daemon frame");
+        writer.flush().expect("daemon flush");
+        loop {
+            let line = lines
+                .next()
+                .expect("the daemon answers")
+                .expect("a daemon line");
+            let frame: Value = serde_json::from_str(&line).expect("daemon JSON");
+            if frame["id"] == json!(id) {
+                return frame;
+            }
+        }
+    };
+    let list = call(
+        "watch-list",
+        json!({ "type": "list", "includeClientOwned": true }),
+    );
+    let active_session_id = list["data"]["sessions"][0]["activeSessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a live session: {list}"))
+        .to_string();
+    let attached = call(
+        "watch-attach",
+        json!({ "type": "attach", "activeSessionId": active_session_id }),
+    );
+    assert_eq!(attached["success"], true, "{attached}");
+    writer
 }
 
 fn decisions(journal: &[Value]) -> Vec<String> {
@@ -389,10 +458,47 @@ fn a_cancel_while_a_request_waits_stops_the_turn() {
     client.notify("session/cancel", &json!({ "sessionId": session_id }));
     // The client answers `cancelled` to a request still pending after its cancel (ACP).
     client.answer(&request, &json!({ "outcome": "cancelled" }));
-    let (response, _) = client.wait_response(prompt);
+    let (response, frames) = client.wait_response(prompt);
     assert_eq!(response["result"]["stopReason"], "cancelled", "{response}");
+    assert_eq!(
+        client.wait_final_status(&frames, "call-cancel"),
+        "failed",
+        "the call reaches a final state"
+    );
     assert!(
         !client.path("cancelled.txt").exists(),
+        "the cell did not run"
+    );
+    let journal = client.journal_until(|journal| !decisions(journal).is_empty());
+    assert_eq!(decisions(&journal), vec!["cancelled"], "{journal:?}");
+}
+
+/// b'. The client answers `cancelled` without `session/cancel`: the request is withdrawn.
+#[test]
+fn a_cancelled_answer_withdraws_the_request() {
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        touch("call-withdrawn", "withdrawn.txt"),
+        { "text": "never requested" },
+    ] }));
+    let (session_id, _) = client.open_session();
+    let prompt = client.prompt(&session_id, "create withdrawn.txt");
+    let (request, _) = client.wait_permission_request();
+    client.answer(&request, &json!({ "outcome": "cancelled" }));
+    let (response, frames) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    assert_eq!(
+        client.wait_final_status(&frames, "call-withdrawn"),
+        "failed",
+        "the call reaches a final state"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| frame.to_string().contains("never requested")),
+        "the turn stopped: {frames:?}"
+    );
+    assert!(
+        !client.path("withdrawn.txt").exists(),
         "the cell did not run"
     );
     let journal = client.journal_until(|journal| !decisions(journal).is_empty());
@@ -407,6 +513,8 @@ fn a_disconnect_while_a_request_waits_declines_the_call() {
         { "text": "never requested" },
     ] }));
     let (session_id, _) = client.open_session();
+    // A second client stays attached through the disconnect, without answering (as the TUI).
+    let _watcher = attach_watcher(&client.socket);
     let _prompt = client.prompt(&session_id, "create gone.txt");
     let _ = client.wait_permission_request();
     // EOF: the editor went away.

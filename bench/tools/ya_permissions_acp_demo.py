@@ -13,6 +13,14 @@ HOME est le dossier préparé par le banc de capture (`~/.cache/yusagent-capture
 kernel) : rien n'est écrit dans `~/.yusagent`. Si le venv du kernel n'y est pas encore, le binaire
 le crée au premier tour (réseau).
 
+Le dossier de travail est pris sous son chemin canonique : sous un chemin qui passe par un lien
+symbolique (`/var/folders` sur macOS), le worker n'écrit rien dans le fichier de session d'une
+session neuve (défaut du bail, `docs/tickets/21-bail-chemin-symbolique.md`).
+
+Vérifications à la fin (code de sortie 1 si l'une échoue) : un fichier créé seulement pour les
+appels autorisés ; des messages dans le fichier de session ; une entrée `ya-permission` par
+réponse, dans l'ordre (`allow`, `deny`) ; aucune ligne `pa-daemon:` dans le journal du worker.
+
 Usage :
     python3 -I bench/tools/ya_permissions_acp_demo.py --binary <dossier>/yusagent
 """
@@ -116,14 +124,15 @@ def ask(cell: str) -> str:
             return "allow-once" if answer == "a" else "reject-once"
 
 
-def turn(acp: Acp, session_id: str, text: str) -> None:
+def turn(acp: Acp, session_id: str, text: str) -> list[str]:
     prompt = acp.request("session/prompt", {
         "sessionId": session_id, "prompt": [{"type": "text", "text": text}]})
     cells: dict[str, str] = {}
+    answers: list[str] = []
     for frame in acp.frames():
         if frame.get("id") == prompt and "method" not in frame:
             print(f"réponse du tour : {json.dumps(frame.get('result') or frame.get('error'))}")
-            return
+            return answers
         update = (frame.get("params") or {}).get("update") or {}
         kind = update.get("sessionUpdate")
         if kind == "tool_call":
@@ -140,6 +149,7 @@ def turn(acp: Acp, session_id: str, text: str) -> None:
             print(f"demande pour {call_id}, statut {params['toolCall'].get('status')}, "
                   f"options {kinds}")
             option = ask(cells.get(call_id, ""))
+            answers.append("allow" if option == "allow-once" else "deny")
             acp.send({"jsonrpc": "2.0", "id": frame["id"],
                       "result": {"outcome": {"outcome": "selected", "optionId": option}}})
 
@@ -153,7 +163,7 @@ def main() -> None:
     args = parser.parse_args()
     binary = args.binary.resolve()
     args.home.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix="ya-perm-acp-"))
+    work = Path(tempfile.mkdtemp(prefix="ya-perm-acp-")).resolve()
     project, agent, tmp = work / "project", work / "agent", work / "tmp"
     for directory in (project, agent, tmp):
         directory.mkdir()
@@ -182,21 +192,44 @@ def main() -> None:
         selector = [option for option in result.get("configOptions", [])
                     if option.get("id") == "permissions"]
         print(f"sélecteur permissions : {selector[0]['currentValue'] if selector else 'absent'}")
+        answers: list[str] = []
         for name, _ in CELLS:
             print(f"\n=== tour : créer {name} ===")
-            turn(acp, session_id, f"Crée {name}.")
+            answers += turn(acp, session_id, f"Crée {name}.")
     finally:
         acp.close(binary)
     print("\n=== résultat ===")
-    for name, _ in CELLS:
-        print(f"{name} : {'créé' if (project / name).exists() else 'absent'}")
+    failures = []
+    for (name, _), answer in zip(CELLS, answers):
+        created = (project / name).exists()
+        print(f"{name} : {'créé' if created else 'absent'} (réponse : {answer})")
+        if created != (answer == "allow"):
+            failures.append(f"{name} : {'créé' if created else 'absent'} après {answer}")
+    entries = [json.loads(line) for session in sorted((agent / "sessions").rglob("*.jsonl"))
+               for line in session.read_text().splitlines()]
+    messages = sum(1 for entry in entries if entry.get("type") == "message")
+    print(f"messages dans le fichier de session : {messages}")
+    if messages == 0:
+        failures.append("aucun message dans le fichier de session")
+    decisions = []
     print("entrées ya-permission :")
-    for session in sorted((agent / "sessions").rglob("*.jsonl")):
-        for line in session.read_text().splitlines():
-            entry = json.loads(line)
-            if entry.get("type") == "custom" and entry.get("customType") == "ya-permission":
-                print(f"  {json.dumps(entry.get('data'), ensure_ascii=False)}")
+    for entry in entries:
+        if entry.get("type") == "custom" and entry.get("customType") == "ya-permission":
+            print(f"  {json.dumps(entry.get('data'), ensure_ascii=False)}")
+            decisions.append((entry.get("data") or {}).get("decision"))
+    if decisions != answers:
+        failures.append(f"journal {decisions}, réponses {answers}")
+    errors = [line for log in sorted((agent / "logs").glob("worker-*.stderr.log"))
+              for line in log.read_text().splitlines() if line.startswith("pa-daemon:")]
+    for line in errors:
+        print(f"journal du worker : {line}")
+    if errors:
+        failures.append(f"{len(errors)} erreur(s) pa-daemon dans le journal du worker")
     print(f"journal du binaire : {work / 'acp-stderr.log'}")
+    if failures:
+        print("ÉCHEC : " + " ; ".join(failures))
+        sys.exit(1)
+    print("OK")
 
 
 if __name__ == "__main__":
