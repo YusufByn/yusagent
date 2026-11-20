@@ -124,4 +124,34 @@ PR #70. Fichiers : `docs/fork-changes.md`, section « Carte de la cellule pendan
   - run `ci` 44794970113 sur `11a8da260` : `test shard 6/8`, accord/refus en échec pour la bonne raison (`✓ python · print('allowed') · ↑ 1 lines · 57ms` pendant l'attente) ; les deux tests d'attente en échec pour une **mauvaise** raison (la course headless attend la fin du tour : « a turn still active »), et `check + clippy` en échec (`clippy::similar_names`, `line` / `live` dans le test) ;
   - test corrigé seul (retrait `cancelled` et `turn_end` en fin d'attente, `ticks`), run `ci` 44797069532 sur `2e8a0731a` : clippy vert, `test shard 6/8` seul en échec, **les trois tests en échec pour la bonne raison** (`✓ python · print('awaiting') · ↑ 1 lines · 58ms` dans les deux ordres, `✓ python · print('allowed') …`).
 - **Pas compilé en local** (règle 8) : formatage par `rustfmt`, compilation, clippy et tests par la CI.
+- **Run sur le correctif** (`56ab31f84`, run `ci` 44799183971) : `check + clippy` et `windows cross-check` en échec (`clippy::unchecked_time_subtraction`, `Instant + QUIET - Duration` dans trois tests du panneau) ; `test shard 8/8` en échec sur le test pty : à l'étape du refus, le panneau recouvre le chargeur (la transcription remplit la fenêtre), « Awaiting permission » n'est pas à l'écran ; « Executing » absent, carte sous le panneau. Corrigé : `QUIET.saturating_sub(…)` ; « Awaiting permission » exigé seulement là où le chargeur est visible (étape 1), « Executing » absent et carte sans `✓` vérifiés partout. Les trois tests headless étaient verts dès ce run.
+- **CI** : run `ci` 44801470190 sur `d957ebe7e`, 14 checks requis verts (`gh pr checks 70 --required`) ; dans les journaux des shards : les trois tests headless `ok` (shard 6/8), `the_tui_answers_switches_to_auto_and_back ... ok` (shard 8/8), les 14 tests du panneau `ok` dont `waits_for_names_the_calls_of_the_waiting_requests`. Build macOS : run 44801457088 sur `d957ebe7e`, succès.
+- **Démo** (Claude Code, 20/11/2026, règle 13), binaire `d957ebe7e` :
+  ```sh
+  bash bench/smoke/tools/install-bin.sh 44801457088 d957ebe7eb00aa5846f3f457b1916d0692b7a7dd
+  DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/ya_permissions_tui_demo.py \
+    --binary ~/.cache/yusagent-bin/d957ebe7eb00aa5846f3f457b1916d0692b7a7dd/yusagent --pilote
+  ```
+  Code de sortie 0, `OK`. Extraits :
+  ```
+  [demande ouverte] chargeur « Awaiting permission » : oui ; « Executing » : non ; carte : " ◇ python · open('autorise.txt', 'w').write('ok') · ↑ 2 lines"
+  [panneau prêt] chargeur « Awaiting permission » : oui ; « Executing » : non ; carte : " ◇ python · open('autorise.txt', 'w').write('ok') · ↑ 2 lines"
+  carte de autorise.txt : " ✓ python · open('autorise.txt', 'w').write('ok') · ↑ 2 ↓ 1 lines · 1ms"
+  [second panneau prêt] chargeur « Awaiting permission » : oui ; « Executing » : non ; carte : " ◇ python · open('refuse.txt', 'w').write('ok') · ↑ 2 lines"
+  carte de refuse.txt : " ✗ python · open('refuse.txt', 'w').write('ok') · ↑ 2 ↓ 1 lines"
+  ```
+  `autorise.txt` et `auto.txt` créés, `refuse.txt` absent ; 11 messages dans le fichier de session ; journal `allow`, `deny`, `manual->auto`. Dans cette démo, le chargeur reste visible au second panneau (transcription plus courte que dans le test pty).
+- **Capture** (Claude Code, 20/11/2026), `py-example-001`, binaires `f2ba28fc4` (`main`, run 44788981604) et `d957ebe7e` (branche, run 44801457088), `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short` :
+  ```sh
+  python3 -I bench/smoke/run.py --binary ~/.cache/yusagent-bin/<sha>/yusagent --model gpt-6.1-sol --tasks py-example-001 --capture
+  python3 -I bench/smoke/tools/compare_capture_prompts.py bench/smoke/runs/20261120T192216Z-f2ba28f-gpt-6.1-sol bench/smoke/runs/20261120T193623Z-d957ebe-gpt-6.1-sol
+  ```
+  `capture [('py-example-001', 'resolved', 0)]` des deux côtés ; `find ~/.yusagent ~/.prime/agent -newer <marque>` vide ; 9 requêtes comparées : **TOUT IDENTIQUE**. **Préfixe inchangé.**
+
+## Points ouverts
+
+- **K5** (YA-10, ticket à part) : un TUI qui s'attache pendant qu'une demande attend ne la reçoit pas.
+- Si `tool_execution_start` arrive avant la demande, une image peut montrer la carte lancée entre les deux événements ; la demande la remet aussitôt « non lancée ». Non observé à l'écran.
+- `track_live_tool_timer` (télémétrie) compte aussi un appel retenu.
+- Le `✓` bref d'upstream en « auto » avant le premier partiel (section 1.1) et le `in_progress` d'ACP avant la décision (YA-10) restent hors périmètre.
 
