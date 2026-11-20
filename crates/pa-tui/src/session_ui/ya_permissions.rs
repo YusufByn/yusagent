@@ -9,7 +9,11 @@
 use pa_types::daemon::ya_permissions::{COMMAND, REQUEST_EVENT, RESOLVED_EVENT};
 use serde_json::json;
 
-use super::{key_event_to_id, AgentView, DaemonCommand, Instant, KeyEvent, Map, SessionUi, Value};
+use super::{
+    key_event_to_id, AgentView, DaemonCommand, Duration, Instant, KeyEvent, Map, SessionUi, Value,
+    UI_REQUEST_TIMEOUT_MS,
+};
+use crate::choice_picker::ChoicePicker;
 use crate::ya_permission_panel::{PanelKey, PermissionPanel, PermissionRequest};
 
 fn text<'a>(event: &'a Value, key: &str) -> &'a str {
@@ -125,6 +129,85 @@ impl SessionUi {
                 }
             }
         });
+    }
+
+    /// `/permissions [manual|auto]` (decision T4): without an argument, the picker with the
+    /// current mode checked; with one, the switch.
+    pub(super) async fn permissions_command(&mut self, args: &str, view: &mut AgentView) {
+        view.editor.set_text("");
+        match args.trim() {
+            "" => {
+                let Some(mode) = self.permission_mode(view).await else {
+                    return;
+                };
+                view.choice_picker = Some(ChoicePicker::permissions(Some(&mode)));
+                self.dirty = true;
+            }
+            mode @ ("manual" | "auto") => self.apply_permission_mode(mode, view).await,
+            _ => self.error_row("Usage: /permissions [manual|auto]", view),
+        }
+    }
+
+    /// The user's choice of mode for the session: the worker's `set_mode`, the path of the ACP
+    /// selector, journaled by the worker when the mode changes. A request already waiting stays
+    /// to answer (decision T7).
+    pub(super) async fn apply_permission_mode(&mut self, mode: &str, view: &mut AgentView) {
+        let mut rest = Map::new();
+        rest.insert("mode".to_string(), json!(mode));
+        let switched = self
+            .bounded_request(
+                Duration::from_millis(UI_REQUEST_TIMEOUT_MS),
+                DaemonCommand::YaPermissions {
+                    id: None,
+                    active_session_id: self.active_session_id.clone(),
+                    action: "set_mode".to_string(),
+                    rest,
+                },
+            )
+            .await;
+        match switched {
+            Ok(_) => {
+                let text = if mode == "auto" {
+                    "Permissions: auto. Tool calls run without asking, with your user's rights (no sandbox)."
+                } else {
+                    "Permissions: manual. Each tool call asks first."
+                };
+                self.note(text, view);
+            }
+            Err(error) => self.error_row(&format!("{error:#}"), view),
+        }
+        self.dirty = true;
+    }
+
+    /// The mode of the session (`get`); `None`, with a note, when it cannot ask.
+    async fn permission_mode(&mut self, view: &mut AgentView) -> Option<String> {
+        let answered = self
+            .bounded_request(
+                Duration::from_millis(UI_REQUEST_TIMEOUT_MS),
+                DaemonCommand::YaPermissions {
+                    id: None,
+                    active_session_id: self.active_session_id.clone(),
+                    action: "get".to_string(),
+                    rest: Map::new(),
+                },
+            )
+            .await;
+        match answered {
+            Ok(data) => {
+                let mode = data.get("mode").and_then(Value::as_str).map(str::to_string);
+                if mode.is_none() {
+                    self.note(
+                        "This session cannot ask for permission: it was not created by a client that answers.",
+                        view,
+                    );
+                }
+                mode
+            }
+            Err(error) => {
+                self.error_row(&format!("{error:#}"), view);
+                None
+            }
+        }
     }
 
     /// A panel left from another session (the view switched) goes away.

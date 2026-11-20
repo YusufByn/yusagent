@@ -325,6 +325,8 @@ impl SessionUi {
                 self.dirty = true;
                 match purpose {
                     ChoicePurpose::Effort => self.apply_thinking_level(&key, view).await,
+                    // yusAgent (YA-11, ticket 20).
+                    ChoicePurpose::Permissions => self.apply_permission_mode(&key, view).await,
                 }
             }
         }

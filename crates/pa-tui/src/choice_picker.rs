@@ -15,6 +15,8 @@ use crate::Line;
 pub(crate) enum ChoicePurpose {
     /// `/effort`: the row key is a thinking level.
     Effort,
+    /// yusAgent (YA-11, ticket 20): `/permissions`: the row key is a permission mode.
+    Permissions,
 }
 
 /// One key press while the picker is open.
@@ -49,6 +51,24 @@ impl ChoicePicker {
         Self::new(ChoicePurpose::Effort, rows, current)
     }
 
+    /// yusAgent (YA-11, ticket 20): the `/permissions` picker, the current mode checked.
+    #[must_use]
+    pub fn permissions(current: Option<&str>) -> Self {
+        let rows = vec![
+            (
+                "manual".to_string(),
+                "manual".to_string(),
+                "Ask before each tool call",
+            ),
+            (
+                "auto".to_string(),
+                "auto".to_string(),
+                "Run tool calls without asking (no sandbox)",
+            ),
+        ];
+        Self::new(ChoicePurpose::Permissions, rows, current)
+    }
+
     fn new(
         purpose: ChoicePurpose,
         rows: Vec<(String, String, &str)>,
@@ -56,6 +76,7 @@ impl ChoicePicker {
     ) -> Self {
         let kind = match purpose {
             ChoicePurpose::Effort => SelectorKind::Effort,
+            ChoicePurpose::Permissions => SelectorKind::Permissions,
         };
         let keys: Vec<String> = rows.iter().map(|(key, _, _)| key.clone()).collect();
         let rows = rows
