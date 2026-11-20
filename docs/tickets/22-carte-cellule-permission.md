@@ -4,6 +4,16 @@ Demande de Yusuf du 20/11/2026. Branche `ya-22-carte-permission`, depuis `main` 
 
 Défaut vu sur la PR #69 (ticket 20, PR 3, points ouverts) : en mode manuel, pendant qu'une demande attend, la carte de la cellule dans la transcription du TUI affiche `✓ python · …` et le chargeur affiche « Executing » alors que l'appel n'est pas autorisé. Le panneau, lui, dit la vérité. À corriger avant les testeurs.
 
+## Décisions de Yusuf (20/11/2026)
+
+- **K1** : option A (la carte reste « non lancée » tant que la demande attend).
+- **K2** : libellé du chargeur « Awaiting permission ».
+- **K3** : durée comptée depuis l'accord.
+- **K4** : vérifier dans le worker si `tool_execution_start` arrive toujours avant la demande ; si oui, rien dans `apply.rs` ; sinon, garder l'appel. Le test headless couvre les deux ordres dans tous les cas.
+  - **Constaté : l'ordre n'est pas garanti.** Le moteur pousse ses événements dans une file (`crates/pa-daemon/src/agent_engine/turn/run_once.rs:81`, `tx.send`), vidée par la boucle du tour (`run_once.rs:399-416`) qui les publie depuis la tâche du tour (`crates/pa-daemon/src/worker/turn.rs:433`, numérotation `turn.rs:994-1010`). La demande est publiée directement par le hook (`crates/pa-daemon/src/ya_permissions.rs:196-202`, `emit` posé `:284-289` sur `crate::user_bash::emit_session_event_frame`, `crates/pa-daemon/src/user_bash.rs:917-944`) : elle peut doubler le `tool_execution_start` encore dans la file. La retenue de la PR 2 est **dans le pont ACP**, pas dans le worker : le pont garde la demande jusqu'à la publication du `tool_call` (`crates/pa-daemon/src/acp/ya_permissions.rs:17-19`, `:168-197`). Le TUI reçoit les événements du worker sans ce pont : **l'appel dans `apply.rs` est gardé.**
+- **K5** : ticket à part, rattaché à YA-10 ; hors périmètre ici (section 3.3).
+- **Fenêtre de calme** (ticket 20, T3) : passer à **1 s**, dans cette PR (`crates/pa-tui/src/ya_permission_panel.rs`, fichier du fork).
+
 ## 1. Constat
 
 ### 1.1 D'où vient l'état de la carte
@@ -67,7 +77,7 @@ Fichiers **upstream** en plus de l'option A : `crates/pa-tui/src/tool_card/mod.r
 
 - Le `✓` bref en mode « auto » avant le premier partiel (`ipython.rs:81`), comportement d'upstream.
 - ACP : la cellule y est annoncée `in_progress` avant la décision (`crates/pa-daemon/src/acp/wire_events.rs:156`, ticket 20 section 1.3) ; équivalent ACP du même défaut, pour YA-10.
-- Un TUI qui s'attache pendant qu'une demande attend : le worker ne renvoie pas la demande ouverte à l'`attach` (`crates/pa-daemon/src/ya_permissions.rs:107-115` enregistre le répondant sans rejouer `pending`). **Non vérifié** à l'écran : ni panneau, ni carte juste, probablement. À juger à part.
+- **K5, ticket à part (YA-10)** : un TUI qui s'attache pendant qu'une demande attend : le worker ne renvoie pas la demande ouverte à l'`attach` (`crates/pa-daemon/src/ya_permissions.rs:107-115` enregistre le répondant sans rejouer `pending`). **Non vérifié** à l'écran : ni panneau, ni carte juste, probablement. À juger à part.
 
 ## 4. Tests et contrôle (proposé)
 
