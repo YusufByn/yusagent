@@ -2,9 +2,27 @@
 
 Demande de Yusuf du 20/11/2026. **Phase 1 : constat seulement.** Branche `ya-20-permissions-constat`, depuis `main` à `dd3ef7381`. Aucun code du produit modifié, rien compilé, aucun appel de modèle, aucun run du banc. La PR contient ce fichier, le script de comptage de la section 3 (`docs/tickets/20-ya11-permissions/compte-confirmations.py`, lecture seule des traces locales) et une ligne du journal du CDC : **préfixe inchangé**, aucun fichier upstream touché. Pas de merge sans « merge » de Yusuf.
 
-Chaque section sépare ce qui est **constaté** dans le code (avec `chemin:ligne`) de ce qui est **proposé**. Les propositions ne sont pas des décisions.
+Chaque section sépare ce qui est **constaté** dans le code (avec `chemin:ligne`) de ce qui est **proposé**. Les choix de Yusuf sur le constat sont dans la section suivante ; ils remplacent les recommandations de la section 6 quand elles diffèrent.
 
-## Décisions déjà prises par Yusuf (20/11/2026)
+## Décisions de Yusuf sur le constat (20/11/2026)
+
+- **D1, réglage** : validé. Réglage `permissions` lu **uniquement dans les réglages globaux** (jamais dans `<cwd>/.yusagent/`), **pas dans `yaRequest`**. Changement par session via `session/set_config_option`. Décisions journalisées.
+- **D2, mode manuel** : option (b) + « toujours pour cette commande », avec une **définition stricte** :
+  - classement par **liste blanche, refus par défaut, sur l'AST de la cellule** ;
+  - une cellule passe sans question **seulement** si elle ne contient que `read`, `grep`, `glob`, `print`, des affectations et des `bash()` dont la commande est une **lecture sûre listée** ;
+  - dans la commande : pas de `;`, `&&`, `||`, `|`, `$()`, backticks ni redirections ;
+  - options qui exécutent exclues (par exemple `find -exec`, `rg --pre`, `git -c`, `sed -i`) ;
+  - tout le reste : confirmation ;
+  - **« toujours » = la commande exacte**, sans opérateur shell.
+
+  Liste blanche proposée et recompte : section 3.4. **Le recompte change beaucoup le résultat** : 18,3 % des cellules v2 passent sans question, contre 60,1 % avec la définition large du constat.
+- **D3, portée de « toujours »** : la session seulement.
+- **D4, avertissement persistant quand « auto » est actif sans sandbox** : oui.
+- **D5, testeurs en manuel au départ** : oui.
+- **D6, manuel sans client capable de répondre** (`-p`, RPC) : erreur au démarrage, avec un message qui donne **la ligne exacte à mettre dans les réglages globaux** (`"permissions": "auto"`) et le chemin du fichier (`~/.yusagent/settings.json`, ou le dossier fixé par `PRIME_AGENT_CODING_AGENT_DIR`).
+- **D7** : le tour s'arrête après un refus.
+
+## Décisions déjà prises par Yusuf avant le constat (20/11/2026)
 
 - Permissions et `session/request_permission` dans le cœur, **avant l'extension** (YA-10). Sandbox du kernel plus tard (seconde partie de YA-11). Conforme au journal du 11/11/2026 (`docs/yusAgent-cdc.md:40`).
 - **Manuel par défaut.** Un réglage permet de passer en « auto », **possible aussi sans sandbox**, jamais par défaut. **Écart** au verrou du 28/10/2026 (`docs/yusAgent-cdc.md:12`, `:399` : « hors sandbox ou conteneur, l'auto-approve des cellules du kernel est impossible ») et au critère de YA-11 « Auto-approve des cellules refusé hors sandbox ou conteneur, testé » (`:411`). La ligne du journal du CDC est écrite dans cette PR.
@@ -18,6 +36,7 @@ Chaque section sépare ce qui est **constaté** dans le code (avec `chemin:ligne
 - **ACP ne sait pas recevoir de réponse du client** : le pont JSON-RPC rejette toute trame sans `method` (`crates/pa-daemon/src/acp/jsonrpc.rs:57-60`). `session/request_permission` (requête agent → client) demande d'abord ce sens de circulation.
 - **Comptage heuristique** sur 556 sessions locales du smoke bench (section 3). En prompt v2 (136 sessions, 1 935 cellules), confirmations par session, en médiane : (a) chaque cellule **13** ; (b) cellules à effet de bord seulement **5** (40 % des cellules) ; (b) avec « toujours pour cette commande » **3** ; (c) chaque `bash()` et chaque écriture **13** ; (c) avec les commandes en lecture seule auto-approuvées **7**.
 - **Recommandation** (section 6) : option (b) avec « toujours pour cette commande » à la portée de la session, interception à la cellule entière par `before_tool_call` ; réglage global seulement (jamais depuis le dossier de projet), hors de `yaRequest` ; `-p` et RPC en manuel : erreur au démarrage ; banc en « auto » écrit par `bench/smoke/run.py`.
+- **Recompte avec la définition stricte de D2** (section 3.4), prompt v2 : **10** confirmations par session en médiane (p90 20), **18,3 %** des cellules sans question ; avec « toujours » (commande exacte) : **10** (p90 20), 18,6 %. La définition large du constat donnait 5 et 60,1 %. Première cause : un opérateur shell dans un `bash()` (693 cellules, seule raison pour 569).
 
 ## Méthode
 
@@ -91,6 +110,8 @@ Commande (depuis la racine du dépôt ; runs locaux non versionnés) :
 python3 -I docs/tickets/20-ya11-permissions/compte-confirmations.py
 ```
 
+Le script calcule la définition large du constat (sections 3.1 à 3.3) et la définition stricte de D2 (section 3.4).
+
 Périmètre : sessions principales des runs **réels** du smoke bench (`bench/smoke/runs/*/tasks/*/run-*/sessions/*.jsonl` et `bench/smoke/runs/*/arms/*/tasks/*/run-*/sessions/*.jsonl`, `report.json` en mode `réel`) ; hors capture, chauffe, sonde et sous-agents. 556 sessions : 420 en prompt v1 (7 602 appels de tools, dont 661 `apply_patch`, 115 `exec_command`, 103 `write_stdin`), 136 en prompt v2 (1 935 cellules, aucun autre tool). Le v2 est la configuration par défaut actuelle.
 
 Règles du script (heuristiques, à lire comme telles) :
@@ -128,6 +149,63 @@ Limites : 10 tâches courtes du smoke bench (`docs/yusAgent-cdc.md:32`), un ou d
 | **(b) lecture seule auto, le reste confirmé** | Accord ou refus fiables ; **la classification ne l'est pas** : une cellule classée en lecture seule à tort s'exécute sans question (Python indirect, `sed -n '1e cmd'` en GNU, `awk 'BEGIN{system(…)}'`, `rg --pre`, alias). Contournable, à présenter comme tel (`docs/yusAgent-cdc.md:397`). Le classifieur doit être une liste blanche conservatrice : tout ce qu'il ne reconnaît pas demande. | Moyenne : 5 ; 3 avec « toujours ». | Moyen : classifieur du code de cellule côté Rust (module du fork) et ses tests ; c'est ce que décrit déjà le verrou du 28/10 (« chaque cellule à effet de bord […] demande confirmation », `:399`). |
 | **(c) chaque `bash()` et chaque écriture** | Plus fine pour les commandes **construites**, mais **ne couvre pas** le Python qui écrit ou lance des process sans `bash()`/`edit()` : un trou plus grave que (b), car rien ne demande. | 13 brut ; 7 avec lecture seule auto ; 4 avec « toujours ». | Élevé : aller-retour kernel → hôte dans `bash()` (synchrone) et `edit()`, fichiers runtime upstream, tests du kernel ; plusieurs demandes pour une même cellule (`gather`). |
 
+### 3.4 Recompte avec la définition stricte de D2 (décision du 20/11/2026)
+
+Même commande, même périmètre (section 3.1) ; le script calcule les deux définitions. Compteurs `s_confirm` (b), `s2_confirm` (b + « toujours »), `cells_strict_ok`, `cells_strict_ok_always`, `cells_strict_ops_ok` et la ligne « raisons D2 strict ».
+
+#### Liste blanche proposée (refus par défaut)
+
+Une cellule passe sans question si **tout** son AST est dans la liste ; sinon, confirmation. Une cellule illisible (erreur de syntaxe) demande aussi.
+
+- **Instructions** : expression, affectation (`=`, annotée, augmentée). Rien d'autre : pas d'`import`, de boucle, de `if`, de `with`, de `def`, de compréhension, d'`assert`.
+- **Expressions** : noms (sauf ceux qui commencent par `__`), constantes, f-strings, tuples, listes, dictionnaires, ensembles, indices et tranches, opérateurs arithmétiques, de comparaison et booléens, `await`.
+- **Appels** : seulement `read(…)`, `grep(…)`, `glob(…)`, `print(…)` (sans `file=`) et `bash(…)`, appelés par leur nom. Aucun appel de méthode ni d'attribut (`os.getcwd()`, `Path(…).read_text()`, `asyncio.gather(…)` demandent).
+- **Attributs** : `.output` et `.exit_code` seulement (lecture du résultat d'un `bash()`).
+- **`bash()`** : premier argument littéral (ni f-string, ni variable, ni concaténation), seul argument mot-clé `timeout=`. La commande est une **lecture sûre** si :
+  - elle ne contient ni `;`, `&`, `|`, `$(`, backtick, `>`, `<`, ni saut de ligne (vérifié sur le texte, même entre guillemets : refus par défaut) ;
+  - elle se découpe (`shlex`) en une seule commande, sans affectation de variable en tête ;
+  - le programme est dans la liste : `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `find`, `sed`, `git`, `pwd`, `tree`, `stat`, `file`, `diff` ;
+  - aucune option qui exécute ou écrit : `rg --pre`, `--pre-glob`, `-z`/`--search-zip` ; `find -exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint`, `-fprint0`, `-fprintf`, `-fls` ; `tree -o` ; `file -C` ;
+  - `git` : sous-commande `status`, `diff`, `log`, `show`, `ls-files`, `rev-parse`, `blame` ou `grep` ; avant elle, seulement `--no-pager` ; jamais `-c`, `--config-env`, `--exec-path`, `--output`, `--ext-diff`, `-O`/`--open-files-in-pager` ;
+  - `sed` : exactement `-n`, aucune autre option (donc ni `-i` ni `-f`), script d'impression d'une ligne ou d'un intervalle seulement (`12p`, `1,120p`, `$p`). `sed -n '1e cmd'` est refusé.
+- **« Toujours »** (D3) : la commande exacte d'un `bash()` littéral, sans opérateur. Une cellule passe ensuite sans question si sa structure est dans la liste et si chacune de ses commandes hors liste a déjà reçu « toujours » dans la session. Le comptage suppose que l'utilisateur choisit « toujours » à chaque confirmation, pour toutes les commandes sans opérateur de la cellule : c'est un **majorant** du gain.
+
+**`grep()` et `glob()` n'existent pas dans le kernel aujourd'hui** : seul `read()` est défini (`prime-agent-runtime/src/rlm/read.py:32`), et le prompt v2 ne documente que lui (`crates/pa-core/src/prompts/ya_prompt_v2/core.md:11`). Aucune cellule des traces ne les appelle (461 cellules appellent `read(`, 0 `grep(` ni `glob(`) : les garder dans la liste ne change pas le compte. Constat, pas une proposition de les ajouter.
+
+#### Résultats
+
+| | v2 (136 sessions, 1 935 cellules) | v1 (420 sessions, 6 723 cellules et 879 autres tools) |
+|---|---|---|
+| (b) stricte : confirmations par session | **10** (p90 20, max 30) ; 1 580 | 15 (p90 27, max 61) ; 7 074 |
+| (b) stricte : cellules sans question | **355, soit 18,3 %** | 528, soit 7,9 % |
+| (b) stricte + « toujours » : confirmations par session | **10** (p90 20, max 30) ; 1 575 | 15 (p90 27, max 61) ; 7 007 |
+| (b) stricte + « toujours » : cellules sans question | **360, soit 18,6 %** | 595, soit 8,9 % |
+| Rappel, (b) large du constat | 5 (p90 11) ; 60,1 % | 6 (p90 11) ; 72,9 % |
+
+**Le chiffre change beaucoup : 18,3 % des cellules v2 passent sans question, contre 60,1 % avec la définition large.** La médiane des confirmations double (10 contre 5) et « toujours » n'apporte presque rien (5 cellules de plus sur 1 935).
+
+Raisons de confirmation en v2 (une cellule peut en avoir plusieurs ; entre parenthèses, les cellules où c'est la seule raison) :
+
+| Raison | Cellules v2 |
+|---|---|
+| `bash()` avec un opérateur (`;`, `&&`, `\|`, redirection…) | 693 (569) |
+| Autre appel (`Path(…)`, `os.getcwd()`, `os.path.abspath(…)`, `asyncio.gather(…)`, `str(…)`, `.read_text()`…) | 512 (85) |
+| `edit()` | 454 (223) |
+| Autre construction (`import`, boucle, compréhension, `assert`…) | 333 (13) |
+| `bash()` sans opérateur, hors liste (tests, builds, formateurs…) | 249 (128) |
+| `bash()` non littéral | 29 (0) |
+| Cellule illisible | 9 (9) |
+
+Lecture :
+
+- **La première cause est l'opérateur shell** : seule raison pour 569 cellules (29 % des cellules v2), surtout des lectures enchaînées (`sed -n '1,120p' a; sed -n '1,90p' b`, `git status --short; grep …`, `… | head`). **Sensibilité, pour information, pas une option** : si `;`, `&&`, `||` et `|` étaient permis **entre** lectures sûres (toujours sans `$()`, backtick ni redirection), 547 cellules v2 passeraient (28,3 %), v1 790 (11,8 %).
+- **« Toujours » aide peu** avec la commande exacte : dans les cellules confirmées, 213 des 271 occurrences de commandes sans opérateur hors liste n'apparaissent qu'une fois dans leur session (les tests changent d'arguments : `-k …`, fichiers), et la plupart de ces cellules demandent aussi pour une autre raison (`edit()`, `import`, appel). Compteurs `memo_cmd_occurrences` et `memo_cmd_occurrences_unique_in_session` du script (v1 : 786 sur 1 113).
+- Le reste de l'écart vient du Python : le modèle lit souvent par `Path(p).read_text()`, `os.path.abspath`, `os.getcwd()` ou une boucle plutôt que par `read()`.
+
+Contrôle à la main sur un tirage de 12 cellules v2 classées sans question : toutes sont des `read()`, `print()` ou `bash()` de lecture (`cat`, `ls -la`). Contrôles de commandes : `sed -n '1,120p' a.py` et `git status --short` passent ; `sed -n '1e rm x' a`, `rg --pre cat x`, `git -c core.pager=x log`, `find . -exec rm {} ;`, `git diff --output=x`, `ls; rm x`, `cat $(echo x)`, `npm test` demandent.
+
+Limites : celles de la section 3.2. Les traces viennent de sessions sans permissions ; le modèle ne voit pas les confirmations (seulement les refus, section 5), donc rien ne l'incite à écrire des cellules qui passent sans question, et le prompt n'en dira rien.
+
 ## 4. Hors interface : `-p`, RPC, banc
 
 ### Constaté
@@ -140,7 +218,7 @@ Limites : 10 tâches courtes du smoke bench (`docs/yusAgent-cdc.md:32`), un ou d
 ### Proposé
 
 - **Banc** : `run.py` (`write_agent_config`) et `bench/tools/capture/run.py` (`write_settings`) écrivent toujours `"permissions": "auto"`, comme `cacheRetention`, sans toucher aux 14 fichiers de `bench/smoke/settings/` ; `default.json` reste `{}`. Plus sûr que de compter sur chaque fichier de variante : un fichier oublié bloquerait le run. `known_settings` (`run.py:1126-1130`) l'ajoute au rapport.
-- **Manuel sans client capable de répondre** (`-p`, `text`, `json`, RPC) : **erreur au démarrage**, avant tout appel de modèle, code de sortie non nul, message qui nomme le réglage (« permissions are manual and this mode cannot ask: set `"permissions": "auto"` in ~/.yusagent/settings.json »). Plutôt qu'un refus cellule par cellule : un refus en cours de session coûte des appels de modèle et ressemble à un échec de tâche au banc. Une commande RPC de réponse pourra s'ajouter plus tard si un client RPC en a besoin.
+- **Manuel sans client capable de répondre** (`-p`, `text`, `json`, RPC) : **erreur au démarrage**, avant tout appel de modèle, code de sortie non nul, message qui donne la ligne exacte et le chemin réel des réglages globaux (D6), par exemple « permissions are manual and this mode cannot ask. To run without confirmations, add this line to /Users/…/.yusagent/settings.json: "permissions": "auto" » (le chemin suit `PRIME_AGENT_CODING_AGENT_DIR`). Plutôt qu'un refus cellule par cellule : un refus en cours de session coûte des appels de modèle et ressemble à un échec de tâche au banc. Une commande RPC de réponse pourra s'ajouter plus tard si un client RPC en a besoin.
 - **ACP** : toujours capable de répondre (méthode sans capacité, section 1.2).
 - **Sous-agents** (`rlmMaxDepth` ≥ 1, prompt v1 seulement) : une session enfant hérite du mode et du canal de demande de son parent ; à défaut, refus au démarrage. Hors du chemin par défaut (`docs/yusAgent-cdc.md:88`).
 
@@ -159,6 +237,8 @@ Limites : 10 tâches courtes du smoke bench (`docs/yusAgent-cdc.md:32`), un ou d
 
 ## 6. À trancher par Yusuf
 
+**Tranché le 20/11/2026** : voir « Décisions de Yusuf sur le constat » en tête. Écarts avec les recommandations ci-dessous : D2 prend la définition stricte (liste blanche sur l'AST, sans opérateur shell) ; D3 prend la commande exacte comme clé, sans « toujours » pour `edit()`. Le tableau est gardé tel que proposé.
+
 | # | Question | Options | Recommandation |
 |---|---|---|---|
 | D1 | **Portée du réglage** | (i) figé par session dans `yaRequest` ; (ii) persistant, lu dans les réglages globaux à chaque cellule, avec changement par session à chaud. | **(ii).** `yaRequest` sert aux réglages qui façonnent les requêtes (`crates/pa-core/src/session_engine/ya_request.rs:1-2`) ; les permissions n'en changent aucune. Figé, une session créée en « auto » (au banc par exemple) resterait en « auto » à sa reprise même si l'utilisateur est repassé en manuel. Réglage `"permissions": "manual" \| "auto"` lu **dans les seuls réglages globaux** (`SettingsManager` garde `global` à part, `manager.rs:42-52`), jamais dans `<cwd>/.yusagent/` (section 4). Changement par session : sélecteur `permissions` dans `session/set_config_option` (ACP, à côté de `model` et `thought_level`), toujours à l'initiative de l'utilisateur (spec ACP) ; chaque changement et chaque décision journalisés dans la session (critère « Décisions de permission journalisées », `docs/yusAgent-cdc.md:409`), sans être relus à la reprise : une session reprise suit le réglage global. |
@@ -173,7 +253,7 @@ Limites : 10 tâches courtes du smoke bench (`docs/yusAgent-cdc.md:32`), un ou d
 
 ### PR (proposé)
 
-1. **PR 1, cœur** (`crates/pa-core`, module du fork, par exemple `session_engine/ya_permissions.rs`) : réglage global (D1), hook `before_tool_call` sur l'agent principal (une ligne dans `engine.rs`, fichier upstream, listée dans `docs/fork-changes.md`), classifieur (D2), « toujours » (D3), journal des décisions, texte de refus (section 5), interface « demandeur » avec deux implémentations : « auto » et « aucun client » (erreur au démarrage en `-p` et RPC, D6). Avertissement sur stderr en « auto ». **Banc dans la même PR** : `run.py` et `bench/tools/capture/run.py` écrivent `"permissions": "auto"`. Entre la PR 1 et la PR 2, une session du démon (TUI, ACP) en manuel échoue aussi à sa création, avec le même message : régler `"permissions": "auto"` le temps de la PR 2.
+1. **PR 1, cœur** (`crates/pa-core`, module du fork, par exemple `session_engine/ya_permissions.rs`) : réglage global (D1), hook `before_tool_call` sur l'agent principal (une ligne dans `engine.rs`, fichier upstream, listée dans `docs/fork-changes.md`), classifieur strict sur l'AST (D2, liste blanche de la section 3.4), « toujours » sur la commande exacte (D3), journal des décisions, texte de refus (section 5), arrêt du tour après un refus (D7), interface « demandeur » avec deux implémentations : « auto » et « aucun client » (erreur au démarrage en `-p` et RPC, avec la ligne exacte à mettre dans les réglages globaux et le chemin du fichier, D6). Avertissement sur stderr en « auto ». **Banc dans la même PR** : `run.py` et `bench/tools/capture/run.py` écrivent `"permissions": "auto"`. Entre la PR 1 et la PR 2, une session du démon (TUI, ACP) en manuel échoue aussi à sa création, avec le même message : régler `"permissions": "auto"` le temps de la PR 2.
 2. **PR 2, démon et ACP** : demande worker → superviseur → client attaché (nouveau message du protocole du démon, module du fork), première réponse retenue si plusieurs clients ; `session/request_permission` côté ACP (le pont doit accepter les réponses du client, `jsonrpc.rs:57-60`), options `allow_once` / `allow_always` / `reject_once`, `tool_call` en `pending` jusqu'à la décision (aujourd'hui `in_progress`, `wire_events.rs:156`), `session/cancel` qui répond `cancelled`, sélecteur `permissions` dans `session/set_config_option`.
 3. **PR 3, TUI** : boîte minimale (une fois, toujours, refuser) et état « auto sans sandbox » dans la barre. La refonte du CLI reste après YA-10 (`docs/yusAgent-cdc.md:37`).
 
@@ -182,15 +262,19 @@ Ensuite : sandbox du kernel (seconde partie de YA-11), puis keep-warm pendant l'
 ### Tests (proposé ; provider factice ou requêtes interceptées, aucun modèle réel)
 
 - **Remplace le critère du 28/10** (« Auto-approve des cellules refusé hors sandbox ou conteneur, testé ») : « Sans réglage, le mode est manuel ; une cellule à effet de bord ne s'exécute pas sans accord explicite ; "auto" n'est actif que par le réglage global de l'utilisateur (un réglage de projet est ignoré) ; en "auto" sans sandbox, l'avertissement est émis. » Tests e2e avec le provider factice (`PRIME_AGENT_FAUX_SCRIPT`, `crates/pa-cli/src/print_runtime.rs:195`) : cellule `edit()` et cellule `bash("touch x")` ; réglage absent → manuel ; `"auto"` dans `<cwd>/.yusagent/settings.json` seul → toujours manuel ; refus → fichier absent et résultat `[permission-denied] …` ; accord → fichier créé ; `-p` en manuel → sortie en erreur **avant** toute requête au provider factice ; `"auto"` global → exécution et avertissement sur stderr.
+- **PR 1, arrêt du tour quand le hook bloque une cellule** (D7) : provider factice scripté avec deux réponses, une cellule à effet de bord puis une seconde cellule ; demandeur de test qui refuse. Attendu : la première cellule n'est pas exécutée (fichier absent), le résultat de tool est `[permission-denied] …`, **le provider factice ne reçoit aucune requête de plus dans ce tour** (la seconde réponse n'est jamais demandée), le tour se termine et la session attend l'utilisateur ; un nouveau prompt reprend normalement. Variante annulation : réponse `cancelled` → même arrêt.
+- **PR 1, un `settings.json` de projet ne peut pas passer la session en « auto »** (D1) : réglages globaux sans `permissions` (ou `"manual"`), `<cwd>/.yusagent/settings.json` avec `"permissions": "auto"`. Attendu : mode manuel ; en `-p`, sortie en erreur au démarrage avec le message de D6, **avant toute requête** au provider factice ; avec un demandeur de test, la cellule à effet de bord est demandée. Contrôle inverse : `"auto"` dans les réglages globaux → auto, quel que soit le réglage de projet. Le mode lu ne vient jamais des réglages fusionnés (`manager.rs:49`).
 - **Préfixe** : `prefix_stability.rs`, empreintes SHA-256 identiques en manuel et en auto ; puis capture `py-example-001` contre `main`, « TOUT IDENTIQUE ».
-- **Classifieur** (unitaires) : lecture seule reconnue (`sed -n`, `git diff`, `rg`, `gather` de lectures) ; demandés : redirections, `sed -i`, `sed -n '1e …'`, `awk` avec `system`, `find -exec`, `rg --pre`, `git -c`, f-strings, `subprocess`, `open(…, "w")`, tout appel inconnu.
-- **« Toujours »** : une clé approuvée ne redemande pas dans la session ; redemande après reprise ; jamais pour une commande dynamique.
+- **Classifieur** (unitaires, liste blanche de la section 3.4) : passent sans question `read()`, `print()`, affectations, `await bash("sed -n '1,120p' a.py")`, `bash("git status --short")`, `.output` ; demandent : chaque opérateur (`;`, `&&`, `||`, `|`, `$()`, backtick, `>`, `<`), `sed -i`, `sed -n '1e …'`, `find -exec`, `rg --pre`, `git -c`, `git diff --output=…`, f-string ou variable dans `bash()`, `import`, boucle, `edit()`, `open(…)`, `Path(…).read_text()`, `asyncio.gather(…)`, tout appel inconnu, cellule illisible. Les mêmes cas que le script de comptage, pour garder l'accord entre la mesure et le code.
+- **« Toujours »** : une commande exacte approuvée ne redemande pas dans la session ; la même commande avec un argument de plus redemande ; redemande après reprise ; jamais pour une commande avec opérateur, une commande dynamique ou `edit()`.
 - **ACP** (PR 2, client factice) : forme de `session/request_permission`, `pending` puis `in_progress`, `session/cancel` → `cancelled` → cellule non exécutée, issue inconnue → refus.
 - **Journal** : chaque décision (accord, refus, annulation, « toujours », changement de mode) écrite dans la session.
 - **Banc** : run `--capture` d'une tâche avec le binaire de la PR 1, code de sortie 0 en « auto ».
 
 ## Points ouverts
 
-- Arrêt du tour après un refus par le chemin `Preparation::Immediate` (section 5) : à vérifier dans `pa-agent` avant la PR 1.
+- Arrêt du tour après un refus par le chemin `Preparation::Immediate` (section 5) : à vérifier dans `pa-agent` avant la PR 1 ; le test de D7 le prouvera.
+- **Où analyser l'AST de la cellule** (avant la PR 1, proposé, non tranché) : (i) crate Rust d'analyse Python dans le cœur : nouvelle dépendance, à peser avec la règle 8 de `CLAUDE.md` ; (ii) requête au kernel (`ast` de CPython) : **à écarter**, le code d'une cellule déjà approuvée tourne dans ce process et peut remplacer `ast.parse`, donc fausser le classement suivant ; (iii) process Python court, lancé avec l'interpréteur du venv du kernel en `-I` et un script du fork, hors de l'état du kernel. Recommandation : (iii), sans dépendance Rust ; coût par cellule à mesurer (estimation : quelques dizaines de millisecondes, non mesuré). Sans sandbox, aucun de ces choix n'arrête un process du même utilisateur (seconde partie de YA-11).
+- **Fatigue** : avec la définition stricte, 10 confirmations par session en médiane sur le banc (section 3.4). À revoir avec l'usage réel ; la sensibilité aux opérateurs entre lectures sûres (28,3 %) est notée, sans proposition.
 - Le keep-warm du cache pendant l'attente (`docs/yusAgent-cdc.md:288`) n'est pas dans ce découpage.
 - Les tools MCP en écriture (`docs/yusAgent-cdc.md:533`) passent par le kernel, donc par la cellule : la classification les verra comme des appels inconnus (demandés).
