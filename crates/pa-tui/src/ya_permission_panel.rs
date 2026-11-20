@@ -25,8 +25,8 @@ use crate::theme::{Theme, ThemeColor};
 use crate::width::{char_width, truncate_line};
 use crate::{Line, Span};
 
-/// The pause in typing after which the panel takes the answer keys.
-pub const QUIET: Duration = Duration::from_millis(500);
+/// The pause in typing after which the panel takes the answer keys (ticket 22: 1 s, was 0.5 s).
+pub const QUIET: Duration = Duration::from_millis(1000);
 
 /// The tray's badge while the session runs in "auto" without a sandbox (decision D4).
 pub const AUTO_BADGE: &str = "auto \u{b7} no sandbox";
@@ -457,26 +457,19 @@ mod tests {
         let start = Instant::now();
         let mut panel = panel(start);
         assert_eq!(panel.handle_key("y", start), PanelKey::PassThrough);
-        assert!(!panel.armed(start + Duration::from_millis(499)));
+        assert!(!panel.armed(start + QUIET - Duration::from_millis(1)));
     }
 
     #[test]
     fn y_after_a_pause_allows() {
         let start = Instant::now();
         let mut panel = panel(start);
-        assert_eq!(
-            panel.handle_key("a", start + Duration::from_millis(200)),
-            PanelKey::PassThrough
-        );
+        let typed = start + Duration::from_millis(200);
+        assert_eq!(panel.handle_key("a", typed), PanelKey::PassThrough);
         // The pause counts from the last keystroke, not from the opening.
-        assert_eq!(
-            panel.handle_key("y", start + Duration::from_millis(600)),
-            PanelKey::PassThrough
-        );
-        assert_eq!(
-            panel.handle_key("y", start + Duration::from_millis(1100)),
-            PanelKey::Allow
-        );
+        let early = typed + QUIET - Duration::from_millis(100);
+        assert_eq!(panel.handle_key("y", early), PanelKey::PassThrough);
+        assert_eq!(panel.handle_key("y", early + QUIET), PanelKey::Allow);
         assert_eq!(PanelKey::Allow.outcome(), Some("allow"));
     }
 
@@ -522,9 +515,10 @@ mod tests {
     fn a_paste_restarts_the_quiet_window() {
         let start = Instant::now();
         let mut panel = panel(start);
-        panel.note_input(start + Duration::from_millis(400));
-        assert!(!panel.armed(start + Duration::from_millis(800)));
-        assert!(panel.armed(start + Duration::from_millis(900)));
+        let pasted = start + Duration::from_millis(400);
+        panel.note_input(pasted);
+        assert!(!panel.armed(pasted + QUIET - Duration::from_millis(100)));
+        assert!(panel.armed(pasted + QUIET));
     }
 
     /// The tool calls with a waiting request (ticket 22: their cards are not started).
