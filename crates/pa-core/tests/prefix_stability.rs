@@ -23,8 +23,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use pa_core::session::manager::SessionManager;
-use pa_core::session_engine::engine::{create_session, SessionEngine, SessionEngineConfig};
+use pa_core::session_engine::engine::{create_session_with, SessionEngine, SessionEngineConfig};
 use pa_core::session_engine::provider_adapter::real_stream_fn;
+use pa_core::session_engine::ya_permissions::{
+    PermissionAsker, PermissionDecision, PermissionMode, PermissionRequest, PermissionsWiring,
+};
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -603,49 +606,74 @@ async fn try_engine_with_model(
     session: SessionManager,
     thinking_level: Option<pa_agent::types::ThinkingLevel>,
 ) -> anyhow::Result<SessionEngine> {
+    try_engine_with_permissions(
+        model,
+        api_key,
+        agent_dir,
+        cwd,
+        session,
+        thinking_level,
+        PermissionsWiring::default(),
+    )
+    .await
+}
+
+/// yusAgent (YA-11, ticket 20): [`try_engine_with_model`] with the permissions of the session.
+async fn try_engine_with_permissions(
+    model: &Value,
+    api_key: &str,
+    agent_dir: &Path,
+    cwd: &Path,
+    session: SessionManager,
+    thinking_level: Option<pa_agent::types::ThinkingLevel>,
+    permissions: PermissionsWiring,
+) -> anyhow::Result<SessionEngine> {
     let provider_model: pa_types::ai::Model =
         serde_json::from_value(model.clone()).expect("provider model");
     let loop_model: pa_agent::types::Model =
         serde_json::from_value(model.clone()).expect("loop model");
-    create_session(SessionEngineConfig {
-        on_late_sent_agent_message: None,
-        semantic_edges: None,
-        cron_store: None,
-        steering_mode: None,
-        follow_up_mode: None,
-        cwd: cwd.to_path_buf(),
-        agent_dir: agent_dir.to_path_buf(),
-        model: Some(loop_model),
-        thinking_level,
-        stream_fn: Some(real_stream_fn(Some(api_key.to_string()), provider_model)),
-        tools: Vec::new(),
-        custom_system_prompt: None,
-        prompt_guidelines: Vec::new(),
-        generic_mcp_servers: Vec::new(),
-        allow_recursion: None,
-        session_manager: Some(session),
-        extra_host_handlers: None,
-        conversation_log_path: None,
-        additional_skill_paths: Vec::new(),
-        additional_prompt_paths: Vec::new(),
-        extra_builtin_skill_overrides: Vec::new(),
-        rlm_subagent_host: None,
-        rlm_usage_store: None,
-        progress_note_emit: None,
-        rlm_depth: None,
-        factory_child: false,
-        daemonless: true,
-        telemetry: None,
-        model_info: None,
-        mcp_manager: None,
-        prewarm_ipython_kernel: None,
-        on_background_work_settled: None,
-        bash_notice_wake: None,
-        queued_goal_context_purge: None,
-        queued_steering_probe: None,
-        should_stop_after_turn: None,
-        image_model_router: None,
-    })
+    create_session_with(
+        SessionEngineConfig {
+            on_late_sent_agent_message: None,
+            semantic_edges: None,
+            cron_store: None,
+            steering_mode: None,
+            follow_up_mode: None,
+            cwd: cwd.to_path_buf(),
+            agent_dir: agent_dir.to_path_buf(),
+            model: Some(loop_model),
+            thinking_level,
+            stream_fn: Some(real_stream_fn(Some(api_key.to_string()), provider_model)),
+            tools: Vec::new(),
+            custom_system_prompt: None,
+            prompt_guidelines: Vec::new(),
+            generic_mcp_servers: Vec::new(),
+            allow_recursion: None,
+            session_manager: Some(session),
+            extra_host_handlers: None,
+            conversation_log_path: None,
+            additional_skill_paths: Vec::new(),
+            additional_prompt_paths: Vec::new(),
+            extra_builtin_skill_overrides: Vec::new(),
+            rlm_subagent_host: None,
+            rlm_usage_store: None,
+            progress_note_emit: None,
+            rlm_depth: None,
+            factory_child: false,
+            daemonless: true,
+            telemetry: None,
+            model_info: None,
+            mcp_manager: None,
+            prewarm_ipython_kernel: None,
+            on_background_work_settled: None,
+            bash_notice_wake: None,
+            queued_goal_context_purge: None,
+            queued_steering_probe: None,
+            should_stop_after_turn: None,
+            image_model_router: None,
+        },
+        permissions,
+    )
     .await
 }
 
@@ -2365,5 +2393,111 @@ async fn anthropic_cache_retention_follows_the_setting() {
     let long = first_request_of_a_session(api, &fixture).await;
     for marker in markers(&long) {
         assert_eq!(marker, json!({"type": "ephemeral", "ttl": "1h"}));
+    }
+}
+
+/// yusAgent (YA-11, ticket 20): allows every tool call and counts the requests.
+struct AllowEveryCall(Arc<Mutex<usize>>);
+
+impl PermissionAsker for AllowEveryCall {
+    fn ask(
+        &self,
+        _request: PermissionRequest,
+        _signal: pa_agent::abort::AbortSignal,
+    ) -> pa_agent::BoxFut<'static, PermissionDecision> {
+        *self.0.lock().expect("asked lock") += 1;
+        Box::pin(async { PermissionDecision::Allow })
+    }
+}
+
+/// SHA-256 of a JSON value, as hex.
+fn fingerprint(value: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
+}
+
+/// yusAgent (YA-11, ticket 20): the permission mode does not change what the model receives. Two
+/// sessions of one project on the default settings: `"auto"`, then `"manual"` with an asker that
+/// allows every call. Each prefix is stable across its requests, the manual session was asked for
+/// each of its three cells, and every request of the two sessions has the same fingerprint for the
+/// system prompt and for the tools and parameters (the prompt cache key, the session id, aside).
+#[tokio::test]
+async fn permissions_manual_and_auto_send_the_same_prefix() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let server = ModelServer::start(api).await;
+    let asked = Arc::new(Mutex::new(0_usize));
+    for mode in [PermissionMode::Auto, PermissionMode::Manual] {
+        let mut session = SessionManager::in_memory(&cwd);
+        session.materialize_session_file(Some(sessions.clone()));
+        let permissions = PermissionsWiring {
+            mode: Some(mode),
+            asker: (mode == PermissionMode::Manual)
+                .then(|| Arc::new(AllowEveryCall(Arc::clone(&asked))) as Arc<dyn PermissionAsker>),
+        };
+        let engine = try_engine_with_permissions(
+            &model_json(api, server.port, CODEX_DEFAULT),
+            "prefix-test-placeholder",
+            &agent_dir,
+            &cwd,
+            session,
+            None,
+            permissions,
+        )
+        .await
+        .expect("create_session_with");
+        for prompt in PROMPTS {
+            run_prompt(&engine, prompt).await;
+        }
+        drop(engine);
+    }
+    assert_eq!(
+        *asked.lock().expect("asked lock"),
+        3,
+        "one request per cell"
+    );
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2 * EXPECTED_REQUESTS, "two sessions");
+    let (auto, manual) = bodies.split_at(EXPECTED_REQUESTS);
+    assert_prefix_stable(api, auto);
+    assert_prefix_stable(api, manual);
+    for (index, (auto, manual)) in auto.iter().zip(manual).enumerate() {
+        let (mut fixed_auto, messages_auto) =
+            split_request(api, &request_object(api, index + 1, auto));
+        let (mut fixed_manual, messages_manual) = split_request(
+            api,
+            &request_object(api, EXPECTED_REQUESTS + index + 1, manual),
+        );
+        let system_auto = fixed_auto
+            .remove("input[0] (system)")
+            .expect("system prompt");
+        let system_manual = fixed_manual
+            .remove("input[0] (system)")
+            .expect("system prompt");
+        assert_eq!(
+            fingerprint(&system_auto),
+            fingerprint(&system_manual),
+            "request {}: system prompt",
+            index + 1
+        );
+        // The prompt cache key is the session id: one per session.
+        fixed_auto.remove("prompt_cache_key");
+        fixed_manual.remove("prompt_cache_key");
+        assert_eq!(
+            fingerprint(&Value::Object(fixed_auto)),
+            fingerprint(&Value::Object(fixed_manual)),
+            "request {}: tools and parameters",
+            index + 1
+        );
+        assert_eq!(
+            messages_auto.len(),
+            messages_manual.len(),
+            "request {}: messages",
+            index + 1
+        );
     }
 }
