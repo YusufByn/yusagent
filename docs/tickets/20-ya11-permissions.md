@@ -310,7 +310,29 @@ Branche `ya-20-permissions-coeur`, depuis `main` à `e8449ee32` (merge de la PR 
 - **Contrôle en capture** (Yusuf, 20/11/2026) : `py-example-001`, binaires `5f596c958` (`main`, run 44610160108, code livré identique à `e8449ee32`) et `32903c963` (branche, run 44706671367) : `compare_capture_prompts.py` sur 9 requêtes, **TOUT IDENTIQUE** ; deux dossiers de run différents ; `('py-example-001', 'resolved', 0)` des deux côtés ; rien d'écrit dans `~/.yusagent` ni `~/.prime/agent`. `-p` du binaire de la branche sans réglage : code de sortie 1, message avec la ligne `"permissions": "auto"` et le chemin des réglages globaux, **0 connexion** au serveur du modèle. Même `-p` avec `PRIME_AGENT_TEST_PERMISSIONS=auto` : même refus, 0 connexion (le binaire de release ignore la variable).
 - **Merge** : PR #66 mergée le 20/11/2026 (« merge » de Yusuf), `main` à `f598ef0b6`.
 
+## PR 2 : démon et ACP (20/11/2026)
+
+Branche `ya-20-permissions-acp`, depuis `main` à `f598ef0b6` (merge de la PR #66). Fichiers et tests : `docs/fork-changes.md`, section « Permissions, PR 2 ».
+
+Réponses de Yusuf aux questions de la passation (20/11/2026) :
+
+- **Sélecteur `permissions`** de `session/set_config_option` dans la PR 2, dans un commit séparé ; chaque changement journalisé (entrée `ya-permission`) ; retour en manuel permis ; préfixe inchangé.
+- **Sessions créées par le TUI** : toujours refusées à la création en manuel jusqu'à la PR 3. Seul le pont ACP déclare savoir répondre.
+- **Déconnexion du client ou `session/cancel` pendant une demande** : vaut refus, le tour s'arrête (D7). Les deux cas sont testés.
+
+Ce qui est fait :
+
+- **Qui répond.** La commande `create` du mode ACP porte `yaPermissionAsker: true` ; le superviseur la garde dans la commande `create` durable (liste blanche, `crates/pa-daemon/src/supervisor/worker_lifecycle.rs`), le worker la lit (la session sait demander) ; l'`attach` du pont porte le même champ (ce client répond : le `create` reçu par le worker n'a pas d'id de client). Sans ce champ, le moteur n'a pas de demandeur et une session manuelle est refusée comme dans la PR 1.
+- **Demande** (`crates/pa-daemon/src/ya_permissions.rs`). Le demandeur du worker émet l'événement de session `ya_permission_request` (`requestId`, `toolCallId`, `toolName`, `args`) à tous les clients attachés ; la première réponse retenue (commande `ya_permissions`, `action: "respond"`, `outcome: "allow"` ; toute autre valeur est un refus) ; `ya_permission_resolved` ferme la demande chez les autres clients. Retrait (refus, le tour s'arrête) si le tour est annulé pendant l'attente, si le dernier client qui répond se détache (déconnexion : le superviseur envoie `detach`), ou aussitôt si aucun client qui répond n'est attaché.
+- **Journal.** Le moteur du démon tourne sur un gestionnaire de session en mémoire (`crates/pa-daemon/src/agent_engine/lifecycle.rs`, `build_session`) : le journal du gate est injecté (`PermissionsWiring::journal`) et le worker écrit l'entrée dans son fichier (`custom`, `customType: "ya-permission"`). Une demande abandonnée par une annulation est journalisée `cancelled` (le hook est abandonné par `race_with_abort`, le journal part du destructeur).
+- **ACP** (`crates/pa-daemon/src/acp/ya_permissions.rs`). `session/request_permission` (requête agent → client, id `ya-permission-<n>`) avec `toolCall: {toolCallId, status: "pending"}` et deux options, `allow-once` (`allow_once`) et `reject-once` (`reject_once`). Les réponses du client sont lues avant `jsonrpc::parse_line`, qui continue de refuser les autres réponses ; `selected` + `allow-once` autorise, tout le reste refuse ; une réponse à une demande déjà fermée est ignorée. En manuel, le `tool_call` part en `pending`, puis `tool_call_update` `in_progress` après un accord.
+- **Sélecteur** (commit séparé). `permissions` (`manual`, `auto`, catégorie `mode`), ajouté en dernier aux options ; `get_connection_state` porte `yaPermissions` pour une session qui sait demander. Le choix passe par `ya_permissions` `action: "set_mode"` ; avec un demandeur, le gate est posé dans les deux modes et lit le mode avant chaque appel (`PermissionSwitch`) ; le choix survit aux reconstructions du moteur dans le worker ; une session reprise suit de nouveau le réglage global (D1). Chaque changement est journalisé (`mode`, `previousMode`, `change: "user"`).
+- **Préfixe** : inchangé. Rien dans le prompt, les tools ni `yaRequest` ; les entrées `ya-permission` sont ignorées à la reprise (`build_session_context`). Tests : `permissions_journal_does_not_change_the_requests_of_a_resumed_session` (`crates/pa-core/tests/prefix_stability.rs`, requêtes entières identiques hors `prompt_cache_key`, avant et après la reprise) et `journal_entries_change_nothing_in_a_resumed_context` (reprise du démon depuis le fichier du worker).
+- **Pas compilé en local** (règle 8) : formatage par `rustfmt`, compilation, clippy et tests par la CI.
+
 ## Points ouverts
+
+- PR 2 : l'avertissement « auto sans sandbox » (D4) n'a pas de `session_info_update` dédié en ACP ; seul le libellé de l'option `auto` du sélecteur le dit (« no sandbox »). Un TUI attaché à une session ACP voit les événements de demande sans pouvoir y répondre (PR 3). Après une relance du worker, le client ACP n'est plus enregistré comme répondant jusqu'à son prochain `attach` : les demandes sont refusées aussitôt.
 
 - Arrêt du tour après un refus par le chemin `Preparation::Immediate` (section 5) : à vérifier dans `pa-agent` au début de la PR 1 ; le test de D7 le prouvera.
 - **Fatigue** : en manuel, 13 confirmations par session en médiane sur le banc (p90 23, prompt v2). Le passage en « auto » pour la session est la réponse retenue ; le classement (b) sera rejugé après le sandbox (ticket à part).
