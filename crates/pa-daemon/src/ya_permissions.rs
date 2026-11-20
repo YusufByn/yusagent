@@ -16,20 +16,24 @@
 //!   run and the turn stops (D7). A request with no client to answer is withdrawn at once;
 //! - the decisions are journaled in the worker's durable session file (the engine runs on an
 //!   in-memory session manager), as `custom` entries of type
-//!   `pa_core::session_engine::ya_permissions::JOURNAL_TYPE`, never sent to the model.
+//!   `pa_core::session_engine::ya_permissions::JOURNAL_TYPE`, never sent to the model;
+//! - the mode can be switched while the session runs (action `set_mode`, the ACP selector
+//!   `permissions`), back to `"manual"` too; each change is journaled. A resumed session follows
+//!   the global setting again (decision D1).
 //!
 //! Nothing here reaches the model's requests: the prefix is unchanged. Listed in
 //! `docs/fork-changes.md`.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pa_agent::abort::AbortSignal;
 use pa_agent::BoxFut;
 use pa_core::session_engine::ya_permissions::{
-    PermissionAsker, PermissionDecision, PermissionJournal, PermissionRequest, PermissionsWiring,
-    JOURNAL_TYPE,
+    configured_mode, mode_change_entry, PermissionAsker, PermissionDecision, PermissionJournal,
+    PermissionMode, PermissionRequest, PermissionSwitch, PermissionsWiring, JOURNAL_TYPE,
 };
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
@@ -44,8 +48,10 @@ pub const ASKER_FIELD: &str = "yaPermissionAsker";
 pub const REQUEST_EVENT: &str = "ya_permission_request";
 /// The session event that closes a request (answered, or withdrawn).
 pub const RESOLVED_EVENT: &str = "ya_permission_resolved";
-/// The command of the clients (`action`: `respond`).
+/// The command of the clients (`action`: `respond`, `set_mode`, `get`).
 pub const COMMAND: &str = "ya_permissions";
+/// The field of `get_connection_state` that carries the mode of a session that can ask.
+pub const STATE_FIELD: &str = "yaPermissions";
 
 /// Sends one session event to the attached clients.
 type Emit = Arc<dyn Fn(Value) + Send + Sync>;
@@ -61,6 +67,7 @@ pub(crate) struct WorkerPermissions {
     /// The requests waiting for an answer.
     pending: Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>,
     next_request: AtomicU64,
+    switch: Arc<PermissionSwitch>,
     emit: Mutex<Option<Emit>>,
     journal: Mutex<Option<PermissionJournal>>,
 }
@@ -129,8 +136,8 @@ impl WorkerPermissions {
         *lock(&self.journal) = Some(journal);
     }
 
-    /// What the build passes to `create_session_with`: an asker and the worker's journal when a
-    /// client answers; nothing otherwise (a manual session is refused, PR 1).
+    /// What the build passes to `create_session_with`: an asker, the worker's journal and the
+    /// switch when a client answers; nothing otherwise (a manual session is refused, PR 1).
     pub(crate) fn wiring(self: &Arc<Self>) -> PermissionsWiring {
         if !self.can_ask.load(Ordering::SeqCst) {
             return PermissionsWiring::default();
@@ -139,7 +146,20 @@ impl WorkerPermissions {
             mode: None,
             asker: Some(Arc::new(WorkerAsker(Arc::clone(self)))),
             journal: lock(&self.journal).clone(),
+            switch: Some(Arc::clone(&self.switch)),
         }
+    }
+
+    /// The mode of a session that can ask: the user's choice or the mode in force, else the
+    /// global setting. `None` when no client answers.
+    pub(crate) fn mode(&self, agent_dir: &Path) -> Option<PermissionMode> {
+        if !self.can_ask.load(Ordering::SeqCst) {
+            return None;
+        }
+        self.switch
+            .current()
+            .or_else(|| self.switch.chosen())
+            .or_else(|| global_mode(agent_dir))
     }
 
     fn emit(&self, event: Value) {
@@ -204,6 +224,21 @@ impl WorkerPermissions {
         };
         answer.send(decision).is_ok()
     }
+
+    /// The user's choice of mode; journaled when it changes the mode.
+    fn set_mode(&self, mode: PermissionMode, agent_dir: &Path) {
+        let before = self.switch.choose(mode).or_else(|| global_mode(agent_dir));
+        if let Some(before) = before.filter(|before| *before != mode) {
+            self.journal(mode_change_entry(before, mode));
+        }
+    }
+}
+
+/// The mode of the global settings, as a new session would read it.
+fn global_mode(agent_dir: &Path) -> Option<PermissionMode> {
+    // The project settings are never read for this setting: the global document only.
+    let settings = pa_core::settings::SettingsManager::create(agent_dir, agent_dir);
+    configured_mode(settings.global_raw(), agent_dir).ok()
 }
 
 /// Withdraws its request when dropped unanswered (the turn was aborted while it waited), and
@@ -287,6 +322,7 @@ impl Worker {
             );
         };
         let permissions = &engine.ya_permissions;
+        let agent_dir = &self.config.agent_dir;
         match payload.get("action").and_then(Value::as_str) {
             Some("respond") => {
                 let request_id = payload
@@ -300,7 +336,51 @@ impl Worker {
                 let resolved = permissions.respond(request_id, outcome);
                 response_success(None, COMMAND, Some(json!({ "resolved": resolved })))
             }
-            _ => response_failure(None, COMMAND, "the action must be \"respond\"", None),
+            Some("set_mode") => {
+                let Some(mode) = payload
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .and_then(PermissionMode::from_label)
+                else {
+                    return response_failure(
+                        None,
+                        COMMAND,
+                        "the mode must be \"manual\" or \"auto\"",
+                        None,
+                    );
+                };
+                if permissions.mode(agent_dir).is_none() {
+                    return response_failure(
+                        None,
+                        COMMAND,
+                        "this session cannot ask for permission",
+                        None,
+                    );
+                }
+                permissions.set_mode(mode, agent_dir);
+                response_success(None, COMMAND, Some(json!({ "mode": mode.label() })))
+            }
+            Some("get") => {
+                let mode = permissions.mode(agent_dir).map(PermissionMode::label);
+                response_success(None, COMMAND, Some(json!({ "mode": mode })))
+            }
+            _ => response_failure(
+                None,
+                COMMAND,
+                "the action must be \"respond\", \"set_mode\" or \"get\"",
+                None,
+            ),
+        }
+    }
+
+    /// Adds [`STATE_FIELD`] to `get_connection_state` for a session that can ask.
+    pub(crate) fn ya_permissions_state(&self, state: &mut Value) {
+        let mode = self
+            .agent_engine
+            .as_ref()
+            .and_then(|engine| engine.ya_permissions.mode(&self.config.agent_dir));
+        if let (Some(mode), Some(state)) = (mode, state.as_object_mut()) {
+            state.insert(STATE_FIELD.to_string(), json!(mode.label()));
         }
     }
 
@@ -399,8 +479,12 @@ mod tests {
         attach[ASKER_FIELD] = json!(true);
         permissions.client_attached(&attach);
         assert!(lock(&permissions.askers).is_empty());
-        assert!(permissions.wiring().asker.is_none());
-        assert!(asking("acp:1").wiring().asker.is_some());
+        let wiring = permissions.wiring();
+        assert!(wiring.asker.is_none() && wiring.switch.is_none());
+        assert_eq!(permissions.mode(Path::new("/nonexistent")), None);
+
+        let wiring = asking("acp:1").wiring();
+        assert!(wiring.asker.is_some() && wiring.switch.is_some());
     }
 
     #[tokio::test]
@@ -473,6 +557,25 @@ mod tests {
         assert_eq!(lock(&events).last().unwrap()["outcome"], "cancelled");
     }
 
+    #[test]
+    fn a_change_of_mode_is_journaled_and_manual_comes_back() {
+        let permissions = asking("acp:1");
+        let (_, journal) = recorded(&permissions);
+        let agent_dir = Path::new("/nonexistent");
+        // The session runs in "manual" (as a build would leave it).
+        let _ = permissions.switch.choose(PermissionMode::Manual);
+        permissions.set_mode(PermissionMode::Auto, agent_dir);
+        assert_eq!(permissions.mode(agent_dir), Some(PermissionMode::Auto));
+        permissions.set_mode(PermissionMode::Auto, agent_dir);
+        permissions.set_mode(PermissionMode::Manual, agent_dir);
+        assert_eq!(permissions.mode(agent_dir), Some(PermissionMode::Manual));
+        let journal = lock(&journal).clone();
+        assert_eq!(journal.len(), 2, "{journal:?}");
+        assert_eq!(journal[0]["mode"], "auto");
+        assert_eq!(journal[1]["mode"], "manual");
+        assert_eq!(journal[1]["previousMode"], "auto");
+    }
+
     /// The daemon's resume reads the worker's file (`SessionFile::branch_file_entries`, as
     /// `agent_engine/lifecycle.rs` does) and rebuilds the model's context from it: the
     /// `ya-permission` entries the worker journals change nothing in it.
@@ -504,9 +607,18 @@ mod tests {
                     .persist_entry("message", json!({ "message": message }))
                     .unwrap();
             }
+            if journal {
+                let change = mode_change_entry(PermissionMode::Manual, PermissionMode::Auto);
+                store
+                    .persist_entry(
+                        "custom",
+                        json!({ "customType": JOURNAL_TYPE, "data": change }),
+                    )
+                    .unwrap();
+            }
             path
         };
-        let context = |path: &std::path::Path| {
+        let context = |path: &Path| {
             let entries = SessionFile::open(path).unwrap().branch_file_entries();
             serde_json::to_value(pa_core::session::build_session_context(&entries, None).messages)
                 .unwrap()
@@ -518,7 +630,7 @@ mod tests {
             .lines()
             .filter(|line| line.contains(JOURNAL_TYPE))
             .count();
-        assert_eq!(journaled, 2, "the journal is in the file");
+        assert_eq!(journaled, 3, "the journal is in the file");
         let resumed = context(&with);
         assert_eq!(resumed.as_array().map(Vec::len), Some(3), "{resumed}");
         assert_eq!(resumed, context(&without));

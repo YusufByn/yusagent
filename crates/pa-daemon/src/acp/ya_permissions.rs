@@ -1,5 +1,5 @@
 //! yusAgent (YA-11, ticket 20, PR 2): `session/request_permission` on the daemon-attached ACP
-//! bridge.
+//! bridge, and the `permissions` selector of `session/set_config_option`.
 //!
 //! - The bridge creates its daemon session with `crate::ya_permissions::ASKER_FIELD`: it answers
 //!   the requests of its session (`crate::print_runtime` of `pa-cli` builds the create).
@@ -11,7 +11,10 @@
 //!   `selected` with the `allow-once` option allows; anything else (`reject-once`, `cancelled`,
 //!   an unknown option or outcome, an error) is a refusal. A response to a request already closed
 //!   (answered elsewhere, or withdrawn by `session/cancel`) is dropped.
-//! - An allowed call goes `in_progress` (`crate::ya_permissions::RESOLVED_EVENT`).
+//! - In `"manual"`, a tool call is published `pending` until its decision, then `in_progress`
+//!   once allowed (`crate::ya_permissions::RESOLVED_EVENT`).
+//! - The selector `permissions` (`manual`, `auto`) applies the user's choice to the session
+//!   (action `set_mode`), journaled by the worker; it is only ever changed by the client.
 //!
 //! The JSON-RPC parser of the bridge (`super::jsonrpc::parse_line`) still refuses responses from
 //! the client: the bridge reads the responses to its own requests before it. Listed in
@@ -25,9 +28,11 @@ use pa_types::daemon::DaemonCommand;
 use serde_json::{json, Map, Value};
 use tokio::sync::mpsc::{UnboundedSender, WeakUnboundedSender};
 
+use super::config_options::{SessionConfigOption, SessionConfigSelectOption};
 use super::daemon::DaemonLink;
 use super::types::{AcpSessionUpdate, AcpToolStatus};
-use crate::ya_permissions::{REQUEST_EVENT, RESOLVED_EVENT};
+use super::wire_config::{HostedConfig, WireConfigError};
+use crate::ya_permissions::{COMMAND, REQUEST_EVENT, RESOLVED_EVENT, STATE_FIELD};
 
 /// The agent-to-client request.
 pub const METHOD: &str = "session/request_permission";
@@ -35,6 +40,8 @@ pub const METHOD: &str = "session/request_permission";
 pub const ALLOW_ONCE: &str = "allow-once";
 /// The option that declines it.
 pub const REJECT_ONCE: &str = "reject-once";
+/// The id of the selector in `session/set_config_option`.
+pub const CONFIG_ID: &str = "permissions";
 /// The prefix of the ids of the bridge's requests to the client.
 const ID_PREFIX: &str = "ya-permission-";
 
@@ -218,6 +225,89 @@ impl AcpPermissions {
     }
 }
 
+/// Whether the session's published selector is `"manual"`.
+async fn manual(config: &HostedConfig) -> bool {
+    config
+        .published
+        .lock()
+        .await
+        .iter()
+        .any(|option| option.id == CONFIG_ID && option.current_value == "manual")
+}
+
+/// In `"manual"`, a tool call starts `pending` (it waits for its decision).
+pub(crate) async fn mark_pending(
+    event: &Value,
+    config: &HostedConfig,
+    updates: &mut [AcpSessionUpdate],
+) {
+    if event.get("type").and_then(Value::as_str) != Some("tool_execution_start")
+        || !manual(config).await
+    {
+        return;
+    }
+    for update in updates {
+        if let AcpSessionUpdate::ToolCall { status, .. } = update {
+            *status = AcpToolStatus::Pending;
+        }
+    }
+}
+
+/// The selector, when the worker's state carries the mode of a session that can ask.
+pub(crate) fn push_option(options: &mut Vec<SessionConfigOption>, state: &Value) {
+    let Some(mode) = state.get(STATE_FIELD).and_then(Value::as_str) else {
+        return;
+    };
+    let choice = |value: &str, name: &str| SessionConfigSelectOption {
+        value: value.to_string(),
+        name: name.to_string(),
+    };
+    options.push(SessionConfigOption {
+        id: CONFIG_ID.to_string(),
+        name: "Permissions".to_string(),
+        kind: "select",
+        category: "mode".to_string(),
+        current_value: mode.to_string(),
+        options: vec![
+            choice("manual", "Ask before each tool call"),
+            choice("auto", "Run tool calls without asking (no sandbox)"),
+        ],
+    });
+}
+
+/// `session/set_config_option` on the selector: the user's choice, applied by the worker.
+pub(super) async fn apply_mode(
+    link: &DaemonLink,
+    daemon_session_id: &str,
+    value: &str,
+) -> Result<(), WireConfigError> {
+    if !matches!(value, "manual" | "auto") {
+        return Err(WireConfigError::InvalidParams(format!(
+            "Invalid permissions value: {value}"
+        )));
+    }
+    let mut rest = Map::new();
+    rest.insert("mode".to_string(), json!(value));
+    let response = link
+        .request(DaemonCommand::YaPermissions {
+            id: None,
+            active_session_id: daemon_session_id.to_string(),
+            action: "set_mode".to_string(),
+            rest,
+        })
+        .await
+        .map_err(|error| WireConfigError::Internal(error.to_string()))?;
+    if response.success {
+        Ok(())
+    } else {
+        Err(WireConfigError::Internal(
+            response
+                .error
+                .unwrap_or_else(|| format!("the {COMMAND} command failed")),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +419,27 @@ mod tests {
                 meta: None,
             }]
         );
+    }
+
+    #[test]
+    fn the_selector_follows_the_worker_state() {
+        let mut options = Vec::new();
+        push_option(&mut options, &json!({ "thinkingLevel": "off" }));
+        assert!(
+            options.is_empty(),
+            "no selector for a session that cannot ask"
+        );
+        let mut state = json!({ "thinkingLevel": "off" });
+        state[STATE_FIELD] = json!("manual");
+        push_option(&mut options, &state);
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].id, CONFIG_ID);
+        assert_eq!(options[0].current_value, "manual");
+        let values: Vec<&str> = options[0]
+            .options
+            .iter()
+            .map(|option| option.value.as_str())
+            .collect();
+        assert_eq!(values, vec!["manual", "auto"]);
     }
 }

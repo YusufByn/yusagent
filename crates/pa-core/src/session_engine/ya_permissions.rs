@@ -27,9 +27,14 @@
 //! tools without an asker (`.cargo/config.toml` sets it to `auto`, as it sets
 //! `PRIME_AGENT_PROMPT_VERSION`). Release builds ignore it. Listed in `docs/fork-changes.md`.
 //!
-//! PR 2 of the ticket (the daemon and ACP): an embedding that can ask may journal elsewhere than
-//! the engine's session manager ([`PermissionsWiring::journal`]: the daemon's engine runs on an
-//! in-memory manager, the worker owns the durable file).
+//! PR 2 of the ticket (the daemon and ACP): an embedding that can ask may also
+//! - journal elsewhere than the engine's session manager ([`PermissionsWiring::journal`]: the
+//!   daemon's engine runs on an in-memory manager, the worker owns the durable file);
+//! - switch the mode of the session while it runs ([`PermissionsWiring::switch`], ACP
+//!   `session/set_config_option`). With a switch and an asker, the gate is installed in both
+//!   modes and reads the live mode before each call; `"auto"` lets the call run without asking
+//!   and without journaling it. Each change is journaled by the embedding
+//!   ([`mode_change_entry`]).
 //!
 //! A request dropped before its answer (the turn is aborted while it waits: ACP
 //! `session/cancel`) is journaled as `"cancelled"`.
@@ -81,6 +86,12 @@ impl PermissionMode {
             Self::Manual => "manual",
             Self::Auto => "auto",
         }
+    }
+
+    /// The mode of a setting value; `None` for anything else.
+    #[must_use]
+    pub fn from_label(value: &str) -> Option<Self> {
+        parse_mode(value)
     }
 }
 
@@ -141,16 +152,79 @@ pub trait PermissionAsker: Send + Sync {
 /// keeps the session file.
 pub type PermissionJournal = Arc<dyn Fn(Value) + Send + Sync>;
 
+/// The live mode of a session that can ask, switched by the user (ACP
+/// `session/set_config_option`). Shared by the embedding and the gate; it outlives a rebuild of
+/// the engine, so a choice made before (or between) builds holds.
+#[derive(Debug, Default)]
+pub struct PermissionSwitch {
+    state: Mutex<SwitchState>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct SwitchState {
+    /// The user's choice for this session; `None` follows the global setting.
+    chosen: Option<PermissionMode>,
+    /// The mode in force, once the engine is built.
+    current: Option<PermissionMode>,
+}
+
+impl PermissionSwitch {
+    fn state(&self) -> SwitchState {
+        *self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The mode in force; `None` before the first build.
+    #[must_use]
+    pub fn current(&self) -> Option<PermissionMode> {
+        self.state().current
+    }
+
+    /// The user's choice for this session, if any.
+    #[must_use]
+    pub fn chosen(&self) -> Option<PermissionMode> {
+        self.state().chosen
+    }
+
+    /// The user's choice: in force at once, and for the next builds of this session. Returns the
+    /// mode in force before (or the earlier choice, before the first build).
+    #[must_use]
+    pub fn choose(&self, mode: PermissionMode) -> Option<PermissionMode> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = state.current.or(state.chosen);
+        state.chosen = Some(mode);
+        state.current = Some(mode);
+        previous
+    }
+
+    /// A build resolved `mode`.
+    fn start(&self, mode: PermissionMode) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .current = Some(mode);
+    }
+}
+
 /// What the embedding passes to [`crate::session_engine::engine::create_session_with`].
 #[derive(Clone, Default)]
 pub struct PermissionsWiring {
-    /// Overrides the setting (tests). `None` reads the global settings.
+    /// Overrides the setting (tests). `None` reads the user's choice ([`Self::switch`]), then
+    /// the global settings.
     pub mode: Option<PermissionMode>,
     /// Who answers in `"manual"`. `None`: a manual session is refused at creation.
     pub asker: Option<Arc<dyn PermissionAsker>>,
     /// Where the decisions are journaled. `None`: the engine's session manager (its file when it
     /// has one).
     pub journal: Option<PermissionJournal>,
+    /// The live mode, switchable while the session runs. With an asker, the gate is installed
+    /// in both modes.
+    pub switch: Option<Arc<PermissionSwitch>>,
 }
 
 /// The value of [`TEST_ENV`], in debug builds only.
@@ -218,6 +292,34 @@ pub fn no_asker_message(agent_dir: &Path) -> String {
     )
 }
 
+/// The mode the global settings give (and the test override, in debug builds), as [`resolve`]
+/// reads it, without an embedding's choice.
+///
+/// # Errors
+///
+/// An invalid setting, with the path of the file.
+pub fn configured_mode(
+    global_raw: Option<&Value>,
+    agent_dir: &Path,
+) -> Result<PermissionMode, String> {
+    mode_from(
+        global_raw,
+        test_override().as_deref(),
+        &global_settings_path(agent_dir),
+    )
+    .map(|(mode, _)| mode)
+}
+
+/// The journal entry of a change of mode by the user.
+#[must_use]
+pub fn mode_change_entry(previous: PermissionMode, mode: PermissionMode) -> Value {
+    json!({
+        "mode": mode.label(),
+        "previousMode": previous.label(),
+        "change": "user",
+    })
+}
+
 /// The mode of a new session: refuses a manual session without an asker, and prints
 /// [`AUTO_WARNING`] when `announce` and the mode comes from the user's settings.
 ///
@@ -230,7 +332,10 @@ pub fn resolve(
     wiring: &PermissionsWiring,
     announce: bool,
 ) -> anyhow::Result<PermissionMode> {
-    let (mode, source) = match wiring.mode {
+    let chosen = wiring
+        .mode
+        .or_else(|| wiring.switch.as_deref().and_then(PermissionSwitch::chosen));
+    let (mode, source) = match chosen {
         Some(mode) => (mode, ModeSource::Embedding),
         None => mode_from(
             global_raw,
@@ -245,15 +350,20 @@ pub fn resolve(
     if mode == PermissionMode::Auto && source == ModeSource::GlobalSettings && announce {
         eprintln!("{AUTO_WARNING}");
     }
+    if let Some(switch) = &wiring.switch {
+        switch.start(mode);
+    }
     Ok(mode)
 }
 
-/// The confirmation of the tool calls of one manual session.
+/// The confirmation of the tool calls of one manual session (or of a session whose mode can be
+/// switched, [`PermissionsWiring::switch`]).
 #[derive(Clone)]
 pub struct PermissionGate {
     asker: Arc<dyn PermissionAsker>,
     session: Arc<tokio::sync::Mutex<SessionManager>>,
     journal: Option<PermissionJournal>,
+    switch: Option<Arc<PermissionSwitch>>,
     /// The tool calls declined (or skipped after a refusal) whose turn has not ended yet.
     declined: Arc<Mutex<HashSet<String>>>,
 }
@@ -290,8 +400,8 @@ fn journal_data(tool_call_id: &str, tool_name: &str, decision: &str) -> Value {
 }
 
 impl PermissionGate {
-    /// The gate of a session in `mode`: `None` in `"auto"` or without an asker (nothing to
-    /// install).
+    /// The gate of a session in `mode`: `None` when there is nothing to install (`"auto"` without
+    /// a switch, or no asker).
     #[must_use]
     pub fn new(
         mode: PermissionMode,
@@ -299,15 +409,23 @@ impl PermissionGate {
         session: Arc<tokio::sync::Mutex<SessionManager>>,
     ) -> Option<Self> {
         let asker = wiring.asker.as_ref()?;
-        if mode == PermissionMode::Auto {
+        if mode == PermissionMode::Auto && wiring.switch.is_none() {
             return None;
         }
         Some(Self {
             asker: Arc::clone(asker),
             session,
             journal: wiring.journal.clone(),
+            switch: wiring.switch.clone(),
             declined: Arc::default(),
         })
+    }
+
+    /// Whether the user switched the session to `"auto"`.
+    fn switched_to_auto(&self) -> bool {
+        self.switch
+            .as_ref()
+            .is_some_and(|switch| switch.current() == Some(PermissionMode::Auto))
     }
 
     /// The `before_tool_call` hook: asks, journals, and blocks a declined call.
@@ -326,6 +444,9 @@ impl PermissionGate {
         signal: AbortSignal,
     ) -> Option<BeforeToolCallResult> {
         let call = &context.tool_call;
+        if self.switched_to_auto() {
+            return None;
+        }
         // A refusal ends the turn: the other calls of the same message are not asked.
         let sibling_declined = {
             let declined = self.declined.lock().expect("declined lock");
@@ -828,6 +949,74 @@ mod tests {
         (journal, entries)
     }
 
+    #[test]
+    fn the_switch_reports_the_mode_before_the_choice() {
+        let switch = PermissionSwitch::default();
+        assert_eq!(switch.current(), None);
+        assert_eq!(switch.choose(PermissionMode::Auto), None);
+        assert_eq!(switch.chosen(), Some(PermissionMode::Auto));
+        assert_eq!(
+            switch.choose(PermissionMode::Manual),
+            Some(PermissionMode::Auto)
+        );
+        assert_eq!(switch.current(), Some(PermissionMode::Manual));
+    }
+
+    /// PR 2: with a switch, the gate follows the live mode. In "auto" the call runs without a
+    /// request and nothing is journaled; back in "manual", the next call is asked again. The
+    /// decisions go to the embedding's journal, not to the engine's session manager.
+    #[tokio::test]
+    async fn the_switch_turns_the_requests_off_and_on_while_the_session_runs() {
+        let switch = Arc::new(PermissionSwitch::default());
+        let _ = switch.choose(PermissionMode::Auto);
+        let (journal_sink, journaled) = collecting_journal();
+        let session = session_with(
+            PermissionDecision::Allow,
+            PermissionsWiring {
+                journal: Some(journal_sink),
+                switch: Some(Arc::clone(&switch)),
+                ..PermissionsWiring::default()
+            },
+            |provider| {
+                provider
+                    .push_tool_call_turn(None, vec![("call-1", "echo", json!({ "text": "a" }))]);
+                provider.push_text_turn("first done");
+                provider
+                    .push_tool_call_turn(None, vec![("call-2", "echo", json!({ "text": "b" }))]);
+                provider.push_text_turn("second done");
+            },
+        )
+        .await;
+        prompt(&session.engine, "run the echo tool").await;
+        assert_eq!(session.runs.load(Ordering::SeqCst), 1);
+        assert!(
+            session.asker.asked.lock().unwrap().is_empty(),
+            "not asked in auto"
+        );
+        assert!(
+            journaled.lock().unwrap().is_empty(),
+            "nothing journaled in auto"
+        );
+
+        assert_eq!(
+            switch.choose(PermissionMode::Manual),
+            Some(PermissionMode::Auto)
+        );
+        prompt(&session.engine, "run it again").await;
+        assert_eq!(session.runs.load(Ordering::SeqCst), 2);
+        let asked = session.asker.asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].tool_call_id, "call-2");
+        let journaled = journaled.lock().unwrap().clone();
+        assert_eq!(journaled.len(), 1);
+        assert_eq!(journaled[0]["toolCallId"], "call-2");
+        assert_eq!(journaled[0]["decision"], "allow");
+        assert!(
+            journal(&session.engine).await.is_empty(),
+            "the engine's session manager is not written"
+        );
+    }
+
     /// Never answers; signals when it is asked.
     struct SilentAsker(Arc<tokio::sync::Notify>);
 
@@ -869,6 +1058,7 @@ mod tests {
                 mode: Some(PermissionMode::Manual),
                 asker: Some(Arc::new(SilentAsker(Arc::clone(&asked))) as Arc<dyn PermissionAsker>),
                 journal: Some(journal_sink),
+                switch: None,
             },
         )
         .await

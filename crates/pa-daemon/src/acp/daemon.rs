@@ -374,7 +374,13 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                             let turn_id = current.producer.active_prompt_turn().await;
                             let mut updates =
                                 wire_events::wire_updates(&event, &mut current.mapping);
-                            // yusAgent (YA-11, ticket 20): the permission requests.
+                            // yusAgent (YA-11, ticket 20): pending tool calls, permission requests.
+                            super::ya_permissions::mark_pending(
+                                &event,
+                                &current.config,
+                                &mut updates,
+                            )
+                            .await;
                             updates.extend(ya_permissions.on_event(
                                 &event,
                                 &current.acp_session_id,

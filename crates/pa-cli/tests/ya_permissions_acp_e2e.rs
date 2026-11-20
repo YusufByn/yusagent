@@ -6,14 +6,16 @@
 //! serves ACP over stdio on its own sandboxed daemon; the worker runs the real engine on the faux
 //! provider (`"engine": "faux"`) and a real kernel, in `"manual"` (the default: [`TEST_ENV`],
 //! which `.cargo/config.toml` sets to `auto` for the upstream tests, is removed).
-//! a. Allowed then declined: the request carries the `allow_once` and `reject_once` options;
-//!    allowed, the cell runs and goes `in_progress`; declined, it does not run, its result is the
-//!    `[permission-denied]` text and the turn ends. Both decisions are journaled in the worker's
-//!    session file.
+//! a. Allowed then declined: the tool call is published `pending`, the request carries the
+//!    `allow_once` and `reject_once` options; allowed, the cell runs and goes `in_progress`;
+//!    declined, it does not run, its result is the `[permission-denied]` text and the turn ends.
+//!    Both decisions are journaled in the worker's session file.
 //! b. `session/cancel` while a request waits: the turn answers `cancelled`, the cell does not run,
 //!    the decision is journaled as `cancelled`.
 //! c. The client disconnects while a request waits: the cell does not run, its result is an error
 //!    and the turn stops (the model gets no other request); journaled as `cancelled`.
+//! d. The `permissions` selector: `auto` runs a cell without a request, back to `manual` asks
+//!    again; both changes are journaled.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -195,6 +197,14 @@ impl Client {
         )
     }
 
+    fn set_permissions(&mut self, session_id: &str, value: &str) -> Value {
+        let id = self.request(
+            "session/set_config_option",
+            &json!({ "sessionId": session_id, "configId": "permissions", "value": value }),
+        );
+        self.wait_response(id).0
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.home.path().join(name)
     }
@@ -279,6 +289,14 @@ fn tool_updates<'a>(frames: &'a [Value], kind: &str, id: &str) -> Vec<&'a Value>
         .collect()
 }
 
+fn permissions_option(options: &Value) -> Value {
+    options
+        .as_array()
+        .and_then(|options| options.iter().find(|option| option["id"] == "permissions"))
+        .cloned()
+        .unwrap_or_else(|| panic!("a permissions selector: {options}"))
+}
+
 /// a. Allowed, then declined.
 #[test]
 fn a_call_is_allowed_then_a_call_is_declined() {
@@ -288,10 +306,17 @@ fn a_call_is_allowed_then_a_call_is_declined() {
         touch("call-deny", "declined.txt"),
         { "text": "never requested: the turn stops after a refusal" },
     ] }));
-    let (session_id, _) = client.open_session();
+    let (session_id, options) = client.open_session();
+    assert_eq!(permissions_option(&options)["currentValue"], "manual");
 
     let prompt = client.prompt(&session_id, "create allowed.txt");
-    let (request, _) = client.wait_permission_request();
+    let (request, before) = client.wait_permission_request();
+    let started = tool_updates(&before, "tool_call", "call-allow");
+    assert_eq!(started.len(), 1, "{before:?}");
+    assert_eq!(
+        started[0]["status"], "pending",
+        "pending until the decision"
+    );
     let params = &request["params"];
     assert_eq!(params["sessionId"], session_id.as_str());
     assert_eq!(params["toolCall"]["toolCallId"], "call-allow");
@@ -415,4 +440,81 @@ fn a_disconnect_while_a_request_waits_declines_the_call() {
             .any(|message| message.to_string().contains("never requested")),
         "the turn stopped after the call"
     );
+}
+
+/// d. The selector: `auto` runs without a request, back to `manual` asks again.
+#[test]
+fn the_permissions_selector_switches_to_auto_and_back() {
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        touch("call-auto", "auto.txt"),
+        { "text": "ran without a request" },
+        touch("call-manual", "manual.txt"),
+        { "text": "ran after the request" },
+    ] }));
+    let (session_id, options) = client.open_session();
+    assert_eq!(permissions_option(&options)["currentValue"], "manual");
+    let invalid = client.set_permissions(&session_id, "always");
+    assert!(invalid.get("error").is_some(), "{invalid}");
+
+    let switched = client.set_permissions(&session_id, "auto");
+    assert_eq!(
+        permissions_option(&switched["result"]["configOptions"])["currentValue"],
+        "auto",
+        "{switched}"
+    );
+    let prompt = client.prompt(&session_id, "create auto.txt");
+    let (response, frames) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| frame["method"] == "session/request_permission"),
+        "no request in auto: {frames:?}"
+    );
+    assert_eq!(
+        tool_updates(&frames, "tool_call", "call-auto")[0]["status"],
+        "in_progress"
+    );
+    assert!(client.path("auto.txt").exists());
+
+    let switched = client.set_permissions(&session_id, "manual");
+    assert_eq!(
+        permissions_option(&switched["result"]["configOptions"])["currentValue"],
+        "manual",
+        "{switched}"
+    );
+    let prompt = client.prompt(&session_id, "create manual.txt");
+    let (request, _) = client.wait_permission_request();
+    assert_eq!(request["params"]["toolCall"]["toolCallId"], "call-manual");
+    client.answer(
+        &request,
+        &json!({ "outcome": "selected", "optionId": "allow-once" }),
+    );
+    let (response, _) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    assert!(client.path("manual.txt").exists());
+
+    let journal = client.journal_until(|journal| journal.len() >= 3);
+    let changes: Vec<(String, String)> = journal
+        .iter()
+        .filter(|data| data.get("previousMode").is_some())
+        .map(|data| {
+            (
+                data["previousMode"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                data["mode"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        changes,
+        vec![
+            ("manual".to_string(), "auto".to_string()),
+            ("auto".to_string(), "manual".to_string()),
+        ],
+        "{journal:?}"
+    );
+    assert_eq!(decisions(&journal), vec!["allow"], "{journal:?}");
 }
