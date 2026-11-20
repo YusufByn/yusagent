@@ -139,13 +139,12 @@ impl Client {
                 .unwrap_or_else(|error| panic!("no frame ({error})"));
             let frame: Value = serde_json::from_str(&line).expect("a JSON line");
             if frame["method"] == "session/request_permission" {
-                let option = frame["params"]["options"]
-                    .as_array()
-                    .and_then(|options| {
-                        options.iter().find(|option| option["kind"] == "allow_once")
-                    })
-                    .map(|option| option["optionId"].clone())
-                    .unwrap_or_else(|| panic!("an allow_once option: {frame}"));
+                let Some(allow) = frame["params"]["options"].as_array().and_then(|options| {
+                    options.iter().find(|option| option["kind"] == "allow_once")
+                }) else {
+                    panic!("an allow_once option: {frame}");
+                };
+                let option = allow["optionId"].clone();
                 let request_id = frame["id"].clone();
                 self.send(&json!({ "jsonrpc": "2.0", "id": request_id, "result": {
                     "outcome": { "outcome": "selected", "optionId": option },
