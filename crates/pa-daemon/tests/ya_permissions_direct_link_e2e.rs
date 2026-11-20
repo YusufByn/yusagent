@@ -85,6 +85,8 @@ impl Drop for Supervisor {
     }
 }
 
+// The supervisor is killed and waited for by `Supervisor`'s drop (as `abort_kernel_e2e.rs`).
+#[allow(clippy::zombie_processes)]
 fn spawn_supervisor(socket: &Path, agent_dir: &Path, script: &Path) -> Supervisor {
     std::fs::create_dir_all(agent_dir).expect("agent dir");
     let child = Command::new(env!("CARGO_BIN_EXE_pa-daemon"))
