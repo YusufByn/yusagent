@@ -45,7 +45,8 @@ def stop(process):
 def env_for(root):
     env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TZ")
            if key in os.environ}
-    for key in ("PRIME_AGENT_KERNEL_PYTHON", "PA_E2E_KERNEL_PYTHON"):
+    # yusAgent (YA-11, ticket 20): the permission mode of the debug binary (manual refuses -p).
+    for key in ("PRIME_AGENT_KERNEL_PYTHON", "PA_E2E_KERNEL_PYTHON", "PRIME_AGENT_TEST_PERMISSIONS"):
         if key in os.environ:
             env[key] = os.environ[key]
     for name in ("home", "tmp", "xdg", "agent/sessions"):
