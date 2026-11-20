@@ -99,6 +99,9 @@ KERNEL_SETTINGS = {"kernel": {"envAllowlist": ["YA_CAPTURE_ALLOWED", "ANTHROPIC_
 # lue aussi par un binaire antérieur à T03, et le réglage `cacheRetention`.
 CACHE_RETENTION = "short"
 CACHE_SETTINGS = {"cacheRetention": CACHE_RETENTION}
+# YA-11 (ticket 20) : la capture tourne sans humain, permissions « auto » (manuel par défaut,
+# refusé au démarrage en -p) ; ignoré par les binaires d'avant le réglage.
+PERMISSIONS_SETTINGS = {"permissions": "auto"}
 
 
 def sha256(path: Path) -> str:
@@ -129,7 +132,8 @@ def base_env(home: Path, agent_dir: Path, tmp: Path) -> dict[str, str]:
 def write_settings(agent_dir: Path, settings: dict | None = None) -> None:
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "settings.json").write_text(
-        json.dumps({**KERNEL_SETTINGS, **CACHE_SETTINGS, **(settings or {})}) + "\n")
+        json.dumps({**KERNEL_SETTINGS, **CACHE_SETTINGS, **(settings or {}),
+                    **PERMISSIONS_SETTINGS}) + "\n")
 
 
 def write_models_json(agent_dir: Path, api: str, port: int, provider: str = "capture",

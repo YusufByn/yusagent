@@ -17,7 +17,7 @@ DIR=$(mktemp -d)
 trap 'rm -rf "$DIR"' EXIT
 mkdir -p "$DIR/agent" "$DIR/home"
 if [ -n "$WINDOW" ]; then
-  printf '{"bashNoticeBatchSeconds": %s}\n' "$WINDOW" > "$DIR/agent/settings.json"
+  printf '{"bashNoticeBatchSeconds": %s, "permissions": "auto"}\n' "$WINDOW" > "$DIR/agent/settings.json"
 fi
 SCRIPT='{"responses":[{"content":[{"type":"toolCall","name":"ipython","arguments":{"code":"a = bash(\"sleep 1\")\nb = bash(\"sleep 2.5\")\nc = bash(\"sleep 4\")\nprint(\"STARTED\")"}}]},"WAITING","WOKEN"],"repeatLastResponse":true}'
 (
