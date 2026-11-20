@@ -27,6 +27,8 @@ use serde_json::{json, Value};
 const PANEL: &str = "Permission · python_repl";
 const AWAITING: &str = "Awaiting permission";
 const DRAINED: &str = "ya-card-drained";
+/// The note of a request the worker withdrew.
+const WITHDRAWN: &str = "closed elsewhere (cancelled)";
 const WAITING_CODE: &str = "print('awaiting')";
 const ALLOWED_CODE: &str = "print('allowed')";
 const DENIED_CODE: &str = "print('denied')";
@@ -35,9 +37,9 @@ const WAIT_MS: u64 = 2000;
 
 #[derive(Clone, Copy)]
 enum Scenario {
-    /// `tool_execution_start`, then the request; no answer.
+    /// `tool_execution_start`, then the request; withdrawn after a wait (the turn must end).
     StartThenRequest,
-    /// The request overtakes the start; no answer.
+    /// The request overtakes the start; withdrawn after a wait.
     RequestThenStart,
     /// A call allowed after a wait, then a call denied.
     AllowThenDeny,
@@ -147,14 +149,12 @@ fn play(scenario: Scenario, w: &mut UnixStream) {
         Scenario::StartThenRequest => {
             tool_start(w, "call_wait", WAITING_CODE);
             request(w, "ya-permission-1", "call_wait", WAITING_CODE);
-            std::thread::sleep(Duration::from_millis(WAIT_MS));
-            drain_barrier(w);
+            withdraw_after_the_wait(w);
         }
         Scenario::RequestThenStart => {
             request(w, "ya-permission-1", "call_wait", WAITING_CODE);
             tool_start(w, "call_wait", WAITING_CODE);
-            std::thread::sleep(Duration::from_millis(WAIT_MS));
-            drain_barrier(w);
+            withdraw_after_the_wait(w);
         }
         Scenario::AllowThenDeny => {
             tool_start(w, "call_allow", ALLOWED_CODE);
@@ -185,6 +185,21 @@ fn play(scenario: Scenario, w: &mut UnixStream) {
             drain_barrier(w);
         }
     }
+}
+
+/// The wait, then the worker withdraws the request and the turn ends (the headless run waits for
+/// the turn to settle).
+fn withdraw_after_the_wait(w: &mut UnixStream) {
+    std::thread::sleep(Duration::from_millis(WAIT_MS));
+    resolved(w, "ya-permission-1", "call_wait", "cancelled");
+    tool_end(
+        w,
+        "call_wait",
+        "[permission-denied] The user declined this cell; nothing was executed.",
+        true,
+    );
+    event(w, &json!({ "type": "turn_end" }));
+    drain_barrier(w);
 }
 
 fn write_json(writer: &mut UnixStream, value: &Value) {
@@ -403,14 +418,18 @@ fn durations_ms(line: &str) -> Vec<f64> {
         .collect()
 }
 
-/// While the request waits (from the frame that opened the panel to the barrier): the card is
-/// not started, the loader awaits the permission.
+/// While the request waits (from the frame that opened the panel to its withdrawal): the card
+/// is not started, the loader awaits the permission.
 fn assert_not_started_while_waiting(frames: &[String]) {
     let opened = frames
         .iter()
         .position(|frame| frame.contains(PANEL))
         .unwrap_or_else(|| panic!("the panel opened:\n{}", frames.join("\n===\n")));
-    let waiting = &frames[opened..];
+    let withdrawn = frames
+        .iter()
+        .position(|frame| frame.contains(WITHDRAWN))
+        .unwrap_or_else(|| panic!("the request was withdrawn:\n{}", frames.join("\n===\n")));
+    let waiting = &frames[opened..withdrawn];
     let all = waiting.join("\n===\n");
     for frame in waiting {
         // A request that overtakes its start opens the panel before the card exists.
@@ -429,7 +448,7 @@ fn assert_not_started_while_waiting(frames: &[String]) {
             "the loader never says Executing while the request waits:\n{frame}"
         );
     }
-    let last = waiting.last().expect("a frame after the panel opened");
+    let last = waiting.last().expect("a frame while the request waits");
     let line =
         card_line(last, WAITING_CODE).unwrap_or_else(|| panic!("the card is on screen:\n{last}"));
     assert!(line.contains('◇'), "the card is not started: {line}");
@@ -441,13 +460,13 @@ fn assert_not_started_while_waiting(frames: &[String]) {
 
 #[test]
 fn a_call_waiting_for_permission_is_not_shown_as_started() {
-    let frames = run(Scenario::StartThenRequest, &[PANEL, DRAINED]);
+    let frames = run(Scenario::StartThenRequest, &[PANEL, WITHDRAWN, DRAINED]);
     assert_not_started_while_waiting(&frames);
 }
 
 #[test]
 fn a_request_that_overtakes_its_start_keeps_the_card_not_started() {
-    let frames = run(Scenario::RequestThenStart, &[PANEL, DRAINED]);
+    let frames = run(Scenario::RequestThenStart, &[PANEL, WITHDRAWN, DRAINED]);
     assert_not_started_while_waiting(&frames);
 }
 
@@ -478,18 +497,18 @@ fn an_allowed_call_starts_at_the_answer_and_a_denied_one_never_runs() {
     }
 
     // After the allow: the live timer counts from the answer, not from the start (K3).
-    let live: Vec<f64> = frames[allowed..]
+    let ticks: Vec<f64> = frames[allowed..]
         .iter()
         .filter_map(|frame| card_line(frame, ALLOWED_CODE))
         .flat_map(durations_ms)
         .collect();
     assert!(
-        !live.is_empty(),
+        !ticks.is_empty(),
         "the allowed call shows its live timer:\n{all}"
     );
     assert!(
-        live.iter().all(|ms| *ms < 1500.0),
-        "the timer starts at the allow, after a {WAIT_MS} ms wait: {live:?}\n{all}"
+        ticks.iter().all(|ms| *ms < 1500.0),
+        "the timer starts at the allow, after a {WAIT_MS} ms wait: {ticks:?}\n{all}"
     );
     let last = frames.last().expect("a last frame");
     let line = card_line(last, ALLOWED_CODE).expect("the allowed card at the end");
