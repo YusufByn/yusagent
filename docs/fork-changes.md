@@ -619,22 +619,6 @@ Aucune dépendance de la messagerie aux réglages coupés par YA-01 :
 
 Si ce test retombe sur une PR suivante : enquête.
 
-## Instabilité probable : `agent_family_e2e`, passivation (YA-16)
-
-`crates/pa-daemon/tests/agent_family_e2e.rs`, test `passivated_child_recent_messages_reads_its_file_end_to_end` (`:1359`), shard 1 de `ci.yml`. C'est le troisième test instable de ce fichier (voir la section précédente), avec un autre symptôme.
-
-| Run | Commit | Tentative | Résultat |
-|---|---|---|---|
-| 44601054912 | `8efe27bdf` | 1 | réussi |
-| 44604335224 | `74137ca47` | 1 | échec du shard 1 (3 réussis, 1 échec) |
-| 44604335224 | `74137ca47` | 2 | réussi, aucun changement de code (relance du shard seul, accord de Yusuf, commentée dans la PR #63) |
-
-Symptôme : « the passivation stopped kid-a's worker » à `agent_family_e2e.rs:1500`. `worker_idle_passivation` répond `success`, mais le `list` qui suit (`:1343-1352`) contient encore la session de kid-a. `74137ca47` ne change que la doc par rapport à `8efe27bdf`. Dans ce fichier, la PR #63 ne change que le chemin du venv du kernel (`:219-220`).
-
-Hypothèse non vérifiée : le superviseur répond `success` avant d'avoir retiré le worker des sessions résidentes (`DaemonCommand::WorkerIdlePassivation`, `crates/pa-daemon/src/protocol.rs:954`, traité à `crates/pa-daemon/src/supervisor/clients.rs:688`). Point ouvert dans le ticket 19, à vérifier avant YA-10.
-
-Si ce test retombe : relancer le shard une fois, et noter le run ici.
-
 ## Instabilité probable : `rpc_mode_e2e` (YA-16)
 
 `crates/pa-cli/tests/rpc_mode_e2e.rs`, test `rpc_compact_flush_is_bounded_against_a_stalled_reader` (`:1368`), shard 8 de `ci.yml`.
@@ -1161,6 +1145,19 @@ Constat et décision : `docs/tickets/21-bail-chemin-symbolique.md`.
 | `crates/pa-daemon/src/lease.rs` | report partiel d'upstream (fichier upstream) | Commit upstream `12a5081aca4248e8651f9f24ee4b01c249de6492` (#3871), partie « pa-daemon: keep one lease path for a session created in a new directory » seule, repris à l'identique par `git apply` du diff de ce fichier (aucune retouche) : `canonical_session_path` canonicalise le plus proche parent existant et rejoint la fin manquante, et le test unitaire `a_lease_taken_before_its_sessions_dir_exists_owns_the_created_file`. Corrige la perte silencieuse des messages de la première session d'un dossier agent neuf sous un lien symbolique. Les 70 autres fichiers du commit ne sont pas repris : pour un `git cherry-pick` futur de `12a5081ac`, `lease.rs` est déjà au contenu d'upstream. | YA-11 (ticket 21) |
 | `crates/pa-cli/tests/ya_session_lease_symlink_e2e.rs` | nouveau | Vrai binaire en ACP, `HOME` en lien symbolique, dossier agent neuf, provider factice et vrai kernel en manuel : une cellule acceptée ; le fichier de session contient les 4 messages du tour et l'entrée `ya-permission`, le journal du worker aucune ligne `pa-daemon:`. Échoue sans le correctif, sous Linux aussi. | YA-11 (ticket 21) |
 | `.changes/ya-21-bail.md` | nouveau | Fragment de changelog. | YA-11 (ticket 21) |
+
+## Passivation différée dans les tests (ticket 23)
+
+Constat et décisions : `docs/tickets/23-passivation-differee.md`.
+
+Le superviseur répond `success` à `worker_idle_passivation` aussi quand il **diffère** l'arrêt : une requête routée vers le worker tient un permis (`crates/pa-daemon/src/supervisor/worker_lifecycle.rs:713-717`, report voulu). Le test `passivated_child_recent_messages_reads_its_file_end_to_end` prenait `success` pour « arrêté » et échouait par intermittence (run 44604335224, `agent_family_e2e.rs:1500`). L'ancienne hypothèse, une réponse `success` envoyée avant le retrait du worker du registre, est fausse : sur un arrêt effectif, `success` part après `registry.remove` (`worker_lifecycle.rs:797`). Ce test ne figure plus parmi les tests instables. Le produit ne change pas.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/tests/agent_family_e2e.rs` | modif. (fichier upstream) | Aide `passivate_until_gone` : redemande la passivation toutes les 100 ms, jusqu'à 30 s, tant que la session est résidente. Elle remplace la demande unique suivie d'un `list` immédiat dans `passivated_child_recent_messages_reads_its_file_end_to_end`. | YA-16 (ticket 23) |
+| `crates/pa-daemon/tests/ya_idle_passivation_defer_e2e.rs` | nouveau | Vrai démon, vrai kernel, provider factice. Une session racine au repos ; un second client y tient `execute_bash_and_wait` (`sleep 3`) pendant la demande. La première demande est différée, une demande après la fin de la commande arrête le worker (au moins 2 demandes). Avec l'ancien enchaînement, le test échoue. | YA-16 (ticket 23) |
+
+**Pour un `git cherry-pick` futur de `c8cbb5ba7`** (upstream #3769, absent de notre historique) : ce commit ajoute à `agent_family_e2e.rs` un second test avec le même enchaînement (`upstream/main:crates/pa-daemon/tests/agent_family_e2e.rs:1895-1909`). Lui appliquer `passivate_until_gone` (décision P3 du ticket 23).
 
 ## Code repris d'Unharnessed
 

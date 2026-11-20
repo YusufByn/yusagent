@@ -118,3 +118,29 @@ Pas de build local (règle 8) : rouge et vert vus en CI.
 
 - Requête en cours lors de l'échec du run 44604335224 : non identifiée.
 - `docs/fork-changes.md` (hypothèse « répond `success` avant d'avoir retiré le worker ») et le ticket 19 (`:324`) ne sont pas encore corrigés. À faire avec le correctif, avec un renvoi à ce ticket.
+
+## Décisions de Yusuf (20/11/2026)
+
+- **P1** : correctif dans les tests seulement.
+- **P2** : test déterministe dans un fichier du fork, vu en échec en CI, puis vert avec l'aide.
+- **P3** : noté dans `docs/fork-changes.md`, pour le jour où on reprendra `c8cbb5ba7`.
+- Retirer ce test des tests instables de `docs/fork-changes.md` (les deux autres d'`agent_family_e2e` restent). Corriger l'ancienne hypothèse dans `docs/fork-changes.md` et au ticket 19 (`:324`).
+
+## Correctif (PR #71)
+
+Branche `ya-23-passivation`, depuis `main` à `99e801f50`.
+
+- **Test du fork** : `crates/pa-daemon/tests/ya_idle_passivation_defer_e2e.rs`. Vrai démon, vrai kernel, provider factice ; une session racine au repos.
+  - Un second client y lance `execute_bash_and_wait` (`touch <repère> && sleep 3`).
+  - Une fois le repère créé, le test demande la passivation avec le jeton du worker.
+- **Rouge sans l'aide, vérifié en CI** (pas de build local, règle 8) :
+  - le premier push de la PR ne contenait que ce test, avec l'ancien enchaînement (demande, `success`, `list` immédiat) : `bea554b52` ;
+  - run `ci` 44813120397, job `test shard 6/8` (136554706993) : `a_passivation_asked_behind_a_routed_request_is_deferred_then_retried ... FAILED`, panique à `ya_idle_passivation_defer_e2e.rs:257` (« the passivation stopped the root's worker ») ;
+  - seule unité en échec du shard (`FAILED UNITS: pa-daemon#test:ya_idle_passivation_defer_e2e`). Les autres jobs du run sont verts, dont `check + clippy` et `fmt`.
+- **Aide `passivate_until_gone`** : redemande la passivation toutes les 100 ms, jusqu'à 30 s, tant que la session est résidente.
+  - Dans le test du fork, elle remplace l'ancien enchaînement, et le test exige au moins 2 demandes : la première est différée.
+  - Dans `crates/pa-daemon/tests/agent_family_e2e.rs` (fichier upstream), elle remplace la demande unique de `passivated_child_recent_messages_reads_its_file_end_to_end`.
+- **Doc** :
+  - `docs/fork-changes.md` : la section « Instabilité probable : `agent_family_e2e`, passivation (YA-16) » est retirée, et remplacée par « Passivation différée dans les tests (ticket 23) » (fichiers, hypothèse corrigée, note P3) ;
+  - ticket 19, `:324` : hypothèse corrigée.
+- **Rien de livré ne change** : `git diff --stat main` ne liste que deux fichiers de `crates/pa-daemon/tests/` et des fichiers de `docs/`. La vérification du changelog passe sans fragment : elle exclut les dossiers `tests/` (`.github/workflows/changelog-fragment.yml:41`). Pas de build macOS ni de capture (décision de Yusuf). **Préfixe inchangé.**
