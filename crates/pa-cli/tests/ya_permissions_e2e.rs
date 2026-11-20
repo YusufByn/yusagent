@@ -51,7 +51,7 @@ impl ModelServer {
                             connections.fetch_add(1, Ordering::SeqCst);
                             let _ = socket.set_nonblocking(false);
                             let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
-                            let mut buffer = [0_u8; 65_536];
+                            let mut buffer = vec![0_u8; 65_536];
                             let read = socket.read(&mut buffer).unwrap_or(0);
                             assert!(read <= buffer.len());
                             let body = r#"{"error":{"message":"permissions test","type":"invalid_request_error"}}"#;
