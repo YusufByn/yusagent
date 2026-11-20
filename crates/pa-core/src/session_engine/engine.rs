@@ -198,7 +198,24 @@ fn mcp_gating_blocking(
 ///
 /// Panics if the MCP manager mutex is poisoned while wiring telemetry
 /// reporting.
-pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<SessionEngine> {
+pub async fn create_session(config: SessionEngineConfig) -> anyhow::Result<SessionEngine> {
+    create_session_with(config, super::ya_permissions::PermissionsWiring::default()).await
+}
+
+/// yusAgent (YA-11, ticket 20): [`create_session`] with the permissions of the embedding
+/// (`super::ya_permissions`).
+///
+/// # Errors
+///
+/// As [`create_session`]; also a manual session without an asker.
+///
+/// # Panics
+///
+/// As [`create_session`].
+pub async fn create_session_with(
+    mut config: SessionEngineConfig,
+    ya_permissions: super::ya_permissions::PermissionsWiring,
+) -> anyhow::Result<SessionEngine> {
     let cwd = config.cwd.clone();
     // Session persistence first: the conversation-log path and the resume
     // context both come from the session manager.
@@ -219,6 +236,14 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
     };
     let (settings, trace_consent) =
         crate::agent_traces::ContinuousTraceUpload::load_settings(&cwd, &config.agent_dir);
+    // yusAgent (YA-11, ticket 20): the global setting only; a manual session that cannot ask is
+    // refused here, before any model request.
+    let ya_permission_mode = super::ya_permissions::resolve(
+        settings.global_raw(),
+        &config.agent_dir,
+        &ya_permissions,
+        config.daemonless && config.rlm_depth.unwrap_or(0) == 0,
+    )?;
     // Resolve the kernel shell once, before any side effects: an invalid
     // `shellPath` must fail session creation with a clear config error
     // naming the setting, not every kernel `bash()` call later.
@@ -257,6 +282,16 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
         },
         config.queued_goal_context_purge.clone(),
         config.cron_store.clone(),
+    );
+    let ya_permission_gate = super::ya_permissions::PermissionGate::new(
+        ya_permission_mode,
+        &ya_permissions,
+        wiring.session.clone(),
+    );
+    // yusAgent (YA-11, ticket 20): the turn stops after a declined call.
+    config.should_stop_after_turn = super::ya_permissions::wrap_should_stop(
+        ya_permission_gate.as_ref(),
+        config.should_stop_after_turn.take(),
     );
 
     let refinement_settings = settings.reopen();
@@ -921,6 +956,10 @@ pub async fn create_session(mut config: SessionEngineConfig) -> anyhow::Result<S
             std::sync::Arc::clone(&request_timing_wiring),
             masking_transform,
         )),
+        // yusAgent (YA-11, ticket 20): a manual session confirms every tool call.
+        before_tool_call: ya_permission_gate
+            .as_ref()
+            .map(super::ya_permissions::PermissionGate::before_tool_call),
         should_stop_after_turn: {
             let steering = config.queued_steering_probe.take();
             let boundary = config.should_stop_after_turn.take();

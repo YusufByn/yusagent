@@ -61,6 +61,8 @@ pub(crate) mod ya_bash_notice_batch;
 pub(crate) mod ya_bash_timeout;
 // yusAgent (YA-03): kernel crash during a cell, restart and notice.
 pub(crate) mod ya_kernel_restart;
+// yusAgent (YA-11, ticket 20): permissions of the tool calls (`permissions`, global setting).
+pub mod ya_permissions;
 // yusAgent (YA-09): request settings (`reasoningSummary`), frozen per session.
 pub mod ya_request;
 // yusAgent (YA-09, ticket 14): `session-id` header on the ChatGPT provider (`codexSessionIdHeader`).

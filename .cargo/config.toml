@@ -11,3 +11,8 @@ RLM_MAX_DEPTH = "2"
 # upstream tests keep the upstream prompt (version 1) with spawning at 2. Read below the
 # `promptVersion` setting; a test that sets its own value (or removes it) keeps it.
 PRIME_AGENT_PROMPT_VERSION = "1"
+# yusAgent (YA-11, ticket 20): the default permission mode is manual, and a session that cannot
+# ask for confirmation (`-p`, RPC, the daemon until ACP asks) is refused at creation. The upstream
+# tests run tools without an asker: `auto` for them. Read by debug builds only (release builds
+# ignore it); a test that sets its own value (or removes it) keeps it.
+PRIME_AGENT_TEST_PERMISSIONS = "auto"
