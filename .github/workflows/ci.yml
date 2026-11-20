@@ -372,6 +372,9 @@ jobs:
           export PA_RUST_BINARY="${GITHUB_WORKSPACE}/target/debug/prime-agent"
           export PRIME_AGENT_KERNEL_PYTHON="${HOME}/.yusagent/kernel-venv/bin/python"
           export PA_E2E_KERNEL_PYTHON="${PRIME_AGENT_KERNEL_PYTHON}"
+          # yusAgent (YA-11, ticket 20): the checks run the debug binary outside cargo, so without
+          # the `.cargo/config.toml` env; their sessions have no asker and need `auto`.
+          export PRIME_AGENT_TEST_PERMISSIONS=auto
           test -x "${PRIME_AGENT_KERNEL_PYTHON}"
           check_status=0
           python3 scripts/test_lifecycle_lib.py || check_status=1

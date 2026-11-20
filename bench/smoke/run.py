@@ -85,6 +85,8 @@ DEFAULT_CACHE = Path.home() / ".cache" / "yusagent-smoke"
 # capture. Le corps Codex ne porte pas de rétention (pas de `prompt_cache_retention`) :
 # le tarif d'écriture 30 min est retenu pour le coût théorique, hypothèse notée au rapport.
 CACHE_RETENTION = "short"
+# YA-11 (ticket 20) : réglage global écrit dans le dossier agent du banc.
+PERMISSIONS_SETTINGS = {"permissions": "auto"}
 CACHE_WRITE_PRICE = "cache_write_30m"
 WARMUP_PROMPT = "Réponds uniquement : OK."
 PROBE_PROMPT = "Exécute la sonde réseau."
@@ -315,8 +317,11 @@ def write_agent_config(agent_dir: Path, proxy_port: int, source: dict, settings:
         provider["models"] = [source["fiche"]]
     (agent_dir / "models.json").write_text(json.dumps({"providers": {PROVIDER: provider}},
                                                       indent=2) + "\n")
+    # YA-11 (ticket 20) : le banc tourne sans humain, permissions « auto » (manuel par défaut,
+    # refusé au démarrage en -p) ; ignoré par les binaires d'avant le réglage.
     (agent_dir / "settings.json").write_text(
-        json.dumps({"cacheRetention": CACHE_RETENTION, **settings}, indent=2) + "\n")
+        json.dumps({"cacheRetention": CACHE_RETENTION, **settings, **PERMISSIONS_SETTINGS},
+                   indent=2) + "\n")
 
 
 def agent_profile(cache: "Cache", workspace: Path, binary: Path | None,

@@ -240,6 +240,8 @@ pub fn generate(options: &CorpusOptions) -> anyhow::Result<Manifest> {
         serde_json::json!({
             "onboardingShown": true,
             "agentTraces": { "enabled": false },
+            // yusAgent (YA-11, ticket 20): the bench runs without a human (manual is refused).
+            "permissions": "auto",
         })
         .to_string(),
     )?;
