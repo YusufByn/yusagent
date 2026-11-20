@@ -43,16 +43,10 @@ use crate::agent_engine::AgentSessionEngine;
 use crate::protocol::{response_failure, response_success, DaemonResponse};
 use crate::worker::{EventPump, SessionCore, Worker};
 
-/// The `create` field by which the creating client declares that it answers the requests.
-pub const ASKER_FIELD: &str = "yaPermissionAsker";
-/// The session event of a request (worker to clients).
-pub const REQUEST_EVENT: &str = "ya_permission_request";
-/// The session event that closes a request (answered, or withdrawn).
-pub const RESOLVED_EVENT: &str = "ya_permission_resolved";
-/// The command of the clients (`action`: `respond`, `set_mode`, `get`).
-pub const COMMAND: &str = "ya_permissions";
-/// The field of `get_connection_state` that carries the mode of a session that can ask.
-pub const STATE_FIELD: &str = "yaPermissions";
+/// The wire names, shared with the TUI (`pa_types::daemon::ya_permissions`).
+pub use pa_types::daemon::ya_permissions::{
+    ASKER_FIELD, COMMAND, MODE_EVENT, REQUEST_EVENT, RESOLVED_EVENT, STATE_FIELD,
+};
 
 /// Sends one session event to the attached clients.
 type Emit = Arc<dyn Fn(Value) + Send + Sync>;
