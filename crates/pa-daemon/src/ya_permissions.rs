@@ -9,7 +9,8 @@
 //!   id); a client that attaches without it only watches;
 //! - a request is a session event [`REQUEST_EVENT`] (`requestId`, `toolCallId`, `toolName`,
 //!   `args`) to every attached client; the first answer wins (command [`COMMAND`], action
-//!   `respond`, `outcome` `"allow"` or anything else for a refusal). The worker then sends
+//!   `respond`, `outcome` `"allow"`, `"cancelled"` for a withdrawn request, anything else for a
+//!   refusal). The worker then sends
 //!   [`RESOLVED_EVENT`] (`requestId`, `toolCallId`, `outcome`) so the other clients close it;
 //! - a request still waiting when the turn is aborted (`session/cancel`), or when the last
 //!   client that answers detaches (the client disconnected), is withdrawn: the call does not
@@ -217,10 +218,10 @@ impl WorkerPermissions {
         let Some(answer) = lock(&self.pending).remove(request_id) else {
             return false;
         };
-        let decision = if outcome == "allow" {
-            PermissionDecision::Allow
-        } else {
-            PermissionDecision::Deny
+        let decision = match outcome {
+            "allow" => PermissionDecision::Allow,
+            "cancelled" => PermissionDecision::Cancelled,
+            _ => PermissionDecision::Deny,
         };
         answer.send(decision).is_ok()
     }
@@ -431,12 +432,13 @@ mod tests {
         tokio::spawn(asker.ask(request(tool_call_id), signal))
     }
 
+    /// What a test records: session events or journal entries.
+    type Recorded = Arc<Mutex<Vec<Value>>>;
+
     /// Records the session events and the journal entries.
-    fn recorded(
-        permissions: &WorkerPermissions,
-    ) -> (Arc<Mutex<Vec<Value>>>, Arc<Mutex<Vec<Value>>>) {
-        let events: Arc<Mutex<Vec<Value>>> = Arc::default();
-        let journal: Arc<Mutex<Vec<Value>>> = Arc::default();
+    fn recorded(permissions: &WorkerPermissions) -> (Recorded, Recorded) {
+        let events: Recorded = Arc::default();
+        let journal: Recorded = Arc::default();
         let (events_sink, journal_sink) = (Arc::clone(&events), Arc::clone(&journal));
         permissions.install(
             Arc::new(move |event: Value| lock(&events_sink).push(event)),

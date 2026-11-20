@@ -381,17 +381,19 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                                 &mut updates,
                             )
                             .await;
-                            updates.extend(ya_permissions.on_event(
-                                &event,
-                                &current.acp_session_id,
-                                &current.daemon_active_session_id,
-                            ));
+                            updates.extend(ya_permissions.updates(&event));
                             for update in updates {
                                 let _ = current
                                     .producer
                                     .publish(&update, turn_id, PrimeAgentEventPhase::Event, None)
                                     .await;
                             }
+                            // yusAgent (YA-11, ticket 20): after its tool call is published.
+                            ya_permissions.after_publish(
+                                &event,
+                                &current.acp_session_id,
+                                &current.daemon_active_session_id,
+                            );
                             if matches!(
                                 event.get("type").and_then(Value::as_str),
                                 Some("agent_end" | "auto_retry_start" | "auto_retry_end")

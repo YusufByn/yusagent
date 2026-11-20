@@ -8,11 +8,15 @@
 //!   id), with the tool call in `pending` and two options, `allow_once` and `reject_once`. No
 //!   `allow_always`: the session-wide answer is the selector (decision D3).
 //! - The client's response goes back to the worker (command `ya_permissions`, action `respond`):
-//!   `selected` with the `allow-once` option allows; anything else (`reject-once`, `cancelled`,
-//!   an unknown option or outcome, an error) is a refusal. A response to a request already closed
+//!   `selected` with the `allow-once` option allows; `cancelled` withdraws the request (the
+//!   client answers it after its `session/cancel`); anything else (`reject-once`, an unknown
+//!   option or outcome, an error) is a refusal. Both stop the turn. A response to a request already closed
 //!   (answered elsewhere, or withdrawn by `session/cancel`) is dropped.
 //! - In `"manual"`, a tool call is published `pending` until its decision, then `in_progress`
 //!   once allowed (`crate::ya_permissions::RESOLVED_EVENT`).
+//! - The worker's request can overtake the `tool_execution_start` of its call (the worker
+//!   publishes the engine's events from its own queue): the bridge holds the request until the
+//!   `tool_call` is published, so the client always knows the call it is asked about.
 //! - The selector `permissions` (`manual`, `auto`) applies the user's choice to the session
 //!   (action `set_mode`), journaled by the worker; it is only ever changed by the client.
 //!
@@ -20,7 +24,7 @@
 //! the client: the bridge reads the responses to its own requests before it. Listed in
 //! `docs/fork-changes.md`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -92,6 +96,10 @@ pub(crate) struct AcpPermissions {
     frames: WeakUnboundedSender<Value>,
     next_id: AtomicU64,
     sent: Mutex<HashMap<String, Sent>>,
+    /// The tool calls whose `tool_call` is published and not ended yet.
+    started: Mutex<HashSet<String>>,
+    /// Requests waiting for the `tool_call` of their call, by tool call id.
+    held: Mutex<HashMap<String, Value>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -100,15 +108,26 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The worker's outcome of the client's response: only `selected` with [`ALLOW_ONCE`] allows.
+/// The worker's outcome of the client's response: only `selected` with [`ALLOW_ONCE`] allows;
+/// `cancelled` withdraws; anything else declines.
 #[must_use]
 pub fn outcome_of(response: &Value) -> &'static str {
     let outcome = &response["result"]["outcome"];
     if outcome["outcome"] == "selected" && outcome["optionId"] == ALLOW_ONCE {
         "allow"
+    } else if outcome["outcome"] == "cancelled" {
+        "cancelled"
     } else {
         "deny"
     }
+}
+
+fn text(event: &Value, key: &str) -> String {
+    event
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 impl AcpPermissions {
@@ -117,62 +136,85 @@ impl AcpPermissions {
             frames: frames.downgrade(),
             next_id: AtomicU64::new(0),
             sent: Mutex::default(),
+            started: Mutex::default(),
+            held: Mutex::default(),
         })
     }
 
-    /// One worker event of the hosted session: a request goes to the client; an allowed call
-    /// returns its `in_progress` update.
-    pub(crate) fn on_event(
+    /// The updates one worker event adds (before they are published): an allowed call goes
+    /// `in_progress`. A closed request is forgotten.
+    pub(crate) fn updates(&self, event: &Value) -> Vec<AcpSessionUpdate> {
+        if event.get("type").and_then(Value::as_str) != Some(RESOLVED_EVENT) {
+            return Vec::new();
+        }
+        let request_id = text(event, "requestId");
+        let tool_call_id = text(event, "toolCallId");
+        lock(&self.sent).retain(|_, sent| sent.request_id != request_id);
+        lock(&self.held).remove(&tool_call_id);
+        if text(event, "outcome") == "allow" {
+            vec![AcpSessionUpdate::ToolCallUpdate {
+                tool_call_id,
+                status: Some(AcpToolStatus::InProgress),
+                content: None,
+                meta: None,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// One worker event, once its updates are published: a request goes to the client after the
+    /// `tool_call` of its call.
+    pub(crate) fn after_publish(
         &self,
         event: &Value,
         acp_session_id: &str,
         daemon_session_id: &str,
-    ) -> Vec<AcpSessionUpdate> {
-        let text = |key: &str| {
-            event
-                .get(key)
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string()
-        };
+    ) {
+        let tool_call_id = text(event, "toolCallId");
         match event.get("type").and_then(Value::as_str) {
-            Some(REQUEST_EVENT) => {
-                self.send_request(
-                    acp_session_id,
-                    daemon_session_id,
-                    &text("requestId"),
-                    &text("toolCallId"),
-                );
-                Vec::new()
-            }
-            Some(RESOLVED_EVENT) => {
-                let request_id = text("requestId");
-                lock(&self.sent).retain(|_, sent| sent.request_id != request_id);
-                if text("outcome") == "allow" {
-                    vec![AcpSessionUpdate::ToolCallUpdate {
-                        tool_call_id: text("toolCallId"),
-                        status: Some(AcpToolStatus::InProgress),
-                        content: None,
-                        meta: None,
-                    }]
-                } else {
-                    Vec::new()
+            Some("tool_execution_start") => {
+                lock(&self.started).insert(tool_call_id.clone());
+                let held = lock(&self.held).remove(&tool_call_id);
+                if let Some(frame) = held {
+                    self.send(frame);
                 }
             }
-            _ => Vec::new(),
+            Some("tool_execution_end") => {
+                lock(&self.started).remove(&tool_call_id);
+            }
+            Some(REQUEST_EVENT) => {
+                let frame = self.request_frame(
+                    acp_session_id,
+                    daemon_session_id,
+                    &text(event, "requestId"),
+                    &tool_call_id,
+                );
+                let started = lock(&self.started).contains(&tool_call_id);
+                if started {
+                    self.send(frame);
+                } else {
+                    lock(&self.held).insert(tool_call_id, frame);
+                }
+            }
+            _ => {}
         }
     }
 
-    fn send_request(
+    fn send(&self, frame: Value) {
+        if let Some(frames) = self.frames.upgrade() {
+            let _ = frames.send(frame);
+        }
+    }
+
+    /// The request to the client, registered as sent.
+    fn request_frame(
         &self,
         acp_session_id: &str,
         daemon_session_id: &str,
         request_id: &str,
         tool_call_id: &str,
-    ) {
-        let Some(frames) = self.frames.upgrade() else {
-            return;
-        };
+    ) -> Value {
         let id = format!(
             "{ID_PREFIX}{}",
             self.next_id.fetch_add(1, Ordering::SeqCst) + 1
@@ -184,7 +226,7 @@ impl AcpPermissions {
                 request_id: request_id.to_string(),
             },
         );
-        let _ = frames.send(json!({
+        json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": METHOD,
@@ -196,7 +238,7 @@ impl AcpPermissions {
                     { "optionId": REJECT_ONCE, "name": "Reject", "kind": "reject_once" },
                 ],
             },
-        }));
+        })
     }
 
     /// A line from the client, read before the JSON-RPC parser.
@@ -316,6 +358,17 @@ mod tests {
         json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
     }
 
+    /// The events the consumer hands over: the updates, then the post-publish step.
+    fn feed(permissions: &AcpPermissions, event: &Value) -> Vec<AcpSessionUpdate> {
+        let updates = permissions.updates(event);
+        permissions.after_publish(event, "acp-1", "daemon-1");
+        updates
+    }
+
+    fn start(tool_call_id: &str) -> Value {
+        json!({ "type": "tool_execution_start", "toolCallId": tool_call_id })
+    }
+
     #[test]
     fn only_the_allow_option_allows() {
         let selected = |option: &str| json!({ "result": { "outcome": { "outcome": "selected", "optionId": option } } });
@@ -324,7 +377,7 @@ mod tests {
         assert_eq!(outcome_of(&selected("allow-always")), "deny");
         assert_eq!(
             outcome_of(&json!({ "result": { "outcome": { "outcome": "cancelled" } } })),
-            "deny"
+            "cancelled"
         );
         assert_eq!(
             outcome_of(&json!({ "error": { "code": -32603, "message": "no" } })),
@@ -337,13 +390,13 @@ mod tests {
     fn a_request_goes_to_the_client_and_its_response_back_to_the_worker() {
         let (frames, mut client) = tokio::sync::mpsc::unbounded_channel();
         let permissions = AcpPermissions::new(&frames);
-        let updates = permissions.on_event(
+        assert!(feed(&permissions, &start("call-1")).is_empty());
+        let updates = feed(
+            &permissions,
             &json!({
                 "type": REQUEST_EVENT, "requestId": "ya-permission-7", "toolCallId": "call-1",
                 "toolName": "python_repl", "args": { "code": "print(1)" },
             }),
-            "acp-1",
-            "daemon-1",
         );
         assert!(updates.is_empty());
         let request = client.try_recv().expect("a request to the client");
@@ -382,33 +435,57 @@ mod tests {
         assert!(matches!(permissions.client_line(&again), ClientLine::Stale));
     }
 
+    /// The worker's request overtook the `tool_execution_start` of its call: held until then.
+    #[test]
+    fn a_request_waits_for_the_tool_call_of_its_call() {
+        let (frames, mut client) = tokio::sync::mpsc::unbounded_channel();
+        let permissions = AcpPermissions::new(&frames);
+        let _ = feed(
+            &permissions,
+            &json!({ "type": REQUEST_EVENT, "requestId": "r-1", "toolCallId": "call-1" }),
+        );
+        assert!(client.try_recv().is_err(), "held");
+        let _ = feed(&permissions, &start("call-1"));
+        let request = client.try_recv().expect("released after the tool call");
+        assert_eq!(request["params"]["toolCall"]["toolCallId"], "call-1");
+    }
+
     #[test]
     fn a_closed_request_drops_the_late_response_and_an_allowed_call_runs() {
         let (frames, mut client) = tokio::sync::mpsc::unbounded_channel();
         let permissions = AcpPermissions::new(&frames);
-        let _ = permissions.on_event(
+        let _ = feed(&permissions, &start("call-1"));
+        let _ = feed(
+            &permissions,
             &json!({ "type": REQUEST_EVENT, "requestId": "r-1", "toolCallId": "call-1" }),
-            "acp-1",
-            "daemon-1",
         );
         let id = client.try_recv().unwrap()["id"]
             .as_str()
             .unwrap()
             .to_string();
         // Withdrawn by the worker (`session/cancel`): the client's `cancelled` is dropped.
-        let updates = permissions.on_event(
+        let updates = feed(
+            &permissions,
             &json!({ "type": RESOLVED_EVENT, "requestId": "r-1", "toolCallId": "call-1", "outcome": "cancelled" }),
-            "acp-1",
-            "daemon-1",
         );
         assert!(updates.is_empty());
         let late = response(&id, &json!({ "outcome": { "outcome": "cancelled" } }));
         assert!(matches!(permissions.client_line(&late), ClientLine::Stale));
+        // A request withdrawn while held is never sent.
+        let _ = feed(
+            &permissions,
+            &json!({ "type": REQUEST_EVENT, "requestId": "r-3", "toolCallId": "call-3" }),
+        );
+        let _ = feed(
+            &permissions,
+            &json!({ "type": RESOLVED_EVENT, "requestId": "r-3", "toolCallId": "call-3", "outcome": "cancelled" }),
+        );
+        let _ = feed(&permissions, &start("call-3"));
+        assert!(client.try_recv().is_err(), "nothing to ask");
         // An allowed call goes `in_progress`.
-        let updates = permissions.on_event(
+        let updates = feed(
+            &permissions,
             &json!({ "type": RESOLVED_EVENT, "requestId": "r-2", "toolCallId": "call-2", "outcome": "allow" }),
-            "acp-1",
-            "daemon-1",
         );
         assert_eq!(
             updates,
