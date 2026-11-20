@@ -69,3 +69,20 @@ Décision de Yusuf : reporter la partie `lease.rs` d'upstream `12a5081ac` (corre
 - **Report partiel** : `crates/pa-daemon/src/lease.rs` seul, diff de ce fichier dans `12a5081ac` appliqué tel quel (`git apply`, aucune retouche, le fichier n'avait pas bougé depuis le point de fork), avec le test unitaire `a_lease_taken_before_its_sessions_dir_exists_owns_the_created_file`. Commit séparé, message citant le SHA upstream. Listé dans `docs/fork-changes.md`, section « Bail de session sous un chemin symbolique ».
 - **Test e2e** : `crates/pa-cli/tests/ya_session_lease_symlink_e2e.rs` (fichier du fork). `HOME` = `<tmp>/home`, lien symbolique vers `<tmp>/real` ; dossier agent `~/.yusagent` neuf ; vrai binaire en ACP, provider factice, vrai kernel, mode manuel ; une cellule acceptée. Attendu : `stopReason` `end_turn`, une demande, rôles `user`, `assistant`, `toolResult`, `assistant` dans le fichier de session, une entrée `ya-permission` `allow`, aucune ligne `pa-daemon:` dans le journal du worker.
 - **Rouge sans le correctif, vérifié en CI** (pas de build local, règle 8) : le premier push de la PR ne contenait que le test (`1ee68d8de`, sur `main`). Run `ci` 44742804539, job `test shard 2/8` : `the_first_session_under_a_symlinked_home_keeps_its_messages ... FAILED`, `left: []`, `right: ["user", "assistant", "toolResult", "assistant"]` (`ya_session_lease_symlink_e2e.rs:290`), seule unité en échec du shard. Le même run avait un échec clippy (`map_unwrap_or`) dans le test, corrigé dans un commit suivant.
+
+### Contrôles avant le merge de la PR #68 (20/11/2026)
+
+Même commande que la section « Mesures » (`docs/tickets/21-bail-chemin-symbolique/mesure.py`), dossier de travail sous `/var/folders/…/T` (lien symbolique), un tour texte puis un tour avec une cellule acceptée. Binaires : `main` `163f3d39d` (run 44740311939) et branche `5d3834267` (run 44743845310), installés par `bench/smoke/tools/install-bin.sh`.
+
+```sh
+M=docs/tickets/21-bail-chemin-symbolique/mesure.py
+VAR=$(python3 -c 'import tempfile; print(tempfile.gettempdir())')
+for k in text cell; do python3 -I $M "$BIN/yusagent" "$VAR" $k; done
+```
+
+- **Claude Code**, sortie brute (`stopReason`, lignes, messages, entrées `custom`, puis les lignes `pa-daemon:`) :
+  - `main` `163f3d39d` : texte `{'stopReason': 'end_turn'} 5 0 []`, `[]` ; cellule `{'stopReason': 'end_turn'} 5 0 []`, `['pa-daemon: permission journal entry not persisted: session lease does not own append target']` ;
+  - branche `5d3834267` : texte `{'stopReason': 'end_turn'} 7 2 []`, `[]` ; cellule `{'stopReason': 'end_turn'} 10 4 ['ya-permission']`, `[]`.
+- **Yusuf**, sur `163f3d39d` contre `5d3834267` : conforme, identique. `main` : 0 message, avec la ligne `pa-daemon:` pour la cellule ; branche : 2 et 4 messages, `['ya-permission']`, aucune ligne `pa-daemon:`.
+
+PR #68 mergée le 20/11/2026 (« merge » de Yusuf), `main` à `3cdccf6f7` ; build macOS de `main` : run 44746491241, succès.

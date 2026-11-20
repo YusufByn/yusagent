@@ -340,6 +340,31 @@ Ce qui est fait :
   - réponse `cancelled` du client, avec ou sans `session/cancel` : l'appel finit en `failed` (`tool_execution_end` est toujours émis, `crates/pa-agent/src/agent_loop/tools.rs:131` ; l'abandon du hook devient un résultat en erreur, `crates/pa-agent/src/agent_loop/tool_call.rs:45-50`), cellule non exécutée, journal `cancelled`. Test e2e b étendu (état final) et test `a_cancelled_answer_withdraws_the_request` ajouté.
 - **Démo de Yusuf sur `b5763b3f4`** : OK, code de sortie 0, `allow` puis `deny`, `find` vide.
 
+## PR 3 : TUI (20/11/2026)
+
+Branche `ya-20-permissions-tui`, depuis `main` à `3cdccf6f7` (merge de la PR #68). Fichiers et tests : `docs/fork-changes.md`, section « Permissions, PR 3 ».
+
+### Constat (avant le code)
+
+- **Réception** : le TUI reçoit déjà l'événement `ya_permission_request` (`crates/pa-tui/src/daemon_client.rs:119-133`), mais `event_to_update` le réduit à un rafraîchissement du statut (`crates/pa-tui/src/snapshot/decoder.rs:398-399`) : la demande est perdue.
+- **Déclaration** : le pont ACP porte `yaPermissionAsker` sur le `create` (`crates/pa-cli/src/print_runtime.rs:163-164`) et sur l'`attach` (`crates/pa-daemon/src/acp/daemon.rs:633-634`). Le TUI a un seul `create` (`crates/pa-tui/src/interactive.rs:425-431`, repris par la vue Agents, `crates/pa-tui/src/agents_view/reply.rs:549-550`) et un seul `attach` (`crates/pa-tui/src/session_ui/lifecycle.rs:346-359`). `pa-tui` ne dépend que de `pa-types` (`crates/pa-tui/Cargo.toml:9`).
+- **Lien direct** : le TUI s'attache souvent par un lien direct vers le worker (`lifecycle.rs:362-366`). Le superviseur n'envoie `detach` à la déconnexion que pour les attach qu'il a routés (`crates/pa-daemon/src/supervisor/routing.rs:772`, `crates/pa-daemon/src/supervisor/clients.rs:311-326`). Côté worker, la fin du lien libère l'attach (`crates/pa-daemon/src/worker/connection.rs:182-185`, `:998-1036`) sans appeler `ya_permissions_detached` : un TUI parti pendant une demande la laissait en attente jusqu'à l'annulation du tour.
+- **Première réponse** : `respond` retire la demande sous verrou (`crates/pa-daemon/src/ya_permissions.rs:217-227`), `ya_permission_resolved` part vers tous les clients (`:254-264`). Le pont ACP oublie la demande et ignore une réponse tardive (`crates/pa-daemon/src/acp/ya_permissions.rs:146-163`, `crates/pa-daemon/src/acp/daemon.rs:486`), sans rien envoyer au client pour fermer sa boîte.
+- **Frappe avant l'ouverture du panneau** : le lecteur du terminal tourne dans son thread (`crates/pa-tui/src/input.rs:120-205`) ; la boucle met chaque frappe dans une file (`crates/pa-tui/src/interactive/run.rs:1546-1562`) et la traite au tour suivant (`:1014-1031`), après les événements du démon (`:1355-1370`). Une frappe tapée pour l'éditeur pendant le tour peut donc atteindre un panneau ouvert entre-temps.
+
+### Décisions de Yusuf (20/11/2026)
+
+- **T1** : les noms du protocole (`yaPermissionAsker`, événements, commande, champ d'état) dans un module du fork de `pa-types`, repris par `pa-daemon`.
+- **T2** : le panneau montre le texte entier de l'appel, lignes repliées (jamais tronquées), avec défilement.
+- **T3 (révisé)** : **fenêtre de calme**, pas de délai fixe. Le panneau ne prend les touches de réponse (`y` autorise une fois, `n` ou `Esc` refuse une fois) qu'après 0,5 s sans aucune frappe ; chaque frappe relance le compteur. Tant qu'il n'est pas actif, les frappes vont où elles iraient sans lui (éditeur, ou panneau déjà ouvert) : le texte en cours reste intact. Le panneau affiche qu'il attend une pause, puis les touches. `Ctrl+C` reste immédiat : il retire la demande (`cancelled`, refus, le tour s'arrête, D7). Première version (délai fixe de 0,5 s après l'ouverture) écartée : elle ne couvre pas une frappe continue et perd les touches ignorées.
+- **T4** : `/permissions` (choix `manual` / `auto`) et `/permissions auto|manual`, même commande démon que le sélecteur ACP (`ya_permissions`, `set_mode`), donc même journal.
+- **T5** : le worker émet `ya_permission_mode` à chaque changement de mode ; le TUI le suit. ACP ne le traduit pas dans cette PR.
+- **T6** : étiquette fixe « auto · no sandbox » dans la barre sous l'éditeur, en couleur d'avertissement, dès que le mode est « auto » (réglage global ou `/permissions`).
+- **T7** : passer en « auto » pendant une demande ouverte ne la tranche pas.
+- **T8** : correctif du retrait d'un client parti par un lien direct, dans `worker/connection.rs` (fichier upstream), commit séparé ; test vu en échec sans le correctif, puis en succès avec.
+- **T9** : requêtes identiques en manuel et en « auto » vérifiées par un serveur local qui enregistre les corps, puis capture contre `main` après le build.
+- **T10** : la boîte ACP restée ouverte quand un autre client a répondu est notée dans les points ouverts (YA-10).
+
 ## Points ouverts
 
 - Défaut du bail sous un chemin symbolique (messages perdus sans erreur pour la première session d'un dossier agent neuf) : `docs/tickets/21-bail-chemin-symbolique.md`, hors de la PR 2.
@@ -347,5 +372,6 @@ Ce qui est fait :
 
 - Arrêt du tour après un refus par le chemin `Preparation::Immediate` (section 5) : à vérifier dans `pa-agent` au début de la PR 1 ; le test de D7 le prouvera.
 - **Fatigue** : en manuel, 13 confirmations par session en médiane sur le banc (p90 23, prompt v2). Le passage en « auto » pour la session est la réponse retenue ; le classement (b) sera rejugé après le sandbox (ticket à part).
+- PR 3, T10 : quand un autre client (le TUI) a répondu, le pont ACP n'envoie rien au client ACP pour fermer sa boîte `session/request_permission` ; le client voit seulement l'appel passer à `in_progress` ou finir en `failed`. **L'existence d'une annulation de requête de l'agent vers le client dans ACP n'est pas vérifiée** : à voir en YA-10 (l'extension devra au moins fermer sa boîte sur ce changement de statut).
 - Le keep-warm du cache pendant l'attente (`docs/yusAgent-cdc.md:288`) n'est pas dans ce découpage.
 - Les tools MCP en écriture (`docs/yusAgent-cdc.md:533`) passent par le kernel, donc par la cellule : demandés comme toute cellule.
