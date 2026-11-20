@@ -457,7 +457,7 @@ mod tests {
         let start = Instant::now();
         let mut panel = panel(start);
         assert_eq!(panel.handle_key("y", start), PanelKey::PassThrough);
-        assert!(!panel.armed(start + QUIET - Duration::from_millis(1)));
+        assert!(!panel.armed(start + QUIET.saturating_sub(Duration::from_millis(1))));
     }
 
     #[test]
@@ -467,7 +467,7 @@ mod tests {
         let typed = start + Duration::from_millis(200);
         assert_eq!(panel.handle_key("a", typed), PanelKey::PassThrough);
         // The pause counts from the last keystroke, not from the opening.
-        let early = typed + QUIET - Duration::from_millis(100);
+        let early = typed + QUIET.saturating_sub(Duration::from_millis(100));
         assert_eq!(panel.handle_key("y", early), PanelKey::PassThrough);
         assert_eq!(panel.handle_key("y", early + QUIET), PanelKey::Allow);
         assert_eq!(PanelKey::Allow.outcome(), Some("allow"));
@@ -517,7 +517,7 @@ mod tests {
         let mut panel = panel(start);
         let pasted = start + Duration::from_millis(400);
         panel.note_input(pasted);
-        assert!(!panel.armed(pasted + QUIET - Duration::from_millis(100)));
+        assert!(!panel.armed(pasted + QUIET.saturating_sub(Duration::from_millis(100))));
         assert!(panel.armed(pasted + QUIET));
     }
 
