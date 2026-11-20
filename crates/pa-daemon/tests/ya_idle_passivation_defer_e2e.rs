@@ -121,6 +121,37 @@ impl Client {
             .filter_map(|row| row["sessionId"].as_str().map(str::to_string))
             .collect()
     }
+
+    /// Ask for the idle passivation until the session leaves the residents: a deferred ask
+    /// answers `success` too, and only a new ask retries the stop (ticket 23). Returns the number
+    /// of asks.
+    fn passivate_until_gone(&mut self, token: &str, session_id: &str) -> usize {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut asks = 0;
+        loop {
+            asks += 1;
+            let id = format!("passivate-{asks}");
+            self.send_command(
+                &id,
+                &json!({
+                    "type": "worker_idle_passivation",
+                    "workerToken": token,
+                    "idleMinutes": 1,
+                }),
+            );
+            let response = self.read_response(&id);
+            assert_eq!(response["success"], true, "passivation: {response}");
+            let residents = self.resident_session_ids(&format!("list-{asks}"));
+            if !residents.iter().any(|resident| resident == session_id) {
+                return asks;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the session stayed resident after {asks} passivation asks"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
 }
 
 /// The kernel Python with prime-agent-runtime installed (`PA_E2E_KERNEL_PYTHON` overrides), as
@@ -242,21 +273,12 @@ fn a_passivation_asked_behind_a_routed_request_is_deferred_then_retried() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    // The ask while the request is in flight, read as "stopped" (the pattern of
-    // `agent_family_e2e.rs`).
-    client.send_command(
-        "passivate",
-        &json!({
-            "type": "worker_idle_passivation",
-            "workerToken": token,
-            "idleMinutes": 1,
-        }),
-    );
-    let passivated = client.read_response("passivate");
-    assert_eq!(passivated["success"], true, "passivation: {passivated}");
+    // The first ask lands while the request is in flight: deferred, yet answered `success`. An
+    // ask after the command ends stops the worker.
+    let asks = client.passivate_until_gone(&token, &session_id);
     assert!(
-        !client.resident_session_ids("list").contains(&session_id),
-        "the passivation stopped the root's worker"
+        asks >= 2,
+        "the ask behind the routed request was deferred, then retried: {asks} ask(s)"
     );
 
     let held = holder.read_response("held-bash");
