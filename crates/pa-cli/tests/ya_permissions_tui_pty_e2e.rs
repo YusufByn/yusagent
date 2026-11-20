@@ -55,17 +55,20 @@ fn card_line(screen: &str, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Ticket 22: while a request waits, nothing says the call runs.
-fn assert_waiting(screen: &str, name: &str) {
-    assert!(
-        screen.contains(AWAITING),
-        "the loader awaits the permission:\n{screen}"
-    );
+/// Ticket 22: while a request waits, nothing says the call runs. The panel covers the bottom of
+/// the transcript: once the transcript fills the window, the loader and the card sit under it
+/// (`loader_shown` false).
+fn assert_waiting(screen: &str, name: &str, loader_shown: bool) {
+    if loader_shown {
+        assert!(
+            screen.contains(AWAITING),
+            "the loader awaits the permission:\n{screen}"
+        );
+    }
     assert!(
         !screen.contains("Executing"),
         "the loader does not say Executing:\n{screen}"
     );
-    // The card can sit under the panel, which covers the bottom of the transcript.
     if let Some(card) = card_line(screen, name) {
         assert!(
             !card.contains('✓'),
@@ -417,9 +420,9 @@ fn the_tui_answers_switches_to_auto_and_back() {
         !project.join("allowed.txt").exists(),
         "typing answered nothing"
     );
-    assert_waiting(&typed, "allowed.txt");
+    assert_waiting(&typed, "allowed.txt", true);
     let armed = screen.wait_for(ARMED);
-    assert_waiting(&armed, "allowed.txt");
+    assert_waiting(&armed, "allowed.txt", true);
     screen.type_slowly("y", Duration::from_millis(50));
     screen.wait_for("the first cell ran");
     assert!(project.join("allowed.txt").exists(), "the allowed cell ran");
@@ -444,7 +447,7 @@ fn the_tui_answers_switches_to_auto_and_back() {
     screen.submit("create denied.txt");
     screen.wait_for(WAITING);
     let armed = screen.wait_for(ARMED);
-    assert_waiting(&armed, "denied.txt");
+    assert_waiting(&armed, "denied.txt", false);
     screen.type_slowly("n", Duration::from_millis(50));
     screen.wait_gone(PANEL);
     let denied = screen.wait("the denied card to fail", |screen| {

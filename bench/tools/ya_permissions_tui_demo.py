@@ -96,12 +96,14 @@ def card_line(screen: str, name: str) -> str | None:
     return next((line for line in screen.splitlines() if "python · " in line and name in line), None)
 
 
-def check_waiting(screen: str, name: str, moment: str) -> None:
-    """Ticket 22 : pendant une demande, rien ne dit que l'appel tourne."""
+def check_waiting(screen: str, name: str, moment: str, chargeur_visible: bool = True) -> None:
+    """Ticket 22 : pendant une demande, rien ne dit que l'appel tourne. Le panneau recouvre le bas
+    de la transcription : une fois la fenêtre remplie, le chargeur et la carte sont dessous
+    (`chargeur_visible` faux)."""
     card = card_line(screen, name)
     print(f"[{moment}] chargeur « {AWAITING} » : {'oui' if AWAITING in screen else 'non'} ; "
           f"« Executing » : {'oui' if 'Executing' in screen else 'non'} ; carte : {card!r}")
-    if AWAITING not in screen or "Executing" in screen or (card and "✓" in card):
+    if (chargeur_visible and AWAITING not in screen) or "Executing" in screen or (card and "✓" in card):
         sys.exit(f"carte ou chargeur faux pendant la demande ({moment}) ; écran :\n{screen}")
 
 
@@ -231,7 +233,7 @@ def pilot(command: list[str], env: dict[str, str], project: Path) -> None:
         print("\n=== 2. refuser ===")
         tui.type("Crée refuse.txt\r")
         tui.wait_for(WAITING)
-        check_waiting(tui.wait_for(ARMED), "refuse.txt", "second panneau prêt")
+        check_waiting(tui.wait_for(ARMED), "refuse.txt", "second panneau prêt", chargeur_visible=False)
         tui.type("n")
         tui.wait("la fermeture du panneau", lambda text: PANEL not in text)
         wait_card(tui, "refuse.txt", "✗")
