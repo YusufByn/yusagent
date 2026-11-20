@@ -306,6 +306,9 @@ Branche `ya-20-permissions-coeur`, depuis `main` à `e8449ee32` (merge de la PR 
 - **Préfixe** : inchangé (rien dans le prompt, les tools ni `yaRequest`) ; test `permissions_manual_and_auto_send_the_same_prefix` dans `crates/pa-core/tests/prefix_stability.rs`, puis contrôle en `--capture` après le build.
 - **Banc** : `bench/smoke/run.py`, `bench/tools/capture/run.py` et `bench/smoke/tools/notice-batch-repro.sh` écrivent `"permissions": "auto"` ; `bench/smoke/settings/default.json` reste `{}`. Tests Python du banc : `python3 -I -m unittest discover -s bench/smoke/tests`, 103 tests OK.
 - **Pas compilé en local** (règle 8 de `CLAUDE.md`) : la compilation, clippy et les tests Rust passent par la CI.
+- **CI** : run `ci` 44708605726 sur `8943999fb`, 14 checks requis verts. Deux runs précédents en échec, corrigés : clippy `large_stack_arrays` dans le test e2e (run 44703584290) ; contrôles Python du cycle de vie lancés hors de `cargo` sans la variable de test (runs 44703584290 et 44706678374, shard 1). Build macOS de la branche : run 44706671367 sur `32903c963` (code livré identique à `8943999fb`).
+- **Contrôle en capture** (Yusuf, 20/11/2026) : `py-example-001`, binaires `5f596c958` (`main`, run 44610160108, code livré identique à `e8449ee32`) et `32903c963` (branche, run 44706671367) : `compare_capture_prompts.py` sur 9 requêtes, **TOUT IDENTIQUE** ; deux dossiers de run différents ; `('py-example-001', 'resolved', 0)` des deux côtés ; rien d'écrit dans `~/.yusagent` ni `~/.prime/agent`. `-p` du binaire de la branche sans réglage : code de sortie 1, message avec la ligne `"permissions": "auto"` et le chemin des réglages globaux, **0 connexion** au serveur du modèle. Même `-p` avec `PRIME_AGENT_TEST_PERMISSIONS=auto` : même refus, 0 connexion (le binaire de release ignore la variable).
+- **Merge** : PR #66 mergée le 20/11/2026 (« merge » de Yusuf), `main` à `f598ef0b6`.
 
 ## Points ouverts
 
