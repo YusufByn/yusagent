@@ -1021,6 +1021,8 @@ impl Worker {
         if ids.is_empty() {
             return;
         }
+        // yusAgent (YA-11, ticket 20): the ids that left with this connection.
+        let mut left = Vec::new();
         for id in &ids {
             let held_elsewhere = self
                 .session_attachments
@@ -1030,9 +1032,15 @@ impl Worker {
                 .any(|other| other.iter().any(|entry| entry == id));
             if !held_elsewhere {
                 core.attached_client_ids.retain(|entry| entry != id);
+                left.push(id);
             }
         }
         drop(core);
+        // yusAgent (YA-11, ticket 20): a client gone with its connection (a direct link gets no
+        // routed `detach`) no longer answers the permission requests (`crate::ya_permissions`).
+        for id in left {
+            self.ya_permissions_detached(id);
+        }
         // The runner's park re-arms: the released hold opens the idle
         // passivation's unattached gate for a now-detached child.
         self.work_notify.notify_one();
