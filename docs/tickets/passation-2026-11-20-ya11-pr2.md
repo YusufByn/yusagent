@@ -5,7 +5,7 @@ Raison : contexte de la session précédente proche de 350k. Rien du code de la 
 ## État
 
 - **PR 1 mergée** : PR #66, `main` à `f598ef0b661d1158881d5361d06a2f7bbbb37841` (« merge » de Yusuf du 20/11/2026, 14 checks requis verts sur `8943999fb`, merge avec `--match-head-commit`). Contrôle en capture réussi (noté dans `docs/tickets/20-ya11-permissions.md`, section « PR 1 »).
-- **Build macOS de `main`** lancé à la main : run 44715022593 sur `f598ef0b6`, **en cours** au moment de la passation. À vérifier : `gh run view 44715022593 --repo YusufByn/yusagent --json status,conclusion,headSha`.
+- **Build macOS de `main`** lancé à la main : run 44715022593 sur `f598ef0b6`, **succès** (binaire de référence de `main` pour le contrôle en capture de la PR 2).
 - **Branche `ya-20-permissions-acp`** depuis `main` à `f598ef0b6`, un commit de doc : `cdb1483d7` (résultat du contrôle de la PR 1 dans le ticket), plus ce fichier. Pas de PR ouverte.
 
 ## Demande de Yusuf pour la PR 2 (20/11/2026)
