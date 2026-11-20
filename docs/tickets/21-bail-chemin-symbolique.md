@@ -61,3 +61,11 @@ Le binaire de `main` refuse le tour (session manuelle sans demandeur, PR 1 du ti
 - Le test unitaire d'upstream ci-dessus, avec le correctif.
 - **Test e2e proposé** : `HOME` (donc le dossier agent) atteint par un lien symbolique vers le dossier temporaire du test ; une session ACP neuve, un tour du provider factice, puis : le fichier de session contient les messages du tour (et, en manuel, l'entrée `ya-permission`), et le journal du worker n'a aucune ligne `pa-daemon:`. Sous Linux, `canonicalize` résout le lien : le test échoue sans le correctif.
 - La démo du ticket 20 vérifie déjà ce point (messages présents, journal égal aux réponses, aucune ligne `pa-daemon:`) et travaille sous le chemin canonique de son dossier.
+
+## Correctif (20/11/2026, PR #68)
+
+Décision de Yusuf : reporter la partie `lease.rs` d'upstream `12a5081ac` (correctif 1) et ajouter le test e2e. Branche `ya-21-bail`, depuis `main` à `163f3d39d`.
+
+- **Report partiel** : `crates/pa-daemon/src/lease.rs` seul, diff de ce fichier dans `12a5081ac` appliqué tel quel (`git apply`, aucune retouche, le fichier n'avait pas bougé depuis le point de fork), avec le test unitaire `a_lease_taken_before_its_sessions_dir_exists_owns_the_created_file`. Commit séparé, message citant le SHA upstream. Listé dans `docs/fork-changes.md`, section « Bail de session sous un chemin symbolique ».
+- **Test e2e** : `crates/pa-cli/tests/ya_session_lease_symlink_e2e.rs` (fichier du fork). `HOME` = `<tmp>/home`, lien symbolique vers `<tmp>/real` ; dossier agent `~/.yusagent` neuf ; vrai binaire en ACP, provider factice, vrai kernel, mode manuel ; une cellule acceptée. Attendu : `stopReason` `end_turn`, une demande, rôles `user`, `assistant`, `toolResult`, `assistant` dans le fichier de session, une entrée `ya-permission` `allow`, aucune ligne `pa-daemon:` dans le journal du worker.
+- **Rouge sans le correctif, vérifié en CI** (pas de build local, règle 8) : le premier push de la PR ne contenait que le test (`1ee68d8de`, sur `main`). Run `ci` 44742804539, job `test shard 2/8` : `the_first_session_under_a_symlinked_home_keeps_its_messages ... FAILED`, `left: []`, `right: ["user", "assistant", "toolResult", "assistant"]` (`ya_session_lease_symlink_e2e.rs:290`), seule unité en échec du shard. Le même run avait un échec clippy (`map_unwrap_or`) dans le test, corrigé dans un commit suivant.
