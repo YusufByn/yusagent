@@ -335,10 +335,13 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
 
     let link = Arc::new(DaemonLink::connect(&options.socket_path).await?);
     let state = Arc::new(Mutex::new(DaemonAcpState::default()));
+    // yusAgent (YA-11, ticket 20): the permission requests to the client.
+    let ya_permissions = super::ya_permissions::AcpPermissions::new(&tx);
 
     {
         let link = Arc::clone(&link);
         let state = Arc::clone(&state);
+        let ya_permissions = Arc::clone(&ya_permissions);
         tokio::spawn(async move {
             let mut frames = link.frames.lock().await;
             while let Some(frame) = frames.recv().await {
@@ -369,7 +372,15 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                                 }
                             }
                             let turn_id = current.producer.active_prompt_turn().await;
-                            for update in wire_events::wire_updates(&event, &mut current.mapping) {
+                            let mut updates =
+                                wire_events::wire_updates(&event, &mut current.mapping);
+                            // yusAgent (YA-11, ticket 20): the permission requests.
+                            updates.extend(ya_permissions.on_event(
+                                &event,
+                                &current.acp_session_id,
+                                &current.daemon_active_session_id,
+                            ));
+                            for update in updates {
                                 let _ = current
                                     .producer
                                     .publish(&update, turn_id, PrimeAgentEventPhase::Event, None)
@@ -460,6 +471,18 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
         }
         if input_line.trim().is_empty() {
             continue;
+        }
+        // yusAgent (YA-11, ticket 20): the client's responses to `session/request_permission`.
+        match ya_permissions.client_line(&input_line) {
+            super::ya_permissions::ClientLine::Other => {}
+            super::ya_permissions::ClientLine::Stale => continue,
+            super::ya_permissions::ClientLine::Answer(answer) => {
+                let link = Arc::clone(&link);
+                tokio::spawn(async move {
+                    answer.send(&link).await;
+                });
+                continue;
+            }
         }
         let incoming = match jsonrpc::parse_line(&input_line) {
             Ok(incoming) => incoming,
@@ -599,7 +622,8 @@ async fn bind_daemon_session(
             recovery_config: None,
             env: None,
             launch_env: None,
-            rest: Map::default(),
+            // yusAgent (YA-11, ticket 20): this client answers the permission requests.
+            rest: crate::ya_permissions::asker_fields(),
         })
         .await
         .and_then(|response| {

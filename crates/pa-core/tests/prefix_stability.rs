@@ -2438,6 +2438,7 @@ async fn permissions_manual_and_auto_send_the_same_prefix() {
             mode: Some(mode),
             asker: (mode == PermissionMode::Manual)
                 .then(|| Arc::new(AllowEveryCall(Arc::clone(&asked))) as Arc<dyn PermissionAsker>),
+            ..PermissionsWiring::default()
         };
         let engine = try_engine_with_permissions(
             &model_json(api, server.port, CODEX_DEFAULT),
@@ -2499,5 +2500,115 @@ async fn permissions_manual_and_auto_send_the_same_prefix() {
             "request {}: messages",
             index + 1
         );
+    }
+}
+
+/// The `ya-permission` entries of a session file, as their `decision`.
+fn journaled_decisions(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .expect("session file")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["type"] == "custom" && entry["customType"] == "ya-permission")
+        .map(|entry| {
+            entry["data"]["decision"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect()
+}
+
+/// yusAgent (YA-11, ticket 20, PR 2): the `ya-permission` entries of a session file change
+/// nothing the model receives, before and after a resume. Two sessions of one project, each on
+/// its own server (so the same call ids): A in "manual" with an asker that allows every call (one
+/// entry per cell in its file), B in "auto" (no entry). The same three prompts, then each file is
+/// reopened (`SessionManager::open`) in the same mode and one more prompt runs. Every request of A
+/// equals the request of B at the same rank, whole body, the prompt cache key (the session id)
+/// aside.
+#[tokio::test]
+async fn permissions_journal_does_not_change_the_requests_of_a_resumed_session() {
+    let api = Api::OpenAiResponses;
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let (agent_dir, cwd) = (fixture.agent_dir(), fixture.cwd());
+    let sessions = agent_dir.join("sessions");
+    let asked = Arc::new(Mutex::new(0_usize));
+    let wiring = |mode: PermissionMode| PermissionsWiring {
+        mode: Some(mode),
+        asker: (mode == PermissionMode::Manual)
+            .then(|| Arc::new(AllowEveryCall(Arc::clone(&asked))) as Arc<dyn PermissionAsker>),
+        ..PermissionsWiring::default()
+    };
+    let mut runs = Vec::new();
+    for mode in [PermissionMode::Manual, PermissionMode::Auto] {
+        let server = ModelServer::start(api).await;
+        let model = model_json(api, server.port, CODEX_DEFAULT);
+        let mut session = SessionManager::in_memory(&cwd);
+        let path = session.materialize_session_file(Some(sessions.clone()));
+        let engine = try_engine_with_permissions(
+            &model,
+            "prefix-test-placeholder",
+            &agent_dir,
+            &cwd,
+            session,
+            None,
+            wiring(mode),
+        )
+        .await
+        .expect("create_session_with");
+        for prompt in PROMPTS {
+            run_prompt(&engine, prompt).await;
+        }
+        drop(engine);
+        let resumed = SessionManager::open(&cwd, &sessions, &path);
+        let engine = try_engine_with_permissions(
+            &model,
+            "prefix-test-placeholder",
+            &agent_dir,
+            &cwd,
+            resumed,
+            None,
+            wiring(mode),
+        )
+        .await
+        .expect("create_session_with after the resume");
+        run_prompt(&engine, PROMPTS[1]).await;
+        drop(engine);
+        runs.push((path, server.bodies()));
+    }
+    assert_eq!(
+        *asked.lock().expect("asked lock"),
+        3,
+        "one request per cell"
+    );
+    let (manual_path, manual) = &runs[0];
+    let (auto_path, auto) = &runs[1];
+    assert_eq!(
+        journaled_decisions(manual_path),
+        vec!["allow"; 3],
+        "the manual session journaled its cells"
+    );
+    assert!(
+        journaled_decisions(auto_path).is_empty(),
+        "the auto session journaled nothing"
+    );
+    assert_eq!(manual.len(), EXPECTED_REQUESTS + 1, "manual requests");
+    assert_eq!(auto.len(), EXPECTED_REQUESTS + 1, "auto requests");
+    assert_prefix_stable(api, manual);
+    assert_prefix_stable(api, auto);
+    for (index, (manual, auto)) in manual.iter().zip(auto).enumerate() {
+        let mut manual = request_object(api, index + 1, manual);
+        let mut auto = request_object(api, index + 1, auto);
+        // The prompt cache key is the session id: one per session.
+        manual.remove("prompt_cache_key");
+        auto.remove("prompt_cache_key");
+        let (manual, auto) = (
+            Value::Object(manual).to_string(),
+            Value::Object(auto).to_string(),
+        );
+        let difference = first_difference(&auto, &manual);
+        assert_eq!(manual, auto, "request {}: {difference}", index + 1);
     }
 }

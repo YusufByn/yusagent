@@ -251,6 +251,8 @@ pub struct AgentSessionEngine {
     >,
     /// yusAgent (YA-03): writes the frozen tools into the durable header (`ya_frozen_tools`).
     ya_header_sink: std::sync::Mutex<Option<ya_frozen_tools::YaHeaderSink>>,
+    /// yusAgent (YA-11, ticket 20): the permission requests (`crate::ya_permissions`).
+    pub(crate) ya_permissions: std::sync::Arc<crate::ya_permissions::WorkerPermissions>,
     own_summary: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
     pub(crate) create_resources: std::sync::RwLock<CreateSessionResources>,
     pub(crate) autonomous:

@@ -460,6 +460,8 @@ impl Worker {
                 concrete.set_ya_header_sink(
                     crate::agent_engine::ya_frozen_tools::core_header_sink(Arc::clone(&core)),
                 );
+                // yusAgent (YA-11, ticket 20): permission requests and their journal.
+                crate::ya_permissions::install(concrete, &core, &events);
                 let sink_core = Arc::clone(&core);
                 let sink_notify = Arc::clone(&work_notify);
                 let autonomous_sink: crate::agent_engine::AutonomousAdmission = {

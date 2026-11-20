@@ -124,6 +124,8 @@ pub(crate) mod user_bash;
 pub mod util;
 pub mod worker;
 pub(crate) mod worker_stderr;
+// yusAgent (YA-11, ticket 20): the permission requests of a daemon session.
+pub mod ya_permissions;
 
 #[cfg(test)]
 pub(crate) mod test_support;

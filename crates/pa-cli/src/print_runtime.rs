@@ -160,6 +160,8 @@ fn daemon_acp_create(
         // The telemetry execution mode (TS main.ts `executionMode: appMode`).
         "executionMode": "acp",
     });
+    // yusAgent (YA-11, ticket 20): the ACP client answers the permission requests.
+    create_config[pa_daemon::ya_permissions::ASKER_FIELD] = serde_json::json!(true);
     if let Some(provider) = &config.provider {
         create_config["provider"] = serde_json::json!(provider);
     }

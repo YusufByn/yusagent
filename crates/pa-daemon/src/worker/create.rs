@@ -17,6 +17,8 @@ impl Worker {
         // One create in flight at a time: a concurrent create joins this open and
         // answers with the created summary instead of racing a second init.
         let _create_gate = self.create_gate.lock().await;
+        // yusAgent (YA-11, ticket 20): whether the session can ask for permission.
+        self.ya_permissions_declare(payload);
         let existing_summary = {
             let (core, inputs) = self.summary_inputs();
             core.created.then(|| self.summary_locked(&core, inputs))

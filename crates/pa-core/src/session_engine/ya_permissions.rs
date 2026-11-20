@@ -26,6 +26,13 @@
 //! Debug builds only: [`TEST_ENV`] overrides the setting, so that the upstream tests keep running
 //! tools without an asker (`.cargo/config.toml` sets it to `auto`, as it sets
 //! `PRIME_AGENT_PROMPT_VERSION`). Release builds ignore it. Listed in `docs/fork-changes.md`.
+//!
+//! PR 2 of the ticket (the daemon and ACP): an embedding that can ask may journal elsewhere than
+//! the engine's session manager ([`PermissionsWiring::journal`]: the daemon's engine runs on an
+//! in-memory manager, the worker owns the durable file).
+//!
+//! A request dropped before its answer (the turn is aborted while it waits: ACP
+//! `session/cancel`) is journaled as `"cancelled"`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -67,7 +74,9 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
-    fn label(self) -> &'static str {
+    /// The value of the setting (`"manual"`, `"auto"`).
+    #[must_use]
+    pub fn label(self) -> &'static str {
         match self {
             Self::Manual => "manual",
             Self::Auto => "auto",
@@ -128,14 +137,20 @@ pub trait PermissionAsker: Send + Sync {
     ) -> BoxFut<'static, PermissionDecision>;
 }
 
+/// Writes one journal entry (the `data` of a [`JOURNAL_TYPE`] custom entry) where the embedding
+/// keeps the session file.
+pub type PermissionJournal = Arc<dyn Fn(Value) + Send + Sync>;
+
 /// What the embedding passes to [`crate::session_engine::engine::create_session_with`].
 #[derive(Clone, Default)]
 pub struct PermissionsWiring {
-    /// Overrides the setting (tests, and later the per-session switch of ACP). `None` reads the
-    /// global settings.
+    /// Overrides the setting (tests). `None` reads the global settings.
     pub mode: Option<PermissionMode>,
     /// Who answers in `"manual"`. `None`: a manual session is refused at creation.
     pub asker: Option<Arc<dyn PermissionAsker>>,
+    /// Where the decisions are journaled. `None`: the engine's session manager (its file when it
+    /// has one).
+    pub journal: Option<PermissionJournal>,
 }
 
 /// The value of [`TEST_ENV`], in debug builds only.
@@ -238,26 +253,61 @@ pub fn resolve(
 pub struct PermissionGate {
     asker: Arc<dyn PermissionAsker>,
     session: Arc<tokio::sync::Mutex<SessionManager>>,
+    journal: Option<PermissionJournal>,
     /// The tool calls declined (or skipped after a refusal) whose turn has not ended yet.
     declined: Arc<Mutex<HashSet<String>>>,
 }
 
+/// Journals `"cancelled"` when a request is dropped before its answer (the turn was aborted
+/// while it waited).
+struct Unanswered<'a> {
+    gate: &'a PermissionGate,
+    tool_call_id: &'a str,
+    tool_name: &'a str,
+    answered: bool,
+}
+
+impl Drop for Unanswered<'_> {
+    fn drop(&mut self) {
+        if !self.answered {
+            self.gate.journal_detached(journal_data(
+                self.tool_call_id,
+                self.tool_name,
+                PermissionDecision::Cancelled.label(),
+            ));
+        }
+    }
+}
+
+/// The `data` of the journal entry of one decision.
+fn journal_data(tool_call_id: &str, tool_name: &str, decision: &str) -> Value {
+    json!({
+        "mode": PermissionMode::Manual.label(),
+        "toolCallId": tool_call_id,
+        "toolName": tool_name,
+        "decision": decision,
+    })
+}
+
 impl PermissionGate {
-    /// The gate of a session in `mode`: `None` in `"auto"` (nothing to install).
+    /// The gate of a session in `mode`: `None` in `"auto"` or without an asker (nothing to
+    /// install).
     #[must_use]
     pub fn new(
         mode: PermissionMode,
         wiring: &PermissionsWiring,
         session: Arc<tokio::sync::Mutex<SessionManager>>,
     ) -> Option<Self> {
-        match (mode, &wiring.asker) {
-            (PermissionMode::Manual, Some(asker)) => Some(Self {
-                asker: Arc::clone(asker),
-                session,
-                declined: Arc::default(),
-            }),
-            _ => None,
+        let asker = wiring.asker.as_ref()?;
+        if mode == PermissionMode::Auto {
+            return None;
         }
+        Some(Self {
+            asker: Arc::clone(asker),
+            session,
+            journal: wiring.journal.clone(),
+            declined: Arc::default(),
+        })
     }
 
     /// The `before_tool_call` hook: asks, journals, and blocks a declined call.
@@ -288,24 +338,31 @@ impl PermissionGate {
         let decision = if sibling_declined {
             None
         } else {
-            Some(
-                self.asker
-                    .ask(
-                        PermissionRequest {
-                            tool_call_id: call.id.clone(),
-                            tool_name: call.name.clone(),
-                            args: context.args.clone(),
-                        },
-                        signal,
-                    )
-                    .await,
-            )
+            let mut unanswered = Unanswered {
+                gate: self,
+                tool_call_id: &call.id,
+                tool_name: &call.name,
+                answered: false,
+            };
+            let decision = self
+                .asker
+                .ask(
+                    PermissionRequest {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        args: context.args.clone(),
+                    },
+                    signal,
+                )
+                .await;
+            unanswered.answered = true;
+            Some(decision)
         };
-        self.journal(
+        self.journal(journal_data(
             &call.id,
             &call.name,
             decision.map_or("skipped", PermissionDecision::label),
-        )
+        ))
         .await;
         if decision == Some(PermissionDecision::Allow) {
             return None;
@@ -320,19 +377,34 @@ impl PermissionGate {
         })
     }
 
-    async fn journal(&self, tool_call_id: &str, tool_name: &str, decision: &str) {
-        let data = json!({
-            "mode": PermissionMode::Manual.label(),
-            "toolCallId": tool_call_id,
-            "toolName": tool_name,
-            "decision": decision,
-        });
+    async fn journal(&self, data: Value) {
+        if let Some(journal) = &self.journal {
+            journal(data);
+            return;
+        }
         // A journal that cannot be written does not change the decision.
         let _ = self
             .session
             .lock()
             .await
             .append_custom_entry(JOURNAL_TYPE, Some(data));
+    }
+
+    /// [`Self::journal`] from a destructor: the engine's session manager is written by a task.
+    fn journal_detached(&self, data: Value) {
+        if let Some(journal) = &self.journal {
+            journal(data);
+            return;
+        }
+        let session = Arc::clone(&self.session);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = session
+                    .lock()
+                    .await
+                    .append_custom_entry(JOURNAL_TYPE, Some(data));
+            });
+        }
     }
 
     /// Whether the batch that just ended had a declined call (and forgets its calls).
@@ -428,7 +500,7 @@ mod tests {
     fn manual_without_asker_is_refused_with_the_exact_line_and_path() {
         let wiring = PermissionsWiring {
             mode: Some(PermissionMode::Manual),
-            asker: None,
+            ..PermissionsWiring::default()
         };
         let error = resolve(None, Path::new("/home/u/.yusagent"), &wiring, false)
             .unwrap_err()
@@ -521,6 +593,23 @@ mod tests {
         decision: PermissionDecision,
         turns: impl FnOnce(&ScriptedProvider),
     ) -> ManualSession {
+        session_with(
+            decision,
+            PermissionsWiring {
+                mode: Some(PermissionMode::Manual),
+                ..PermissionsWiring::default()
+            },
+            turns,
+        )
+        .await
+    }
+
+    /// A session on `wiring`, whose asker answers `decision`.
+    async fn session_with(
+        decision: PermissionDecision,
+        mut wiring: PermissionsWiring,
+        turns: impl FnOnce(&ScriptedProvider),
+    ) -> ManualSession {
         let provider = Arc::new(ScriptedProvider::new(model()));
         turns(&provider);
         let asker = Arc::new(ScriptedAsker {
@@ -531,10 +620,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&cwd).unwrap();
-        let wiring = PermissionsWiring {
-            mode: Some(PermissionMode::Manual),
-            asker: Some(Arc::clone(&asker) as Arc<dyn PermissionAsker>),
-        };
+        wiring.asker = Some(Arc::clone(&asker) as Arc<dyn PermissionAsker>);
         let engine = create_session_with(
             SessionEngineConfig {
                 cwd,
@@ -731,5 +817,80 @@ mod tests {
                 ("call-2".to_string(), "skipped".to_string()),
             ]
         );
+    }
+
+    /// A journal that collects the entries (the daemon's worker writes them to its file).
+    fn collecting_journal() -> (PermissionJournal, Arc<Mutex<Vec<Value>>>) {
+        let entries: Arc<Mutex<Vec<Value>>> = Arc::default();
+        let sink = Arc::clone(&entries);
+        let journal: PermissionJournal =
+            Arc::new(move |data: Value| sink.lock().unwrap().push(data));
+        (journal, entries)
+    }
+
+    /// Never answers; signals when it is asked.
+    struct SilentAsker(Arc<tokio::sync::Notify>);
+
+    impl PermissionAsker for SilentAsker {
+        fn ask(
+            &self,
+            _request: PermissionRequest,
+            _signal: AbortSignal,
+        ) -> BoxFut<'static, PermissionDecision> {
+            self.0.notify_one();
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// PR 2 (D7): a request still waiting when the turn is aborted (ACP `session/cancel`) is
+    /// journaled as "cancelled", the call does not run, and the model gets no other request.
+    #[tokio::test]
+    async fn a_request_dropped_by_an_abort_is_journaled_as_cancelled() {
+        let provider = Arc::new(ScriptedProvider::new(model()));
+        provider.push_tool_call_turn(None, vec![("call-1", "echo", json!({ "text": "hi" }))]);
+        provider.push_text_turn("not requested");
+        let asked = Arc::new(tokio::sync::Notify::new());
+        let (journal_sink, journaled) = collecting_journal();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let engine = create_session_with(
+            SessionEngineConfig {
+                cwd,
+                agent_dir: dir.path().join("agent"),
+                model: Some(model()),
+                stream_fn: Some(provider.stream_fn()),
+                tools: vec![counting_tool(Arc::clone(&runs))],
+                daemonless: true,
+                ..Default::default()
+            },
+            PermissionsWiring {
+                mode: Some(PermissionMode::Manual),
+                asker: Some(Arc::new(SilentAsker(Arc::clone(&asked))) as Arc<dyn PermissionAsker>),
+                journal: Some(journal_sink),
+            },
+        )
+        .await
+        .unwrap();
+        let abort = async {
+            asked.notified().await;
+            engine.session.agent().abort();
+        };
+        // The aborted turn may answer with an error: only its effects are checked.
+        let turn = async {
+            let _ = engine
+                .prompt("run the echo tool", PromptOptions::default())
+                .await;
+            engine.session.agent().wait_for_idle().await;
+        };
+        let ((), ()) = tokio::join!(turn, abort);
+
+        assert_eq!(runs.load(Ordering::SeqCst), 0, "the tool did not run");
+        assert_eq!(provider.calls().len(), 1, "no request after the abort");
+        let journaled = journaled.lock().unwrap().clone();
+        assert_eq!(journaled.len(), 1, "{journaled:?}");
+        assert_eq!(journaled[0]["toolCallId"], "call-1");
+        assert_eq!(journaled[0]["decision"], "cancelled");
     }
 }

@@ -1,0 +1,418 @@
+// too_many_lines: style gate, not correctness.
+#![allow(clippy::too_many_lines)]
+#![cfg(unix)]
+
+//! yusAgent (YA-11, ticket 20, PR 2): `session/request_permission` end to end. The real binary
+//! serves ACP over stdio on its own sandboxed daemon; the worker runs the real engine on the faux
+//! provider (`"engine": "faux"`) and a real kernel, in `"manual"` (the default: [`TEST_ENV`],
+//! which `.cargo/config.toml` sets to `auto` for the upstream tests, is removed).
+//! a. Allowed then declined: the request carries the `allow_once` and `reject_once` options;
+//!    allowed, the cell runs and goes `in_progress`; declined, it does not run, its result is the
+//!    `[permission-denied]` text and the turn ends. Both decisions are journaled in the worker's
+//!    session file.
+//! b. `session/cancel` while a request waits: the turn answers `cancelled`, the cell does not run,
+//!    the decision is journaled as `cancelled`.
+//! c. The client disconnects while a request waits: the cell does not run, its result is an error
+//!    and the turn stops (the model gets no other request); journaled as `cancelled`.
+//!
+//! Listed in `docs/fork-changes.md`.
+
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{channel, Receiver};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+const TEST_ENV: &str = "PRIME_AGENT_TEST_PERMISSIONS";
+const TIMEOUT: Duration = Duration::from_mins(2);
+const DENIED: &str = "[permission-denied] The user declined this cell; nothing was executed.";
+
+/// The kernel Python with prime-agent-runtime installed (`PA_E2E_KERNEL_PYTHON` overrides), as
+/// `ya_permissions_e2e.rs`.
+fn kernel_python() -> PathBuf {
+    if let Some(explicit) = std::env::var_os("PA_E2E_KERNEL_PYTHON") {
+        return PathBuf::from(explicit);
+    }
+    let candidate = PathBuf::from(std::env::var("HOME").map_or_else(
+        |_| "/home/ubuntu/.yusagent/kernel-venv/bin/python".to_string(),
+        |home| format!("{home}/.yusagent/kernel-venv/bin/python"),
+    ));
+    assert!(
+        candidate.exists(),
+        "kernel python {} not found: set PA_E2E_KERNEL_PYTHON",
+        candidate.display()
+    );
+    candidate
+}
+
+/// One scripted turn: a `python_repl` cell with the call id `id`.
+fn cell(id: &str, code: &str) -> Value {
+    json!({ "content": [
+        { "type": "toolCall", "id": id, "name": "python_repl", "arguments": { "code": code } },
+    ] })
+}
+
+/// A cell that creates `name` in the session's cwd.
+fn touch(id: &str, name: &str) -> Value {
+    cell(id, &format!("open({name:?}, 'w').write('x')"))
+}
+
+/// The ACP child on its own home and daemon socket (as `acp_mode_e2e.rs`).
+struct Client {
+    child: Child,
+    stdin: Option<std::process::ChildStdin>,
+    lines: Receiver<String>,
+    next_id: u64,
+    home: tempfile::TempDir,
+    socket: PathBuf,
+}
+
+impl Client {
+    fn spawn(script: &Value) -> Client {
+        let home = tempfile::TempDir::new().unwrap();
+        let socket = home.path().join("daemon.sock");
+        let script_path = home.path().join("worker-script.json");
+        std::fs::write(&script_path, script.to_string()).unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_prime-agent"))
+            .args(["--mode", "acp", "--daemon-socket"])
+            .arg(&socket)
+            .env("HOME", home.path())
+            .env("PRIME_AGENT_FAUX_SCRIPT", &script_path)
+            .env("PRIME_AGENT_KERNEL_PYTHON", kernel_python())
+            .env(
+                pa_daemon::worker::WORKER_SUPERVISOR_LOST_EXIT_MS_ENV,
+                "15000",
+            )
+            .env_remove(TEST_ENV)
+            .env_remove("PRIME_AGENT_CODING_AGENT_DIR")
+            .current_dir(home.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("binary present");
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("stdout piped");
+        let (tx, lines) = channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { return };
+                if tx.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        Client {
+            child,
+            stdin,
+            lines,
+            next_id: 0,
+            home,
+            socket,
+        }
+    }
+
+    fn send(&mut self, frame: &Value) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        writeln!(stdin, "{frame}").unwrap();
+        stdin.flush().unwrap();
+    }
+
+    fn request(&mut self, method: &str, params: &Value) -> u64 {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+        id
+    }
+
+    fn notify(&mut self, method: &str, params: &Value) {
+        self.send(&json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+    }
+
+    /// Reads frames until one matches; returns it with the frames before it.
+    fn wait_for(&mut self, mut matches: impl FnMut(&Value) -> bool) -> (Value, Vec<Value>) {
+        let deadline = Instant::now() + TIMEOUT;
+        let mut before = Vec::new();
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "timed out; frames so far: {before:?}");
+            let line = self
+                .lines
+                .recv_timeout(left)
+                .unwrap_or_else(|error| panic!("no frame ({error}); frames so far: {before:?}"));
+            let frame: Value = serde_json::from_str(&line).expect("a JSON line");
+            if matches(&frame) {
+                return (frame, before);
+            }
+            before.push(frame);
+        }
+    }
+
+    fn wait_response(&mut self, id: u64) -> (Value, Vec<Value>) {
+        self.wait_for(|frame| {
+            frame["id"] == json!(id)
+                && (frame.get("result").is_some() || frame.get("error").is_some())
+        })
+    }
+
+    /// The next `session/request_permission`, with the frames before it.
+    fn wait_permission_request(&mut self) -> (Value, Vec<Value>) {
+        self.wait_for(|frame| frame["method"] == "session/request_permission")
+    }
+
+    /// Answers a `session/request_permission` with `outcome`.
+    fn answer(&mut self, request: &Value, outcome: &Value) {
+        let id = request["id"].clone();
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "result": { "outcome": outcome } }));
+    }
+
+    /// `initialize` then `session/new`: the session id and its config options.
+    fn open_session(&mut self) -> (String, Value) {
+        let init = self.request(
+            "initialize",
+            &json!({
+                "protocolVersion": 1,
+                "clientCapabilities": {},
+                "clientInfo": { "name": "ya-permissions-e2e", "version": "0.0.1" },
+            }),
+        );
+        let _ = self.wait_response(init);
+        let new = self.request("session/new", &json!({ "mcpServers": [] }));
+        let (response, _) = self.wait_response(new);
+        let session_id = response["result"]["sessionId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a session: {response}"))
+            .to_string();
+        (session_id, response["result"]["configOptions"].clone())
+    }
+
+    fn prompt(&mut self, session_id: &str, text: &str) -> u64 {
+        self.request(
+            "session/prompt",
+            &json!({ "sessionId": session_id, "prompt": [{ "type": "text", "text": text }] }),
+        )
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.home.path().join(name)
+    }
+
+    /// The `data` of the `ya-permission` entries of the session files under the home.
+    fn journal(&self) -> Vec<Value> {
+        session_lines(&self.home.path().join(".yusagent/sessions"))
+            .into_iter()
+            .filter(|entry| entry["type"] == "custom" && entry["customType"] == "ya-permission")
+            .map(|entry| entry["data"].clone())
+            .collect()
+    }
+
+    /// Polls [`Self::journal`] until `done` holds.
+    fn journal_until(&self, done: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            let journal = self.journal();
+            if done(&journal) || Instant::now() >= deadline {
+                return journal;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        // The sandboxed supervisor goes with the test.
+        if let Ok(mut stream) = pa_types::platform::transport::connect_blocking(&self.socket) {
+            let frame = json!({
+                "type": "command", "id": "shutdown-test",
+                "protocol": { "name": "prime-agent.daemon", "version": pa_types::daemon::DAEMON_PROTOCOL_VERSION },
+                "command": { "type": "shutdown" },
+            });
+            let _ = writeln!(stream, "{frame}");
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+}
+
+/// Every JSON line of the `.jsonl` files under `dir`.
+fn session_lines(dir: &Path) -> Vec<Value> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            lines.extend(session_lines(&path));
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "jsonl")
+        {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            lines.extend(
+                text.lines()
+                    .filter_map(|line| serde_json::from_str(line).ok()),
+            );
+        }
+    }
+    lines
+}
+
+fn decisions(journal: &[Value]) -> Vec<String> {
+    journal
+        .iter()
+        .filter_map(|data| data["decision"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// The `sessionUpdate`s of `kind` for the tool call `id`.
+fn tool_updates<'a>(frames: &'a [Value], kind: &str, id: &str) -> Vec<&'a Value> {
+    frames
+        .iter()
+        .map(|frame| &frame["params"]["update"])
+        .filter(|update| update["sessionUpdate"] == kind && update["toolCallId"] == id)
+        .collect()
+}
+
+/// a. Allowed, then declined.
+#[test]
+fn a_call_is_allowed_then_a_call_is_declined() {
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        touch("call-allow", "allowed.txt"),
+        { "text": "the first cell ran" },
+        touch("call-deny", "declined.txt"),
+        { "text": "never requested: the turn stops after a refusal" },
+    ] }));
+    let (session_id, _) = client.open_session();
+
+    let prompt = client.prompt(&session_id, "create allowed.txt");
+    let (request, _) = client.wait_permission_request();
+    let params = &request["params"];
+    assert_eq!(params["sessionId"], session_id.as_str());
+    assert_eq!(params["toolCall"]["toolCallId"], "call-allow");
+    assert_eq!(params["toolCall"]["status"], "pending");
+    let kinds: Vec<&str> = params["options"]
+        .as_array()
+        .expect("options")
+        .iter()
+        .filter_map(|option| option["kind"].as_str())
+        .collect();
+    assert_eq!(kinds, vec!["allow_once", "reject_once"]);
+    let allow = params["options"][0]["optionId"].clone();
+    client.answer(
+        &request,
+        &json!({ "outcome": "selected", "optionId": allow }),
+    );
+    let (response, frames) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    let progress = tool_updates(&frames, "tool_call_update", "call-allow");
+    assert_eq!(
+        progress.first().map(|update| &update["status"]),
+        Some(&json!("in_progress"))
+    );
+    assert_eq!(
+        progress.last().map(|update| &update["status"]),
+        Some(&json!("completed"))
+    );
+    assert!(client.path("allowed.txt").exists(), "the allowed cell ran");
+
+    let prompt = client.prompt(&session_id, "create declined.txt");
+    let (request, _) = client.wait_permission_request();
+    assert_eq!(request["params"]["toolCall"]["toolCallId"], "call-deny");
+    let reject = request["params"]["options"][1]["optionId"].clone();
+    client.answer(
+        &request,
+        &json!({ "outcome": "selected", "optionId": reject }),
+    );
+    let (response, frames) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    let ended = tool_updates(&frames, "tool_call_update", "call-deny");
+    let last = ended.last().expect("the declined call's end");
+    assert_eq!(last["status"], "failed");
+    assert!(last.to_string().contains("[permission-denied]"), "{last}");
+    assert!(
+        !client.path("declined.txt").exists(),
+        "the declined cell did not run"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| frame.to_string().contains("never requested")),
+        "the turn stopped after the refusal: {frames:?}"
+    );
+
+    let journal = client.journal_until(|journal| decisions(journal).len() >= 2);
+    assert_eq!(decisions(&journal), vec!["allow", "deny"], "{journal:?}");
+}
+
+/// b. `session/cancel` while a request waits.
+#[test]
+fn a_cancel_while_a_request_waits_stops_the_turn() {
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        touch("call-cancel", "cancelled.txt"),
+        { "text": "never requested" },
+    ] }));
+    let (session_id, _) = client.open_session();
+    let prompt = client.prompt(&session_id, "create cancelled.txt");
+    let (request, _) = client.wait_permission_request();
+    client.notify("session/cancel", &json!({ "sessionId": session_id }));
+    // The client answers `cancelled` to a request still pending after its cancel (ACP).
+    client.answer(&request, &json!({ "outcome": "cancelled" }));
+    let (response, _) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "cancelled", "{response}");
+    assert!(
+        !client.path("cancelled.txt").exists(),
+        "the cell did not run"
+    );
+    let journal = client.journal_until(|journal| !decisions(journal).is_empty());
+    assert_eq!(decisions(&journal), vec!["cancelled"], "{journal:?}");
+}
+
+/// c. The client disconnects while a request waits.
+#[test]
+fn a_disconnect_while_a_request_waits_declines_the_call() {
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        touch("call-gone", "gone.txt"),
+        { "text": "never requested" },
+    ] }));
+    let (session_id, _) = client.open_session();
+    let _prompt = client.prompt(&session_id, "create gone.txt");
+    let _ = client.wait_permission_request();
+    // EOF: the editor went away.
+    client.stdin = None;
+    let journal = client.journal_until(|journal| !decisions(journal).is_empty());
+    assert_eq!(decisions(&journal), vec!["cancelled"], "{journal:?}");
+    let messages = || {
+        session_lines(&client.home.path().join(".yusagent/sessions"))
+            .into_iter()
+            .filter(|entry| entry["type"] == "message")
+            .map(|entry| entry["message"].clone())
+            .collect::<Vec<_>>()
+    };
+    let result = || {
+        messages()
+            .into_iter()
+            .find(|message| message["role"] == "toolResult" && message["toolCallId"] == "call-gone")
+    };
+    let deadline = Instant::now() + TIMEOUT;
+    while result().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let result = result().expect("the call's result");
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(result.to_string().contains(DENIED), "{result}");
+    assert!(!client.path("gone.txt").exists(), "the cell did not run");
+    // The turn stopped: the model's next answer was never requested.
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        !messages()
+            .iter()
+            .any(|message| message.to_string().contains("never requested")),
+        "the turn stopped after the call"
+    );
+}
