@@ -272,6 +272,19 @@ impl AgentView {
             let covered = toasts.len().min(window_height);
             self.click.mask_rows(top_rows, top_rows + covered);
         }
+        // yusAgent (YA-11, ticket 20): the permission panel (`crate::ya_permission_panel`)
+        // overlays the transcript window's bottom rows; a click there reaches nothing beneath.
+        if let Some(panel) = self.ya_permission.as_mut() {
+            let rows = panel.render(&self.theme, width, window_height, now);
+            let end = top_rows + window_height;
+            let first = end.saturating_sub(rows.len());
+            for (offset, line) in rows.into_iter().enumerate() {
+                if let Some(row) = frame.get_mut(first + offset) {
+                    *row = pad_row(line, width);
+                }
+            }
+            self.click.mask_rows(first, end);
+        }
         frame
     }
 

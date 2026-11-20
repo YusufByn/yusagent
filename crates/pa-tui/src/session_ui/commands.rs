@@ -197,6 +197,8 @@ impl SessionUi {
                 self.track_menu_opened("model", "command");
                 self.track_feature_outcome("model", "initiated", None);
             }
+            // yusAgent (YA-11, ticket 20): `/permissions [manual|auto]` (`super::ya_permissions`).
+            "permissions" => self.permissions_command(&resolved.args, view).await,
             "effort" => {
                 let Some(state) = self.connection_state(view).await else {
                     return Ok(());

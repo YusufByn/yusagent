@@ -106,6 +106,7 @@ impl SessionUi {
             pending_model: None,
             pending_model_provider: None,
             pending_thinking_suffix: None,
+            ya_permission_auto: false,
             pending_queue: None,
             queue_selection: crate::queued::QueueSelection::default(),
             context: None,
@@ -355,7 +356,13 @@ impl SessionUi {
             recovery_config: None,
             env: client_env.clone(),
             launch_env: None,
-            rest: Map::default(),
+            // yusAgent (YA-11, ticket 20): this client answers the permission requests.
+            rest: [(
+                pa_types::daemon::ya_permissions::ASKER_FIELD.to_string(),
+                Value::Bool(true),
+            )]
+            .into_iter()
+            .collect(),
         };
         let direct_attached = self
             .client
@@ -383,6 +390,8 @@ impl SessionUi {
         // The bash slot follows the attached session's live state: the captured
         // state drives the next rebuild's resync edge.
         let state = attach.snapshot.get("state");
+        // yusAgent (YA-11, ticket 20): the permission mode, shown by the rebuild's tray.
+        self.ya_permission_auto = super::ya_permissions::state_is_auto(state);
         let resync_bash = ResyncBash {
             was_running: self.user_bash_running,
             snap_running: state
@@ -632,6 +641,8 @@ impl SessionUi {
         // The tray's effort suffix moves with the same snapshot; the bare name
         // wins when the state reports neither.
         view.chrome.thinking_suffix = self.pending_thinking_suffix.take();
+        // yusAgent (YA-11, ticket 20): "auto" without a sandbox stays visible (decision D4).
+        view.chrome.ya_auto_no_sandbox = self.ya_permission_auto;
         view.queued = self.pending_queue.take().unwrap_or_default();
         // Any browse selection belonged to the previous queue and drops.
         let _ = self.queue_selection.reset();

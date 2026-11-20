@@ -53,6 +53,8 @@ pub enum SelectorKind {
     ResourceConfig,
     /// The `/effort` picker: single-select semantics, Enter applies.
     Effort,
+    /// yusAgent (YA-11, ticket 20): the `/permissions` picker, as `/effort`.
+    Permissions,
 }
 
 impl SelectorKind {
@@ -67,6 +69,9 @@ impl SelectorKind {
                 "Thinking Level",
                 &[("enter", "select"), ("escape", "close")],
             ),
+            SelectorKind::Permissions => {
+                ("Permissions", &[("enter", "select"), ("escape", "close")])
+            }
         }
     }
 }
@@ -474,6 +479,7 @@ impl ConfigSelector {
         match self.kind {
             SelectorKind::ResourceConfig => "Type to filter resources",
             SelectorKind::Effort => "Type to filter levels",
+            SelectorKind::Permissions => "Type to filter modes",
         }
     }
 
@@ -482,6 +488,7 @@ impl ConfigSelector {
         match self.kind {
             SelectorKind::ResourceConfig => "No resources found",
             SelectorKind::Effort => "No matching levels",
+            SelectorKind::Permissions => "No matching modes",
         }
     }
 

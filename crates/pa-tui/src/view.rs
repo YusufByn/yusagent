@@ -104,6 +104,8 @@ pub struct AgentView {
     pub reload_box: Option<String>,
     pub side_pane: Option<crate::side_question::SideQuestionPane>,
     pub settings_menu: Option<crate::settings_menu::SettingsMenu>,
+    /// yusAgent (YA-11, ticket 20): the open permission panel (`crate::ya_permission_panel`).
+    pub ya_permission: Option<crate::ya_permission_panel::PermissionPanel>,
     /// The read-only info panel (operator directive 2026-09-26: the
     /// `/context`-family displays dock instead of flooding the transcript).
     pub info_panel: Option<crate::info_panel::InfoPanel>,
@@ -312,6 +314,7 @@ impl AgentView {
             reload_box: None,
             side_pane: None,
             settings_menu: None,
+            ya_permission: None,
             info_panel: None,
             show_images: true,
             show_hardware_cursor: false,

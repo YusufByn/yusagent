@@ -1086,6 +1086,56 @@ Décisions : `docs/tickets/20-ya11-permissions.md`, section « PR 2 ». En manue
 
 Limites connues : un client qui s'attache sans `yaPermissionAsker` (TUI) voit les événements de demande sans pouvoir y répondre ; après une relance du worker, le client ACP n'est plus enregistré comme répondant tant qu'il ne s'est pas rattaché, et les demandes sont retirées aussitôt (refus).
 
+## Permissions, PR 3 : TUI (YA-11, ticket 20)
+
+Décisions : `docs/tickets/20-ya11-permissions.md`, section « PR 3 » (T1 à T10). Le TUI se déclare répondant (`yaPermissionAsker` sur son `create` et son `attach`) : ses sessions ne sont plus refusées en manuel. Une demande ouvre un panneau qui montre l'appel entier et prend `y` (autoriser une fois), `n` ou `Esc` (refuser une fois) après 0,5 s sans frappe ; avant, les touches vont à l'éditeur. `Ctrl+C` retire la demande aussitôt. `/permissions [manual|auto]` passe par la même commande que le sélecteur ACP (journalisée) ; la barre montre « auto · no sandbox » tant que la session est en « auto » (D4). Le worker annonce chaque changement de mode (`ya_permission_mode`) et retire les demandes d'un client parti avec sa connexion directe (T8). **Ni prompt, ni tools, ni paramètres de requête touchés : préfixe inchangé** (test `manual_and_auto_send_the_same_requests`).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-types/src/daemon/ya_permissions.rs` | nouveau | Noms du protocole des permissions (champ `yaPermissionAsker`, événements `ya_permission_request`, `ya_permission_resolved`, `ya_permission_mode`, commande `ya_permissions`, champ d'état `yaPermissions`), partagés par le worker, le pont ACP et le TUI (qui ne dépend que de `pa-types`). | YA-11 |
+| `crates/pa-types/src/daemon/mod.rs` | modif. (fichier upstream, 2 lignes) | Déclaration du module. | YA-11 |
+| `crates/pa-types/src/slash_commands.rs` | modif. (fichier upstream, 2 lignes) | Commande `permissions` (`[manual\|auto]`) dans la table des commandes slash. | YA-11 |
+| `crates/pa-daemon/src/ya_permissions.rs` | modif. (fichier du fork) | Noms repris de `pa-types` ; `set_mode` émet `ya_permission_mode` quand le mode change. Test unitaire étendu. | YA-11 |
+| `crates/pa-daemon/src/worker/connection.rs` | modif. (fichier upstream, 11 lignes) | **T8** : `release_session_attachments` (fin d'une connexion, dont un lien direct, qui n'a jamais de `detach` routé par le superviseur) retire de la liste des répondants les clients qui partent avec elle ; sans cela, une demande restait en attente jusqu'à l'annulation du tour. `handle_attach` : l'état du snapshot porte `yaPermissions`, comme `get_connection_state` (la barre du TUI). | YA-11 |
+| `crates/pa-tui/src/ya_permission_panel.rs` | nouveau | Panneau : texte entier de l'appel, replié à la largeur, caractères de contrôle et de mise en forme invisibles montrés échappés ; fenêtre de calme (T3) ; défilement ; file des demandes ; étiquette `AUTO_BADGE`. Tests unitaires (frappe continue avec `y` sans effet, `y` et `n` après une pause, `Ctrl+C` dans la fenêtre, repli, échappement, rendu). | YA-11 |
+| `crates/pa-tui/src/session_ui/ya_permissions.rs` | nouveau | Événements de demande, de clôture et de mode ; touches du panneau ; réponse `respond` ; `/permissions` (choix ou argument) par `set_mode` ; état « auto » de la barre. | YA-11 |
+| `crates/pa-tui/src/lib.rs` | modif. (fichier upstream, 2 lignes) | Déclaration du module `ya_permission_panel`, sans quoi le panneau du fork ne compile pas dans la crate. | YA-11 |
+| `crates/pa-tui/src/session_ui.rs` | modif. (fichier upstream, 5 lignes) | Déclaration du module `session_ui::ya_permissions` (sous-module, pour lire les champs privés de `SessionUi`) et champ `ya_permission_auto`, l'état « auto » gardé d'un attach à la reconstruction de la vue. | YA-11 |
+| `crates/pa-tui/src/view.rs` | modif. (fichier upstream, 3 lignes) | Champ `ya_permission` d'`AgentView`. | YA-11 |
+| `crates/pa-tui/src/view/frame.rs` | modif. (fichier upstream, 13 lignes) | Seul endroit où le cadre est composé : le panneau y est posé sur les dernières lignes de la fenêtre de transcription (comme les toasts sur les premières) et ces lignes sont masquées aux clics ; l'éditeur, le curseur et les zones de clic du dock restent où ils sont, ce qui permet à la frappe de continuer dans l'éditeur pendant la fenêtre de calme (T3). | YA-11 |
+| `crates/pa-tui/src/session_ui/apply.rs` | modif. (fichier upstream, 4 lignes) | Les événements de permission passent par le module du fork avant `event_to_update` (qui les réduisait à un rafraîchissement du statut). | YA-11 |
+| `crates/pa-tui/src/session_ui/keys.rs` | modif. (fichier upstream, 9 lignes) | Le panneau voit chaque touche en premier et la rend si la fenêtre de calme court ; un collage relance la fenêtre ; bras `Permissions` du choix. | YA-11 |
+| `crates/pa-tui/src/session_ui/lifecycle.rs` | modif. (fichier upstream, 12 lignes) | `attach` avec `yaPermissionAsker` ; lecture de `yaPermissions` dans l'état du snapshot ; la reconstruction recopie l'état « auto » dans la barre. | YA-11 |
+| `crates/pa-tui/src/session_ui/commands.rs` | modif. (fichier upstream, 2 lignes) | Bras `permissions`. | YA-11 |
+| `crates/pa-tui/src/interactive.rs` | modif. (fichier upstream, 2 lignes) | `create_config` porte `yaPermissionAsker` (repris par la reprise depuis la vue Agents). | YA-11 |
+| `crates/pa-tui/src/interactive/run.rs` | modif. (fichier upstream, 18 lignes) | Le réveil de calme (`quiet_tick`) tourne tant que le panneau n'a pas été dessiné prêt à répondre, et redessine quand il l'est. | YA-11 |
+| `crates/pa-tui/src/chrome.rs` | modif. (fichier upstream, 10 lignes) | Champ `ya_auto_no_sandbox` de `ChromeState` ; étiquette en tête du côté droit de la barre, couleur d'avertissement. | YA-11 |
+| `crates/pa-tui/src/choice_picker.rs` | modif. (fichier upstream, 21 lignes) | `/permissions` sans argument ouvre un choix `manual` / `auto` (T4) : le sélecteur de `/effort` est réutilisé plutôt que recopié, d'où la variante `ChoicePurpose::Permissions` et le constructeur `ChoicePicker::permissions`. | YA-11 |
+| `crates/pa-tui/src/config_selector.rs` | modif. (fichier upstream, 7 lignes) | Variante `SelectorKind::Permissions` : sans elle, le choix s'afficherait sous le titre « Thinking Level » et avec les textes de `/effort` (titre, invite de filtre, ligne « aucun résultat »). | YA-11 |
+| `crates/pa-cli/Cargo.toml`, `Cargo.lock` | modif. (1 dépendance de test) | `vt100 = "0.15"` en dépendance de test de `pa-cli` (version déjà résolue pour les tests de `pa-tui`) : le TUI dessine par différence de cellules (ratatui), l'e2e pty doit émuler le terminal pour lire l'écran. Hors du binaire livré (voir sous le tableau). | YA-11 |
+| `crates/pa-daemon/tests/ya_permissions_direct_link_e2e.rs` | nouveau | **T8** : un client répondant attaché par lien direct ferme son lien pendant une demande ; la demande est retirée (`cancelled`), le tour s'arrête, la cellule ne tourne pas. Rouge sans le correctif : run `ci` 44754613332, `test shard 1/8`. | YA-11 |
+| `crates/pa-daemon/tests/ya_permissions_same_requests_e2e.rs` | nouveau | **T9** : vrai démon, vrai kernel, serveur local qui joue le modèle ; le même tour en manuel (accord) et en « auto » envoie des corps de requête identiques, `prompt_cache_key` mis à part. | YA-11 |
+| `crates/pa-cli/tests/ya_permissions_tui_pty_e2e.rs` | nouveau | Vrai binaire, TUI sur pty (terminal de contrôle), démon, faux provider, vrai kernel, mode manuel : frappe pendant la demande renvoyée à l'éditeur, accord par `y` après une pause, `/permissions auto` (étiquette, cellule sans panneau), retour en manuel, refus par `n` ; journal `allow`, deux changements de mode, `deny`. | YA-11 |
+| `bench/tools/ya_permissions_tui_demo.py` | nouveau (outil du fork) | Démo du contrôle : démon isolé, TUI du binaire, provider factice ; une cellule autorisée, une refusée, `/permissions auto` et une cellule sans panneau ; vérifie fichiers, messages du fichier de session, journal `ya-permission` et journal du worker (code de sortie 1 sinon). Mode `--pilote` (pty, écran lu par l'émulateur de `scripts/lifecycle_lib.py`) pour le lancement de Claude Code (règle 13). | YA-11 |
+| `.changes/ya-20-permissions-tui.md` | nouveau | Fragment de changelog. | YA-11 |
+
+**`vt100` n'entre pas dans le binaire livré.** Dans `crates/pa-cli/Cargo.toml`, il est déclaré à la ligne 45, dans la section `[dev-dependencies]` qui commence à la ligne 26 (les dépendances du binaire sont sous `[dependencies]`, ligne 8 ; le binaire `prime-agent`, renommé `yusagent` à l'empaquetage, est déclaré lignes 22-24). Cargo ne compile une dépendance de test que pour les tests, exemples et benchs du paquet, jamais pour `cargo build --release`. Vérifié par la résolution, sans compilation :
+
+```sh
+cargo tree -p pa-cli -e normal,build -i vt100 --target all --offline   # « warning: nothing to print. »
+cargo tree -p pa-cli -e dev -i vt100 --offline --depth 1               # vt100 v0.15.2 <- [dev-dependencies] pa-cli
+```
+
+Les deux autres déclarations (`crates/pa-tui/Cargo.toml:36`, section `[dev-dependencies]` ligne 33 ; `crates/pa-perf/Cargo.toml:21`, outil de perf, absent de l'arbre normal de `pa-cli` : `cargo tree -p pa-cli -e normal,build --target all --offline | grep -c pa-perf` donne `0`) existaient avant ce ticket.
+
+### Tests upstream touchés (YA-11, ticket 20, PR 3)
+
+| Fichier | Changement | Raison |
+|---|---|---|
+| `crates/pa-tui/src/interactive/tests.rs` | `create_config_binds_a_new_child_to_its_parent` : le JSON attendu porte `"yaPermissionAsker": true`. | Le test compare la config du `create` en entier. |
+
+Limites connues : une demande émise avant l'attach du TUI (session ouverte ailleurs) n'est pas rejouée à l'attach ; le panneau ne la voit pas, un autre client répondant ou l'annulation du tour la tranche. L'étiquette « auto » ne s'affiche que pour une session qui sait demander (`yaPermissions` absent sinon).
+
 ## Bail de session sous un chemin symbolique (ticket 21)
 
 Constat et décision : `docs/tickets/21-bail-chemin-symbolique.md`.

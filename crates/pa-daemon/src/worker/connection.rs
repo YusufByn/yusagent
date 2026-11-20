@@ -876,7 +876,9 @@ impl Worker {
             create_daemon_replay_info(resume_cursor.as_ref(), last_event_sequence, &generation);
         let cursor = json!({ "generation": generation, "sequence": last_event_sequence });
         let summary_value = serde_json::to_value(&summary).unwrap_or(Value::Null);
-        let state_value = serde_json::to_value(&state).unwrap_or(Value::Null);
+        let mut state_value = serde_json::to_value(&state).unwrap_or(Value::Null);
+        // yusAgent (YA-11, ticket 20): the permission mode, as `get_connection_state` (the TUI).
+        self.ya_permissions_state(&mut state_value);
         // The messages move into the snapshot once (avoiding a second
         // message tree per attach).
         let mut snapshot = json!({
@@ -1019,6 +1021,8 @@ impl Worker {
         if ids.is_empty() {
             return;
         }
+        // yusAgent (YA-11, ticket 20): the ids that left with this connection.
+        let mut left = Vec::new();
         for id in &ids {
             let held_elsewhere = self
                 .session_attachments
@@ -1028,9 +1032,15 @@ impl Worker {
                 .any(|other| other.iter().any(|entry| entry == id));
             if !held_elsewhere {
                 core.attached_client_ids.retain(|entry| entry != id);
+                left.push(id);
             }
         }
         drop(core);
+        // yusAgent (YA-11, ticket 20): a client gone with its connection (a direct link gets no
+        // routed `detach`) no longer answers the permission requests (`crate::ya_permissions`).
+        for id in left {
+            self.ya_permissions_detached(id);
+        }
         // The runner's park re-arms: the released hold opens the idle
         // passivation's unattached gate for a now-detached child.
         self.work_notify.notify_one();

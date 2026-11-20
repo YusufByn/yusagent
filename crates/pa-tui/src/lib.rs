@@ -120,6 +120,8 @@ pub(crate) mod update_restart_wait;
 pub mod user_message_selector;
 pub mod view;
 pub mod width;
+// yusAgent (YA-11, ticket 20): the permission panel.
+pub mod ya_permission_panel;
 
 use ratatui::style::Style;
 

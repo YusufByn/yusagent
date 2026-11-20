@@ -21,6 +21,8 @@ mod settings;
 mod share;
 mod stream;
 mod window;
+// yusAgent (YA-11, ticket 20): the permission requests of the session.
+mod ya_permissions;
 pub(crate) use window::TranscriptPageNote;
 
 pub(crate) use apply::CompactionAbortNote;
@@ -237,6 +239,9 @@ pub(crate) struct SessionUi {
     pending_model: Option<String>,
     pending_model_provider: Option<String>,
     pending_thinking_suffix: Option<String>,
+    /// yusAgent (YA-11, ticket 20): the session runs in "auto" (attach state, `/permissions`,
+    /// `ya_permission_mode`); the tray's badge follows it on every rebuild (decision D4).
+    ya_permission_auto: bool,
     pending_queue: Option<crate::queued::QueuedMessages>,
     queue_selection: crate::queued::QueueSelection,
     context: Option<crate::chrome::ContextUsage>,

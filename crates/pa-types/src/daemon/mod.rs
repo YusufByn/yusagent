@@ -102,6 +102,8 @@ mod outbound;
 mod plane;
 pub mod update_flow;
 mod worker;
+// yusAgent (YA-11, ticket 20): the wire names of the permission requests.
+pub mod ya_permissions;
 
 pub use command::{
     CycleDirection, DaemonCommand, DaemonCommandEnvelope, DaemonCommandFrameType,

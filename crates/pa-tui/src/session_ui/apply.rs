@@ -217,6 +217,10 @@ impl SessionUi {
                 if meta_sequence > self.last_event_sequence {
                     self.last_event_sequence = meta_sequence;
                 }
+                // yusAgent (YA-11, ticket 20): the permission requests (`super::ya_permissions`).
+                if self.ya_permission_event(&event, view) {
+                    return;
+                }
                 if let Some(update) = event_to_update(&event) {
                     self.apply_update(update, view);
                 }
