@@ -417,6 +417,9 @@ impl SessionUi {
                     self.pending_tools.insert(tool_call_id.clone());
                     Self::set_working_activity("Executing", false, view);
                     self.track_live_tool_timer();
+                    // yusAgent (YA-11, ticket 22): a call whose permission request waits
+                    // (the request can come first) stays not started.
+                    self.ya_permission_hold_card(&tool_call_id, view);
                 }
             }
             TurnUpdate::ToolExecutionUpdate {

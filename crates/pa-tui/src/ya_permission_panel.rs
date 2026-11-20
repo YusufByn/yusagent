@@ -162,6 +162,15 @@ impl PermissionPanel {
         self.queue.is_empty()
     }
 
+    /// Whether a request of the tool call `tool_call_id` waits (ticket 22: its card is not
+    /// started).
+    #[must_use]
+    pub fn waits_for(&self, tool_call_id: &str) -> bool {
+        self.queue
+            .iter()
+            .any(|request| request.tool_call_id == tool_call_id)
+    }
+
     /// A new request: queued behind the others (a request already known is ignored).
     pub fn push(&mut self, request: PermissionRequest) {
         if !self
@@ -516,6 +525,20 @@ mod tests {
         panel.note_input(start + Duration::from_millis(400));
         assert!(!panel.armed(start + Duration::from_millis(800)));
         assert!(panel.armed(start + Duration::from_millis(900)));
+    }
+
+    /// The tool calls with a waiting request (ticket 22: their cards are not started).
+    #[test]
+    fn waits_for_names_the_calls_of_the_waiting_requests() {
+        let start = Instant::now();
+        let mut panel = panel(start);
+        panel.push(request("r2", "print(2)"));
+        assert!(panel.waits_for("call-r1"));
+        assert!(panel.waits_for("call-r2"));
+        assert!(!panel.waits_for("call-r3"));
+        assert!(panel.close("r1", start));
+        assert!(!panel.waits_for("call-r1"));
+        assert!(panel.waits_for("call-r2"));
     }
 
     #[test]
