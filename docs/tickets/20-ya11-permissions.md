@@ -387,7 +387,7 @@ Fichiers : `docs/fork-changes.md`, section « Permissions, PR 3 ». Commits sép
 - **Contrôles de Yusuf sur `47423fffc`** :
   - capture contre `3cdccf6f7` : **TOUT IDENTIQUE**, `find` vide ;
   - démo TUI : OK, code de sortie 0 ; `allow`, `deny`, puis passage en « auto » ; `autorise.txt` et `auto.txt` créés, `refuse.txt` absent ; étiquette « auto · no sandbox » visible ;
-  - fenêtre de calme : **avis de Claude Code, non mesuré**. Elle fait ce que T3 demande sur ce qui a été vu : frappe continue (« any ») restée dans l'éditeur, panneau ouvert, puis réponse après la pause. Limite : 0,5 s est plus court que bien des pauses de réflexion en cours de frappe ; un mot qui commence par `y` ou `n` tapé juste après une telle pause (« non », « ne », « nous ») répond au panneau. Le journal garde la décision, mais un accord donné ainsi n'est visible que si l'utilisateur le remarque. Proposition : la garder telle quelle pour les testeurs et leur demander s'ils ont répondu sans le vouloir ; si oui, deux pistes à juger alors : une fenêtre plus longue (1 s), ou des touches de réponse actives seulement quand l'éditeur est vide.
+  - fenêtre de calme : **décision de Yusuf (20/11/2026) : passer à 1 s**, faite dans la PR du ticket 22 (`crates/pa-tui/src/ya_permission_panel.rs`, `QUIET`). Raison notée avec l'avis de Claude Code (non mesuré) : 0,5 s est plus court que bien des pauses de réflexion en cours de frappe, et un mot qui commence par `y` ou `n` tapé juste après une telle pause répondait au panneau.
 - **Clôture** : PR #69 mergée le 20/11/2026 (`main` à `f2ba28fc4`), build macOS de `main` : run 44788981604, succès.
 
 ## Points ouverts

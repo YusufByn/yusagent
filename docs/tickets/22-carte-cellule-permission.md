@@ -113,3 +113,15 @@ Lancés par Claude Code sur le binaire de la branche (build `ya-build-macos-arm6
 - **K3** : après un accord, durée comptée depuis l'accord (proposé) ou depuis `tool_execution_start` (attente incluse).
 - **K4** : l'appel dans `apply.rs` pour l'ordre inverse : le garder d'office (proposé, l'ordre n'est pas prouvé) ou attendre que le test pty montre l'ordre réel.
 - **K5** : le TUI attaché pendant une demande ouverte (section 3.3) : ticket à part ou dans celui-ci.
+
+## Ce qui est fait
+
+PR #70. Fichiers : `docs/fork-changes.md`, section « Carte de la cellule pendant une demande de permission ». Commits séparés : test seul, correctif, fenêtre de calme, test pty et démo, doc.
+
+- **Correctif (option A)** : `crates/pa-tui/src/session_ui/ya_permissions.rs` (fork) remet la carte « non lancée » à la demande et la lance à l'accord du worker ; `crates/pa-tui/src/ya_permission_panel.rs` (fork) : `waits_for` ; `crates/pa-tui/src/session_ui/apply.rs` (upstream, 3 lignes) : un appel après `tool_execution_start` (K4).
+- **Fenêtre de calme** : `QUIET` à 1 s ; tests du panneau exprimés avec `QUIET`.
+- **Test vu rouge sans le correctif** (`crates/pa-tui/tests/ya_permission_card_headless.rs`) :
+  - run `ci` 44794970113 sur `11a8da260` : `test shard 6/8`, accord/refus en échec pour la bonne raison (`✓ python · print('allowed') · ↑ 1 lines · 57ms` pendant l'attente) ; les deux tests d'attente en échec pour une **mauvaise** raison (la course headless attend la fin du tour : « a turn still active »), et `check + clippy` en échec (`clippy::similar_names`, `line` / `live` dans le test) ;
+  - test corrigé seul (retrait `cancelled` et `turn_end` en fin d'attente, `ticks`), run `ci` 44797069532 sur `2e8a0731a` : clippy vert, `test shard 6/8` seul en échec, **les trois tests en échec pour la bonne raison** (`✓ python · print('awaiting') · ↑ 1 lines · 58ms` dans les deux ordres, `✓ python · print('allowed') …`).
+- **Pas compilé en local** (règle 8) : formatage par `rustfmt`, compilation, clippy et tests par la CI.
+

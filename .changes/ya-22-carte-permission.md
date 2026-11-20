@@ -1,0 +1,1 @@
+- yusAgent: while a permission request waits, the TUI no longer shows the tool call as running: its card is not started (no checkmark, no timer) and the loader says `Awaiting permission` instead of `Executing`; an allowed call starts, and is timed, from the answer. The permission panel takes its answer keys after a 1 s pause in typing (was 0.5 s).

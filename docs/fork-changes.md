@@ -1088,7 +1088,7 @@ Limites connues : un client qui s'attache sans `yaPermissionAsker` (TUI) voit le
 
 ## Permissions, PR 3 : TUI (YA-11, ticket 20)
 
-Décisions : `docs/tickets/20-ya11-permissions.md`, section « PR 3 » (T1 à T10). Le TUI se déclare répondant (`yaPermissionAsker` sur son `create` et son `attach`) : ses sessions ne sont plus refusées en manuel. Une demande ouvre un panneau qui montre l'appel entier et prend `y` (autoriser une fois), `n` ou `Esc` (refuser une fois) après 0,5 s sans frappe ; avant, les touches vont à l'éditeur. `Ctrl+C` retire la demande aussitôt. `/permissions [manual|auto]` passe par la même commande que le sélecteur ACP (journalisée) ; la barre montre « auto · no sandbox » tant que la session est en « auto » (D4). Le worker annonce chaque changement de mode (`ya_permission_mode`) et retire les demandes d'un client parti avec sa connexion directe (T8). **Ni prompt, ni tools, ni paramètres de requête touchés : préfixe inchangé** (test `manual_and_auto_send_the_same_requests`).
+Décisions : `docs/tickets/20-ya11-permissions.md`, section « PR 3 » (T1 à T10). Le TUI se déclare répondant (`yaPermissionAsker` sur son `create` et son `attach`) : ses sessions ne sont plus refusées en manuel. Une demande ouvre un panneau qui montre l'appel entier et prend `y` (autoriser une fois), `n` ou `Esc` (refuser une fois) après 0,5 s sans frappe (1 s depuis le ticket 22) ; avant, les touches vont à l'éditeur. `Ctrl+C` retire la demande aussitôt. `/permissions [manual|auto]` passe par la même commande que le sélecteur ACP (journalisée) ; la barre montre « auto · no sandbox » tant que la session est en « auto » (D4). Le worker annonce chaque changement de mode (`ya_permission_mode`) et retire les demandes d'un client parti avec sa connexion directe (T8). **Ni prompt, ni tools, ni paramètres de requête touchés : préfixe inchangé** (test `manual_and_auto_send_the_same_requests`).
 
 | Fichier | Type | Raison | Ticket |
 |---|---|---|---|
@@ -1135,6 +1135,22 @@ Les deux autres déclarations (`crates/pa-tui/Cargo.toml:36`, section `[dev-depe
 | `crates/pa-tui/src/interactive/tests.rs` | `create_config_binds_a_new_child_to_its_parent` : le JSON attendu porte `"yaPermissionAsker": true`. | Le test compare la config du `create` en entier. |
 
 Limites connues : une demande émise avant l'attach du TUI (session ouverte ailleurs) n'est pas rejouée à l'attach ; le panneau ne la voit pas, un autre client répondant ou l'annulation du tour la tranche. L'étiquette « auto » ne s'affiche que pour une session qui sait demander (`yaPermissions` absent sinon).
+
+## Carte de la cellule pendant une demande de permission (YA-11, ticket 22)
+
+Constat, plan et décisions : `docs/tickets/22-carte-cellule-permission.md` (K1 à K5). Pendant qu'une demande attend, la carte de l'appel n'est pas lancée (ni `✓`, ni minuteur) et le chargeur dit « Awaiting permission » ; l'appel part à l'accord du worker (`ya_permission_resolved`, `allow`), son minuteur aussi. La fenêtre de calme du panneau passe de 0,5 s à 1 s. **Ni prompt, ni tools, ni requêtes touchés : préfixe inchangé** (TUI seulement).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-tui/src/session_ui/ya_permissions.rs` | modif. (fichier du fork) | À la demande, la carte de son `toolCallId` est remise « non lancée » et le chargeur passe à « Awaiting permission » ; à `ya_permission_resolved` (toujours lu, plus seulement pour fermer le panneau), un `allow` lance la carte à cet instant (K3). | YA-11 (ticket 22) |
+| `crates/pa-tui/src/ya_permission_panel.rs` | modif. (fichier du fork) | `waits_for` (une demande ouverte porte-t-elle cet appel) ; `QUIET` à 1 s. Tests unitaires ajustés à `QUIET` et test de `waits_for`. | YA-11 (ticket 22) |
+| `crates/pa-tui/src/session_ui/apply.rs` | modif. (fichier upstream, 3 lignes) | La carte d'un appel en attente de permission reste non lancée même si `tool_execution_start` arrive après la demande : le worker publie la demande hors de la file des événements du moteur, elle peut doubler le départ de l'appel (K4). | YA-11 (ticket 22) |
+| `crates/pa-tui/tests/ya_permission_card_headless.rs` | nouveau | Démon simulé, sans kernel ni modèle : carte non lancée et chargeur « Awaiting permission » pendant la demande, dans les deux ordres ; accord après 2 s d'attente, minuteur parti de l'accord, `✓` ; refus, `✗`, jamais de `✓` ni de minuteur. Rouge sans le correctif : run `ci` 44797069532 sur `2e8a0731a`, `test shard 6/8`, les trois tests en échec sur `✓ python · …` pendant l'attente. | YA-11 (ticket 22) |
+| `crates/pa-cli/tests/ya_permissions_tui_pty_e2e.rs` | modif. (fichier du fork) | Pendant chaque demande, « Awaiting permission » présent, « Executing » absent, carte sans `✓` ; carte autorisée en `✓`, refusée en `✗`. | YA-11 (ticket 22) |
+| `bench/tools/ya_permissions_tui_demo.py` | modif. (outil du fork) | Mêmes vérifications d'écran en `--pilote` (code de sortie 1 sinon) ; texte de la démo à 1 s. | YA-11 (ticket 22) |
+| `.changes/ya-22-carte-permission.md` | nouveau | Fragment de changelog. | YA-11 (ticket 22) |
+
+Limite connue : si `tool_execution_start` arrive avant la demande, une image peut être dessinée entre les deux avec la carte lancée (le temps de deux événements consécutifs) ; la demande la remet aussitôt « non lancée ». Le compteur de télémétrie des minuteurs vivants (`track_live_tool_timer`) compte aussi un appel retenu.
 
 ## Bail de session sous un chemin symbolique (ticket 21)
 
