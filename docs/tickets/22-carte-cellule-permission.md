@@ -148,6 +148,22 @@ PR #70. Fichiers : `docs/fork-changes.md`, section « Carte de la cellule pendan
   ```
   `capture [('py-example-001', 'resolved', 0)]` des deux côtés ; `find ~/.yusagent ~/.prime/agent -newer <marque>` vide ; 9 requêtes comparées : **TOUT IDENTIQUE**. **Préfixe inchangé.**
 
+### Contrôles de Yusuf sur `d957ebe7e` (20/11/2026)
+
+Démo TUI à la main, deux passes.
+
+1. **Passe improvisée, hors scénario** : réponses `n`, `y`, `y`, sans `/permissions auto`. **ÉCHEC attendu** (la démo vérifie le scénario). Le journal reprend fidèlement les réponses données.
+2. **Passe selon le scénario** : **OK**, code de sortie 0.
+   - Journal : `allow`, `deny`, `manual->auto`.
+   - `autorise.txt` et `auto.txt` créés, `refuse.txt` absent.
+   - Pendant les demandes : « Awaiting permission » affiché, carte sans `✓`.
+
+Fenêtre de 1 s : OK.
+
+### Clôture
+
+PR #70 mergée le 20/11/2026, `main` à `99e801f50`. Build macOS de `main` : run 44810287615 (`ya-build-macos-arm64`), succès.
+
 ## Points ouverts
 
 - **K5** (YA-10, ticket à part) : un TUI qui s'attache pendant qu'une demande attend ne la reçoit pas.
