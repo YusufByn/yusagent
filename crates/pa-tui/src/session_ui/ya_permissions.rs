@@ -5,6 +5,12 @@
 //! answer goes back by the `ya_permissions` command (`respond`), routed by the supervisor. The
 //! first answer wins: a request closed elsewhere (another client answered, or the worker withdrew
 //! it) closes here with a note. Listed in `docs/fork-changes.md`.
+//!
+//! Ticket 22: the engine emits `tool_execution_start` before it asks, and the worker can publish
+//! the request before that start (the engine's events go through the worker's queue). Whatever
+//! the order, the card of a call whose request waits is not started (no success mark, no timer)
+//! and the loader says `Awaiting permission`; the call starts at the worker's `allow` (its timer
+//! does not count the wait); a refusal leaves it not started until its error result lands.
 
 use pa_types::daemon::ya_permissions::{
     COMMAND, MODE_EVENT, REQUEST_EVENT, RESOLVED_EVENT, STATE_FIELD,
@@ -15,8 +21,14 @@ use super::{
     key_event_to_id, AgentView, DaemonCommand, Duration, Instant, KeyEvent, Map, SessionUi, Value,
     UI_REQUEST_TIMEOUT_MS,
 };
+use crate::chat::ChatEntry;
 use crate::choice_picker::ChoicePicker;
 use crate::ya_permission_panel::{PanelKey, PermissionPanel, PermissionRequest};
+
+/// The loader's activity while a request waits (decision K2 of ticket 22).
+const AWAITING: &str = "Awaiting permission";
+/// The loader's activity of a running call (`super::apply`).
+const EXECUTING: &str = "Executing";
 
 fn text<'a>(event: &'a Value, key: &str) -> &'a str {
     event.get(key).and_then(Value::as_str).unwrap_or_default()
@@ -39,6 +51,7 @@ impl SessionUi {
         match text(event, "type") {
             REQUEST_EVENT => {
                 if let Some(request) = PermissionRequest::from_event(event) {
+                    let tool_call_id = request.tool_call_id.clone();
                     if let Some(panel) = view.ya_permission.as_mut() {
                         panel.push(request);
                     } else {
@@ -48,24 +61,31 @@ impl SessionUi {
                             now,
                         ));
                     }
+                    self.ya_permission_hold_card(&tool_call_id, view);
                     self.dirty = true;
                 }
                 true
             }
             RESOLVED_EVENT => {
                 let request_id = text(event, "requestId");
+                let outcome = text(event, "outcome");
                 let closed = view
                     .ya_permission
                     .as_mut()
                     .is_some_and(|panel| panel.close(request_id, now));
                 if closed {
                     // Still shown here: another client answered, or the worker withdrew it.
-                    let outcome = text(event, "outcome");
                     self.note(
                         &format!("The permission request was closed elsewhere ({outcome})."),
                         view,
                     );
                     self.close_empty_permission_panel(view);
+                    self.dirty = true;
+                }
+                // Ticket 22: the card follows the worker's outcome, whoever answered (this client
+                // or another one); a refusal or a withdrawal lands as the call's error result.
+                if outcome == "allow" {
+                    Self::start_allowed_card(text(event, "toolCallId"), view);
                     self.dirty = true;
                 }
                 true
@@ -76,6 +96,66 @@ impl SessionUi {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Ticket 22: the card of a call whose request waits is not started, and the loader awaits
+    /// the permission. Called on the request and after `tool_execution_start` (`super::apply`),
+    /// which can come in either order.
+    pub(super) fn ya_permission_hold_card(&mut self, tool_call_id: &str, view: &mut AgentView) {
+        if !view
+            .ya_permission
+            .as_ref()
+            .is_some_and(|panel| panel.waits_for(tool_call_id))
+        {
+            return;
+        }
+        let index = view.chat.iter().rposition(|entry| {
+            matches!(entry, ChatEntry::Tool(card) if card.id == tool_call_id && !card.aborted)
+        });
+        if let Some(index) = index {
+            view.prepare_entry_mutation(index);
+            if let Some(ChatEntry::Tool(card)) = view.chat.get_mut(index) {
+                card.started = false;
+                card.started_at = None;
+            }
+            view.mark_entry_stale(index);
+        }
+        if let Some(working) = view.working.as_mut() {
+            working.activity = AWAITING;
+        }
+        self.dirty = true;
+    }
+
+    /// Ticket 22: an allowed call starts now (decision K3: its timer does not count the wait). A
+    /// card not seen yet (the start still to come) starts with its `tool_execution_start`.
+    fn start_allowed_card(tool_call_id: &str, view: &mut AgentView) {
+        let index = view.chat.iter().rposition(|entry| {
+            matches!(
+                entry,
+                ChatEntry::Tool(card) if card.id == tool_call_id
+                    && !card.aborted
+                    && !card.started
+                    && card.result.is_none()
+            )
+        });
+        if let Some(index) = index {
+            view.prepare_entry_mutation(index);
+            if let Some(ChatEntry::Tool(card)) = view.chat.get_mut(index) {
+                card.started = true;
+                card.started_at = Some(Instant::now());
+            }
+            view.mark_entry_stale(index);
+        }
+        // Another request still waiting keeps the loader on it.
+        let waiting = view
+            .ya_permission
+            .as_ref()
+            .is_some_and(|panel| !panel.is_empty());
+        if !waiting {
+            if let Some(working) = view.working.as_mut() {
+                working.activity = EXECUTING;
+            }
         }
     }
 

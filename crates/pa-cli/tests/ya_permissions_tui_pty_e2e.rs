@@ -16,8 +16,11 @@
 //! 3. `/permissions manual`: the badge goes; a cell asks; after a pause, `n` denies: no file, the
 //!    turn stops (the next scripted reply is never requested).
 //!
-//! The journal of the session holds `allow`, the two changes of mode, then `deny`. Listed in
-//! `docs/fork-changes.md`.
+//! The journal of the session holds `allow`, the two changes of mode, then `deny`.
+//!
+//! Ticket 22: while a request waits, the loader says `Awaiting permission` (never `Executing`)
+//! and the cell's card shows no success mark; the allowed card ends in `✓`, the denied one in
+//! `✗`. Listed in `docs/fork-changes.md`.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -40,6 +43,39 @@ const BADGE: &str = "auto · no sandbox";
 const PANEL: &str = "Permission · python_repl";
 const WAITING: &str = "pause typing to answer";
 const ARMED: &str = "y allow once";
+/// The loader while a request waits (ticket 22).
+const AWAITING: &str = "Awaiting permission";
+
+/// The summary line of the cell card that creates `name` (`<mark> python · open("name", …`); the
+/// panel shows the same code without the `python · ` label.
+fn card_line(screen: &str, name: &str) -> Option<String> {
+    screen
+        .lines()
+        .find(|line| line.contains("python · ") && line.contains(name))
+        .map(str::to_string)
+}
+
+/// Ticket 22: while a request waits, nothing says the call runs. The panel covers the bottom of
+/// the transcript: once the transcript fills the window, the loader and the card sit under it
+/// (`loader_shown` false).
+fn assert_waiting(screen: &str, name: &str, loader_shown: bool) {
+    if loader_shown {
+        assert!(
+            screen.contains(AWAITING),
+            "the loader awaits the permission:\n{screen}"
+        );
+    }
+    assert!(
+        !screen.contains("Executing"),
+        "the loader does not say Executing:\n{screen}"
+    );
+    if let Some(card) = card_line(screen, name) {
+        assert!(
+            !card.contains('✓'),
+            "the waiting card is not a success: {card}\n{screen}"
+        );
+    }
+}
 
 /// The kernel Python with prime-agent-runtime installed (`PA_E2E_KERNEL_PYTHON` overrides), as
 /// `ya_permissions_acp_e2e.rs`.
@@ -384,10 +420,15 @@ fn the_tui_answers_switches_to_auto_and_back() {
         !project.join("allowed.txt").exists(),
         "typing answered nothing"
     );
-    screen.wait_for(ARMED);
+    assert_waiting(&typed, "allowed.txt", true);
+    let armed = screen.wait_for(ARMED);
+    assert_waiting(&armed, "allowed.txt", true);
     screen.type_slowly("y", Duration::from_millis(50));
     screen.wait_for("the first cell ran");
     assert!(project.join("allowed.txt").exists(), "the allowed cell ran");
+    screen.wait("the allowed card to succeed", |screen| {
+        card_line(screen, "allowed.txt").is_some_and(|card| card.contains('✓'))
+    });
     screen.wait_gone(WAITING);
     // The typed text stayed in the editor: erase it.
     screen.type_slowly("\x7f\x7f\x7f", Duration::from_millis(50));
@@ -405,9 +446,18 @@ fn the_tui_answers_switches_to_auto_and_back() {
     });
     screen.submit("create denied.txt");
     screen.wait_for(WAITING);
-    screen.wait_for(ARMED);
+    let armed = screen.wait_for(ARMED);
+    assert_waiting(&armed, "denied.txt", false);
     screen.type_slowly("n", Duration::from_millis(50));
     screen.wait_gone(PANEL);
+    let denied = screen.wait("the denied card to fail", |screen| {
+        card_line(screen, "denied.txt").is_some_and(|card| card.contains('✗'))
+    });
+    let card = card_line(&denied, "denied.txt").unwrap_or_default();
+    assert!(
+        !card.contains('✓'),
+        "the denied card is not a success: {card}"
+    );
     assert!(
         !exists_within(&project.join("denied.txt"), Duration::from_secs(3)),
         "the denied cell did not run"

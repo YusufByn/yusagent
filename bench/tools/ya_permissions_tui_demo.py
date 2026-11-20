@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Démo TUI des permissions (YA-11, ticket 20, PR 3) : autoriser, refuser, puis « auto ».
+"""Démo TUI des permissions (YA-11, ticket 20, PR 3 ; ticket 22) : autoriser, refuser, puis « auto ».
 
 Lance un démon isolé (`--mode daemon --daemon-socket` dans un dossier temporaire) puis le TUI
 du binaire, avec le provider factice (`PRIME_AGENT_FAUX_SCRIPT`, `"engine": "faux"`) : aucun
@@ -11,8 +11,9 @@ un refus ne demande rien de plus au modèle : la cellule `auto.txt` sert donc au
 À faire dans le TUI (mode normal) :
   1. taper `Crée autorise.txt` puis Entrée. Le panneau « Permission · python_repl » s'ouvre en
      bas de la transcription avec la cellule entière et « pause typing to answer ». Taper quelques
-     lettres (par exemple `any`) : elles vont dans l'éditeur, le panneau reste ouvert. S'arrêter
-     une demi-seconde : la ligne du bas devient « y allow once · n or Esc deny · Ctrl+C
+     lettres (par exemple `any`) : elles vont dans l'éditeur, le panneau reste ouvert. Pendant
+     la demande, le chargeur dit « Awaiting permission » et la carte de la cellule n'a ni `✓` ni
+     minuteur (ticket 22). S'arrêter une seconde : la ligne du bas devient « y allow once · n or Esc deny · Ctrl+C
      withdraw ». Effacer les lettres tapées (elles restent dans l'éditeur), puis attendre la même
      pause et taper `y` : la cellule tourne, le texte « Tour terminé après la cellule qui crée
      autorise.txt. » s'affiche ;
@@ -25,7 +26,10 @@ un refus ne demande rien de plus au modèle : la cellule `auto.txt` sert donc au
   5. quitter (`/quit`).
 
 Mode `--pilote` (le lancement de Claude Code, règle 13) : le même scénario joué sur un pty, l'écran
-lu par l'émulateur de `scripts/lifecycle_lib.py`, avec des extraits d'écran imprimés.
+lu par l'émulateur de `scripts/lifecycle_lib.py`, avec des extraits d'écran imprimés. Il vérifie
+aussi l'écran (ticket 22) : pendant chaque demande, « Awaiting permission » présent, « Executing »
+absent, pas de `✓` sur la carte de la cellule ; après `y`, la carte finit en `✓` ; après `n`, en
+`✗` ; il s'arrête avec le code 1 sinon.
 
 Vérifications à la fin (code de sortie 1 si l'une échoue) : `autorise.txt` et `auto.txt` créés,
 `refuse.txt` absent ; des messages dans le fichier de session ; journal `ya-permission` égal à
@@ -63,6 +67,7 @@ ROWS, COLS = 40, 120
 PANEL = "Permission · python_repl"
 WAITING = "pause typing to answer"
 ARMED = "y allow once"
+AWAITING = "Awaiting permission"
 BADGE = "auto · no sandbox"
 EXPECTED_JOURNAL = ["allow", "deny", "manual->auto"]
 
@@ -83,6 +88,32 @@ def faux_script() -> dict:
         cell("call-auto", "auto.txt"),
         {"text": "Tour terminé après la cellule qui crée auto.txt."},
     ]}
+
+
+def card_line(screen: str, name: str) -> str | None:
+    """La ligne de la carte de la cellule qui crée `name` (`<marque> python · open('name'…`) ; le
+    panneau montre le même code sans l'étiquette `python · `."""
+    return next((line for line in screen.splitlines() if "python · " in line and name in line), None)
+
+
+def check_waiting(screen: str, name: str, moment: str, chargeur_visible: bool = True) -> None:
+    """Ticket 22 : pendant une demande, rien ne dit que l'appel tourne. Le panneau recouvre le bas
+    de la transcription : une fois la fenêtre remplie, le chargeur et la carte sont dessous
+    (`chargeur_visible` faux)."""
+    card = card_line(screen, name)
+    print(f"[{moment}] chargeur « {AWAITING} » : {'oui' if AWAITING in screen else 'non'} ; "
+          f"« Executing » : {'oui' if 'Executing' in screen else 'non'} ; carte : {card!r}")
+    if (chargeur_visible and AWAITING not in screen) or "Executing" in screen or (card and "✓" in card):
+        sys.exit(f"carte ou chargeur faux pendant la demande ({moment}) ; écran :\n{screen}")
+
+
+def wait_card(tui, name: str, mark: str) -> None:
+    screen = tui.wait(f"la carte {mark} de {name}",
+                      lambda text: (card_line(text, name) or "").find(mark) >= 0)
+    card = card_line(screen, name)
+    print(f"carte de {name} : {card!r}")
+    if mark != "✓" and "✓" in card:
+        sys.exit(f"la carte de {name} montre un succès : {card!r}")
 
 
 def load_screen():
@@ -183,27 +214,29 @@ def pilot(command: list[str], env: dict[str, str], project: Path) -> None:
 
         print("\n=== 1. autoriser ===")
         tui.type("Crée autorise.txt\r")
-        tui.wait_for(WAITING)
+        check_waiting(tui.wait_for(WAITING), "autorise.txt", "demande ouverte")
         tui.show("demande ouverte, fenêtre de calme")
         tui.type("any", gap=0.12)
         screen = tui.text()
         if PANEL not in screen or (project / "autorise.txt").exists():
             sys.exit(f"la frappe a répondu au panneau ; écran :\n{screen}")
         tui.show("« any » tapé pendant la demande : dans l'éditeur, panneau ouvert")
-        tui.wait_for(ARMED)
+        check_waiting(tui.wait_for(ARMED), "autorise.txt", "panneau prêt")
         tui.show("après la pause : le panneau répond")
         tui.type("\x7f\x7f\x7f", gap=0.05)
         tui.wait_for(ARMED)
         tui.type("y")
         tui.wait_for("Tour terminé après la cellule qui crée autorise.txt.")
+        wait_card(tui, "autorise.txt", "✓")
         tui.show("après `y`")
 
         print("\n=== 2. refuser ===")
         tui.type("Crée refuse.txt\r")
         tui.wait_for(WAITING)
-        tui.wait_for(ARMED)
+        check_waiting(tui.wait_for(ARMED), "refuse.txt", "second panneau prêt", chargeur_visible=False)
         tui.type("n")
         tui.wait("la fermeture du panneau", lambda text: PANEL not in text)
+        wait_card(tui, "refuse.txt", "✗")
         tui.pump(2.0)
         tui.show("après `n`")
 
