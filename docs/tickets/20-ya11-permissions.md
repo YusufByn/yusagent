@@ -365,6 +365,20 @@ Branche `ya-20-permissions-tui`, depuis `main` à `3cdccf6f7` (merge de la PR #6
 - **T9** : requêtes identiques en manuel et en « auto » vérifiées par un serveur local qui enregistre les corps, puis capture contre `main` après le build.
 - **T10** : la boîte ACP restée ouverte quand un autre client a répondu est notée dans les points ouverts (YA-10).
 
+### Ce qui est fait
+
+Fichiers : `docs/fork-changes.md`, section « Permissions, PR 3 ». Commits séparés : noms du protocole, panneau, `/permissions`, événement de mode et étiquette, correctif T8, tests, doc.
+
+- **Déclaration** : `yaPermissionAsker` sur le `create` (`crates/pa-tui/src/interactive.rs`) et l'`attach` (`crates/pa-tui/src/session_ui/lifecycle.rs`) du TUI ; noms dans `crates/pa-types/src/daemon/ya_permissions.rs`.
+- **Panneau** (`crates/pa-tui/src/ya_permission_panel.rs`) : texte entier de l'appel (la seule chaîne d'argument, sinon tous les arguments en JSON), lignes repliées, caractères de contrôle et de mise en forme invisibles échappés (`\u{1b}`, `\u{202e}`…) pour que l'écran montre le code exécuté ; défilement ↑/↓, PgUp/PgDn ; plusieurs demandes en file. Il recouvre le bas de la fenêtre de transcription : l'éditeur reste visible.
+- **Fenêtre de calme (T3)** : le panneau voit chaque touche en premier (`crates/pa-tui/src/session_ui/keys.rs`) ; tant que 0,5 s ne s'est pas écoulée depuis la dernière frappe (ou l'ouverture), il la rend et elle suit son chemin habituel (éditeur, ou panneau déjà ouvert) ; un collage relance aussi la fenêtre. Le passage à l'éditeur n'a rien demandé de plus : la touche continue simplement le routage existant. `Esc` tapé pendant la fenêtre va donc à l'éditeur, qui interrompt le tour (refus, D7). Le réveil de calme de la boucle (`crates/pa-tui/src/interactive/run.rs`, 50 ms) redessine le panneau quand il devient actif.
+- **`/permissions`** : sans argument, choix `manual` / `auto` sur le sélecteur de `/effort` ; avec argument, bascule directe ; même commande démon que le sélecteur ACP (`set_mode`), donc même journal. Une demande ouverte reste à trancher (T7).
+- **Étiquette D4** : « auto · no sandbox » en tête du côté droit de la barre, couleur d'avertissement ; état lu dans le snapshot d'attach (le worker y ajoute `yaPermissions`), suivi par `ya_permission_mode` et par `/permissions`.
+- **Première réponse** : la clôture d'une demande affichée (`ya_permission_resolved`) ferme le panneau avec une note ; une réponse arrivée trop tard est signalée par une note.
+- **T8** : correctif dans `crates/pa-daemon/src/worker/connection.rs` (`release_session_attachments`), commit séparé. Rouge sans lui : run `ci` 44754613332 sur `65f07453b`, job `test shard 1/8`, `a_direct_link_that_closes_while_a_request_waits_withdraws_it` en échec (`the request was not withdrawn after the direct link closed`, `ya_permissions_direct_link_e2e.rs:412`), seule unité en échec du shard. Le même run avait un échec clippy (`zombie_processes`) dans ce test, corrigé dans un commit suivant.
+- **T9** : test `manual_and_auto_send_the_same_requests` au niveau du démon (vrai worker, vrai kernel, serveur local qui joue le modèle) : ce qui part au modèle ne dépend que du moteur du worker, commun à tous les clients.
+- **Pas compilé en local** (règle 8) : formatage par `rustfmt`, compilation, clippy et tests par la CI.
+
 ## Points ouverts
 
 - Défaut du bail sous un chemin symbolique (messages perdus sans erreur pour la première session d'un dossier agent neuf) : `docs/tickets/21-bail-chemin-symbolique.md`, hors de la PR 2.
