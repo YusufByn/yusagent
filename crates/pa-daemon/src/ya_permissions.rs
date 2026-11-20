@@ -19,8 +19,9 @@
 //!   in-memory session manager), as `custom` entries of type
 //!   `pa_core::session_engine::ya_permissions::JOURNAL_TYPE`, never sent to the model;
 //! - the mode can be switched while the session runs (action `set_mode`, the ACP selector
-//!   `permissions`), back to `"manual"` too; each change is journaled. A resumed session follows
-//!   the global setting again (decision D1).
+//!   `permissions`, the TUI's `/permissions`), back to `"manual"` too; each change is journaled
+//!   and announced to the clients ([`MODE_EVENT`]). A resumed session follows the global setting
+//!   again (decision D1).
 //!
 //! Nothing here reaches the model's requests: the prefix is unchanged. Listed in
 //! `docs/fork-changes.md`.
@@ -220,11 +221,13 @@ impl WorkerPermissions {
         answer.send(decision).is_ok()
     }
 
-    /// The user's choice of mode; journaled when it changes the mode.
+    /// The user's choice of mode; when it changes the mode, journaled and announced to the
+    /// clients ([`MODE_EVENT`], PR 3: the TUI shows "auto" without a sandbox, decision D4).
     fn set_mode(&self, mode: PermissionMode, agent_dir: &Path) {
         let before = self.switch.choose(mode).or_else(|| global_mode(agent_dir));
         if let Some(before) = before.filter(|before| *before != mode) {
             self.journal(mode_change_entry(before, mode));
+            self.emit(json!({ "type": MODE_EVENT, "mode": mode.label() }));
         }
     }
 }
@@ -556,7 +559,7 @@ mod tests {
     #[test]
     fn a_change_of_mode_is_journaled_and_manual_comes_back() {
         let permissions = asking("acp:1");
-        let (_, journal) = recorded(&permissions);
+        let (events, journal) = recorded(&permissions);
         let agent_dir = Path::new("/nonexistent");
         // The session runs in "manual" (as a build would leave it).
         let _ = permissions.switch.choose(PermissionMode::Manual);
@@ -570,6 +573,13 @@ mod tests {
         assert_eq!(journal[0]["mode"], "auto");
         assert_eq!(journal[1]["mode"], "manual");
         assert_eq!(journal[1]["previousMode"], "auto");
+        // Each change is announced to the clients (PR 3), the repeated choice is not.
+        let modes: Vec<Value> = lock(&events)
+            .iter()
+            .filter(|event| event["type"] == MODE_EVENT)
+            .map(|event| event["mode"].clone())
+            .collect();
+        assert_eq!(modes, [json!("auto"), json!("manual")]);
     }
 
     /// The daemon's resume reads the worker's file (`SessionFile::branch_file_entries`, as

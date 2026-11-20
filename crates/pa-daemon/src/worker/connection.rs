@@ -876,7 +876,9 @@ impl Worker {
             create_daemon_replay_info(resume_cursor.as_ref(), last_event_sequence, &generation);
         let cursor = json!({ "generation": generation, "sequence": last_event_sequence });
         let summary_value = serde_json::to_value(&summary).unwrap_or(Value::Null);
-        let state_value = serde_json::to_value(&state).unwrap_or(Value::Null);
+        let mut state_value = serde_json::to_value(&state).unwrap_or(Value::Null);
+        // yusAgent (YA-11, ticket 20): the permission mode, as `get_connection_state` (the TUI).
+        self.ya_permissions_state(&mut state_value);
         // The messages move into the snapshot once (avoiding a second
         // message tree per attach).
         let mut snapshot = json!({

@@ -28,6 +28,9 @@ use crate::{Line, Span};
 /// The pause in typing after which the panel takes the answer keys.
 pub const QUIET: Duration = Duration::from_millis(500);
 
+/// The tray's badge while the session runs in "auto" without a sandbox (decision D4).
+pub const AUTO_BADGE: &str = "auto \u{b7} no sandbox";
+
 /// The gutter in front of each row of the call.
 const GUTTER: &str = "│ ";
 

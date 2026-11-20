@@ -89,6 +89,9 @@ pub struct ChromeState {
     /// Hide the splash `cwd` line (the scoped agents view keeps its
     /// metadata rows centered against the logo).
     pub splash_hide_cwd: bool,
+    /// yusAgent (YA-11, ticket 20): the session runs tool calls without asking and there is no
+    /// sandbox; the tray shows [`crate::ya_permission_panel::AUTO_BADGE`] (decision D4).
+    pub ya_auto_no_sandbox: bool,
 }
 
 /// Which actionable group owns the dock's selection. Every group is
@@ -540,6 +543,13 @@ pub fn render_tray_with_hint(
         }
     }
     let mut right: Line = Vec::new();
+    // yusAgent (YA-11, ticket 20): first on the right, in the warning color (decision D4).
+    if state.ya_auto_no_sandbox {
+        right.push(theme.fg_span(
+            crate::theme::ThemeColor::Warning,
+            crate::ya_permission_panel::AUTO_BADGE,
+        ));
+    }
     if let Some(model) = &state.model_id {
         let mut label = model.clone();
         if let Some(suffix) = &state.thinking_suffix {

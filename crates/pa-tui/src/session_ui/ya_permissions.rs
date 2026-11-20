@@ -6,7 +6,9 @@
 //! first answer wins: a request closed elsewhere (another client answered, or the worker withdrew
 //! it) closes here with a note. Listed in `docs/fork-changes.md`.
 
-use pa_types::daemon::ya_permissions::{COMMAND, REQUEST_EVENT, RESOLVED_EVENT};
+use pa_types::daemon::ya_permissions::{
+    COMMAND, MODE_EVENT, REQUEST_EVENT, RESOLVED_EVENT, STATE_FIELD,
+};
 use serde_json::json;
 
 use super::{
@@ -18,6 +20,15 @@ use crate::ya_permission_panel::{PanelKey, PermissionPanel, PermissionRequest};
 
 fn text<'a>(event: &'a Value, key: &str) -> &'a str {
     event.get(key).and_then(Value::as_str).unwrap_or_default()
+}
+
+/// Whether an attach snapshot's state reports the session in "auto" (the field is there only
+/// for a session that can ask).
+pub(super) fn state_is_auto(state: Option<&Value>) -> bool {
+    state
+        .and_then(|state| state.get(STATE_FIELD))
+        .and_then(Value::as_str)
+        == Some("auto")
 }
 
 impl SessionUi {
@@ -59,8 +70,20 @@ impl SessionUi {
                 }
                 true
             }
+            MODE_EVENT => {
+                // A change of mode, from this client or another one (the ACP selector).
+                self.show_permission_mode(text(event, "mode") == "auto", view);
+                true
+            }
             _ => false,
         }
+    }
+
+    /// The tray's "auto · no sandbox" badge follows the session's mode (decision D4).
+    fn show_permission_mode(&mut self, auto: bool, view: &mut AgentView) {
+        self.ya_permission_auto = auto;
+        view.chrome.ya_auto_no_sandbox = auto;
+        self.dirty = true;
     }
 
     /// One key while the panel is open: `true` when the panel took it; otherwise the key goes on
@@ -167,6 +190,7 @@ impl SessionUi {
             .await;
         match switched {
             Ok(_) => {
+                self.show_permission_mode(mode == "auto", view);
                 let text = if mode == "auto" {
                     "Permissions: auto. Tool calls run without asking, with your user's rights (no sandbox)."
                 } else {
