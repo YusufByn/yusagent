@@ -289,6 +289,8 @@ impl Supervisor {
             "promptTemplates",
             "autonomous",
             "executionMode",
+            // yusAgent (YA-11, ticket 20): the creating client answers permission requests.
+            "yaPermissionAsker",
         ] {
             if let Some(value) = config_object.and_then(|config| config.get(key)) {
                 durable_rest.insert(key.to_string(), value.clone());

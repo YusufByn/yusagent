@@ -22,6 +22,8 @@ impl Worker {
         drop(core);
         let mut value = serde_json::to_value(&state).unwrap_or(Value::Null);
         value["heartbeat"] = Value::Null;
+        // yusAgent (YA-11, ticket 20): the permission mode (the ACP selector).
+        self.ya_permissions_state(&mut value);
         response_success(None, "get_connection_state", Some(value))
     }
 

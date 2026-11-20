@@ -536,6 +536,11 @@ const WIRE_FIXTURES: &[(&str, &str)] = &[
         "get_session_messages",
         r#"{"type": "get_session_messages", "activeSessionId": "sess", "start": -10, "limit": 10, "roles": ["*"]}"#,
     ),
+    // yusAgent (YA-11, ticket 20).
+    (
+        "ya_permissions",
+        r#"{"type": "ya_permissions", "activeSessionId": "sess", "action": "respond", "requestId": "ya-permission-1", "outcome": "allow"}"#,
+    ),
 ];
 
 /// The accept list is the TS list, in TS order, then the Rust-native supervisor/worker frames.
@@ -568,6 +573,8 @@ fn known_command_types_match_the_ts_list() {
                     | "tail_persistent_shell"
                     | "kill_persistent_shell"
                     | "get_session_messages"
+                    // yusAgent (YA-11, ticket 20).
+                    | "ya_permissions"
             ),
             "unexpected non-TS command type: {extra}"
         );

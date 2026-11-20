@@ -266,7 +266,8 @@ fn acp_daemon_attached_config_option_pickers() {
     // fixture model listed) and the effort select on the reasoning
     // model's supported levels.
     let options = &result["configOptions"];
-    assert_eq!(options.as_array().map(Vec::len), Some(2), "{options}");
+    // yusAgent (YA-11, ticket 20): the `permissions` selector comes last.
+    assert_eq!(options.as_array().map(Vec::len), Some(3), "{options}");
     let model_option = &options[0];
     assert_eq!(model_option["id"], "model");
     assert_eq!(model_option["type"], "select");
@@ -355,7 +356,8 @@ fn acp_daemon_attached_config_option_pickers() {
     );
     let (response, notifications) = client.wait_response(select, TIMEOUT);
     let options = &response["result"]["configOptions"];
-    assert_eq!(options.as_array().map(Vec::len), Some(1), "{options}");
+    // yusAgent (YA-11, ticket 20): the `permissions` selector comes last.
+    assert_eq!(options.as_array().map(Vec::len), Some(2), "{options}");
     assert_eq!(options[0]["currentValue"], plain, "{response}");
     let updates = config_updates(&notifications);
     assert!(
@@ -391,7 +393,8 @@ fn acp_daemon_attached_config_option_pickers() {
     );
     let (response, _) = client.wait_response(select, TIMEOUT);
     let options = &response["result"]["configOptions"];
-    assert_eq!(options.as_array().map(Vec::len), Some(2), "{options}");
+    // yusAgent (YA-11, ticket 20): the `permissions` selector comes last.
+    assert_eq!(options.as_array().map(Vec::len), Some(3), "{options}");
     assert_eq!(options[0]["currentValue"], reasoner);
     assert_eq!(options[1]["currentValue"], "high", "{options}");
 
@@ -414,7 +417,8 @@ fn acp_daemon_attached_config_option_pickers() {
     );
     let (response, _) = client.wait_response(select, TIMEOUT);
     let options = &response["result"]["configOptions"];
-    assert_eq!(options.as_array().map(Vec::len), Some(2), "{options}");
+    // yusAgent (YA-11, ticket 20): the `permissions` selector comes last.
+    assert_eq!(options.as_array().map(Vec::len), Some(3), "{options}");
     assert_eq!(options[0]["currentValue"], map);
     assert_eq!(
         options[1]["currentValue"], "high",

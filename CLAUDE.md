@@ -24,6 +24,7 @@ Hard fork de Prime Agent (MIT), transformé en harness d'agent de code cache-fir
 10. **Mesures** : aucun chiffre inventé. Chaque mesure est produite par une commande reproductible, notée dans le rapport. Une estimation est marquée comme telle.
 11. **Preuves** : toute affirmation sur le code cite `chemin:ligne`.
 12. **Commits** : préfixés par le ticket (`YA-04: ...`), un sujet par commit.
+13. **Scripts de contrôle** : tout script de contrôle remis à Yusuf (démo, vérification, commande de mesure) est d'abord lancé par Claude Code sur le binaire concerné ; la sortie de ce lancement accompagne le script remis.
 
 ## Boucle de dev
 

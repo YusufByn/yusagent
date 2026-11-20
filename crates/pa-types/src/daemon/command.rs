@@ -665,6 +665,17 @@ pub enum DaemonCommand {
         #[serde(flatten)]
         rest: JsonMap,
     },
+    /// yusAgent (YA-11, ticket 20): the permission requests of a session
+    /// (`pa_daemon::ya_permissions`). `action` is `respond` (with `requestId` and `outcome`),
+    /// `set_mode` (with `mode`) or `get`; the other fields ride `rest`.
+    YaPermissions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        active_session_id: String,
+        action: String,
+        #[serde(flatten)]
+        rest: JsonMap,
+    },
     /// One slice of the session's display transcript:
     /// `rows[start:][:limit]` over the rows whose role matches a `roles` glob.
     /// Rust-native extension.

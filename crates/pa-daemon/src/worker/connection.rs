@@ -780,6 +780,8 @@ impl Worker {
             .and_then(Value::as_str)
             .unwrap_or("anonymous")
             .to_string();
+        // yusAgent (YA-11, ticket 20): whether this client answers permission requests.
+        self.ya_permissions_attached(payload);
         let capabilities = payload
             .get("capabilities")
             .and_then(Value::as_array)
@@ -1041,6 +1043,8 @@ impl Worker {
             .unwrap_or("anonymous")
             .to_string();
         self.side_questions.abort_for_client(&client_id);
+        // yusAgent (YA-11, ticket 20): a disconnected client's permission requests are withdrawn.
+        self.ya_permissions_detached(&client_id);
         // The detaching client's input-pause leases go with the detach
         // (TS worker `detach` arm releases the client's pauses).
         self.release_input_pauses_for_detach(&client_id);

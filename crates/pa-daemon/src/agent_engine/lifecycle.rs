@@ -176,6 +176,7 @@ impl AgentSessionEngine {
             usage_producer: std::sync::Mutex::new(None),
             rlm_usage_store: std::sync::Mutex::new(None),
             ya_header_sink: std::sync::Mutex::new(None),
+            ya_permissions: std::sync::Arc::default(),
             quota_park: std::sync::Arc::new(std::sync::Mutex::new(None)),
             quota_parked_this_run: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             autonomous_driver,
@@ -1155,7 +1156,11 @@ impl AgentSessionEngine {
             .lock()
             .expect("late agent message sink lock")
             .clone();
-        pa_core::session_engine::engine::create_session(SessionEngineConfig {
+        // yusAgent (YA-11, ticket 20): the permissions of the session (`crate::ya_permissions`).
+        let ya_permissions = self.ya_permissions.wiring();
+        let create_session =
+            |config| pa_core::session_engine::engine::create_session_with(config, ya_permissions);
+        create_session(SessionEngineConfig {
             on_late_sent_agent_message,
             semantic_edges,
             telemetry,

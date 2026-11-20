@@ -249,6 +249,10 @@ async fn apply_wire_config(
             }
             Ok(())
         }
+        // yusAgent (YA-11, ticket 20): the permissions selector.
+        ("permissions", Some(value)) => {
+            super::ya_permissions::apply_mode(link, daemon_session_id, value).await
+        }
         _ => Err(WireConfigError::invalid_params(format!(
             "Invalid configuration option: {config_id}"
         ))),
@@ -319,7 +323,10 @@ pub(super) fn picker_options_from_state(
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default();
-    session_config_options(model, &thinking_level, &levels, models)
+    let mut options = session_config_options(model, &thinking_level, &levels, models);
+    // yusAgent (YA-11, ticket 20): the permissions selector.
+    super::ya_permissions::push_option(&mut options, state);
+    options
 }
 
 /// Recompute the options from the worker's live state and publish the
