@@ -382,6 +382,14 @@ Fichiers : `docs/fork-changes.md`, section « Permissions, PR 3 ». Commits sép
 - **Contrôle en capture** (Claude Code, 20/11/2026, règle 13) : `py-example-001`, binaires `3cdccf6f7` (`main`, run 44746491241) et `47423fffc` (branche, run 44758145623) : `('py-example-001', 'resolved', 0)` en mode `capture` des deux côtés ; `find ~/.yusagent ~/.prime/agent -newer` vide ; `compare_capture_prompts.py` sur 9 requêtes : **TOUT IDENTIQUE**.
 - **Démo TUI** (`bench/tools/ya_permissions_tui_demo.py --pilote`, Claude Code, binaire `47423fffc`) : code de sortie 0, `OK` ; `autorise.txt` et `auto.txt` créés, `refuse.txt` absent ; 11 messages dans le fichier de session ; journal `allow`, `deny`, `manual->auto` ; « any » tapé pendant la demande resté dans l'éditeur, panneau ouvert ; « auto · no sandbox » à droite de la barre après `/permissions auto`.
 
+### Contrôles de Yusuf et clôture
+
+- **Contrôles de Yusuf sur `47423fffc`** :
+  - capture contre `3cdccf6f7` : **TOUT IDENTIQUE**, `find` vide ;
+  - démo TUI : OK, code de sortie 0 ; `allow`, `deny`, puis passage en « auto » ; `autorise.txt` et `auto.txt` créés, `refuse.txt` absent ; étiquette « auto · no sandbox » visible ;
+  - fenêtre de calme : **avis de Claude Code, non mesuré**. Elle fait ce que T3 demande sur ce qui a été vu : frappe continue (« any ») restée dans l'éditeur, panneau ouvert, puis réponse après la pause. Limite : 0,5 s est plus court que bien des pauses de réflexion en cours de frappe ; un mot qui commence par `y` ou `n` tapé juste après une telle pause (« non », « ne », « nous ») répond au panneau. Le journal garde la décision, mais un accord donné ainsi n'est visible que si l'utilisateur le remarque. Proposition : la garder telle quelle pour les testeurs et leur demander s'ils ont répondu sans le vouloir ; si oui, deux pistes à juger alors : une fenêtre plus longue (1 s), ou des touches de réponse actives seulement quand l'éditeur est vide.
+- **Clôture** : PR #69 mergée le 20/11/2026 (`main` à `f2ba28fc4`), build macOS de `main` : run 44788981604, succès.
+
 ## Points ouverts
 
 - Défaut du bail sous un chemin symbolique (messages perdus sans erreur pour la première session d'un dossier agent neuf) : `docs/tickets/21-bail-chemin-symbolique.md`, hors de la PR 2.
@@ -390,6 +398,6 @@ Fichiers : `docs/fork-changes.md`, section « Permissions, PR 3 ». Commits sép
 - Arrêt du tour après un refus par le chemin `Preparation::Immediate` (section 5) : à vérifier dans `pa-agent` au début de la PR 1 ; le test de D7 le prouvera.
 - **Fatigue** : en manuel, 13 confirmations par session en médiane sur le banc (p90 23, prompt v2). Le passage en « auto » pour la session est la réponse retenue ; le classement (b) sera rejugé après le sandbox (ticket à part).
 - PR 3, T10 : quand un autre client (le TUI) a répondu, le pont ACP n'envoie rien au client ACP pour fermer sa boîte `session/request_permission` ; le client voit seulement l'appel passer à `in_progress` ou finir en `failed`. **L'existence d'une annulation de requête de l'agent vers le client dans ACP n'est pas vérifiée** : à voir en YA-10 (l'extension devra au moins fermer sa boîte sur ce changement de statut).
-- PR 3 : pendant une demande, la carte de la cellule dans la transcription affiche déjà `✓ python · …` et le compteur « Executing » (vu à l'écran de la démo) : le TUI rend `tool_execution_start`, émis avant le hook (section 1.3), comme un appel lancé. Le panneau dit la vérité, la carte non. Équivalent TUI du `pending` d'ACP, non traité dans la PR 3.
+- PR 3 : pendant une demande, la carte de la cellule dans la transcription affiche déjà `✓ python · …` et le compteur « Executing » (vu à l'écran de la démo) : le TUI rend `tool_execution_start`, émis avant le hook (section 1.3), comme un appel lancé. Le panneau dit la vérité, la carte non. Équivalent TUI du `pending` d'ACP, non traité dans la PR 3. Constat et plan : `docs/tickets/22-carte-cellule-permission.md`.
 - Le keep-warm du cache pendant l'attente (`docs/yusAgent-cdc.md:288`) n'est pas dans ce découpage.
 - Les tools MCP en écriture (`docs/yusAgent-cdc.md:533`) passent par le kernel, donc par la cellule : demandés comme toute cellule.
