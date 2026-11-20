@@ -338,6 +338,7 @@ Ce qui est fait :
 - **Questions de Yusuf sur le contrôle, vérifiées sur le binaire `b5763b3f4`** :
   - un client ACP qui se détache alors qu'un second client (comme le TUI) reste attaché : la demande est retirée (`crates/pa-daemon/src/worker/connection.rs:1047`, `crates/pa-daemon/src/ya_permissions.rs:123-128` ; le second client ne s'est pas déclaré répondant, `ya_permissions.rs:112`) : journal `cancelled`, résultat `[permission-denied] …`, aucun message d'agent ensuite, cellule non exécutée. Test e2e c étendu (second client attaché par le socket du démon) ;
   - réponse `cancelled` du client, avec ou sans `session/cancel` : l'appel finit en `failed` (`tool_execution_end` est toujours émis, `crates/pa-agent/src/agent_loop/tools.rs:131` ; l'abandon du hook devient un résultat en erreur, `crates/pa-agent/src/agent_loop/tool_call.rs:45-50`), cellule non exécutée, journal `cancelled`. Test e2e b étendu (état final) et test `a_cancelled_answer_withdraws_the_request` ajouté.
+- **Démo de Yusuf sur `b5763b3f4`** : OK, code de sortie 0, `allow` puis `deny`, `find` vide.
 
 ## Points ouverts
 

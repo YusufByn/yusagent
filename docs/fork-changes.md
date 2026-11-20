@@ -1086,6 +1086,16 @@ Décisions : `docs/tickets/20-ya11-permissions.md`, section « PR 2 ». En manue
 
 Limites connues : un client qui s'attache sans `yaPermissionAsker` (TUI) voit les événements de demande sans pouvoir y répondre ; après une relance du worker, le client ACP n'est plus enregistré comme répondant tant qu'il ne s'est pas rattaché, et les demandes sont retirées aussitôt (refus).
 
+## Bail de session sous un chemin symbolique (ticket 21)
+
+Constat et décision : `docs/tickets/21-bail-chemin-symbolique.md`.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/lease.rs` | report partiel d'upstream (fichier upstream) | Commit upstream `12a5081aca4248e8651f9f24ee4b01c249de6492` (#3871), partie « pa-daemon: keep one lease path for a session created in a new directory » seule, repris à l'identique par `git apply` du diff de ce fichier (aucune retouche) : `canonical_session_path` canonicalise le plus proche parent existant et rejoint la fin manquante, et le test unitaire `a_lease_taken_before_its_sessions_dir_exists_owns_the_created_file`. Corrige la perte silencieuse des messages de la première session d'un dossier agent neuf sous un lien symbolique. Les 70 autres fichiers du commit ne sont pas repris : pour un `git cherry-pick` futur de `12a5081ac`, `lease.rs` est déjà au contenu d'upstream. | YA-11 (ticket 21) |
+| `crates/pa-cli/tests/ya_session_lease_symlink_e2e.rs` | nouveau | Vrai binaire en ACP, `HOME` en lien symbolique, dossier agent neuf, provider factice et vrai kernel en manuel : une cellule acceptée ; le fichier de session contient les 4 messages du tour et l'entrée `ya-permission`, le journal du worker aucune ligne `pa-daemon:`. Échoue sans le correctif, sous Linux aussi. | YA-11 (ticket 21) |
+| `.changes/ya-21-bail.md` | nouveau | Fragment de changelog. | YA-11 (ticket 21) |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

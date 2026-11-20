@@ -1,0 +1,1 @@
+- yusAgent: the first session of a fresh agent directory reached through a symlink (macOS `/tmp` and `/var/folders`) keeps its messages; every append to its session file used to be refused silently (upstream fix from `12a5081ac`).
