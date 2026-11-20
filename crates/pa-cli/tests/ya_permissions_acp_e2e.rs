@@ -13,7 +13,8 @@
 //! b. `session/cancel` while a request waits: the turn answers `cancelled`, the cell does not run,
 //!    the decision is journaled as `cancelled`.
 //! c. The client disconnects while a request waits: the cell does not run, its result is an error
-//!    and the turn stops (the model gets no other request); journaled as `cancelled`.
+//!    (the refusal text, or the abort text when the bridge's teardown aborts the turn first) and
+//!    the turn stops (the model gets no other request); journaled as `cancelled`.
 //! d. The `permissions` selector: `auto` runs a cell without a request, back to `manual` asks
 //!    again; both changes are journaled.
 //!
@@ -430,7 +431,15 @@ fn a_disconnect_while_a_request_waits_declines_the_call() {
     }
     let result = result().expect("the call's result");
     assert_eq!(result["isError"], true, "{result}");
-    assert!(result.to_string().contains(DENIED), "{result}");
+    // Two paths race on a disconnect, both a refusal that stops the turn: the worker withdraws
+    // the request when the client detaches (the fixed refusal text), or the bridge's teardown
+    // aborts the turn first (the abort text). Seen both ways in CI (runs 44721542873 and
+    // 44723659629).
+    let text = result["content"].to_string();
+    assert!(
+        text.contains(DENIED) || text.contains("Request was aborted"),
+        "{result}"
+    );
     assert!(!client.path("gone.txt").exists(), "the cell did not run");
     // The turn stopped: the model's next answer was never requested.
     std::thread::sleep(Duration::from_secs(2));
