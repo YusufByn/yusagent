@@ -286,6 +286,26 @@ Ensuite : sandbox du kernel (seconde partie de YA-11) ; puis, dans un ticket à 
 - **ACP** (client factice) : forme de `session/request_permission` (options `allow_once`, `reject_once`), `pending` puis `in_progress`, `session/cancel` → `cancelled` → cellule non exécutée, issue inconnue → refus, sélecteur `permissions` qui passe la session en « auto » et le journalise ; une session reprise suit le réglage global.
 - **TUI** : la boîte s'affiche pour chaque appel de tool en manuel ; l'état « auto sans sandbox » reste visible.
 
+## PR 1 : cœur et banc (20/11/2026)
+
+Branche `ya-20-permissions-coeur`, depuis `main` à `e8449ee32` (merge de la PR #65). Fichiers et tests : `docs/fork-changes.md`, section « Permissions, PR 1 ».
+
+- **Arrêt du tour, vérifié avant d'écrire le reste** : possible sans toucher à `pa-agent`. Quand le hook `should_stop_after_turn` renvoie `true` après un lot de tools, la boucle émet `AgentEnd` et rend la main, sans nouvel appel au modèle ni lecture des suivis (`crates/pa-agent/src/agent_loop/run.rs:132-152`). Le gate garde l'id des appels refusés ; l'enveloppe du hook de fin de tour de l'embedding (`config.should_stop_after_turn`) arrête le tour si le lot qui vient de finir en contient un. Le bloc upstream qui compose ce hook n'est pas modifié.
+- **Réglage** : `"permissions"` lu dans le document brut des réglages globaux (`SettingsManager::global_raw`), jamais dans les réglages fusionnés ; valeur autre que `"manual"` ou `"auto"` : refus à la création, avec le chemin du fichier.
+- **Refus au démarrage** (D6) : dans `create_session`, juste après le chargement des réglages, avant toute requête et avant le préchauffage du kernel. S'applique à toutes les sessions sans demandeur : `-p`, RPC et, jusqu'à la PR 2, le démon (TUI, ACP). Message :
+
+  ```
+  permissions are "manual" (the default) and this mode cannot ask for confirmation. To run tool calls without confirmation (there is no sandbox yet), add this line to <dossier agent>/settings.json:
+    "permissions": "auto"
+  A project's .yusagent/settings.json is not read for this setting.
+  ```
+- **Refus d'un appel** (D7) : résultat `[permission-denied] The user declined this cell; nothing was executed.`, en erreur ; les autres appels du même message ne sont pas demandés et reçoivent le même texte ; une demande annulée vaut refus. Journal : entrée `ya-permission` du fichier de session (`toolCallId`, `toolName`, `decision` : `allow`, `deny`, `cancelled` ou `skipped`), jamais envoyée au modèle. En « auto », rien n'est journalisé par appel.
+- **Avertissement** (D4) : sur stderr au démarrage d'une session racine sans démon (`-p`, RPC) quand « auto » vient des réglages de l'utilisateur. Le TUI et ACP l'afficheront dans les PR 2 et 3.
+- **Tests upstream : écart à signaler.** Avec « manuel » par défaut et le refus au démarrage, les tests qui lancent une session sans demandeur (presque tous les e2e ; `git grep -l PRIME_AGENT_CODING_AGENT_DIR -- 'crates/*/tests/*'` : 88 fichiers de tests) échoueraient. Plutôt que de modifier ces fichiers upstream, `.cargo/config.toml` pose `PRIME_AGENT_TEST_PERMISSIONS = "auto"`, comme il pose déjà `PRIME_AGENT_PROMPT_VERSION` et `RLM_MAX_DEPTH` pour eux. **Cette variable n'est lue que par les builds de debug** (`cfg!(debug_assertions)`) : un binaire de release (build macOS, banc) ne lit que le réglage global (D1). Nos tests la retirent ou fixent le mode explicitement.
+- **Préfixe** : inchangé (rien dans le prompt, les tools ni `yaRequest`) ; test `permissions_manual_and_auto_send_the_same_prefix` dans `crates/pa-core/tests/prefix_stability.rs`, puis contrôle en `--capture` après le build.
+- **Banc** : `bench/smoke/run.py`, `bench/tools/capture/run.py` et `bench/smoke/tools/notice-batch-repro.sh` écrivent `"permissions": "auto"` ; `bench/smoke/settings/default.json` reste `{}`. Tests Python du banc : `python3 -I -m unittest discover -s bench/smoke/tests`, 103 tests OK.
+- **Pas compilé en local** (règle 8 de `CLAUDE.md`) : la compilation, clippy et les tests Rust passent par la CI.
+
 ## Points ouverts
 
 - Arrêt du tour après un refus par le chemin `Preparation::Immediate` (section 5) : à vérifier dans `pa-agent` au début de la PR 1 ; le test de D7 le prouvera.
