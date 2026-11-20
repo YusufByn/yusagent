@@ -282,6 +282,8 @@ impl SessionUi {
 
     /// A bracketed paste goes to the focused input.
     pub(crate) fn handle_paste(&mut self, text: &str, view: &mut AgentView) {
+        // yusAgent (YA-11, ticket 20): a paste restarts the permission panel's quiet window.
+        Self::ya_permission_input(view);
         // The overlays own the whole frame while open (like their key
         // dispatch): the paste lands in the overlay's own input or is
         // consumed by the input-less ones, never in the hidden editor
@@ -339,6 +341,11 @@ impl SessionUi {
         // Escape itself never resets, so repeated Escape converges to the inert empty state.
         if key_event_to_id(&key).is_some_and(|id| id != "escape") {
             self.escape_tree_shortcut_spent = false;
+        }
+        // yusAgent (YA-11, ticket 20): the permission panel takes its keys once typing paused;
+        // until then the key goes on to its usual owner (`super::ya_permissions`).
+        if self.ya_permission_key(&key, view) {
+            return Ok(());
         }
         // The `/model` picker owns the frame while open: its keys go before the
         // editor, viewport keys, and Ctrl+C.

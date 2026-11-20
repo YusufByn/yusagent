@@ -165,7 +165,8 @@ fn create_config_binds_a_new_child_to_its_parent() {
             "cwd": "/tmp",
             "executionMode": "interactive",
             "parentSessionPath": "/x/p.jsonl",
-            "rlmDepth": 2
+            "rlmDepth": 2,
+            "yaPermissionAsker": true
         })
     );
 }

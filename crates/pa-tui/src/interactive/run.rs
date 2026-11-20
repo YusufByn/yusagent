@@ -1342,9 +1342,18 @@ async fn run_interactive_surface(
         // iteration. Terminal runs never arm it (`headless_done`
         // exists only on the headless harness).
         let settle_recheck_wanted = headless_done && headless_settle_pending;
+        // yusAgent (YA-11, ticket 20): the permission panel's quiet window ends without a key;
+        // the tick repaints the panel once it answers.
+        let ya_permission_waiting = view
+            .ya_permission
+            .as_ref()
+            .is_some_and(crate::ya_permission_panel::PermissionPanel::waits_to_arm);
         // The window anchors at the first iteration that sees pending work: another arm's
         // wake must not restart it, or a streaming reply starves the parked request.
-        quiet_tick_deadline = if autocomplete_pending || auto_scroll_armed || settle_recheck_wanted
+        quiet_tick_deadline = if autocomplete_pending
+            || auto_scroll_armed
+            || settle_recheck_wanted
+            || ya_permission_waiting
         {
             quiet_tick_deadline.or_else(|| Some(Instant::now() + QUIET_TICK_INTERVAL))
         } else {
@@ -1915,6 +1924,14 @@ async fn run_interactive_surface(
                 quiet_tick_deadline = None;
                 session.materialize_editor_autocomplete(&mut view);
                 session.selection_auto_scroll_tick(&mut view);
+                // yusAgent (YA-11, ticket 20): the permission panel repaints once it answers.
+                if view
+                    .ya_permission
+                    .as_ref()
+                    .is_some_and(|panel| panel.needs_repaint(Instant::now()))
+                {
+                    session.dirty = true;
+                }
             }
             () = async {
                 // The 2s bash-activity poll, on its own absolute deadline and only on daemons that

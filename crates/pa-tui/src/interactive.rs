@@ -430,6 +430,8 @@ impl InteractiveOptions {
             "cwd": self.cwd.display().to_string(),
             "executionMode": "interactive",
         });
+        // yusAgent (YA-11, ticket 20): the TUI answers the permission requests of its sessions.
+        config[pa_types::daemon::ya_permissions::ASKER_FIELD] = json!(true);
         if let Some(session_dir) = &self.session_dir {
             config["sessionDir"] = json!(session_dir.display().to_string());
         }

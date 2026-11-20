@@ -21,6 +21,8 @@ mod settings;
 mod share;
 mod stream;
 mod window;
+// yusAgent (YA-11, ticket 20): the permission requests of the session.
+mod ya_permissions;
 pub(crate) use window::TranscriptPageNote;
 
 pub(crate) use apply::CompactionAbortNote;

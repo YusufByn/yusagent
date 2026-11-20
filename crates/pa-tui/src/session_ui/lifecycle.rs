@@ -355,7 +355,13 @@ impl SessionUi {
             recovery_config: None,
             env: client_env.clone(),
             launch_env: None,
-            rest: Map::default(),
+            // yusAgent (YA-11, ticket 20): this client answers the permission requests.
+            rest: [(
+                pa_types::daemon::ya_permissions::ASKER_FIELD.to_string(),
+                Value::Bool(true),
+            )]
+            .into_iter()
+            .collect(),
         };
         let direct_attached = self
             .client
