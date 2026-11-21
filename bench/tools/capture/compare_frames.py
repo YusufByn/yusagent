@@ -3,8 +3,8 @@
 
 YA-10 (ticket 24, PR 3). Vrai binaire : le dossier écrit par `acp_frames.py` (cas A `display` en
 « auto », cas B `basic` en « manual » avec refus). Agent factice
-(`extensions/vscode/test/fake-agent/fake-agent.mjs`) : lancé ici avec les prompts `carte`, `refus`
-et `lent`. Pour chaque paire de trames : chemins de clés (avec le type de la valeur) présents d'un
+(`extensions/vscode/test/fake-agent/fake-agent.mjs`) : lancé ici avec les prompts `carte`, `refus`,
+`lent` et `réveil` (ticket 25 : `turnStart` d'un prompt et d'un tour de réveil, fin du réveil). Pour chaque paire de trames : chemins de clés (avec le type de la valeur) présents d'un
 seul côté, types différents, valeurs des champs constants (statuts, genres, titres, identifiants
 d'option, texte du refus, forme des identifiants de requête), trames de fin d'un tour de prompt.
 
@@ -76,7 +76,11 @@ def fake_frames(prompt: str) -> list[dict]:
     sid = wait(2)["result"]["sessionId"]
     frames.clear()
     send({"id": 3, "method": "session/prompt", "params": {"sessionId": sid, "prompt": [{"type": "text", "text": prompt}]}})
-    if prompt == "lent":
+    if prompt == "réveil":
+        # Ticket 25 : le tour de réveil suit la réponse du prompt.
+        wait(3)
+        wait(None, 1.5)
+    elif prompt == "lent":
         wait(None, 1.0)
         send({"method": "session/cancel", "params": {"sessionId": sid}})
         wait(3, 4.0, on_request=lambda m: send({"id": m["id"], "result": {"outcome": {"outcome": "cancelled"}}}))
@@ -154,6 +158,7 @@ def update(frames, kind, pred=lambda u: True):
 
 A, B = real_frames("A-display-auto"), real_frames("B-basic-manual-reject")
 carte, refus, lent = fake_frames("carte"), fake_frames("refus"), fake_frames("lent")
+reveil = fake_frames("réveil")
 meta = lambda u: u.get("_meta") or {}
 total = 0
 
@@ -202,6 +207,30 @@ def tail(frames):
 print(f"fin de tour avant la réponse : réel {tail(B)}, factice {tail(refus)}"
       f" ({'IDENTIQUE' if tail(B) == tail(refus) else 'DIFFÉRENT'})")
 total += 0 if tail(B) == tail(refus) else 1
+# Ticket 25 : `turnStart` d'un prompt, premier `_meta` du tour.
+starts = lambda frames, origin: [f for f in frames if (meta((f.get("params") or {}).get("update") or {})
+                                 .get("ai.primeintellect.prime-agent", {}).get("turnStart") or {}).get("origin") == origin]
+real_prompt_start, mine_prompt_start = starts(A, "prompt"), starts(carte, "prompt")
+total += compare("session_info_update turnStart (prompt)", real_prompt_start[0] if real_prompt_start else {},
+                 mine_prompt_start[0] if mine_prompt_start else {})
+# Ticket 25 : le tour de réveil (avis `[bash-done]`) : `turnStart` wake, puis sa fin.
+real_wake, mine_wake = starts(A, "wake"), starts(reveil, "wake")
+total += compare("session_info_update turnStart (wake)", real_wake[0] if real_wake else {},
+                 mine_wake[0] if mine_wake else {})
+def wake_end(frames, start):
+    if not start:
+        return None
+    turn = meta(start[0]["params"]["update"])["ai.primeintellect.prime-agent"]["promptTurnId"]
+    out = []
+    for f in frames[frames.index(start[0]) + 1:]:
+        u = (f.get("params") or {}).get("update") or {}
+        m = meta(u).get("ai.primeintellect.prime-agent", {})
+        if m.get("promptTurnId") == turn and u.get("sessionUpdate") == "session_info_update":
+            out.append(m.get("phase"))
+    return out
+print(f"fin du tour de réveil : réel {wake_end(A, real_wake)}, factice {wake_end(reveil, mine_wake)}"
+      f" ({'IDENTIQUE' if wake_end(A, real_wake) == wake_end(reveil, mine_wake) else 'DIFFÉRENT'})")
+total += 0 if real_wake and wake_end(A, real_wake) == wake_end(reveil, mine_wake) else 1
 # Message de l'agent.
 total += compare("agent_message_chunk", update(A, "agent_message_chunk"), update(carte, "agent_message_chunk") or update(lent, "agent_message_chunk"),
                  ignore_values={".params.update.content.type"})

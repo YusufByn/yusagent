@@ -41,7 +41,8 @@ const STEER = "_unharnessed/session/steer";
 
 const PANEL_COMMANDS: ChatCommand[] = [{ name: "new", description: "Start a new conversation", kind: "panel" }];
 
-const WAKES = { bash: "a background command ended", quota: "a usage limit reset", goal: "a goal's pause ended" };
+// yusAgent (ticket 25, E2) : `heartbeat`, réveil planifié qui n'existe qu'avec le démon.
+const WAKES = { bash: "a background command ended", quota: "a usage limit reset", goal: "a goal's pause ended", heartbeat: "a scheduled heartbeat" };
 
 type Turn = TurnHead & { items: TurnItem[] };
 /**
@@ -686,12 +687,8 @@ export class Chat {
   private onUpdate(params: unknown): void {
     const { sessionId, update } = params as { sessionId: string; update: Update };
     if (sessionId !== this.session.updatesFrom) return;
-    // yusAgent : notre `_meta` (espace `ai.primeintellect.prime-agent`), début de tour déduit.
-    const meta = yaMeta<Meta>(update, {
-      known: (id) => this.turns.has(id) || this.loading,
-      prompting: this.sent !== undefined && this.live !== this.sent,
-      ours: (id) => this.sent !== undefined && this.turns.get(id) === this.sent,
-    });
+    // yusAgent : notre `_meta` (espace `ai.primeintellect.prime-agent`), noms d'Unharnessed.
+    const meta = yaMeta<Meta>(update);
     if (update.sessionUpdate === "available_commands_update") {
       this.setCommands(update.availableCommands ?? []);
       return;
@@ -710,8 +707,7 @@ export class Chat {
     }
     if (meta.turnStart) {
       this.begin(meta.promptTurnId ?? 0, meta.turnStart);
-      // yusAgent : début déduit du premier événement du tour, qui porte aussi son contenu.
-      if (!(meta as { yaDeduced?: boolean }).yaDeduced) return;
+      return;
     }
     const turn = this.turns.get(meta.promptTurnId ?? 0) ?? this.live;
     if (!turn) return;

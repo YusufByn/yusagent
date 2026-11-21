@@ -138,6 +138,15 @@ python3 -I bench/tools/capture/acp_frames.py --binary <yusagent> --out <dossier 
 python3 -I bench/tools/capture/compare_frames.py <dossier neuf>
 ```
 
+## Tours de réveil et Stop pendant un réveil (ticket 25)
+
+`wake_turns.py` mène six sessions ACP (scénarios `wake-stop-avant` et `wake-stop-apres` : deux `bash()` non lus, premier réveil de 15 s). Un second client du socket du démon (`attach`) relève les événements du worker (`agent_start`, `agent_end` et ce qu'il y a entre les deux) et envoie pendant le premier réveil l'une des trois commandes d'arrêt (`abort_and_clear_queue`, `abort`, `abort_and_send_queued`), avant ou après l'arrivée du second avis. Le script relève la file (`get_queue`) avant et après la commande, les tours qui démarrent ensuite, et compare chaque requête envoyée au provider après la commande à la précédente (prompt système, tools, historique en ajout seul, `analyze.compare_pair`). Rapport `wake-turns.md`, dernière ligne `CONFORME` ou `NON CONFORME` (code de sortie 1). `--only <cas>` limite les cas ; `--out` doit être neuf.
+
+```sh
+export DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short
+python3 -I bench/tools/capture/wake_turns.py --binary <yusagent> --out <dossier neuf>
+```
+
 ## Serveur seul
 
 ```bash

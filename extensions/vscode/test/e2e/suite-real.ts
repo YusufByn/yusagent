@@ -3,9 +3,10 @@
 // - session 1 (manuel) : cellule avec `bash()` (accord par le bouton de la boîte), `edit()` puis
 //   « Revert », refus (fichier absent, « Declined », le tour s'arrête), texte `[user-reverted]` dans
 //   le message suivant (fichier de session), Stop pendant une cellule ;
-// - session 2 (auto) : bandeau, cellule exécutée sans demande ;
+// - session 2 (auto) : bandeau, cellule exécutée sans demande ; tour lancé par l'agent (avis
+//   `[bash-done]`, ticket 25) ouvert par `turnStart` et fermé sur `responseBoundary`, message suivant
+//   envoyé tout de suite ;
 // - fin : démon arrêté, aucun processus restant.
-// Le tour lancé par l'agent (avis `[bash-done]`) est au ticket 25.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -209,7 +210,15 @@ const tests: [string, () => Promise<void>][] = [
     "auto : bandeau, cellule exécutée sans demande",
     async () => {
       writeFileSync(join(home, ".yusagent", "settings.json"), JSON.stringify({ permissions: "auto" }));
-      writeScript([cell("call-auto", "open('auto.txt', 'w').write('x')"), { text: "auto fini" }]);
+      writeScript([
+        cell("call-auto", "open('auto.txt', 'w').write('x')"),
+        { text: "auto fini" },
+        // Ticket 25 : un bash() jamais lu, puis le tour de réveil sur son avis, puis le message suivant.
+        cell("call-launch", "h = bash('sleep 2; echo reveil')\nprint('lancé')"),
+        { text: "lancé" },
+        { text: "réveil fini" },
+        { text: "suivant fini" },
+      ]);
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await waitFor(async () => {
         const s = (await state()).session;
@@ -221,6 +230,24 @@ const tests: [string, () => Promise<void>][] = [
       assert.equal((await tool("call-auto"))?.status, "done");
       assert.ok(existsSync(join(workspace, "auto.txt")), "cellule exécutée");
       assert.equal((await state()).badge, undefined, "aucune demande");
+    },
+  ],
+  [
+    "tour lancé par l'agent (ticket 25) : avis [bash-done], tour fermé sur responseBoundary, message suivant envoyé tout de suite",
+    async () => {
+      await post({ type: "send", text: "réveil", images: [] });
+      const wake = await waitFor(async () => {
+        const turn = (await state()).chat.entries.filter((entry) => entry.kind === "turn").at(-1);
+        return turn?.kind === "turn" && turn.wake === "bash" && turn.state === "done" ? turn : undefined;
+      }, "tour de réveil fini sur sa frontière", SLOW);
+      assert.equal(wake.prompt, undefined, "tour lancé par l'agent, sans message");
+      await shows("réveil fini", "réponse du réveil");
+      assert.equal((await state()).chat.busy, false, "panneau libre après la frontière");
+      const started = Date.now();
+      await post({ type: "send", text: "suivant", images: [] });
+      await shows("suivant fini", "réponse au message suivant", 15_000);
+      await idle();
+      console.log(`message suivant : réponse en ${Date.now() - started} ms`);
     },
   ],
 ];

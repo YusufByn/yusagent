@@ -48,6 +48,13 @@ async function ready(): Promise<State> {
   }, "session ouverte et webview montée", 30_000);
 }
 
+type Turn = Extract<ChatState["entries"][number], { kind: "turn" }>;
+
+/** Ticket 25 : les tours lancés par l'agent sur un avis `[bash-done]`. */
+async function wakeTurns(): Promise<Turn[]> {
+  return (await state()).chat.entries.filter((entry): entry is Turn => entry.kind === "turn" && entry.wake === "bash");
+}
+
 async function idle(): Promise<void> {
   await waitFor(async () => !(await state()).chat.busy, "tour fini");
 }
@@ -194,6 +201,37 @@ const tests: [string, () => Promise<void>][] = [
       const after = await shows("Not run", "carte jamais lancée après Arrêter");
       assert.ok(!after.includes(BOX), "boîte fermée");
       assert.ok(!after.includes("Demande d'autorisation"), "plus de ligne d'attente");
+    },
+  ],
+  [
+    "tour lancé par l'agent (ticket 25) : turnStart du pont, fermé sur responseBoundary, message suivant envoyé tout de suite",
+    async () => {
+      await post({ type: "send", text: "réveil", images: [] });
+      await waitFor(async () => (await wakeTurns()).at(-1)?.state === "done", "tour de réveil fini sur sa frontière");
+      await shows("réveil fini", "contenu du réveil");
+      await idle();
+      const prompts = () => received(control, lastPid()).filter((frame) => frame.method === "session/prompt").length;
+      const before = prompts();
+      await post({ type: "send", text: "bonjour", images: [] });
+      await waitFor(() => prompts() === before + 1, "session/prompt envoyé tout de suite", 2_000);
+      await shows("Bonjour", "réponse au message suivant");
+      await idle();
+    },
+  ],
+  [
+    "Stop pendant un réveil (ticket 25, T4) : session/cancel, tour arrêté, réveil suivant affiché",
+    async () => {
+      await post({ type: "send", text: "réveil-lent", images: [] });
+      await shows("réveil en cours", "réveil en cours");
+      assert.ok((await state()).chat.busy, "panneau occupé pendant le réveil");
+      await post({ type: "cancel" });
+      await shows("second réveil", "réveil suivant");
+      await idle();
+      assert.deepEqual(
+        (await wakeTurns()).slice(-2).map((turn) => turn.state),
+        ["cancelled", "done"],
+      );
+      assert.ok(received(control, lastPid()).some((frame) => frame.method === "session/cancel"), "session/cancel envoyé");
     },
   ],
   [

@@ -280,6 +280,8 @@ pub(crate) struct HostedSession {
     /// The event mapping state lives and dies with the session, like TS.
     mapping: WireMappingState,
     observed_children: std::collections::HashSet<String>,
+    /// yusAgent (YA-10, ticket 25): the turns this client did not start.
+    pub(crate) ya_turns: super::ya_turns::AgentTurns,
 }
 
 struct ActiveTurn {
@@ -371,6 +373,15 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                                     current.observed_children.insert(id.to_string());
                                 }
                             }
+                            // yusAgent (YA-10, ticket 25): a turn this client did not start.
+                            current
+                                .ya_turns
+                                .open(
+                                    &event,
+                                    &current.producer,
+                                    &mut current.assistant_stop_reason,
+                                )
+                                .await;
                             let turn_id = current.producer.active_prompt_turn().await;
                             let mut updates =
                                 wire_events::wire_updates(&event, &mut current.mapping);
@@ -382,6 +393,10 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                             )
                             .await;
                             updates.extend(ya_permissions.updates(&event));
+                            current
+                                .ya_turns
+                                .announce(&event, !updates.is_empty(), &current.producer)
+                                .await;
                             for update in updates {
                                 let _ = current
                                     .producer
@@ -394,6 +409,19 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                                 &current.acp_session_id,
                                 &current.daemon_active_session_id,
                             );
+                            // yusAgent (YA-10, ticket 25): its end, after its last update.
+                            if let Some(settle) = current
+                                .ya_turns
+                                .close(
+                                    &event,
+                                    &current.producer,
+                                    current.assistant_stop_reason,
+                                    &current.daemon_active_session_id,
+                                )
+                                .await
+                            {
+                                tokio::spawn(super::ya_turns::settle(settle, Arc::clone(&link)));
+                            }
                             if matches!(
                                 event.get("type").and_then(Value::as_str),
                                 Some("agent_end" | "auto_retry_start" | "auto_retry_end")
@@ -570,6 +598,11 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                                 wait_for_session_close(&state).await;
                                 cancel_order(&json!({ "sessionId": session_id }), &state).await
                             }
+                            // yusAgent (YA-10, ticket 25): T4.
+                            CancelOrder::AgentTurnStop { daemon_session_id } => {
+                                super::ya_turns::stop(&link, &daemon_session_id).await;
+                                return;
+                            }
                         };
                     }
                 });
@@ -672,7 +705,13 @@ enum FrameOrder {
 enum CancelOrder {
     None,
     Armed(CancelStop),
-    WaitForClose { session_id: String },
+    WaitForClose {
+        session_id: String,
+    },
+    /// yusAgent (YA-10, ticket 25): Stop during a turn this client did not start.
+    AgentTurnStop {
+        daemon_session_id: String,
+    },
 }
 
 struct CancelStop {
@@ -807,6 +846,12 @@ fn arm_cancel_locked(session_id: &str, guard: &mut DaemonAcpState) -> CancelOrde
         Some(turn) => {
             turn.cancelled = true;
             Some(turn.admission_id.clone())
+        }
+        // yusAgent (YA-10, ticket 25): stop only a turn this client did not start (T4).
+        None if hosted.stop_failure.is_none() && hosted.ya_turns.arm_stop() => {
+            return CancelOrder::AgentTurnStop {
+                daemon_session_id: hosted.daemon_active_session_id.clone(),
+            };
         }
         None if hosted.stop_failure.is_none() => return CancelOrder::None,
         None => None,
@@ -1198,6 +1243,7 @@ async fn handle_session_new(
         assistant_stop_reason: None,
         mapping: WireMappingState::default(),
         observed_children: std::collections::HashSet::new(),
+        ya_turns: super::ya_turns::AgentTurns::default(),
     };
     // The ACP MCP servers ride the wire command, not a local manager.
     let replace_skipped = resolved.is_empty() && state.lock().await.mcp_server_names.is_empty();
@@ -1467,13 +1513,15 @@ async fn prompt_turn(
             _ => return cancelled_response(&id),
         }
     };
-    let turn_id = producer.begin_prompt().await;
+    // yusAgent (YA-10, ticket 25): after a turn this client did not start (T3, E7).
+    let turn_id = super::ya_turns::begin_prompt(state, &producer).await;
     // TS `abort.signal.aborted` before `promptAndWait`.
     let cancelled = turn_cancelled(&*state.lock().await, admission_id);
     if cancelled {
         producer.finish_prompt(turn_id).await;
         return cancelled_response(&id);
     }
+    super::ya_turns::publish_turn_start(&producer, turn_id, super::ya_turns::prompt_start()).await;
     // yusAgent (YA-10, ticket 24): this client answers the permission requests again, for a
     // worker relaunched since the last turn (the relaunch replays `create`, not `attach`).
     super::ya_permissions::rearm_asker(link, &hosted_daemon_session_id).await;
@@ -1746,7 +1794,7 @@ async fn publish_error_boundary(producer: &Arc<UpdateProducer>, turn_id: u64) {
 /// Returns an error when the daemon connection fails or closes mid-request,
 /// when the response reports a failure, or when the status payload does not
 /// deserialize.
-async fn fetch_autonomous_status(
+pub(super) async fn fetch_autonomous_status(
     link: &Arc<DaemonLink>,
     active_session_id: &str,
     wait_for_rlm_quiescence: bool,
@@ -1777,7 +1825,7 @@ async fn fetch_autonomous_status(
 /// Returns an error when the daemon connection fails or closes mid-request,
 /// when the response reports a failure, or when the answer carries no
 /// children array.
-async fn fetch_rlm_children(
+pub(super) async fn fetch_rlm_children(
     link: &Arc<DaemonLink>,
     active_session_id: &str,
 ) -> anyhow::Result<Vec<Value>> {
@@ -1817,7 +1865,7 @@ fn outstanding_subagents(children: &[Value]) -> u64 {
 
 /// TS `quiescenceMeta`: the outstanding-subagent count plus the run's
 /// remaining continuation slots, observed together at one completion point.
-fn quiescence_meta(
+pub(super) fn quiescence_meta(
     status: Option<&pa_core::autonomous::AgentAutonomousStatus>,
     children: &[Value],
 ) -> meta::PrimeAgentQuiescenceMeta {
@@ -2021,6 +2069,7 @@ mod tests {
             assistant_stop_reason: None,
             mapping: WireMappingState::default(),
             observed_children: std::collections::HashSet::new(),
+            ya_turns: super::super::ya_turns::AgentTurns::default(),
         }
     }
 
