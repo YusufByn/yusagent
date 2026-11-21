@@ -16,6 +16,7 @@ import { describeFailure, resolveBinary } from "./binary";
 import type { AgentState } from "./protocol";
 import { notServed, served } from "./ya/methods";
 import { Permissions } from "./ya/permissions";
+import { agentEnv } from "./ya/env"; // yusAgent (PR 3)
 
 const STDERR_TAIL = 20;
 const INITIALIZE_TIMEOUT_MS = 30_000;
@@ -126,7 +127,8 @@ export class Agent {
     const args = ["--mode", "acp", ...(saved ? ["--resume", saved.path] : [])];
     this.log.info(`starting agent: ${resolution.path} ${args.join(" ")} (cwd ${this.cwd})`);
 
-    const proc = spawn(resolution.path, args, { cwd: this.cwd, env: this.env, stdio: "pipe" });
+    // yusAgent (PR 3) : sans PRIME_AGENT_KERNEL_PYTHON (src/ya/env.ts).
+    const proc = spawn(resolution.path, args, { cwd: this.cwd, env: agentEnv(this.env), stdio: "pipe" });
     this.proc = proc;
     // ENOENT / EACCES arrive here, without an exit event.
     proc.on("error", (error) => this.fail(proc, error.message));

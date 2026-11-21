@@ -253,6 +253,22 @@ test("diffs (PR 3, étape 4) : edit() puis sed -i sur le même texte, « Rejeter
   assert.equal(readFileSync(join(h.cwd, "a.txt"), "utf8"), "un\nDeux\ntrois\n", "rien d'écrit");
 });
 
+test("environnement du binaire (PR 3) : PRIME_AGENT_KERNEL_PYTHON retirée, PRIME_AGENT_KERNEL_VENV passée", async () => {
+  process.env.PRIME_AGENT_KERNEL_PYTHON = "/chemin/python-de-l-appelant";
+  process.env.PRIME_AGENT_KERNEL_VENV = "/chemin/kernel-venv";
+  try {
+    const h = open();
+    await ready(h);
+    const start = starts(h.dir).at(-1)!;
+    assert.equal(start.kernelPython, null, "PRIME_AGENT_KERNEL_PYTHON ne passe pas au binaire");
+    assert.equal(start.kernelVenv, "/chemin/kernel-venv", "les autres variables passent");
+    assert.equal(process.env.PRIME_AGENT_KERNEL_PYTHON, "/chemin/python-de-l-appelant", "l'environnement de VS Code n'est pas modifié");
+  } finally {
+    delete process.env.PRIME_AGENT_KERNEL_PYTHON;
+    delete process.env.PRIME_AGENT_KERNEL_VENV;
+  }
+});
+
 test("authentification : message fixe avec le chemin du binaire, deux formes", async () => {
   const h = open();
   await ready(h);

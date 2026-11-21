@@ -21,7 +21,14 @@ const scenario =
 if (dir) {
   appendFileSync(
     join(dir, "starts.log"),
-    JSON.stringify({ pid: process.pid, cwd: process.cwd(), argv: process.argv.slice(2) }) + "\n",
+    JSON.stringify({
+      pid: process.pid,
+      cwd: process.cwd(),
+      argv: process.argv.slice(2),
+      // PR 3 : les variables du kernel reçues (l'extension retire PRIME_AGENT_KERNEL_PYTHON).
+      kernelPython: process.env.PRIME_AGENT_KERNEL_PYTHON ?? null,
+      kernelVenv: process.env.PRIME_AGENT_KERNEL_VENV ?? null,
+    }) + "\n",
   );
 }
 

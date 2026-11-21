@@ -28,6 +28,9 @@ export interface Start {
   pid: number;
   cwd: string;
   argv: string[];
+  /** PR 3 : `PRIME_AGENT_KERNEL_PYTHON` et `PRIME_AGENT_KERNEL_VENV` reçues par l'agent factice. */
+  kernelPython?: string | null;
+  kernelVenv?: string | null;
 }
 
 export function starts(dir: string): Start[] {
