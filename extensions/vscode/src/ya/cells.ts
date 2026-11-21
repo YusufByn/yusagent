@@ -7,6 +7,7 @@
 // - une cellule refusée : `failed` avec le texte fixe de `DENIED_TEXT`
 //   (`crates/pa-core/src/session_engine/ya_permissions.rs:63-64`).
 
+import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
 import { fragmentLines } from "../cell";
@@ -108,9 +109,24 @@ export function isDeclined(output: string | undefined): boolean {
   return output?.trimStart().startsWith(DENIED_PREFIX) ?? false;
 }
 
-/** Chemin montré : relatif au dossier de l'agent quand il est dedans, sinon absolu. */
+/**
+ * Chemin montré : relatif au dossier de l'agent quand il est dedans, sinon absolu. Le pont donne
+ * le chemin résolu (`edit()` le résout) : le dossier est aussi comparé résolu, sinon un dossier
+ * ouvert par un lien (macOS : `/var` → `/private/var`) donnerait des chemins absolus.
+ */
 function shownPath(path: string, cwd: string): string {
   if (!cwd) return path;
-  const inside = relative(cwd, path);
-  return inside && !inside.startsWith(`..${sep}`) && inside !== ".." && !isAbsolute(inside) ? inside : path;
+  for (const base of [cwd, resolved(cwd)]) {
+    const inside = relative(base, path);
+    if (inside && !inside.startsWith(`..${sep}`) && inside !== ".." && !isAbsolute(inside)) return inside;
+  }
+  return path;
+}
+
+function resolved(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }

@@ -3,6 +3,9 @@
 // vrais diffs C7, refus C5).
 
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { fragmentLines, readCell } from "../../src/cell";
@@ -92,4 +95,14 @@ test("isDeclined : texte fixe du refus seulement", () => {
   assert.ok(isDeclined("[permission-denied] The user declined this cell; nothing was executed."));
   assert.ok(!isDeclined("Traceback … [permission-denied]"));
   assert.ok(!isDeclined(undefined));
+});
+
+test("fileEdits : dossier de l'agent ouvert par un lien, chemin du pont résolu → chemin relatif", () => {
+  // Trouvé par real-binary-check.mjs sur macOS : projet `/var/folders/…`, chemin du pont `/private/var/folders/…`.
+  const real = realpathSync(mkdtempSync(join(tmpdir(), "ya-cells-")));
+  mkdirSync(join(real, "projet"));
+  const link = join(real, "lien");
+  symlinkSync(join(real, "projet"), link);
+  const edits = fileEdits(fragments([{ type: "diff", path: join(real, "projet", "src", "a.py"), newText: "x\n" }]), link);
+  assert.equal(edits[0].shown, join("src", "a.py"));
 });
