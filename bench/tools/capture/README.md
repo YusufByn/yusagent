@@ -126,6 +126,18 @@ Pour chaque cas commun, la première requête : prompt système, chaque paramèt
 
 `python3 -I bench/tools/capture/display_check.py <run>`, sur un run d'un binaire qui porte le ticket 24 (pas lancé par `run.py` : un binaire antérieur n'a pas ces champs). Dans le fichier de session de `display-anthropic` : une seule entrée `details.bashRuns`, celle du `bash()` lu ; deux `details.diffs` avec `oldStr`, `newStr` et `startLine` ; dernière requête = avis `[bash-done]` de la commande non lue. Dernière ligne `CONFORME` ou `NON CONFORME` (code de sortie 1), rapport `display-report.md`.
 
+## Trames ACP pour l'agent factice de l'extension (ticket 24, PR 3)
+
+`acp_frames.py` capture les trames ACP du vrai binaire, avec les fonctions de `run.py` : serveur de capture, `sandbox-exec`, démon isolé, venv du banc. Deux sessions : `A-display-auto` (scénario `display` en « auto », attente de `--linger` secondes après la réponse, 40 par défaut, pour le tour de réveil) et `B-basic-manual-reject` (scénario `basic` en « manual », demande refusée). Chaque cas écrit `transcript.jsonl` (trames avec leur sens) et les corps de requête dans `cap/`. Dernière ligne `CONFORME` (deux `end_turn`, aucun processus restant) ou `NON CONFORME` (code de sortie 1). `--out` doit être neuf.
+
+`compare_frames.py <dossier>` lance l'agent factice de l'extension (`extensions/vscode/test/fake-agent/fake-agent.mjs`, ou `--fake`) avec les prompts `carte`, `refus` et `lent`, puis compare ses trames à celles du binaire, champ par champ : chemins de clés et types, valeurs constantes, fin d'un tour de prompt. Dernière ligne `écarts : N` (code de sortie 1 si N > 0).
+
+```sh
+export DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short
+python3 -I bench/tools/capture/acp_frames.py --binary <yusagent> --out <dossier neuf>
+python3 -I bench/tools/capture/compare_frames.py <dossier neuf>
+```
+
 ## Serveur seul
 
 ```bash

@@ -1086,3 +1086,20 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - une frappe vers 0,8 s relance les touches mais pas les boutons : boutons actifs vers 1,15 s, `y` encore sans effet ;
   - puis Entrée, `y` sans focus, et `y` avec focus comme avant ; `Esc` refuse ;
   - zone de message non vide (« brouillon en cours ») : le focus y reste quand la boîte s'ouvre ; le bouton « Reject », actif après 1 s, refuse.
+
+### Scripts de capture des trames versés au banc (règle 13)
+
+- `bench/tools/capture/acp_frames.py` (capture ACP du vrai binaire, sessions `A-display-auto` et `B-basic-manual-reject`) et `bench/tools/capture/compare_frames.py` (agent factice contre binaire, champ par champ) : reprise des scripts jetables de la comparaison, avec arguments nommés, verdict et code de sortie. `acp_frames.py` relève les processus restants par différence avec ceux du binaire avant chaque session : le démon partagé d'un autre usage n'est plus compté. Documentés dans `bench/tools/capture/README.md`.
+- **Commandes** :
+
+  ```sh
+  export DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short
+  rm -rf <dossier>
+  python3 -I bench/tools/capture/acp_frames.py --binary ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent --out <dossier>
+  python3 -I bench/tools/capture/compare_frames.py <dossier>
+  ```
+
+- **Lancés par Claude Code** sur le binaire de `main` `1b96bb645` :
+  - `acp_frames.py` : `A-display-auto : prompt={'stopReason': 'end_turn'} trames=21 processus restants=[]`, `B-basic-manual-reject : prompt={'stopReason': 'end_turn'} trames=13 processus restants=[]`, `CONFORME`, exit 0 ;
+  - `compare_frames.py` : 8 comparaisons `IDENTIQUE` (dont `_yus/bashRuns`, les deux contenus `diff`, la demande d'accord, le refus, la fin de tour, `agent_message_chunk`), `écarts : 0`, exit 0.
+  - **Contrôle négatif** : `--fake` sur l'agent factice d'avant l'alignement (`git show 46919eabc:extensions/vscode/test/fake-agent/fake-agent.mjs`) → 5 paires `DIFFÉRENT`, `écarts : 6`, exit 1.
