@@ -84,12 +84,12 @@ mod tests {
 
     #[test]
     fn edits_become_acp_diffs() {
-        let result = result(&json!({ "diffs": [
+        let cell = result(&json!({ "diffs": [
             { "path": "/w/a.py", "diff": "-3 x\n+3 y", "oldStr": "x", "newStr": "y", "startLine": 3 },
             { "path": "/w/new.py", "diff": "+1 z", "oldStr": "", "newStr": "z", "startLine": 1 },
             { "path": "/w/old.py", "diff": "-1 a\n+1 b" },
         ] }));
-        let contents = diff_contents(Some(&result));
+        let contents = diff_contents(Some(&cell));
         assert_eq!(
             serde_json::to_value(&contents).unwrap(),
             json!([
@@ -106,10 +106,10 @@ mod tests {
     #[test]
     fn bash_runs_ride_the_meta() {
         let runs = json!([{ "command": "ls", "exitCode": 0, "output": "a\n", "durationMs": 4 }]);
-        let result = result(&json!({ "bashRuns": runs }));
+        let cell = result(&json!({ "bashRuns": runs }));
         let meta = with_bash_runs(
             Some(json!({ "ai.primeintellect.prime-agent": { "diffCount": 1 } })),
-            bash_runs(Some(&result)),
+            bash_runs(Some(&cell)),
         );
         assert_eq!(
             meta,
@@ -119,7 +119,7 @@ mod tests {
             }))
         );
         assert_eq!(
-            with_bash_runs(None, bash_runs(Some(&result))),
+            with_bash_runs(None, bash_runs(Some(&cell))),
             Some(json!({ "_yus/bashRuns": runs }))
         );
         assert_eq!(
