@@ -64,6 +64,7 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 | `refine-anthropic` | (T04) Comme `compact-anthropic`, avec `harnessRefinements` et `autoRefine` réactivés : un appel `/refine` est journalisé |
 | `mask-off-anthropic` | (T05) Scénario `mask` : 25 tours, chaque cellule imprime environ 5 000 caractères, exception Python au tour 12, la cellule 25 relit la première sortie masquée (ligne `REREAD`). Cache simulé sur le préfixe réel (`--prefix-cache`). Réglage par défaut : aucun masquage |
 | `mask-on-anthropic` | (T05) Même scénario avec `"masking": {"enabled": true}` (fenêtre 10, palier 5) |
+| `display-anthropic` | (YA-10, ticket 24) Scénario `display` : un `bash()` lu par la cellule, un `bash()` qu'aucune cellule ne lit (`sleep 3; echo non-lu`, il finit après la réponse finale : son avis `[bash-done]` arrive toujours dans un 7ᵉ appel, tour de réveil à part), deux `edit()` (création puis modification) dans `ya-display/`, retiré à la fin. Le fichier de session est copié dans `cases/display-anthropic/sessions/` pour `display_check.py` |
 | ACP | `--mode acp` sur un daemon isolé (`--daemon-socket`) : `initialize`, `session/new`, `session/prompt` |
 | TUI | (YA-10, ticket 24) Le même scénario par le TUI, sur un pty (pilote et émulateur d'écran de `bench/tools/ya_permissions_tui_demo.py`), démon isolé : le prompt est tapé, la capture attend « Capture : fin du scénario. » à l'écran, puis `/quit`. Écran final dans `tui/screen.txt` |
 
@@ -114,7 +115,11 @@ python3 -I bench/tools/capture/compare.py <run A> <run B> --out <fichier>.md
 
 Pour chaque cas commun, la première requête : prompt système, chaque paramètre hors conversation et premier message utilisateur. Chaque bloc modifié est listé avec sa position en octets dans A et dans B, les octets retirés et ajoutés. `--out` écrit aussi le `.json` complet.
 
-`--all` (T04) compare en plus chaque requête de chaque cas, corps entier, dans l'ordre d'arrivée ; seuls les UUID (identifiant de session) sont normalisés.
+`--all` (T04) compare en plus chaque requête de chaque cas, corps entier, dans l'ordre d'arrivée ; seuls les UUID (identifiant de session) et le pid des avis `[bash-done pid:N …]` sont normalisés. Depuis le ticket 24, `--all` compare aussi `acp` et `tui` (hors de `cases/`) et la section finit par `TOUT IDENTIQUE` ou `DIFFÉRENCES`.
+
+## Données d'affichage des cellules (ticket 24)
+
+`python3 -I bench/tools/capture/display_check.py <run>`, sur un run d'un binaire qui porte le ticket 24 (pas lancé par `run.py` : un binaire antérieur n'a pas ces champs). Dans le fichier de session de `display-anthropic` : une seule entrée `details.bashRuns`, celle du `bash()` lu ; deux `details.diffs` avec `oldStr`, `newStr` et `startLine` ; dernière requête = avis `[bash-done]` de la commande non lue. Dernière ligne `CONFORME` ou `NON CONFORME` (code de sortie 1), rapport `display-report.md`.
 
 ## Serveur seul
 
