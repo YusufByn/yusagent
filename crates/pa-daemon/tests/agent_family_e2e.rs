@@ -1352,6 +1352,37 @@ fn resident_session_ids(client: &mut Client, id: &str) -> Vec<String> {
         .collect()
 }
 
+/// yusAgent (ticket 23): ask for the idle passivation until the session leaves the residents. A
+/// passivation deferred behind a request routed to the worker answers `success` too, and only a
+/// new ask retries the stop.
+async fn passivate_until_gone(client: &mut Client, token: &str, session_id: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut asks = 0;
+    loop {
+        asks += 1;
+        let id = format!("passivate-{asks}");
+        client.send_command(
+            &id,
+            &json!({
+                "type": "worker_idle_passivation",
+                "workerToken": token,
+                "idleMinutes": 1,
+            }),
+        );
+        let response = client.read_response(&id);
+        assert_eq!(response["success"], true, "passivation: {response}");
+        let residents = resident_session_ids(client, &format!("list-{asks}"));
+        if !residents.iter().any(|resident| resident == session_id) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the passivation never stopped the worker ({asks} asks)"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// A parent's `agent_observe.recent_messages` of its child reads the same
 /// previews after the child is passivated: the supervisor reads the child's
 /// session file, and no worker comes back for it.
@@ -1487,20 +1518,12 @@ async fn passivated_child_recent_messages_reads_its_file_end_to_end() {
     assert_eq!(newest["truncated"], true, "{newest}");
 
     // A passivated kid-a reads the same from its file, and no worker comes back for it.
-    client.send_command(
-        "passivate-kid-a",
-        &json!({
-            "type": "worker_idle_passivation",
-            "workerToken": parent_worker_token(&agent_dir, &kid_a_active),
-            "idleMinutes": 1,
-        }),
-    );
-    let passivated = client.read_response("passivate-kid-a");
-    assert_eq!(passivated["success"], true, "passivation: {passivated}");
-    assert!(
-        !resident_session_ids(&mut client, "list-before").contains(&kid_a_session),
-        "the passivation stopped kid-a's worker"
-    );
+    passivate_until_gone(
+        &mut client,
+        &parent_worker_token(&agent_dir, &kid_a_active),
+        &kid_a_session,
+    )
+    .await;
     for (limit, resident) in [(50, &all), (1, &newest)] {
         let saved = recent_member(&parent_reads, "kid-a", limit)
             .await
