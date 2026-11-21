@@ -1,178 +1,234 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  AgentState,
+  ChatState,
+  HistoryState,
+  HostMessage,
+  KernelState,
+  LoginState,
+  Provider,
+  Screen,
+  SessionState,
+  SettingsState,
+} from "../src/protocol";
+import { applyPatch, EMPTY_CHAT } from "./Chat";
+import type { Draft, ImageSettings } from "./Composer";
+import { PathsContext, toPaths, type Paths } from "./mentions";
+import { Providers } from "./Providers";
+import { Settings, type SettingsTab } from "./Settings";
+import { SignIn } from "./SignIn";
+import { Splash } from "./Splash";
+import { Status } from "./Status";
+import { onHostMessage, post, saveDraft, savedDraft } from "./vscode";
 
-import type { ToHost } from "../src/shared/messages";
-import {
-  autoWithoutSandbox,
-  selectors,
-  TEXTS,
-  type ChatState,
-  type Item,
-  type ItemStatus,
-  type NoticeAction,
-} from "../src/shared/state";
+type Phase = "boot" | "splash" | "main";
+export type ProviderResult = Extract<HostMessage, { type: "providerResult" }>;
+type LocalScan = Extract<HostMessage, { type: "localScan" }>;
+type LocalProbe = Extract<HostMessage, { type: "localProbe" }>;
+export type SettingResult = Extract<HostMessage, { type: "settingResult" }>;
 
-const STATUS_LABEL: Record<ItemStatus, string> = {
-  pending: "en attente d'accord",
-  in_progress: "en cours",
-  completed: "terminé",
-  failed: "échoué",
-  cancelled: "annulé",
-};
-
-const ACTION_LABEL: Record<NoticeAction, string> = {
-  openSetting: "Ouvrir le réglage yusagent.binaryPath",
-  retry: "Réessayer",
-};
-
-const PHASE_LABEL: Record<ChatState["phase"], string> = {
-  starting: "démarrage…",
-  ready: "prêt",
-  turn: "en cours…",
-  stopping: "arrêt…",
-  stopped: "arrêté",
-  closed: "fermé",
-};
-
-export function App({ state, post }: { state: ChatState; post: (message: ToHost) => void }) {
-  const [draft, setDraft] = useState("");
-  const bottom = useRef<HTMLDivElement>(null);
-  const busy = state.phase === "turn" || state.phase === "stopping";
+export function App() {
+  const [phase, setPhase] = useState<Phase>("boot");
+  const [agent, setAgent] = useState<AgentState | null>(null);
+  const [providers, setProviders] = useState<Provider[] | null>(null);
+  const [login, setLogin] = useState<LoginState | null>(null);
+  const [session, setSession] = useState<SessionState | null>(null);
+  const [result, setResult] = useState<ProviderResult | null>(null);
+  const [localScan, setLocalScan] = useState<LocalScan | null>(null);
+  const [localProbe, setLocalProbe] = useState<LocalProbe | null>(null);
+  const [settings, setSettings] = useState<SettingsState>({ view: null, pending: [], mcp: null, skills: null });
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [settingResult, setSettingResult] = useState<SettingResult | null>(null);
+  const [chat, setChat] = useState<ChatState>(EMPTY_CHAT);
+  const [history, setHistory] = useState<HistoryState>({ chats: null, unread: false });
+  const [kernel, setKernel] = useState<KernelState>({ commands: [], variables: [] });
+  const [paths, setPaths] = useState<Paths | null>(null);
+  const [draft, setDraft] = useState<Draft>(() => ({ text: savedDraft(), images: [] }));
+  /**
+   * A sent prompt being changed in the message box, or a waiting message
+   * (`queued`), and the draft it pushed out, back once the edit ends.
+   */
+  const [editing, setEditing] = useState<{ id: number; saved: Draft; queued: boolean } | null>(null);
+  const draftNow = useRef(draft);
+  useEffect(() => {
+    draftNow.current = draft;
+  }, [draft]);
+  const editingNow = useRef(editing);
+  useEffect(() => {
+    editingNow.current = editing;
+  }, [editing]);
+  const [managing, setManaging] = useState(false);
+  const [tuning, setTuning] = useState(false);
+  const splashDone = useCallback(() => setPhase("main"), []);
+  useEffect(() => saveDraft(draft.text), [draft.text]);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end" });
-  }, [state.items]);
+    const off = onHostMessage((message) => {
+      switch (message.type) {
+        case "init":
+          setAgent(message.agent);
+          setProviders(message.providers);
+          setLogin(message.login);
+          setSession(message.session);
+          setSettings(message.settings);
+          setChat(message.chat);
+          setHistory(message.history);
+          setKernel(message.kernel);
+          setPhase(message.splash ? "splash" : "main");
+          break;
+        case "conversation":
+          // Another conversation, with its own message box.
+          setAgent(message.agent);
+          setSession(message.session);
+          setChat(message.chat);
+          setKernel(message.kernel);
+          setEditing(null);
+          setDraft(message.draft);
+          break;
+        case "kernel":
+          setKernel(message.kernel);
+          break;
+        case "chat":
+          setChat(message.chat);
+          break;
+        case "chatPatch":
+          setChat((chat) => applyPatch(chat, message.patch));
+          break;
+        case "history":
+          setHistory(message.history);
+          break;
+        case "chatEdit": {
+          const { id, text, images, queued } = message;
+          const was = editingNow.current;
+          // The waiting message changed before stays as it was.
+          if (was?.queued && was.id !== id) post({ type: "release", id: was.id });
+          setEditing({ id, saved: was?.saved ?? draftNow.current, queued });
+          setDraft({ text, images });
+          break;
+        }
+        case "agent":
+          setAgent(message.agent);
+          break;
+        case "session":
+          setSession(message.session);
+          break;
+        case "providers":
+          setProviders(message.providers);
+          setLogin(message.login);
+          break;
+        case "providerResult":
+          setResult(message);
+          break;
+        case "localScan":
+          setLocalScan(message);
+          break;
+        case "localProbe":
+          setLocalProbe(message);
+          break;
+        case "settings":
+          setSettings(message.settings);
+          break;
+        case "settingResult":
+          setSettingResult(message);
+          break;
+        case "files":
+          setPaths(toPaths(message.files, message.open));
+          break;
+      }
+    });
+    post({ type: "ready" });
+    return off;
+  }, []);
 
-  const send = () => {
-    if (state.phase !== "ready" || !draft.trim()) return;
-    post({ type: "send", text: draft });
-    setDraft("");
+  const endEdit = () => {
+    if (editing?.queued) post({ type: "release", id: editing.id });
+    if (editing) setDraft(editing.saved);
+    setEditing(null);
   };
+  // The edited turn or waiting message left (a new conversation, a restarted agent): the text stays, as a new message.
+  useEffect(() => {
+    if (!editing) return;
+    const turn = chat.entries.find((entry) => entry.id === editing.id);
+    const left = editing.queued
+      ? !chat.queue.some((message) => message.id === editing.id)
+      : turn?.kind !== "turn" || turn.rewindTo === undefined;
+    if (left) setEditing(null);
+  }, [chat.entries, chat.queue, editing]);
 
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      send();
-    }
-  };
+  // Nothing connected: home's model picker leads to the providers screen.
+  const unconnected = providers !== null && !providers.some((p) => p.connected);
+  let screen: Screen | null = null;
+  if (phase === "splash") screen = "splash";
+  else if (phase === "main" && agent) {
+    if (agent.kind === "ready" && login) screen = "login";
+    else if (agent.kind === "ready" && managing) screen = "providers";
+    // It stays while a restart it asked for runs.
+    else if (tuning && agent.kind !== "failed") screen = "settings";
+    else screen = "status";
+  }
 
-  return (
-    <div className="chat">
-      <header className="header">
-        <span className="workspace">{state.workspaceName ?? "aucun dossier"}</span>
-        <span className="phase">{PHASE_LABEL[state.phase]}</span>
-      </header>
-      {autoWithoutSandbox(state) && (
-        <div className="banner" role="alert">
-          ⚠ Mode auto sans sandbox : les cellules s'exécutent sans demander, avec vos droits.
-        </div>
-      )}
-      <main className="messages">
-        {state.items.map((item, index) => (
-          <ItemView
-            key={item.id}
-            item={item}
-            stale={index < state.staleBefore}
-            post={post}
-          />
-        ))}
-        <div ref={bottom} />
-      </main>
-      <footer className="composer">
-        <textarea
-          className="input"
-          value={draft}
-          placeholder={state.phase === "ready" ? "Message à yusAgent (Entrée pour envoyer, Maj+Entrée pour un saut de ligne)" : ""}
-          disabled={state.phase === "stopped" || state.phase === "closed"}
-          rows={3}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onKeyDown}
+  useEffect(() => {
+    if (screen) post({ type: "screen", screen });
+  }, [screen]);
+
+  if (!screen || !agent) return null;
+  switch (screen) {
+    case "splash":
+      return <Splash agent={agent} onDone={splashDone} />;
+    case "login":
+      return login && <SignIn login={login} />;
+    case "providers":
+      return (
+        <Providers
+          providers={providers ?? []}
+          result={result}
+          local={{ scan: localScan, probe: localProbe }}
+          onBack={() => setManaging(false)}
         />
-        <div className="controls">
-          {selectors(state).map((option) => (
-            <select
-              key={option.id}
-              className="selector"
-              aria-label={option.name}
-              title={option.name}
-              value={option.currentValue}
-              disabled={state.phase !== "ready"}
-              onChange={(event) =>
-                post({ type: "setConfig", configId: option.id, value: event.target.value })
-              }
-            >
-              {option.options.map((choice) => (
-                <option key={choice.value} value={choice.value}>
-                  {choice.name}
-                </option>
-              ))}
-            </select>
-          ))}
-          <span className="spacer" />
-          {busy ? (
-            <button
-              className="button stop"
-              disabled={state.phase === "stopping"}
-              onClick={() => post({ type: "stop" })}
-            >
-              Arrêter
-            </button>
-          ) : (
-            <button
-              className="button"
-              disabled={state.phase !== "ready" || !draft.trim()}
-              onClick={send}
-            >
-              Envoyer
-            </button>
-          )}
-        </div>
-      </footer>
-    </div>
-  );
-}
-
-function ItemView({ item, stale, post }: { item: Item; stale: boolean; post: (message: ToHost) => void }) {
-  const className = stale ? "item stale" : "item";
-  switch (item.kind) {
-    case "user":
-      return <div className={`${className} user`}>{item.text}</div>;
-    case "agent":
-      return <div className={`${className} agent`}>{item.text}</div>;
-    case "thought":
-      return (
-        <details className={`${className} thought`}>
-          <summary>Raisonnement</summary>
-          <div className="thought-text">{item.text}</div>
-        </details>
       );
-    case "tool":
+    case "settings":
       return (
-        <div className={`${className} tool status-${item.status}`}>
-          {item.title} · {STATUS_LABEL[item.status]}
-        </div>
+        <Settings
+          settings={settings}
+          ready={agent.kind === "ready"}
+          session={session}
+          providers={providers ?? []}
+          result={settingResult}
+          tab={settingsTab}
+          onTab={setSettingsTab}
+          onBack={() => setTuning(false)}
+        />
       );
-    case "permission":
+    default:
       return (
-        <div className={`${className} permission`}>
-          Demande d'autorisation en attente (boîte en PR 3) : Arrêter pour annuler.
-        </div>
-      );
-    case "auth":
-      return <div className={`${className} notice error`}>{TEXTS.auth(item.binaryPath)}</div>;
-    case "notice":
-      return (
-        <div className={`${className} notice ${item.level}`}>
-          <div>{item.text}</div>
-          {!stale && item.actions.length > 0 && (
-            <div className="actions">
-              {item.actions.map((action) => (
-                <button key={action} className="button secondary" onClick={() => post({ type: action })}>
-                  {ACTION_LABEL[action]}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <PathsContext.Provider value={paths}>
+          <Status
+            agent={agent}
+            session={session}
+            providers={providers ?? []}
+            unconnected={unconnected}
+            chat={chat}
+            kernel={kernel}
+            images={imageSettings(settings)}
+            draft={draft}
+            onDraft={setDraft}
+            editing={editing?.id ?? null}
+            onEditEnd={endEdit}
+            onProviders={() => setManaging(true)}
+            onSettings={() => setTuning(true)}
+            history={history}
+          />
+        </PathsContext.Provider>
       );
   }
+}
+
+/** The image settings as the agent applies them: the file's value, else the agent's default. */
+function imageSettings({ view }: SettingsState): ImageSettings {
+  const value = (key: string) => view?.values[key] ?? view?.defaults[key] ?? null;
+  return {
+    block: value("images.blockImages") === true,
+    resize: value("images.autoResize") !== false,
+    imageModel: typeof value("imageModel") === "string" ? (value("imageModel") as string) : null,
+  };
 }
