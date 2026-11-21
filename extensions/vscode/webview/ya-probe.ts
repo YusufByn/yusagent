@@ -8,9 +8,12 @@ import { onHostMessage, post } from "./vscode";
 const BOX = ".ya-permission";
 const COMPOSER = "textarea.composer-input";
 
+let clicked: Probe["clicked"];
+
 function probe(): Probe {
   const active = document.activeElement;
   return {
+    clicked,
     text: document.body.innerText,
     selects: Array.from(document.querySelectorAll("select")).map((select) => ({
       label: select.getAttribute("aria-label"),
@@ -27,7 +30,33 @@ function probe(): Probe {
   };
 }
 
-function act({ type, focus, keys, click }: ProbeInput): void {
+/** Un clic comme celui d'un utilisateur (voir `ProbeInput.userClick`). */
+function userClick(text: string): Probe["clicked"] {
+  // Texte exact d'abord, sinon contenu ; le dernier de la page (le plus récent de la conversation).
+  const buttons = Array.from(document.querySelectorAll<HTMLElement>("button"));
+  const exact = buttons.filter((candidate) => candidate.textContent?.trim() === text);
+  const button = (exact.length > 0 ? exact : buttons.filter((candidate) => candidate.textContent?.includes(text))).at(-1);
+  if (!button) return "missing";
+  button.scrollIntoView({ block: "center" });
+  const rect = button.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return "covered";
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  const hit = document.elementFromPoint(x, y);
+  if (!hit) return "covered";
+  if (hit.closest("[inert]")) return "inert";
+  if (!(hit === button || button.contains(hit))) return "covered";
+  const init = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 };
+  hit.dispatchEvent(new PointerEvent("pointerdown", init));
+  hit.dispatchEvent(new MouseEvent("mousedown", init));
+  hit.dispatchEvent(new PointerEvent("pointerup", init));
+  hit.dispatchEvent(new MouseEvent("mouseup", init));
+  hit.dispatchEvent(new MouseEvent("click", init));
+  return "clicked";
+}
+
+function act({ type, focus, keys, click, userClick: clickText }: ProbeInput): void {
+  if (clickText !== undefined) clicked = userClick(clickText);
   if (type !== undefined) {
     // Comme une frappe dans un champ contrôlé par React : la valeur, puis l'événement `input`.
     const composer = document.querySelector<HTMLTextAreaElement>(COMPOSER);

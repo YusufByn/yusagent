@@ -28,6 +28,17 @@ const probe = () => vscode.commands.executeCommand<Probe | undefined>("yusagent.
 const probeInput = (input: ProbeInput) => vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probeInput", input);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const BOX = "Allow this Python cell to run?";
+
+/** Contrôle de Yusuf : des clics d'utilisateur, dans l'ordre ; chacun doit atteindre son bouton. */
+async function userClicks(...texts: string[]): Promise<void> {
+  for (const text of texts) {
+    const done = await waitFor(async () => {
+      const result = await probeInput({ userClick: text });
+      return result?.clicked === "clicked" ? result : undefined;
+    }, `clic sur « ${text} » (issue : ${(await probe())?.clicked ?? "?"})`, 5_000);
+    assert.equal(done.clicked, "clicked");
+  }
+}
 const lastPid = () => starts(control).at(-1)!.pid;
 
 async function ready(): Promise<State> {
@@ -214,8 +225,11 @@ const tests: [string, () => Promise<void>][] = [
         return undefined;
       };
       await waitFor(async () => (await edits())?.every((edit) => edit.revert?.state === "ready"), "avant retrouvé, Revert possible");
-      // C9, C10 : l'avant et l'après de la cellule, en lecture seule.
-      await post({ type: "yaOpenDiff", toolId: "call-d", path: a });
+      // Contrôle de Yusuf : tout par des clics d'utilisateur. Le travail du tour est replié dans
+      // « Worked » ; la carte se déplie, puis le nom du fichier ouvre le diff.
+      await userClicks("Worked", "Edited", "a.txt");
+      const sheet = await shows("Revert", "carte dépliée avec Revert");
+      for (const part of ["DEUX", "nouveau", "a.txt", "neuf.txt"]) assert.ok(sheet.includes(part), `carte dépliée : ${part}`);
       const diff = await waitFor(() => {
         for (const tab of vscode.window.tabGroups.all.flatMap((group) => group.tabs)) {
           if (tab.input instanceof vscode.TabInputTextDiff && tab.input.original.scheme === "yusagent-diff") return tab.input;
@@ -224,9 +238,12 @@ const tests: [string, () => Promise<void>][] = [
       }, "vscode.diff ouvert");
       assert.equal((await vscode.workspace.openTextDocument(diff.original)).getText(), "un\ndeux\ntrois\n", "avant");
       assert.equal((await vscode.workspace.openTextDocument(diff.modified)).getText(), "un\nDEUX\ntrois\n", "après");
-      // Revert : applyEdit puis enregistrement ; le fichier créé va à la corbeille (C12).
-      await post({ type: "yaRevert", toolId: "call-d", path: a });
-      await post({ type: "yaRevert", toolId: "call-d", path: created });
+      // Revert par les boutons de la carte : applyEdit puis enregistrement ; le fichier créé va à la corbeille (C12).
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+      await vscode.commands.executeCommand("yusagent.open");
+      await userClicks("Revert");
+      await waitFor(async () => (await edits())?.some((edit) => edit.revert?.state === "reverted"), "premier Revert");
+      await userClicks("Revert");
       await waitFor(async () => (await edits())?.every((edit) => edit.revert?.state !== "ready" || edit.revert.refused), "Revert traité");
       assert.deepEqual((await edits())?.map((edit) => edit.revert), [{ state: "reverted" }, { state: "reverted" }]);
       assert.equal(readFileSync(a, "utf8"), "un\ndeux\ntrois\n", "a.txt restauré et enregistré");
@@ -252,6 +269,10 @@ const tests: [string, () => Promise<void>][] = [
       // `exit 1` n'est que sur cette carte (une carte plus ancienne dit aussi « Edited »).
       const shown = await shows("exit 1", "carte d'une cellule qui édite");
       for (const part of ["Edited", "a.py", "neuf.txt", "+3", "−1"]) assert.ok(shown.includes(part), `en-tête : ${part}`);
+      // Dépliée par des clics : une ligne par bash(), séparateurs lisibles (contrôle de Yusuf : « exit 0·32 ms »).
+      await userClicks("Worked", "Edited");
+      const sheet = await shows("$ false", "carte dépliée");
+      assert.ok(sheet.includes("exit 0 · 6 ms") && sheet.includes("exit 1 · 3 ms"), "exit puis durée, séparés");
       await post({ type: "send", text: "refus", images: [] });
       await idle();
       await shows("Declined", "carte d'une cellule refusée");

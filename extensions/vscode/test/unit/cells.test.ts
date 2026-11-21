@@ -106,3 +106,12 @@ test("fileEdits : dossier de l'agent ouvert par un lien, chemin du pont résolu 
   const edits = fileEdits(fragments([{ type: "diff", path: join(real, "projet", "src", "a.py"), newText: "x\n" }]), link);
   assert.equal(edits[0].shown, join("src", "a.py"));
 });
+
+test("cellOfRuns : l'en-tête montre la commande sortie en erreur (contrôle de Yusuf : ls puis false)", () => {
+  const runs = [
+    { command: "ls", exitCode: 0, output: "a\n" },
+    { command: "false", exitCode: 1, output: "" },
+  ];
+  assert.equal(cellOfRuns({ kind: "shell", files: [] }, runs).command, "false");
+  assert.equal(cellOfRuns({ kind: "shell", files: [] }, [runs[0]]).command, "ls", "aucune en erreur : la première");
+});

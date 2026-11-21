@@ -609,10 +609,24 @@ export type Probe = {
   focused: "box" | "composer" | "other";
   /** PR 3 : les boutons de la boîte de permission, avec leur état. */
   boxButtons: { name: string; disabled: boolean }[];
+  /** PR 3 : l'issue du dernier `userClick`. */
+  clicked?: "clicked" | "inert" | "covered" | "missing";
 };
 
 /** yusAgent (PR 3, tests e2e) : voir `probeInput`. */
-export type ProbeInput = { type?: string; focus?: "box" | "none"; keys?: string[]; click?: string };
+export type ProbeInput = {
+  type?: string;
+  focus?: "box" | "none";
+  keys?: string[];
+  click?: string;
+  /**
+   * Contrôle de Yusuf : un clic comme celui d'un utilisateur sur le dernier bouton dont le texte est
+   * ce texte (sinon le contient). Bouton amené à l'écran, élément réellement sous le pointeur
+   * (`elementFromPoint`) ; rien si cet élément est inerte, ou si ce n'est pas le bouton (recouvert,
+   * masqué) ; sinon pointeur et souris enfoncés, relâchés, puis `click` sur cet élément.
+   */
+  userClick?: string;
+};
 
 export type WebviewMessage =
   | { type: "ready" }

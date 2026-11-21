@@ -40,6 +40,17 @@ const probe = () => vscode.commands.executeCommand<Probe | undefined>("yusagent.
 const probeInput = (input: ProbeInput) => vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probeInput", input);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Contrôle de Yusuf : des clics d'utilisateur, dans l'ordre ; chacun doit atteindre son bouton. */
+async function userClicks(...texts: string[]): Promise<void> {
+  for (const text of texts) {
+    const done = await waitFor(async () => {
+      const result = await probeInput({ userClick: text });
+      return result?.clicked === "clicked" ? result : undefined;
+    }, `clic sur « ${text} »`, 5_000);
+    assert.equal(done.clicked, "clicked");
+  }
+}
+
 /** Le script du provider factice d'une session (lu à sa création) : une réponse par appel au modèle. */
 function writeScript(responses: unknown[]): void {
   writeFileSync(script, JSON.stringify({ engine: "faux", responses }));
@@ -136,6 +147,9 @@ const tests: [string, () => Promise<void>][] = [
       assert.equal(done?.cell?.kind, "shell");
       assert.equal(done?.cell?.command, "echo lu");
       await shows("bash fini", "réponse du modèle");
+      // Dépliée par des clics : la ligne du bash(), exit puis durée séparés.
+      await userClicks("Worked", "Ran");
+      assert.match(await shows("$ echo lu", "carte dépliée"), /exit 0 · \d+ ms/);
     },
   ],
   [
@@ -149,7 +163,8 @@ const tests: [string, () => Promise<void>][] = [
       await waitFor(async () => (await tool("call-edit"))?.edits?.[0].revert?.state === "ready", "Revert possible", SLOW);
       const edit = (await tool("call-edit"))!.edits![0];
       assert.deepEqual([edit.shown, edit.created, edit.lines], ["ok.txt", true, [["+", "oui"]]]);
-      await post({ type: "yaRevert", toolId: "call-edit", path: edit.path });
+      // Par des clics d'utilisateur : le travail replié, la carte, puis « Revert ».
+      await userClicks("Worked", "Wrote", "Revert");
       await waitFor(async () => (await tool("call-edit"))?.edits?.[0].revert?.state === "reverted", "Revert fait");
       assert.equal(existsSync(file), false, "ok.txt retiré");
     },
