@@ -20,6 +20,10 @@ import type {
   Usage,
 } from "./protocol";
 import type { Session } from "./session";
+// yusAgent (YA-10, ticket 24, PR I) : adaptation à notre pont, dans des modules à part.
+import { authText, isAuthFailure } from "./ya/auth";
+import { features } from "./ya/methods";
+import { yaMeta } from "./ya/meta";
 
 /** How long streamed text gathers before the panel gets it. */
 const FLUSH_MS = 40;
@@ -31,6 +35,10 @@ const RESTORED = "_unharnessed/kernel/restored";
 const STEER = "_unharnessed/session/steer";
 
 /** The panel's own commands, beside the agent's. */
+/** yusAgent : textes de la ligne d'une demande d'accord (boîte en PR 3). */
+const WAITING_PERMISSION = "Demande d'autorisation en attente (boîte en PR 3) : Arrêter pour annuler.";
+const CLOSED_PERMISSION = "Demande d'autorisation fermée.";
+
 const PANEL_COMMANDS: ChatCommand[] = [{ name: "new", description: "Start a new conversation", kind: "panel" }];
 
 const WAKES = { bash: "a background command ended", quota: "a usage limit reset", goal: "a goal's pause ended" };
@@ -139,6 +147,8 @@ export class Chat {
   private restored: boolean | undefined;
   private dirtyHeads = new Set<number>();
   private dirtyItems = new Map<number, Set<number>>();
+  /** yusAgent : la ligne de chaque demande d'accord ouverte, par appel. */
+  private readonly permissionLines = new Map<string, { turn: Turn; at: number }>();
   private commandsChanged = false;
   private timer: NodeJS.Timeout | undefined;
   private readonly listeners = new Set<(message: ChatMessage) => void>();
@@ -152,10 +162,13 @@ export class Chat {
     private readonly onNew: () => void,
   ) {
     agent.onNotification("session/update", (params) => this.onUpdate(params));
+    // yusAgent : une demande d'accord sans boîte (PR 3) se voit par une ligne dans le tour.
+    agent.permissions.onChange((toolCallId, waiting) => this.permissionLine(toolCallId, waiting));
     agent.onNotification(RESTORED, (params) => this.onRestored(params));
     agent.onChange((state) => {
       this.run++;
       this.turns.clear();
+      this.permissionLines.clear();
       this.streaming = undefined;
       this.goal = undefined;
       this.showGoal(null);
@@ -583,20 +596,39 @@ export class Chat {
       this.end(last, stopReason === "cancelled" ? "cancelled" : "done", undefined, stopReason);
     } catch (error) {
       if (run !== this.run) return;
-      this.end(this.sent ?? turn, "failed", errorText(error));
+      // yusAgent : échec d'authentification, message fixe avec le chemin du binaire.
+      this.end(this.sent ?? turn, "failed", isAuthFailure(error) ? authText(this.agent.binaryPath) : errorText(error));
     }
+  }
+
+  /** yusAgent : la ligne d'une demande d'accord ouverte, réécrite à sa fermeture (les éléments ne s'enlèvent pas). */
+  private permissionLine(toolCallId: string, waiting: boolean): void {
+    const turn = this.live ?? this.sent;
+    if (waiting) {
+      if (!turn) return;
+      this.push(turn, { kind: "notice", tone: "warning", text: WAITING_PERMISSION });
+      this.permissionLines.set(toolCallId, { turn, at: turn.items.length - 1 });
+      return;
+    }
+    const line = this.permissionLines.get(toolCallId);
+    if (!line) return;
+    this.permissionLines.delete(toolCallId);
+    line.turn.items[line.at] = { kind: "notice", tone: "info", text: CLOSED_PERMISSION };
+    this.dirtyItem(line.turn, line.at);
+    this.changed();
   }
 
   /** What goes to the agent: the text (a skill by the agent's name), its `@` links, its images. */
   private prompt({ id, text, images }: Pick<Queued, "id" | "text" | "images">): unknown[] {
-    const links = this.files.links(text);
+    // yusAgent : blocs texte seulement (§5.4) tant que `features().attachments` est faux.
+    const links = features().attachments ? this.files.links(text) : [];
     if (links.length > 0) this.log.info(`chat: turn ${id} links ${links.map((link) => link.name).join(", ")}`);
     const skill = this.skillCommand(text);
     if (skill !== text) this.log.info(`chat: turn ${id} runs ${skill.split(/\s/, 1)[0]}`);
     return [
       { type: "text", text: skill },
       ...links,
-      ...images.map(({ mimeType, data }) => ({ type: "image", mimeType, data })),
+      ...(features().attachments ? images.map(({ mimeType, data }) => ({ type: "image", mimeType, data })) : []),
     ];
   }
 
@@ -664,7 +696,12 @@ export class Chat {
   private onUpdate(params: unknown): void {
     const { sessionId, update } = params as { sessionId: string; update: Update };
     if (sessionId !== this.session.updatesFrom) return;
-    const meta = update._meta?.unharnessed ?? {};
+    // yusAgent : notre `_meta` (espace `ai.primeintellect.prime-agent`), début de tour déduit.
+    const meta = yaMeta<Meta>(update, {
+      known: (id) => this.turns.has(id) || this.loading,
+      prompting: this.sent !== undefined && this.live !== this.sent,
+      ours: (id) => this.sent !== undefined && this.turns.get(id) === this.sent,
+    });
     if (update.sessionUpdate === "available_commands_update") {
       this.setCommands(update.availableCommands ?? []);
       return;
@@ -683,7 +720,8 @@ export class Chat {
     }
     if (meta.turnStart) {
       this.begin(meta.promptTurnId ?? 0, meta.turnStart);
-      return;
+      // yusAgent : début déduit du premier événement du tour, qui porte aussi son contenu.
+      if (!(meta as { yaDeduced?: boolean }).yaDeduced) return;
     }
     const turn = this.turns.get(meta.promptTurnId ?? 0) ?? this.live;
     if (!turn) return;

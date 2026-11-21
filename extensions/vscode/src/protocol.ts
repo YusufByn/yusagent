@@ -121,6 +121,11 @@ export type SessionConfig = {
   effort: { current: string; levels: string[] } | null;
   /** The fast mode (priority tier); `null` when the model has none. */
   fast: boolean | null;
+  /**
+   * yusAgent (YA-10, ticket 24) : la valeur `permissions` que l'agent annonce (`manual`, `auto`) ;
+   * `null` sans l'option. Le bandeau D4 la suit ; le panneau ne la change pas (D1).
+   */
+  permissions: string | null;
 };
 
 /** The agent session (`session/new`) as the panel shows it. */
@@ -468,11 +473,25 @@ export type ChatPatch = {
   goal?: Goal | null;
 };
 
+/** yusAgent (YA-10, ticket 24, PR I) : les fonctions dont le pont sert les méthodes (`src/ya/methods.ts`). */
+export type Features = {
+  history: boolean;
+  steer: boolean;
+  rewind: boolean;
+  kernel: boolean;
+  providers: boolean;
+  settings: boolean;
+  /** Liens `@fichier` et images dans le prompt (blocs texte seulement, §5.4). */
+  attachments: boolean;
+};
+
 export type HostMessage =
   /** Answer to `ready`; `splash` is true once per window. */
   | {
       type: "init";
       splash: boolean;
+      /** yusAgent : ce que le panneau montre. */
+      features: Features;
       agent: AgentState;
       providers: Provider[] | null;
       login: LoginState | null;
@@ -492,6 +511,8 @@ export type HostMessage =
       draft: Draft;
     }
   | { type: "chat"; chat: ChatState }
+  /** yusAgent (tests e2e) : la webview renvoie ce qu'elle affiche. */
+  | { type: "probe" }
   | { type: "kernel"; kernel: KernelState }
   /** A command's last lines; `null` when the agent could not give them. */
   | { type: "kernelTail"; id: string; tail: string | null }
@@ -526,8 +547,16 @@ export type HostMessage =
   /** The images among the files of a `readImages`, base64; one that could not be read is a sentence in `errors`. */
   | { type: "droppedImages"; images: { name: string; mimeType: string; data: string }[]; errors: string[] };
 
+/** yusAgent (tests e2e) : ce que la webview affiche, texte visible et sélecteurs. */
+export type Probe = {
+  text: string;
+  selects: { label: string | null; value: string; disabled: boolean; options: string[] }[];
+};
+
 export type WebviewMessage =
   | { type: "ready" }
+  /** yusAgent : réponse de la webview à `probe` (tests e2e). */
+  | { type: "probeResult"; probe: Probe }
   /** The screen now on display, for the log. */
   | { type: "screen"; screen: Screen }
   /** The panel crashed: what threw, and where. */

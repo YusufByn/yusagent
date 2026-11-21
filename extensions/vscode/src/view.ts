@@ -5,20 +5,26 @@ import type { Conversation, Conversations } from "./conversations";
 import type { Files } from "./files";
 import type { History } from "./history";
 import { connectedModels } from "./instructions";
-import type { HostMessage, WebviewMessage } from "./protocol";
+import type { HostMessage, Probe, WebviewMessage } from "./protocol";
 import type { Providers } from "./providers";
 import type { Settings } from "./settings";
 import type { ToolTabs } from "./tabs";
+// yusAgent (YA-10, ticket 24, PR I) : fonctions montrées selon les méthodes servies par le pont.
+import { features } from "./ya/methods";
 
 /**
  * The panel in the right side bar: hosts the React app from dist/webview. It
  * shows one conversation at a time; the others' changes wait until it shows
  * them again, whole.
  */
+// Repris d'Unharnessed (MIT, 157dcdc1d, vscode/src/view.ts) ; adaptations yusAgent marquées.
 export class ChatViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewId = "unharnessed.chat";
+  static readonly viewId = "yusagent.chat";
 
   private view: vscode.WebviewView | undefined;
+  /** yusAgent (tests e2e) : la webview a envoyé `ready`, et les sondes en attente. */
+  rendered = false;
+  private probes: ((probe: Probe | undefined) => void)[] = [];
   private splashPlayed = false;
 
   constructor(
@@ -78,13 +84,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   receive(message: WebviewMessage): void {
     switch (message.type) {
+      case "probeResult":
+        this.probes.shift()?.(message.probe);
+        break;
       case "ready":
+        this.rendered = true;
         this.log.info("webview ready");
         // A panel that comes back is not changing a waiting message.
         this.shown.chat.release();
         this.post({
           type: "init",
-          splash: !this.splashPlayed,
+          // yusAgent : pas d'écran d'accueil (visuel plus tard).
+          splash: false,
+          features: features(),
           agent: this.shown.agent.current,
           providers: this.providers.providers,
           login: this.providers.signIn,
@@ -356,6 +368,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "droppedImages", images, errors });
   }
 
+  /** yusAgent (tests e2e) : la page de la vue. */
+  get html(): string {
+    return this.view?.webview.html ?? "";
+  }
+
+  /** yusAgent (tests e2e) : ce que la webview affiche ; `undefined` sans réponse en 1 s. */
+  probe(): Promise<Probe | undefined> {
+    if (!this.view) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      const answer = (probe: Probe | undefined) => {
+        clearTimeout(timer);
+        resolve(probe);
+      };
+      const timer = setTimeout(() => {
+        const at = this.probes.indexOf(answer);
+        if (at >= 0) this.probes.splice(at, 1);
+        resolve(undefined);
+      }, 1_000);
+      this.probes.push(answer);
+      this.post({ type: "probe" });
+    });
+  }
+
   private post(message: HostMessage): void {
     void this.view?.webview.postMessage(message);
   }
@@ -374,20 +409,20 @@ const IMAGE_MIMES: Record<string, string> = {
 function renderHtml(webview: vscode.Webview, dist: vscode.Uri): string {
   const nonce = randomBytes(16).toString("base64");
   const asset = (name: string) => webview.asWebviewUri(vscode.Uri.joinPath(dist, name)).toString();
+  // yusAgent (E3) : CSP stricte, ni `'unsafe-inline'` ni `data:` (Unharnessed les autorise).
   const csp = [
     "default-src 'none'",
-    `style-src ${webview.cspSource} 'unsafe-inline'`,
+    `style-src ${webview.cspSource}`,
     `font-src ${webview.cspSource}`,
-    `img-src ${webview.cspSource} data:`,
+    `img-src ${webview.cspSource}`,
     `script-src 'nonce-${nonce}'`,
   ].join("; ");
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="preload" href="${asset("OverusedGrotesk-VF.woff2")}" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="${asset("main.css")}">
 </head>
 <body>

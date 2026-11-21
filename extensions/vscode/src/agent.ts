@@ -1,32 +1,39 @@
+// Repris d'Unharnessed (MIT, 157dcdc1d, vscode/src/agent.ts). yusAgent (YA-10, ticket 24, PR I) :
+// - notre client ACP (`./acp/connection`) à la place de `@agentclientprotocol/sdk` ;
+// - binaire du réglage `yusagent.binaryPath`, résolu en chemin absolu ; refus sans dossier ouvert ;
+// - `initialize` sans `clientInfo` (fixture des trames, §5.4) ;
+// - méthodes que le pont ne sert pas : rejetées sur place, sans trame (`./ya/methods`) ;
+// - `session/request_permission` (`./ya/permissions`) : `cancelled` après « Arrêter » ;
+// - journal : méthode et id des trames, jamais leurs paramètres (règle 9) ;
+// - arrêt : fin de stdin, 10 s au plus, puis SIGKILL (notre pont sort aussitôt, ticket 24, point 1).
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
-import { Readable, Writable } from "node:stream";
-import * as acp from "@agentclientprotocol/sdk";
 import type * as vscode from "vscode";
+import { INITIALIZE_PARAMS } from "./acp/client";
+import { Connection, METHOD_NOT_FOUND, RpcError } from "./acp/connection";
+import { PROTOCOL_VERSION } from "./acp/types";
+import { describeFailure, resolveBinary } from "./binary";
 import type { AgentState } from "./protocol";
+import { notServed, served } from "./ya/methods";
+import { Permissions } from "./ya/permissions";
 
 const STDERR_TAIL = 20;
 const INITIALIZE_TIMEOUT_MS = 30_000;
 /**
- * How long `stop` waits for the agent to exit once its stdin is closed:
- * past the agent's own bounds (its turn 10 s, its kernel's save and
- * shutdown about 25 s).
+ * How long `stop` waits for the agent to exit once its stdin is closed. yusAgent: our bridge
+ * cancels the turn and detaches at once (0.01 s measured, ticket 24, point 1); the session and its
+ * kernel stay in the daemon until it passivates them.
  */
-const EXIT_WAIT_MS = 40_000;
+const EXIT_WAIT_MS = 10_000;
 /** A process that dies closes the connection a moment before its exit event. */
 const EXIT_EVENT_MS = 2_000;
-
-/** Request params whose values never reach the log (API keys, pasted codes). */
-const SECRET_PARAMS: Record<string, string> = {
-  "_unharnessed/providers/set_api_key": "apiKey",
-  "_unharnessed/providers/login_answer": "answer",
-};
+const NO_FOLDER = "Ouvrez un dossier : yusAgent démarre dans le dossier du workspace.";
 
 /** A saved conversation: its session id, and the file the agent resumes. */
 export type SavedSession = { id: string; path: string };
 
 /**
- * One `unharnessed --mode acp` process and its ACP connection. The state
+ * One `yusagent --mode acp` process and its ACP connection. The state
  * moves starting → ready → failed (crash), and back to starting on restart.
  * A process starts on a new conversation, or on a saved one (`--resume`).
  */
@@ -34,17 +41,21 @@ export class Agent {
   private state: AgentState;
   private proc: ChildProcessWithoutNullStreams | undefined;
   private saved: SavedSession | undefined;
-  private connection: acp.ClientConnection | undefined;
+  private connection: Connection | undefined;
   private stderr: string[] = [];
   private restarting: Promise<void> | undefined;
+  private resolved: string | undefined;
   private readonly listeners = new Set<(state: AgentState) => void>();
   private readonly notificationListeners = new Map<string, Set<(params: unknown) => void>>();
+  /** yusAgent: the bridge's permission requests, open until answered or closed. */
+  readonly permissions = new Permissions();
 
   constructor(
-    private readonly binary: string,
+    private readonly binary: string | undefined,
     private readonly cwd: string,
     private readonly version: string,
     private readonly log: vscode.LogOutputChannel,
+    private readonly env: NodeJS.ProcessEnv = process.env,
   ) {
     this.state = { kind: "starting" };
   }
@@ -56,6 +67,11 @@ export class Agent {
   /** The saved conversation the running process was started on, if any. */
   get resumed(): SavedSession | undefined {
     return this.saved;
+  }
+
+  /** yusAgent: the binary as launched (the `/login` message names it). */
+  get binaryPath(): string {
+    return this.resolved ?? this.binary ?? "yusagent";
   }
 
   onChange(listener: (state: AgentState) => void): { dispose(): void } {
@@ -70,30 +86,47 @@ export class Agent {
     return { dispose: () => listeners.delete(listener) };
   }
 
-  /** A request to the running agent; rejects when it is not ready. */
+  /** A request to the running agent; rejects when it is not ready, or when the bridge does not serve it. */
   request<Response>(method: string, params: Record<string, unknown> = {}): Promise<Response> {
+    if (!served(method)) return Promise.reject(notServed(method));
     if (this.state.kind !== "ready" || !this.connection) {
       return Promise.reject(new Error("the agent is not running"));
     }
-    return this.connection.agent.request<Response>(method, params);
+    return this.connection.request<Response>(method, params);
   }
 
   notify(method: string, params: Record<string, unknown> = {}): void {
+    if (!served(method)) {
+      this.log.info(`${method} not sent: not served by yusAgent yet`);
+      return;
+    }
     if (this.state.kind !== "ready" || !this.connection) return;
-    this.connection.agent.notify(method, params).catch((error: unknown) => {
-      this.log.warn(`${method} not sent: ${errorText(error)}`);
-    });
+    this.connection.notify(method, params);
+    // ACP v1: after `session/cancel`, every open permission request is answered `cancelled`.
+    if (method === "session/cancel") this.permissions.closeAll();
   }
 
   /** On a new conversation, or on `saved`. */
   start(saved?: SavedSession): void {
     this.stderr = [];
     this.saved = saved;
+    this.proc = undefined;
     this.set({ kind: "starting" });
+    if (!this.cwd) {
+      this.set({ kind: "failed", error: NO_FOLDER, stderr: [] });
+      return;
+    }
+    const resolution = resolveBinary(this.binary, this.env, this.cwd);
+    if (!resolution.ok) {
+      this.log.error(`agent failed: ${describeFailure(resolution)}`);
+      this.set({ kind: "failed", error: describeFailure(resolution), stderr: [] });
+      return;
+    }
+    this.resolved = resolution.path;
     const args = ["--mode", "acp", ...(saved ? ["--resume", saved.path] : [])];
-    this.log.info(`starting agent: ${this.binary} ${args.join(" ")} (cwd ${this.cwd})`);
+    this.log.info(`starting agent: ${resolution.path} ${args.join(" ")} (cwd ${this.cwd})`);
 
-    const proc = spawn(this.binary, args, { cwd: this.cwd, stdio: "pipe" });
+    const proc = spawn(resolution.path, args, { cwd: this.cwd, env: this.env, stdio: "pipe" });
     this.proc = proc;
     // ENOENT / EACCES arrive here, without an exit event.
     proc.on("error", (error) => this.fail(proc, error.message));
@@ -102,18 +135,25 @@ export class Agent {
     proc.stdin.on("error", (error) => this.log.warn(`agent stdin: ${error.message}`));
     createInterface({ input: proc.stderr }).on("line", (line) => this.onStderr(proc, line));
 
-    const stream = acp.ndJsonStream(
-      Writable.toWeb(proc.stdin) as WritableStream<Uint8Array>,
-      Readable.toWeb(proc.stdout) as ReadableStream<Uint8Array>,
+    const connection = new Connection(
+      (line) => {
+        const head = JSON.parse(line) as { id?: unknown; method?: string };
+        this.log.debug(`→ ${head.method ?? "response"}${head.id !== undefined ? ` #${String(head.id)}` : ""}`);
+        if (!proc.stdin.destroyed) proc.stdin.write(line);
+      },
+      {
+        onRequest: (method, params, context) => {
+          this.log.debug(`← ${method} #${String(context.id)}`);
+          if (method === "session/request_permission") return this.permissions.request(params, context);
+          throw new RpcError(METHOD_NOT_FOUND, "Method not found");
+        },
+        onNotification: (method, params) => this.onAgentNotification(method, params),
+        onProtocolError: (message) => this.log.warn(`acp: ${message}`),
+      },
     );
-    const client = acp.client({ name: "unharnessed-vscode" });
-    for (const [method, listeners] of this.notificationListeners) {
-      client.onNotification(method, (params) => params, ({ params }) => {
-        for (const listener of listeners) listener(params);
-      });
-    }
-    const connection = client.connect(logged(stream, this.log));
     this.connection = connection;
+    proc.stdout.setEncoding("utf8");
+    proc.stdout.on("data", (chunk: string) => connection.feed(chunk));
 
     // Nothing is written before the process exists: a missing binary never
     // sees a write (which would raise SIGPIPE in the extension host).
@@ -132,15 +172,15 @@ export class Agent {
   }
 
   /**
-   * Closes stdin: the agent stops its turn, saves its kernel and exits.
-   * SIGKILL if it has not after `EXIT_WAIT_MS`. When VS Code closes it
-   * waits less; the agent goes on alone and saves all the same.
+   * Closes stdin: our bridge cancels the running turn and exits. SIGKILL if
+   * it has not after `EXIT_WAIT_MS`.
    */
   async stop(): Promise<void> {
     const proc = this.proc;
     this.proc = undefined;
-    this.connection?.close();
+    this.connection?.close("stopped");
     this.connection = undefined;
+    this.permissions.closeAll();
     if (!proc || proc.pid === undefined || hasExited(proc)) return;
 
     const began = Date.now();
@@ -153,15 +193,31 @@ export class Agent {
     proc.kill("SIGKILL");
   }
 
-  private initialize(proc: ChildProcessWithoutNullStreams, connection: acp.ClientConnection): void {
-    const initialize = connection.agent.request("initialize", {
-      protocolVersion: acp.PROTOCOL_VERSION,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-      clientInfo: { name: "unharnessed-vscode", title: "Unharnessed for VS Code", version: this.version },
-    });
+  private onAgentNotification(method: string, params: unknown): void {
+    this.log.debug(`← ${method}`);
+    if (method === "session/update") {
+      // E9, par défense : un appel sorti de `pending` a sa demande réglée ailleurs.
+      const update = (params as { update?: { sessionUpdate?: string; toolCallId?: string; status?: string } })?.update;
+      if (update?.sessionUpdate === "tool_call_update" && update.toolCallId && update.status && update.status !== "pending") {
+        this.permissions.settled(update.toolCallId);
+      }
+    }
+    for (const listener of this.notificationListeners.get(method) ?? []) listener(params);
+  }
+
+  private initialize(proc: ChildProcessWithoutNullStreams, connection: Connection): void {
+    const initialize = connection.request<{ protocolVersion?: number; agentInfo?: { name?: string; version?: string } }>(
+      "initialize",
+      INITIALIZE_PARAMS,
+    );
     withTimeout(initialize, INITIALIZE_TIMEOUT_MS, "initialize").then(
       (result) => {
         if (proc !== this.proc || this.state.kind !== "starting") return;
+        if (result?.protocolVersion !== PROTOCOL_VERSION) {
+          this.fail(proc, `ACP version ${String(result?.protocolVersion)} announced, ${PROTOCOL_VERSION} expected`);
+          void this.stop();
+          return;
+        }
         const { name = "agent", version = "unknown" } = result.agentInfo ?? {};
         this.log.info(`agent ready: ${name} ${version} (protocol ${result.protocolVersion}, pid ${proc.pid})`);
         this.set({ kind: "ready" });
@@ -186,7 +242,8 @@ export class Agent {
   private fail(proc: ChildProcessWithoutNullStreams, error: string): void {
     if (proc !== this.proc || this.state.kind === "failed") return;
     this.log.error(`agent failed: ${error}`);
-    this.connection?.close();
+    this.connection?.close("failed");
+    this.permissions.closeAll();
     this.set({ kind: "failed", error, stderr: this.stderr });
   }
 
@@ -194,28 +251,6 @@ export class Agent {
     this.state = state;
     for (const listener of this.listeners) listener(state);
   }
-}
-
-/** Writes every JSON-RPC frame to the log: `→` sent, `←` received. */
-function logged(stream: acp.Stream, log: vscode.LogOutputChannel): acp.Stream {
-  const tap = (arrow: string) =>
-    new TransformStream<acp.AnyMessage, acp.AnyMessage>({
-      transform(message, controller) {
-        log.info(`${arrow} ${JSON.stringify(redacted(message))}`);
-        controller.enqueue(message);
-      },
-    });
-  const outgoing = tap("→");
-  outgoing.readable.pipeTo(stream.writable).catch(() => {});
-  return { readable: stream.readable.pipeThrough(tap("←")), writable: outgoing.writable };
-}
-
-function redacted(message: acp.AnyMessage): acp.AnyMessage {
-  const secret = "method" in message ? SECRET_PARAMS[message.method] : undefined;
-  if (!secret || !("params" in message) || typeof message.params !== "object" || !message.params) {
-    return message;
-  }
-  return { ...message, params: { ...message.params, [secret]: "<redacted>" } };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {

@@ -161,10 +161,13 @@ function readConfig(options: ConfigOption[]): SessionConfig {
   const model = options.find((option) => option.id === "model" && option.type === "select");
   const effort = options.find((option) => option.id === "thought_level" && option.type === "select");
   const fast = options.find((option) => option.id === "fast_mode" && option.type === "boolean");
+  // yusAgent : l'option `permissions` du pont (`crates/pa-daemon/src/acp/ya_permissions.rs`).
+  const permissions = options.find((option) => option.id === "permissions" && option.type === "select");
   return {
     model: model ? { current: String(model.currentValue), choices: values(model).map(choice) } : null,
     effort: effort ? { current: String(effort.currentValue), levels: values(effort).map((v) => v.value) } : null,
     fast: fast ? fast.currentValue === true : null,
+    permissions: permissions ? String(permissions.currentValue) : null,
   };
 }
 
