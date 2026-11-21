@@ -1,17 +1,19 @@
 #!/usr/bin/env node
-// Contrôle du client de l'extension contre le vrai binaire (ticket 24, PR 2, règle 13).
+// Contrôle du code de l'extension contre le vrai binaire (ticket 24, PR I, règle 13).
 //
 // Usage : npm run compile-tests && node scripts/real-binary-check.mjs <chemin absolu de yusagent>
 //
-// Lance `ChatSession` (le code de l'extension, hors VS Code) sur le binaire, deux fois :
-// permissions « manual » puis « auto » (réglage global d'un dossier d'agent temporaire). Vérifie :
-// session ouverte avec les trames de l'extension, sélecteurs annoncés, bandeau qui suit
-// `permissions`, `set_config_option` sur l'effort, message `/login` sur l'échec d'authentification.
+// Lance le code de l'extension hors VS Code (conversations, agent, session, chat, fournisseurs,
+// réglages, historique ; module `vscode` remplacé par le bouchon des tests unitaires) sur le
+// binaire, en permissions « manual » puis « auto » (réglage global d'un dossier d'agent temporaire).
+// Vérifie : session ouverte avec les seules trames de l'extension, options annoncées, bandeau qui
+// suit `permissions`, `set_config_option` sur l'effort, message `/login` sur l'échec
+// d'authentification, arrêt par fin de stdin, aucun processus restant.
 //
 // Aucun modèle n'est joignable (règle 6) : HOME et dossier d'agent vides (aucun identifiant),
-// environnement réduit (aucune clé d'API), binaire sous `sandbox-exec` (réseau limité à
-// localhost, profil du banc de capture), démon isolé (`--daemon-socket`). Le binaire est lancé
-// par un petit script intermédiaire : c'est son chemin qu'affiche le message `/login`.
+// environnement réduit (aucune clé d'API), binaire sous `sandbox-exec` (réseau limité à localhost,
+// profil du banc de capture), démon isolé (`--daemon-socket`). Le binaire est lancé par un petit
+// script intermédiaire : c'est son chemin qu'affiche le message `/login`.
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -21,10 +23,16 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
+const TMP = tmpdir(); // figé avant que les cas ne réduisent l'environnement
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sandboxProfile = resolve(root, "..", "..", "bench", "tools", "capture", "sandbox.sb");
-const { ChatSession } = require(join(root, "out", "src", "session.js"));
-const { autoWithoutSandbox, TEXTS } = require(join(root, "out", "src", "shared", "state.js"));
+require(join(root, "out", "test", "unit", "setup.js"));
+const { Conversations } = require(join(root, "out", "src", "conversations.js"));
+const { ShownAgent } = require(join(root, "out", "src", "shown.js"));
+const { Providers } = require(join(root, "out", "src", "providers.js"));
+const { Settings } = require(join(root, "out", "src", "settings.js"));
+const { History } = require(join(root, "out", "src", "history.js"));
+const { authText } = require(join(root, "out", "src", "ya", "auth.js"));
 
 const binary = process.argv[2];
 if (!binary || !isAbsolute(binary) || !existsSync(binary)) {
@@ -32,6 +40,7 @@ if (!binary || !isAbsolute(binary) || !existsSync(binary)) {
   process.exit(2);
 }
 
+const log = new Proxy({}, { get: () => () => undefined });
 const failures = [];
 const check = (ok, label) => {
   console.log(`  ${ok ? "oui" : "NON"} : ${label}`);
@@ -58,20 +67,22 @@ function pgrep(pattern) {
 
 async function runCase(permissions) {
   console.log(`\n== permissions « ${permissions} » ==`);
-  const base = mkdtempSync(join(tmpdir(), "ya-ext-"));
+  const base = mkdtempSync(join(TMP, "ya-ext-"));
   const home = join(base, "home");
-  const agent = join(base, "agent");
+  const agentDir = join(base, "agent");
   const project = join(base, "project");
   const socket = join(base, "d.sock");
-  for (const dir of [home, agent, project, join(base, "tmp")]) mkdirSync(dir, { recursive: true });
-  writeFileSync(join(agent, "settings.json"), JSON.stringify({ permissions, cacheRetention: "short" }) + "\n");
+  for (const dir of [home, agentDir, project, join(base, "tmp")]) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ permissions, cacheRetention: "short" }) + "\n");
   const wrapper = join(base, "yusagent");
   writeFileSync(
     wrapper,
     `#!/bin/sh\nexec /usr/bin/sandbox-exec -f '${sandboxProfile}' '${binary}' --daemon-socket '${socket}' "$@"\n`,
   );
   chmodSync(wrapper, 0o755);
-  const env = {
+  // L'agent prend l'environnement du processus (comme l'extension celui de VS Code) : réduit ici.
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, {
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
     HOME: home,
     TMPDIR: join(base, "tmp"),
@@ -80,50 +91,54 @@ async function runCase(permissions) {
     PI_OFFLINE: "1",
     PI_SKIP_VERSION_CHECK: "1",
     PI_CACHE_RETENTION: "short",
-    PRIME_AGENT_CODING_AGENT_DIR: agent,
-  };
-  const logs = [];
-  const session = new ChatSession({
-    binaryPath: wrapper,
-    cwd: project,
-    workspaceName: "project",
-    env,
-    log: (line) => logs.push(line),
-    onState: () => undefined,
+    PRIME_AGENT_CODING_AGENT_DIR: agentDir,
   });
+  const shown = new ShownAgent(log);
+  new Providers(shown, log);
+  new Settings(shown, log);
+  const files = { cwd: project, links: () => [], list: async () => ({ files: [], open: [] }) };
+  const conversations = new Conversations(wrapper, project, "0", files, shown, log);
+  new History(shown, conversations, project, log);
   try {
-    void session.start();
-    await waitFor(() => ["ready", "stopped"].includes(session.state.phase), "ouverture", 90_000);
-    check(session.state.phase === "ready", `session ouverte (phase ${session.state.phase})`);
-    const options = session.state.configOptions;
-    for (const option of options) {
-      console.log(`  option ${option.id} (${option.category}) = ${option.currentValue} ; ${option.options.length} valeurs`);
-    }
-    check(options.some((option) => option.category === "model"), "sélecteur de modèle annoncé");
-    const permissionsOption = options.find((option) => option.id === "permissions");
-    check(permissionsOption?.currentValue === permissions, `permissions annoncé = ${permissions}`);
-    check(autoWithoutSandbox(session.state) === (permissions === "auto"), `bandeau ${permissions === "auto" ? "affiché" : "absent"}`);
+    conversations.start();
+    const conversation = conversations.shown;
+    await waitFor(
+      () => conversation.session.current?.kind === "open" || conversation.agent.current.kind === "failed",
+      "ouverture",
+      90_000,
+    );
+    const session = conversation.session.current;
+    check(session?.kind === "open", `session ouverte (${session?.kind ?? conversation.agent.current.kind})`);
+    if (session?.kind !== "open") return;
+    const config = session.config;
+    console.log(`  modèle ${config.model?.current} (${config.model?.choices.length} choix), effort ${config.effort?.current}, permissions ${config.permissions}`);
+    check(config.model !== null, "sélecteur de modèle annoncé");
+    check(config.permissions === permissions, `permissions annoncé = ${permissions}`);
+    check((config.permissions === "auto") === (permissions === "auto"), `bandeau ${permissions === "auto" ? "affiché" : "absent"}`);
 
-    const effort = options.find((option) => option.category === "thought_level");
-    if (effort) {
-      const target = effort.options.map((choice) => choice.value).find((value) => value !== effort.currentValue);
-      await session.setConfig(effort.id, target);
-      const after = session.state.configOptions.find((option) => option.id === effort.id)?.currentValue;
-      check(after === target, `effort ${effort.currentValue} → ${target} par set_config_option (lu : ${after})`);
+    if (config.effort) {
+      const target = config.effort.levels.find((level) => level !== config.effort.current);
+      await conversation.session.setOption({ configId: "thought_level", value: target });
+      const after = conversation.session.current;
+      const now = after?.kind === "open" ? after.config.effort?.current : undefined;
+      check(now === target, `effort ${config.effort.current} → ${target} par set_config_option (lu : ${now})`);
     } else {
       console.log("  (pas de sélecteur d'effort pour ce modèle)");
     }
 
-    await session.send("bonjour");
-    const last = session.state.items.at(-1);
-    const shown = last?.kind === "auth" ? TEXTS.auth(last.binaryPath) : last?.text;
-    console.log(`  dernier message : ${shown}`);
-    check(last?.kind === "auth" && last.binaryPath === wrapper, "message /login avec le chemin lancé");
+    conversation.chat.send("bonjour", []);
+    await waitFor(() => !conversation.chat.current.busy && conversation.chat.current.entries.length > 0, "fin du tour", 60_000);
+    const turn = conversation.chat.current.entries.filter((entry) => entry.kind === "turn").at(-1);
+    console.log(`  tour : ${turn?.state} ; ${turn?.error}`);
+    check(turn?.state === "failed" && turn.error === authText(wrapper), "message /login avec le chemin lancé");
+
+    const began = Date.now();
+    await conversations.stopAll();
+    check(Date.now() - began < 10_000, `arrêt par fin de stdin en ${Date.now() - began} ms`);
   } catch (error) {
     check(false, String(error));
-    for (const line of logs.slice(-20)) console.log(`  [stderr] ${line}`);
   } finally {
-    await session.dispose();
+    await conversations.stopAll();
     try {
       execFileSync("pkill", ["-TERM", "-f", "--", `--daemon-socket ${socket}`]);
     } catch {

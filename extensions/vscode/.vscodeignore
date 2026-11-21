@@ -1,7 +1,8 @@
 **
 !dist/extension.js
-!dist/webview.js
-!dist/webview.css
+!dist/webview/main.js
+!dist/webview/main.css
+!media/icon.svg
 !package.json
 !README.md
 !LICENSE

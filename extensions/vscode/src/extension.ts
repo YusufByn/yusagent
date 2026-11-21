@@ -1,47 +1,61 @@
-// yusAgent pour VS Code (YA-10, ticket 24, PR 2) : chat ACP avec le binaire `yusagent`.
-
+// Repris d'Unharnessed (MIT, 157dcdc1d, vscode/src/extension.ts). yusAgent (YA-10, ticket 24, PR I) :
+// binaire du réglage `yusagent.binaryPath` (résolu au lancement, `src/binary.ts`), aucun dossier
+// ouvert : pas de lancement (le panneau le dit), identifiants `yusagent.*`, commandes de test.
 import * as vscode from "vscode";
+import { Conversations } from "./conversations";
+import { Files } from "./files";
+import { History } from "./history";
+import { Providers } from "./providers";
+import { Settings } from "./settings";
+import { ShownAgent } from "./shown";
+import { ToolTabs } from "./tabs";
+import type { WebviewMessage } from "./protocol";
+import { ChatViewProvider } from "./view";
 
-import { ChatPanel } from "./panel";
-import type { ToHost } from "./shared/messages";
-
-const panels: ChatPanel[] = [];
-let opened = 0;
+let conversations: Conversations | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-  const output = vscode.window.createOutputChannel("yusAgent");
-  context.subscriptions.push(output);
+  const log = vscode.window.createOutputChannel("yusAgent", { log: true });
+  // yusAgent : le réglage, lu à l'activation (nom seul : cherché dans le PATH au lancement).
+  const binary = vscode.workspace.getConfiguration("yusagent").get<string>("binaryPath") || "yusagent";
+  // yusAgent : sans dossier ouvert, pas de cwd (l'agent ne démarre pas) ; Unharnessed prend le dossier personnel.
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  const cwd = folder?.uri.scheme === "file" ? folder.uri.fsPath : "";
+  const version = String(context.extension.packageJSON.version);
+  const shown = new ShownAgent(log);
+  // Before the first conversation: they listen to every agent's notifications.
+  const providers = new Providers(shown, log);
+  const settings = new Settings(shown, log);
+  const files = new Files(cwd, log);
+  conversations = new Conversations(binary, cwd, version, files, shown, log);
+  const history = new History(shown, conversations, cwd, log);
+  const tabs = new ToolTabs();
+  const view = new ChatViewProvider(context.extensionUri, conversations, providers, settings, history, files, tabs, log);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("yusagent.newChat", () => {
-      opened += 1;
-      const title = opened === 1 ? "yusAgent" : `yusAgent (${opened})`;
-      const panel = new ChatPanel(context, title, output, (closed) => {
-        const index = panels.indexOf(closed);
-        if (index >= 0) panels.splice(index, 1);
-      });
-      panels.push(panel);
-    }),
+    log,
+    tabs,
+    vscode.workspace.registerTextDocumentContentProvider(ToolTabs.scheme, tabs),
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, view),
+    // The button in the editor's title bar: the panel opens, its side bar with it.
+    vscode.commands.registerCommand("yusagent.open", () => vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`)),
   );
-
-  // Commandes des tests e2e seulement (variable posée par le lanceur de test), jamais déclarées
-  // dans package.json.
+  // yusAgent : commandes des tests e2e seulement (variable posée par le lanceur), jamais déclarées.
   if (process.env.YUSAGENT_EXTENSION_TEST === "1") {
+    const all = conversations;
     context.subscriptions.push(
-      vscode.commands.registerCommand("yusagent._test.chats", () =>
-        panels.map((panel) => ({ state: panel.state, html: panel.html, rendered: panel.rendered })),
-      ),
-      vscode.commands.registerCommand("yusagent._test.message", (index: number, message: ToHost) => {
-        panels[index]?.handle(message);
+      vscode.commands.registerCommand("yusagent._test.post", (message: WebviewMessage) => view.receive(message)),
+      vscode.commands.registerCommand("yusagent._test.state", () => {
+        const { agent, session, chat } = all.shown;
+        return { agent: agent.current, session: session.current, chat: chat.current, html: view.html, rendered: view.rendered };
       }),
-      vscode.commands.registerCommand("yusagent._test.probe", (index: number) => panels[index]?.probe()),
-      vscode.commands.registerCommand("yusagent._test.close", (index: number) => {
-        panels[index]?.dispose();
-      }),
+      vscode.commands.registerCommand("yusagent._test.probe", () => view.probe()),
     );
   }
+  conversations.start();
 }
 
-export function deactivate(): Promise<void> {
-  return Promise.all(panels.map((panel) => panel.session.dispose())).then(() => undefined);
+/** Every agent stops at once; one VS Code no longer waits for goes on alone. */
+export async function deactivate(): Promise<void> {
+  await conversations?.stopAll();
 }

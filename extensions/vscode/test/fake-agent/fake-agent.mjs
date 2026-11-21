@@ -65,7 +65,20 @@ if (permissions !== null) {
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 const respond = (id, result) => send({ id, result });
 const fail = (id, code, message, data) => send({ id, error: { code, message, ...(data ? { data } : {}) } });
-const update = (body) => send({ method: "session/update", params: { sessionId: SESSION_ID, update: body } });
+// `_meta` de notre pont (`crates/pa-daemon/src/acp/meta.rs`) : tour du prompt en cours, ordre.
+let promptTurnId = 0;
+let eventSequence = 0;
+const update = (body) =>
+  send({
+    method: "session/update",
+    params: {
+      sessionId: SESSION_ID,
+      update: {
+        ...body,
+        _meta: { "ai.primeintellect.prime-agent": { promptTurnId, eventSequence: ++eventSequence, phase: "event" } },
+      },
+    },
+  });
 const chunk = (text, kind = "agent_message_chunk") => update({ sessionUpdate: kind, content: { type: "text", text } });
 const later = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -176,6 +189,8 @@ function onMessage(message) {
     case "session/new":
       return respond(id, { sessionId: SESSION_ID, configOptions: config });
     case "session/prompt": {
+      promptTurnId += 1;
+      eventSequence = 0;
       const text = (params?.prompt ?? []).map((block) => block.text ?? "").join("");
       void onPrompt(id, text);
       return;

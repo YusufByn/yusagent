@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installe le .vsix produit par la CI (workflow ya-extension) dans VS Code (ticket 24, PR 2).
+# Installe le .vsix produit par la CI (workflow ya-extension) dans VS Code (ticket 24, PR 2 et PR I).
 #
 # Usage : extensions/vscode/scripts/install-vsix.sh <id du run ya-extension> [dossier d'extensions]
 #
@@ -27,7 +27,7 @@ echo "sha256 : $(shasum -a 256 "$VSIX" | cut -d' ' -f1)"
 FILES=$(unzip -Z1 "$VSIX" | sort)
 echo "contenu :"
 echo "$FILES" | sed 's/^/  /'
-UNEXPECTED=$(echo "$FILES" | grep -v -x -E '\[Content_Types\]\.xml|extension\.vsixmanifest|extension/package\.json|extension/readme\.md|extension/README\.md|extension/LICENSE(\.txt)?|extension/dist/extension\.js|extension/dist/webview\.js|extension/dist/webview\.css' || true)
+UNEXPECTED=$(echo "$FILES" | grep -v -x -E '\[Content_Types\]\.xml|extension\.vsixmanifest|extension/package\.json|extension/readme\.md|extension/README\.md|extension/LICENSE(\.txt)?|extension/dist/extension\.js|extension/dist/webview/main\.js|extension/dist/webview/main\.css|extension/media/icon\.svg' || true)
 [ -z "$UNEXPECTED" ] || { echo "ÉCHEC : fichiers inattendus :" >&2; echo "$UNEXPECTED" >&2; exit 1; }
 
 if [ -n "$EXT_DIR" ]; then
