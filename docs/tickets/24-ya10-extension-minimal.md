@@ -545,3 +545,217 @@ Dans VS Code, puis « Developer: Reload Window » :
 
 Désinstaller : `code --uninstall-extension yusagent.yusagent`.
 
+## Avant le merge de la PR #73 : comparaison avec l'extension d'Unharnessed (21/11/2026)
+
+Source : `github.com/unharnessed-agent/Unharnessed`, commit `157dcdc1d9452cae6fdd0fc74c182617d4033ee2` (19/11/2026), dossier `vscode/` (dernier commit qui le touche : `61b017877`). Clone jetable dans le scratchpad de Claude Code, lecture seule. Licence MIT (« Copyright (c) 2026 Unharnessed », `LICENSE`). Unharnessed est aussi un fork de Prime Agent (crates `uh-*`), mais son mode ACP tourne **dans le processus de l'agent, sans démon** (`crates/uh-daemon/src/acp/in_process_config.rs`). Le nôtre passe par le démon (§1.2).
+
+**Décision de Yusuf (21/11/2026)** : pour l'extension, on fait **comme Unharnessed sur tout le fonctionnel, emplacement compris**. Le visuel viendra plus tard (outil de design, journée de veille) : on ne reprend pas son `styles.css`. Option A ou B ci-dessous : à trancher.
+
+### 1. Arrêt
+
+- **Chez lui** (`vscode/src/agent.ts:134-154`) : fermeture de stdin, attente de 40 s au plus (`EXIT_WAIT_MS`, `:15` : « past the agent's own bounds (its turn 10 s, its kernel's save and shutdown about 25 s) »), puis SIGKILL. Rien n'est écrit avant l'événement `spawn` (`:118-123`). `initialize` borné à 30 s (`:9`).
+- **Chez nous, lu** : à la fin de stdin, le pont annule le tour en cours (`cancel_owned_admission`), retire ses serveurs MCP et se détache (`crates/pa-daemon/src/acp/daemon.rs:1949-1990`, `teardown`). La session ACP est **`Resident`** (`crates/pa-cli/src/print_runtime.rs:153` ; `ClientOwned` seulement avec `--no-session`, `:128-133`) : le worker et son kernel vivent dans le démon, pas dans notre processus. Un worker sans client passe en veille après `idleEvictionMinutes`, **90 min par défaut** (`crates/pa-core/src/settings/manager.rs:17`, `crates/pa-daemon/src/worker/turn.rs:195-260`). Unharnessed endort aussi une conversation de fond après 90 min (`vscode/src/conversations.ts:11-12`).
+- **Mesuré** (binaire `main` `1b96bb645`, serveur de capture en modèle factice, scénario `basic`, `sandbox-exec`, démon isolé ; script jetable `lifecycle.py` du scratchpad de Claude Code, à verser au banc si Yusuf le veut) :
+  - A, fin de stdin après un tour : le pont sort en **0,0 s** ; démon, worker et **kernel toujours là à +0,5 s, +3 s et +10 s** ; arrêtés seulement par l'arrêt du démon ;
+  - B, séquence actuelle de l'extension : `session/close` répond `{}` en 0,0 s, puis le pont sort dès SIGTERM ; **worker et kernel toujours là** à +0,5 s, +3 s et +10 s.
+- **Conclusion** : notre SIGTERM puis SIGKILL à 2 s ne visent que le pont ; **ils n'arrêtent pas le kernel, et ce n'est pas un défaut** : session résidente, voulue pour le TUI attaché et la reprise. Non mesuré : la fin de stdin **pendant** un tour (durée du `teardown`, et effet d'un SIGTERM qui le couperait).
+
+### 2. Plantage et reprise
+
+- **Chez lui** : pas de relance automatique ; état `failed` avec les 20 dernières lignes de stderr et un bouton (`vscode/webview/Status.tsx`, `Failure`) ; la reprise relance le processus sur le fichier de la conversation (`vscode/src/conversations.ts:65-70`, `--resume <path>`, `vscode/src/agent.ts:93`) puis `session/load`, qui rejoue la conversation dans le chat (`vscode/src/session.ts:120-125`). Le chemin du fichier arrive dans `session/new` (`_meta.unharnessed.saved`, `:117-130`). Une ligne « restart » sépare l'avant de l'après (`vscode/src/chat.ts:186-193`).
+- **Chez nous** : `--continue` et `--resume <sélecteur>` sont acceptés en mode ACP (`crates/pa-cli/src/args.rs:273-285`, `crates/pa-cli/src/print_runtime.rs:1230-1270`). **`session/load` est absent** (`-32601`, `crates/pa-daemon/src/acp/daemon.rs:1061-1068`). **`session/new` ne renvoie ni le chemin ni l'identifiant du fichier de session** (réponse relevée dans `cap-pr2/acp/transcript.jsonl` : `sessionId`, `configOptions` seulement). Sans lui, l'extension ne peut que `--continue`, qui prendrait la session la plus récente du dossier, peut-être celle d'un autre chat.
+- **Mesuré, préfixe à la reprise** (même script) : C, `--continue` sur le même démon (worker encore vivant) ; D, `--resume <fichier>` après arrêt du démon (worker neuf) ; E, référence : deux prompts dans le même pont. Requêtes comparées corps entier, UUID et chemin du projet normalisés : **C = E et D = E sur les 5 requêtes**. Le préfixe se reconstruit à l'identique.
+
+### 3. Client ACP : `@agentclientprotocol/sdk` 1.7.0
+
+- Version épinglée chez lui : `vscode/package.json` (`devDependencies`). Publiée le 02/10/2026, Apache-2.0, dépendance pair `zod`.
+- **Ce qu'il gère** (lu dans `dist/` du paquet 1.7.0) :
+  - `$/cancel_request` reçu : interrompt le gestionnaire de la requête visée par un `AbortSignal`, réponse `-32800` ou valeur du gestionnaire (`dist/jsonrpc.js:852-862`) ;
+  - `session/request_permission` (`dist/acp.js:1123`) ;
+  - requêtes et notifications génériques dans les deux sens (`request`, `notify`, `onNotification`).
+- **Nos trames passent sa validation zod** : `RequestPermissionRequest` (trame du pont, sans titre), `SessionConfigOption` (`permissions`, catégorie `mode`), `tool_call`, `session_info_update` (script de contrôle jetable `chk.mjs`).
+- **Coût de la bascule** :
+  - **taille** : un client minimal groupé et minifié par esbuild pèse **300 633 octets** (SDK 1.7.0 + zod 3.25.76), contre 17 811 pour tout l'hôte de notre extension ;
+  - **code** : remplacer `src/acp/connection.ts` et `client.ts` (environ 330 lignes) par un adaptateur (estimation : 100 lignes) ; les tests unitaires du client deviennent ceux de l'adaptateur ;
+  - **contrainte E2** (client écrit à la main), contredite.
+
+### 4. Autres choix de son extension qui recoupent la PR 2 et diffèrent des nôtres
+
+| Sujet | Unharnessed (`157dcdc1d`) | PR 2 |
+|---|---|---|
+| Emplacement | vue webview dans la **barre latérale secondaire** (`package.json`, `viewsContainers.secondarySidebar`), bouton dans la barre de titre de l'éditeur ; plusieurs conversations dans le même panneau, une par processus (`vscode/src/conversations.ts:73-80`), historique (`session/list`) | onglet d'éditeur par chat |
+| Binaire | `UNHARNESSED_BIN`, sinon `bin/` du `.vsix` par plateforme, sinon `PATH` ; aucun réglage (`vscode/src/extension.ts:19-22`) | réglage `yusagent.binaryPath`, portée `machine` |
+| Sans dossier | cwd = dossier personnel (`vscode/src/extension.ts:23`) | refus, « Ouvrez un dossier » (choix 12) |
+| `initialize` | `clientInfo` avec la version de l'extension ; délai de 30 s | pas de `clientInfo` ; pas de délai |
+| États | `starting` → `ready` → `failed` (avec la fin du stderr), retour à `starting` au redémarrage (`vscode/src/protocol.ts:8-11`) | phases `starting`, `ready`, `turn`, `stopping`, `stopped`, `closed` |
+| Erreurs | `data.details` affiché tel quel (`errorText`, `vscode/src/agent.ts:249-257`) | message `/login` dédié, `details` dans le texte de l'échec |
+| Journal | chaque trame dans le canal de sortie, clés et codes masqués pour 2 méthodes (`vscode/src/agent.ts:19-23`, `:199-219`) | stderr et erreurs de protocole seulement |
+| Prompt | blocs `text`, `resource_link` (fichiers mentionnés), `image` ; `/skill:` réécrit (`vscode/src/chat.ts:591-601`) | blocs `text` seulement (§5.4) |
+| Pendant un tour | message envoyé au tour en cours (`_unharnessed/session/steer`), file d'attente | « Envoyer » grisé |
+| Message précédent | modifiable : retour en arrière (`_unharnessed/session/rewind`) puis renvoi | non |
+| Texte | Markdown (`react-markdown` 10.1.0, `remark-gfm` 4.0.1) | texte brut (choix 3) |
+| CSP | `style-src … 'unsafe-inline'`, `img-src … data:` (`vscode/src/view.ts:379-382`) | aucun style inline, aucun `data:` |
+| Permissions | **aucune** : ni `session/request_permission`, ni bandeau | ligne d'attente (PR 2), boîte (PR 3), bandeau D4 |
+| e2e | vrai binaire + provider factice (`UNHARNESSED_FAUX_SCRIPT`), un VS Code par scénario, contrôle des processus restants (`vscode/test/e2e/run.mjs:1-24`) | agent factice ; vrai binaire en PR 3 |
+| Taille | hôte 4 415 lignes (`vscode/src/`), webview 8 774 lignes TS/TSX + `styles.css` 5 836, e2e 1 211 | hôte environ 900 lignes, webview environ 330 |
+
+### 5. Fonctions de son extension et méthodes ACP
+
+Méthodes utilisées par l'extension : `initialize`, `session/new`, `session/load`, `session/list`, `session/prompt`, `session/cancel`, `session/set_config_option`, et **31 méthodes `_unharnessed/*`** (`grep -rhoE '"_unharnessed/[a-z_/]+"' vscode/src vscode/webview`), implémentées dans `crates/uh-daemon/src/acp/` (10 324 lignes au total). Chez nous, le pont n'en sert aucune : toute méthode inconnue reçoit `-32601` (`crates/pa-daemon/src/acp/daemon.rs:1061-1068`). La plupart des commandes du démon existent déjà (héritage commun de Prime Agent, `crates/pa-types/src/daemon/command.rs`).
+
+Tailles « chez nous » : **estimations** (pont + tests), non mesurées.
+
+| Fonction | Méthodes | Commande du démon chez nous | Code Rust chez lui | Fichiers upstream touchés chez nous | Préfixe | Taille chez nous (estim.) |
+|---|---|---|---|---|---|---|
+| Reprise | `session/load`, `--resume` | `GetSessionMessages`, `--resume` déjà accepté | `mod.rs` (en partie), `history.rs` (en partie) | `acp/daemon.rs` (aiguillage), chemin du fichier dans `session/new` (`_meta` `_yus/*`) | **identique, mesuré** (C, D) ; `session/load` ne fait que rejouer vers le client | 300-400 lignes |
+| Historique | `session/list`, `sessions/delete` | `ListSavedSessions`, `DeleteSavedSession` | `history.rs` (560) | aiguillage | aucun | 250 lignes |
+| Message pendant le tour | `session/steer` | `Steer` (file `steering` du worker, `crates/pa-daemon/src/worker/turn.rs:220-226`) | `steer.rs` (106), `session.rs` | aiguillage | message ajouté à la fin avant l'appel suivant : prompt système et tools inchangés, historique en ajout seul (à vérifier par capture) | 150 lignes |
+| Retour en arrière | `session/rewind` | `NavigateTree`, `Fork` | `rewind.rs` (67) + `rewind_to` du moteur | aiguillage, peut-être `session_engine` | la requête suivante part d'une branche : préfixe réutilisé jusqu'au point de retour, suite perdue pour le cache ; **le kernel garde son état** (`rewind.rs:7-8`), qui ne suit plus la conversation | 150 lignes + cas de capture |
+| Kernel | `kernel/tail`, `kernel/kill`, `kernel/preview`, `kernel/changed`, `kernel/restored` (deux notifications) | `TailKernelBash`, `KillKernelBash`, `ListKernelBash` ; liste et aperçu des variables : **absents** (chez lui `unharnessed-runtime/src/rlm/variables.py`, 229 lignes) ; instantané du kernel : présent (`prime-agent-runtime/src/rlm/repl.py:772`, `:1123`) | `kernel.rs` (318) + `variables.py` | runtime (`repl.py`, upstream), gestionnaire du kernel | aucun si les MIME restent sans `text/plain` (règle de la PR 1), à prouver par capture | 600-800 lignes |
+| Fournisseurs et login | `providers/list`, `reload`, `set_api_key`, `logout`, `login`, `login_answer`, `login_open`, `login_cancel`, `login_update` (notification), `local_scan`, `local_probe`, `local_save`, `local_remove` (13) | aucune (login du TUI : `crates/pa-tui/src/session_ui/commands.rs:286`, `crates/pa-cli/src/subscription_login.rs`, `codex_subscription_login.rs`) | `providers.rs` (625) + flux OAuth de `uh-ai` | couche providers `pa-ai` (règle 3), login Claude hérité (règle 7) | aucun direct ; le modèle disponible peut changer | 900-1 200 lignes |
+| Réglages | `settings/get`, `settings/set` | aucune | `settings.rs` (383) | `settings` de `pa-core` (lecture) | selon la clé : compaction, masquage, effort par défaut… changent les requêtes ; invalidation à journaliser (`docs/yusAgent-cdc.md:19`) ; `permissions` à exclure ou encadrer (D1) | 400 lignes |
+| Skills | `skills/list`, `set`, `create`, `add_folder`, `remove_folder` | `GetResourceSnapshot`, `Reload` (en partie) | `skills.rs` (368) | aiguillage | **la liste des skills est dans le prompt système** : un changement, appliqué au démarrage suivant, change le prompt système (invalidation complète, à journaliser et signaler) | 400 lignes |
+| MCP | `mcp/list`, `mcp/set_token`, `mcp/logout` | `GetMcpConnections`, `SetMcpStaticToken`, `RemoveMcpConnection` | `mcp_servers.rs` (189) | aiguillage | les tools MCP changent la liste des tools : invalidation | 200 lignes |
+| Option `fast_mode` | `session/set_config_option` | `SetServiceTier` | `config_options.rs` (en partie) | `acp/config_options.rs` | paramètre de requête, pas de texte du préfixe ; invalidation à journaliser | 80 lignes |
+| Usage, commandes | `_meta` d'usage (`usage.rs`, 84), `available_commands_update` (`commands.rs`, 76) | `GetSessionStats` ; pas d'`available_commands_update` | 160 | `acp/wire_events.rs` | aucun | 250 lignes |
+
+Total des méthodes portées, **estimation** : 3 700 à 4 600 lignes de Rust côté pont, sans compter le runtime des variables.
+
+### 6. Ce qui chez lui contredit nos décisions (on garde les nôtres sauf avis contraire)
+
+1. **Permissions** : aucune gestion. Contredit D2 (chaque appel confirmé en manuel), D4 (bandeau), D5 (testeurs en manuel), D7 (tour arrêté après un refus). On garde la boîte (PR 3) et le bandeau.
+2. **Réglages globaux écrits par l'extension** (`settings/set`) : D1 (réglage `permissions` global seulement, changement par session via `set_config_option`). Le passage persistant en `auto` depuis l'écran des réglages serait à exclure.
+3. **E2** : SDK au lieu d'un client écrit à la main (§3).
+4. **E3** : CSP avec `'unsafe-inline'` pour les styles et `data:` pour les images.
+5. **E4** : binaire dans le `.vsix` par plateforme, sans réglage (noté pour YA-16).
+6. **E14** (`session/load` reporté) : au cœur de sa reprise. À reprendre si on suit son fonctionnel.
+7. **E15** (sortie d'une cellule en cours reportée) : en partie couvert chez lui par `kernel/tail`.
+8. **§4 et règles 3 et 7** : login dans l'extension (`providers/*`). Le login Claude par abonnement hérité ne doit pas être touché (Yusuf le retire), et la couche providers doit l'être le moins possible.
+9. **§5.4 (préfixe)** : blocs `resource_link` et `image` dans le prompt (ajoutés au message, pas au préfixe) ; `clientInfo` avec version (trame d'ouverture variable d'une version à l'autre) ; `steer`, `rewind`, `skills`, `settings`, MCP : changements de requêtes à journaliser comme invalidations (`docs/yusAgent-cdc.md:19`) et à prouver par capture.
+10. **Décision du 19/11/2026** (`_yus/*` pour nos ajouts, `docs/yusAgent-cdc.md:89`) : ses méthodes sont en `_unharnessed/*`.
+11. **Choix 12** (refus sans dossier) : chez lui, dossier personnel.
+12. **Règle 9** : il journalise chaque trame (prompts compris), avec masquage de deux méthodes seulement.
+
+### Pour plus tard (notes de Yusuf)
+
+- Markdown avec `react-markdown` + `remark-gfm` (versions d'Unharnessed : 10.1.0 et 4.0.1).
+- `.vsix` par plateforme avec le binaire dedans (YA-16), comme `vscode/scripts/package.mjs` d'Unharnessed.
+- Login dans l'extension avant les testeurs.
+- Emplacement : barre latérale secondaire, comme Unharnessed (décision du 21/11/2026).
+
+## Décisions de Yusuf sur la comparaison (21/11/2026)
+
+- **Option (B)** : le code d'extension d'Unharnessed (`157dcdc1d`, `vscode/`) comme base, notice MIT conservée, **notre client ACP derrière une interface**. Écart à la règle du 15/11 (reprendre ses choix) accepté : 17 811 octets et client déjà testé, contre 300 633 octets pour le SDK.
+- **PR #73** : mergée telle quelle, sans les points 1 à 4, qui arrivent avec l'import.
+- **Point 1, arrêt** : mesure d'une fin de stdin pendant un tour avant l'import ; si le tour continue dans le démon, l'extension envoie `session/cancel` avant de fermer stdin. Délai de 10 s avant SIGKILL.
+- **Points 2 et 3** (plantage sans relance automatique, fin du stderr et bouton ; `initialize` borné à 30 s, rien écrit avant le lancement du processus) : oui. **Point 4** (barre latérale secondaire) : avec l'import. **Point 5** : refus sans dossier ouvert, gardé.
+- **Avant les testeurs** : reprise et historique (chemin du fichier dans `session/new`, `session/load`, `session/list`), message pendant un tour (capture à l'appui), login dans l'extension, Markdown, PR 3 (cartes, boîte, diffs), `.vsix` par plateforme. **Plus tard** : retour en arrière, panneau du kernel, réglages, skills, MCP.
+
+### Point 1 : fin de stdin pendant un tour (mesure)
+
+- **Script** : `eof_turn.py`, jetable, dans le scratchpad de Claude Code (à verser au banc si Yusuf le veut). Copie de `bench/tools/capture/server.py` avec un scénario `slow` : une cellule qui dort 10 s, puis écrit `FIN.txt` dans le projet. Binaire `main` `1b96bb645` sous `sandbox-exec`, démon isolé par cas, aucun modèle réel. Fin de stdin 2 s après le début de la cellule ; état relevé 15 s après.
+- **Commande** : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 eof_turn.py ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent <sortie> .` (et `ONLY_CONTROL=1` pour le contrôle positif).
+
+| Cas | Sortie du pont | `FIN.txt` | Requêtes au modèle avant / 15 s après | Processus 15 s après |
+|---|---|---|---|---|
+| M1 manuel, demande d'accord en attente | 0,01 s | non | 1 / 1 | démon, worker, kernel |
+| M2 manuel, accord donné, cellule en cours | 0,01 s | non | 1 / 1 | démon, worker, kernel |
+| A1 auto, cellule en cours | 0,01 s | non | 1 / 1 | démon, worker, kernel |
+| A2 auto, `session/cancel` puis fin de stdin | 0,01 s | non | 1 / 1 | démon, worker, kernel |
+| **Contrôle** N, auto, sans fin de stdin | | **oui** | 1 / **2** | |
+| **Contrôle** N2, manuel, accord, sans fin de stdin | | **oui** | 1 / **2** | |
+
+- **Conclusion** : la fin de stdin arrête le tour, en manuel comme en auto : la cellule ne va pas au bout et le modèle ne reçoit rien de plus (`teardown`, `crates/pa-daemon/src/acp/daemon.rs:1949-1990`). **Le tour ne continue pas dans le démon : pas de `session/cancel` avant la fermeture de stdin.** Le worker et le kernel restent dans le démon, au repos, jusqu'à la veille à 90 min.
+- **Arrêt de l'extension après l'import** : fin de stdin, attente de 10 s au plus, puis SIGKILL du pont ; ni `session/close` ni SIGTERM.
+
+## Découpage (option B), validé par Yusuf le 21/11/2026
+
+**Priorité (Yusuf, 21/11/2026)** : Yusuf est l'utilisateur principal, peut-être le seul ; l'ordre suit son utilité, pas les testeurs. Seuls le sandbox et le `.vsix` par plateforme restent liés à d'autres utilisateurs.
+
+Chaque PR suit la boucle de dev : branche `ya-<ticket>`, captures `main` contre branche si le binaire change, CI verte sur la tête. Les PR Rust passent par des modules du fork. Elles modifient seulement l'aiguillage des méthodes du pont (`crates/pa-daemon/src/acp/daemon.rs:1052-1068`, fichier upstream, quelques lignes, listées dans `docs/fork-changes.md`), sauf mention contraire.
+
+### Règle pour skills, MCP et réglages (Yusuf, 21/11/2026)
+
+Un changement s'applique dès le message suivant, sans changer de conversation. Quand c'est possible, il est annoncé par un message en fin d'historique (préfixe intact) ; sinon, un seul miss, journalisé comme invalidation. `permissions` reste hors de ces écrans (D1).
+
+Constat pour appliquer la règle :
+
+- **Tools MCP : appelés depuis le REPL, pas dans la liste des tools.** Le prompt système le dit (« Generic MCP connections are accessed through the pre-imported Python `mcp` object in the Python REPL, not as top-level native tool namespaces », `crates/pa-core/src/prompts/system_prompt.rs:450`). Le skill `mcp` découvre les connexions en direct (`mcp.list_connections()`, `skills/mcp/SKILL.md`). La liste des tools ne change donc pas.
+- **Mais le prompt système nomme les serveurs MCP activés** (segment « Generic MCP Connections », « Enabled generic MCP servers: … », `system_prompt.rs:263-271`, `:435-455`, en prompt v2 aussi) **et liste les skills** (inventaire compact en v2, `system_prompt.rs:238-259`, `crates/pa-core/src/prompts/ya_prompt_v2.rs:160`).
+- **Donc, cas « annonce » pour MCP et skills** si le prompt système reste celui de l'ouverture de la session. Le changement est appliqué en direct (MCP : `SetMcpStaticToken`, `RemoveMcpConnection` ; skills : fichiers et chemins), puis annoncé par un message en fin d'historique, par la commande du démon `AppendCustomMessage`. Exemple de texte fixe : `[mcp-changed] enabled: slack` ; `[skills-changed] added: deploy (path)`.
+  - Point à vérifier dans le constat de la PR : que rien ne reconstruit le prompt système en cours de session (commande `Reload`, rechargement des skills).
+  - **Limite** : à la reprise d'une conversation, le prompt système est reconstruit avec l'état courant. Si skills ou MCP ont changé entre-temps, la première requête reprise diffère du préfixe d'avant : un miss, à journaliser comme invalidation à la reprise. La reprise mesurée identique le 21/11 (cas C, D) l'était sans changement.
+- **Réglages** : à classer clé par clé dans le constat de la PR :
+  - (a) lus à chaque usage, sans effet sur les requêtes : s'appliquent au message suivant, rien à annoncer ;
+  - (b) qui changent les requêtes sans être figés : annonce si le modèle doit le savoir, sinon un miss journalisé ;
+  - (c) **figés pour la session par conception**, pour le cache : `yaRequest` (`crates/pa-core/src/session_engine/ya_request.rs`, version du prompt, `existingTestsRule`, fenêtre d'`await bash`…) et tools natifs (`editTool`, `shellTool`, en-tête de session, `crates/pa-core/src/session_engine/ya_tool_family.rs:14-21`). La règle « dès le message suivant » demanderait de les rouvrir en cours de session (un miss chacun) ou de les laisser hors de l'écran. **À trancher par Yusuf** sur la liste des clés.
+
+### Ordre des PR
+
+1. **Import, Markdown, PR 3**
+   - **PR #73** (en cours) : mergée telle quelle.
+   - **PR I, import** (extension seule, aucun fichier sous `crates/`, préfixe inchangé) :
+     - `vscode/` d'Unharnessed à `157dcdc1d` dans `extensions/vscode/`, à la place de notre interface ; notice MIT (`LICENSE` avec les deux copyrights, en-tête des fichiers repris, section « Code repris d'Unharnessed » de `docs/fork-changes.md` avec le commit) ;
+     - **notre client ACP** derrière l'interface qu'utilise son `agent.ts` (`request`, `notify`, `onNotification`, plus le gestionnaire de `session/request_permission`) ; pas de SDK ;
+     - points 2 à 4 : plantage sans relance automatique (fin du stderr, bouton « Relancer », nouvelle session tant que la reprise n'existe pas), `initialize` borné à 30 s, rien écrit avant le lancement du processus, barre latérale secondaire ; arrêt du point 1 (fin de stdin, 10 s, SIGKILL) ;
+     - **gardé de la PR 2** : `yusagent.binaryPath` (portée `machine`), refus sans dossier ouvert, ligne d'attente d'une demande d'accord, bandeau D4 qui suit `permissions` annoncé par l'agent, message `/login` avec le chemin du binaire, CSP stricte (sans `'unsafe-inline'` ni `data:`), fixture des trames (preuve 1) et cas `acp-extension` (preuve 2), agent factice et e2e ;
+     - **Markdown** avec l'import (`react-markdown` 10.1.0, `remark-gfm` 4.0.1) ;
+     - **masqué** tant que le pont ne sert pas la méthode : historique, message pendant un tour, retour en arrière, panneau du kernel, fournisseurs et login, réglages, skills, MCP, usage ; mentions `@fichier` et images (blocs texte seulement, §5.4) ;
+     - visuel : feuille de style minimale à nous, pas son `styles.css` ; ses éléments purement visuels (polices, logos, animations) ne sont pas repris.
+   - **PR 3** : cartes de cellule (`_yus/bashRuns`), boîte de permission (« Autoriser » / « Refuser », fermée sur `$/cancel_request` ou au changement de statut), diffs `vscode.diff` et « Rejeter » (E6), e2e contre le vrai binaire (provider factice). `ya-extension` devient requis (E13).
+2. **Reprise et historique**
+   - **PR R1** (Rust) :
+     - `_meta` `_yus/session` (`{id, path}`) dans la réponse de `session/new` ;
+     - `session/load` pour la session ouverte par `--resume`, historique rejoué en `session/update` depuis `GetSessionMessages` ;
+     - `session/list` (`ListSavedSessions`, filtré par `cwd`) ;
+     - nouveau cas de capture `acp-resume` : préfixe identique après `--resume` (mesure du 21/11 : C = E, D = E).
+   - **PR X1** (extension) : « Relancer » reprend par `--resume` et `session/load` ; plusieurs conversations et historique (comme Unharnessed).
+3. **Skills, MCP, réglages**
+   - **Constat d'abord** :
+     - prompt système figé en cours de session ;
+     - classement des clés de réglage en (a), (b), (c) ;
+     - texte des annonces ;
+     - journalisation des invalidations (à la reprise compris).
+   - **PR R3** (Rust) : `_yus/skills/*`, `_yus/mcp/*`, `_yus/settings/*` sur les commandes existantes (`GetResourceSnapshot`, `GetMcpConnections`, `SetMcpStaticToken`, `RemoveMcpConnection`) et les réglages globaux ; annonce par `AppendCustomMessage` ; `permissions` refusé par `_yus/settings/set` (D1) ; cas de capture : préfixe intact après une annonce, et un seul miss journalisé dans le cas sans annonce.
+   - **PR X3** (extension) : ses écrans skills, MCP et réglages.
+4. **Message pendant un tour**
+   - **PR R4** (Rust) : `_yus/session/steer` sur la commande `Steer` du démon. Cas de capture : prompt système et tools identiques, historique en ajout seul.
+   - **PR X4** (extension) : envoi pendant le tour et file d'attente, comme Unharnessed.
+5. **Login dans l'extension** : ticket à part, constat d'abord. Règle 3 (couche providers) et règle 7 (login Claude par abonnement hérité, que Yusuf retire). Méthodes de fournisseurs dans le pont, clés dans `SecretStorage` (CDC YA-10). Puis l'extension.
+6. **Retour en arrière et panneau du kernel**
+   - **D'abord, régler l'état du kernel** qui ne suit plus la conversation après un retour en arrière. Chez Unharnessed, « the kernel keeps what it holds » (`crates/uh-daemon/src/acp/rewind.rs:7-8`). Constat et ticket à part : instantané du kernel par tour (`prime-agent-runtime/src/rlm/repl.py:772`, `:1123`) ou annonce en fin d'historique.
+   - Puis `_yus/session/rewind` (`NavigateTree`, `Fork`), le panneau du kernel (`TailKernelBash`, `KillKernelBash`, `ListKernelBash`, liste des variables à ajouter au runtime), et l'extension.
+
+**Liés à d'autres utilisateurs, hors de cet ordre** : sandbox du kernel (seconde partie de YA-11) ; `.vsix` par plateforme (YA-16 : binaire de la plateforme dans le `.vsix`, comme `vscode/scripts/package.mjs` d'Unharnessed, construit en CI ; `yusagent.binaryPath` devient une surcharge).
+
+## Écarts portés au journal du CDC (validés par Yusuf le 21/11/2026)
+
+1. **YA-10, base de l'extension** : code d'extension d'Unharnessed (MIT, `157dcdc1d`) comme base, fonctionnel aligné sur le sien, visuel plus tard. Notre client ACP est gardé à la place de son SDK : écart à la règle du 15/11 accepté (17 811 contre 300 633 octets, client déjà testé).
+2. **YA-10, emplacement** : vue dans la barre latérale secondaire, comme Unharnessed (le CDC ne fixait pas l'emplacement ; la PR 2 utilisait un onglet d'éditeur).
+3. **YA-10, « redémarrage auto en cas de crash »** (`docs/yusAgent-cdc.md:372`) : remplacé par un bouton « Relancer » qui reprend la conversation (`--resume`, `session/load`), comme Unharnessed. Avant la PR R1, la relance ouvre une nouvelle session.
+4. **YA-10, critère « .vsix < 5 Mo »** (`docs/yusAgent-cdc.md:389`) : ne tient plus avec le binaire dans le `.vsix` par plateforme (binaire seul environ 59 Mo, `docs/yusAgent-cdc.md:570`). **Décision : plafond de 5 Mo sur le `.vsix` hors binaire.**
+5. **YA-10, login** : avant les testeurs, dans l'extension (CDC : clés dans `SecretStorage`, rappel OAuth par `registerUriHandler`). Écart au ticket 24, §4 (« l'extension ne s'occupe pas de l'authentification ») ; contraintes des règles 3 et 7, ticket à part.
+6. **YA-10, ordre** : par utilité pour Yusuf, utilisateur principal, et non plus par les testeurs. (1) import, Markdown, PR 3 ; (2) reprise et historique ; (3) skills, MCP, réglages ; (4) message pendant un tour ; (5) login dans l'extension ; (6) retour en arrière (après l'état du kernel) et panneau du kernel. Sandbox et `.vsix` par plateforme restent liés à d'autres utilisateurs. E14 (`session/load` reporté) est rouvert.
+7. **YA-10, arrêt d'un chat** : fermer un chat arrête le pont, pas le kernel. La session est résidente dans le démon et se met en veille après 90 min (`idleEvictionMinutes`). La fin de stdin arrête le tour en cours (mesure du point 1).
+8. **YA-10, skills, MCP et réglages** : un changement s'applique dès le message suivant, sans changer de conversation ; annonce en fin d'historique quand c'est possible (préfixe intact), sinon un seul miss journalisé comme invalidation ; `permissions` hors de ces écrans (D1). Les réglages figés pour la session par conception (`yaRequest`, tools natifs) sont à trancher clé par clé.
+
+## Décisions de Yusuf sur le découpage (21/11/2026)
+
+- Découpage et écarts 1 à 8 **validés**, portés au journal du CDC (deux lignes du 21/11/2026).
+- **Écart 4** : plafond de 5 Mo sur le `.vsix` hors binaire.
+- **Clés figées pour la session** (`yaRequest`, `editTool`, `shellTool`) : hors de l'écran des réglages par défaut. Yusuf tranche sur la liste des clés (constat de l'étape 3).
+- **Écart 7, point ouvert** : supprimer une conversation devrait arrêter sa session dans le démon ; sinon son worker et son kernel restent jusqu'à la veille, 90 min.
+- **Check `ya-extension` requis** : un check requis filtré par chemins resterait en attente sur les autres PR. Le workflow devient requis seulement s'il tourne sur chaque PR, avec un job qui sort vite en succès quand `extensions/vscode/` n'a pas changé ; sinon il reste non requis.
+
+### Merge de la PR #73
+
+- **Contrôle de Yusuf** : fait ; **résultat non transmis** (le message disait « Contrôle de la PR #73 fait : <résultat>. Merge. »). À compléter.
+- **Merge** : PR #73 mergée par Claude Code sur la demande de Yusuf, `main` à `8830b763d` ; tête `a8941b37f` avec `ci` 44900460119 (14 checks requis verts) et `ya-extension` 44900460206 vert.
+
+## Points ouverts (comparaison et découpage)
+
+- Supprimer une conversation devrait arrêter sa session dans le démon (écart 7).
+- Fin de stdin pendant un tour : mesurée sans relance du worker ; une relance au milieu d'un tour n'a pas de répondant jusqu'au prompt suivant (PR 1).
+- Reprise après un changement de skills ou de MCP : un miss, à journaliser comme invalidation (étape 3).
+- Script de mesure `eof_turn.py` et `lifecycle.py` : jetables, à verser au banc si Yusuf le veut.
+
