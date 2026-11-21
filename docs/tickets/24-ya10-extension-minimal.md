@@ -295,7 +295,7 @@ Le prompt système et les tools viennent du binaire seul.
 - Égalité du préfixe entre ACP et `-p` : non mesurée (5.4).
 - Changement de modèle ou d'effort en cours de session « journalisé comme invalidation de cache » (`docs/yusAgent-cdc.md:19`) : non vérifié dans le pont.
 - Écart à porter au journal du CDC après décision : indicateur de cache reporté (section 2). Les autres reports (Zed, Windows/WSL, terminal, captures, clés, par hunk) sont demandés par Yusuf ; à porter aussi.
-- Ticket 22, `:79` : phrase périmée, à corriger avec le premier push de code.
+- Ticket 22, `:79` : phrase périmée, **corrigée** dans le premier push de la PR 2.
 
 ## PR 1 : vérifications préalables (21/11/2026)
 
@@ -397,7 +397,7 @@ Branche `ya-24-extension`. Pas de build ni de test Rust en local (règle 8) : fo
 - Relance du worker au milieu d'un tour : pas de répondant jusqu'au prompt suivant.
 - `bash()` dont la cellule ne lit pas le résultat : pas d'enregistrement `bash-run` (résultat par l'avis `[bash-done]`).
 - Sortie partielle d'une cellule en cours (E15) et `session/load` (E14) : reportés.
-- Phrase périmée du ticket 22 (`:79`) : à corriger avec la PR 2.
+- Phrase périmée du ticket 22 (`:79`) : **corrigée** dans le premier push de la PR 2.
 
 ### Avant le merge : cas `display-anthropic` et comparaison `acp`/`tui` (demande de Yusuf, 21/11/2026)
 
@@ -439,3 +439,109 @@ grep -l "kernel startup failed" bench/tools/capture/runs/ya24-*/cases/*/cap/*.bo
 ```
 
 Attendu : chaque `run.py` affiche `préparation (réseau autorisé)`, `display-anthropic: exit=[0]`, `acp : prompt={'stopReason': 'end_turn'} process restants=[]`, `tui : requêtes=4 erreur=None process restants=[]` et `CONFORME` ; `compare.py` : 16 lignes à 0 différence, `TOUT IDENTIQUE` ; `prefix_paths_check.py` `CONFORME`, `exit=0` ; `display_check.py` sept `oui`, `CONFORME`, `exit=0` ; `grep` `0`.
+
+### Contrôle de Yusuf de la PR 1 (binaire `3ffc2359c`) et merge
+
+- **Smoke bench** `py-example-001` : `resolved` deux fois, `find ~/.yusagent ~/.prime/agent -newer <marque>` vide, `compare_capture_prompts.py` **TOUT IDENTIQUE**.
+- **Banc de capture** (commandes ci-dessus, dossiers `--out` neufs) : `compare.py --all` **TOUT IDENTIQUE** sur 16 lignes, `prefix_paths_check.py` **CONFORME**, `display_check.py` **CONFORME**, `grep "kernel startup failed"` : 0.
+- **Premier essai `display_check.py` NON CONFORME** : expliqué par le `--out` réutilisé (deux sessions dans le même dossier, section précédente) ; corrigé dans le banc (`--out` rempli refusé, une seule session pour `display_check.py`).
+- **Merge** : PR #72 mergée, `main` à `1b96bb645` ; build macOS `ya-build-macos-arm64` 44893185253 en succès (artefact `yusagent-aarch64-apple-darwin-1b96bb6457e51d010ad32a2293714f911fea2162`, `SHA256SUMS` vérifié par Claude Code, `yusagent --version` = `0.10.2-continuous.1b96bb6457e51d010ad32a2293714f911fea2162`).
+
+## PR 2 : squelette de l'extension (21/11/2026)
+
+Branche `ya-24-extension-pr2`, depuis `main` à `1b96bb645`. Périmètre : section 5.1, point 2. **Aucun fichier sous `crates/` ni upstream** : le binaire ne change pas, le préfixe non plus. Détail des fichiers : `docs/fork-changes.md`, section « Extension VS Code, PR 2 ».
+
+### Décisions de Yusuf sur l'interface (21/11/2026)
+
+1. Chat dans un **onglet d'éditeur** ; « yusAgent: Nouveau chat » ouvre un onglet et lance un processus.
+2. Bandeau en haut, messages au centre, saisie en bas (Entrée envoie, Maj+Entrée saut de ligne) ; « Envoyer » devient « Arrêter » pendant un tour.
+3. Texte de l'agent **brut** (espaces et retours gardés). **Markdown avant les testeurs.**
+4. Sélecteurs modèle et effort sous la saisie, `<select>` natifs au thème, grisés pendant un tour.
+5. Pas de sélecteur `permissions` (lecture seule). **Le bandeau suit la valeur annoncée par l'agent** (`configOptions` de `session/new`, puis `config_option_update` et la réponse de `session/set_config_option`), jamais un fichier lu par l'extension.
+6. Bandeau permanent, non fermable, couleurs d'avertissement du thème : « ⚠ Mode auto sans sandbox : les cellules s'exécutent sans demander, avec vos droits. »
+7. Demande de permission en PR 2 : aucune réponse, ligne « Demande d'autorisation en attente (boîte en PR 3) : Arrêter pour annuler » ; « Arrêter » répond `cancelled`.
+8. Une ligne par appel de tool (« Python cell · en attente d'accord / en cours / terminé / échoué / annulé ») ; raisonnement replié et grisé s'il arrive.
+9. Binaire absent ou non exécutable : état d'erreur dans le chat, chemin essayé, « Ouvrir le réglage yusagent.binaryPath » et « Réessayer ».
+10. Plantage : relance automatique, nouvelle session, historique grisé, tour en cours marqué échoué ; deuxième arrêt en moins de 60 s : plus de relance, bouton « Réessayer ».
+11. Message d'authentification fixe, **avec le chemin réel du binaire** (réglage `yusagent.binaryPath` résolu en chemin absolu) : « Authentification requise : lancez `<chemin>` dans un terminal, puis /login. »
+12. Sans dossier ouvert : pas de lancement, « Ouvrez un dossier » ; plusieurs dossiers : le premier, nom dans l'en-tête.
+
+- **Cas `acp-extension` de la capture (preuve 2)** : dans cette PR 2 (annoncé avant le code).
+- **Merge et check non requis** : `ya-extension.yml` n'est pas requis par la protection de `main` pendant la PR 2 (E13). **Le merge d'une PR qui touche `extensions/vscode/` exige ce workflow vert sur la tête, vérifié à la main** (`gh run list --workflow ya-extension.yml --branch <branche>` : run `success` dont le `headSha` est le dernier commit poussé ; le filtre de chemins porte sur tout le diff de la PR, donc chaque push d'une PR qui touche `extensions/vscode/` le relance), jusqu'à ce qu'il devienne requis (PR 3).
+
+### Ce qui est fait
+
+- **Processus** (`extensions/vscode/src/session.ts`) : `spawn(<binaryPath résolu>, ["--mode", "acp"], {cwd: <premier dossier du workspace>})`, un processus par chat ; stderr vers le canal de sortie « yusAgent » (jamais l'environnement, règle 9) ; fermeture de l'onglet : `session/close` (2 s au plus), fin de stdin, SIGTERM, SIGKILL après 2 s.
+- **`yusagent.binaryPath`** (E4) : défaut `yusagent`, cherché dans le `PATH` ; `~/` développé (`src/binary.ts`). **Portée `machine`** (réglage utilisateur seulement) : un dépôt ouvert ne peut pas choisir, par ses réglages de workspace, le binaire que l'extension lance. Ajout de Claude Code, à valider.
+- **Client ACP écrit à la main** (E2, `src/acp/connection.ts`, `client.ts`) : JSON-RPC une trame par ligne, requêtes croisées, `$/cancel_request` reçu (rappel de la requête visée, réponse `cancelled`), une seule réponse par requête, méthode inconnue `-32601`. Envoyés : `initialize` (capacités client à `false`, pas de `clientInfo`), `session/new {cwd, mcpServers: []}`, `session/prompt` (bloc `text`), `session/cancel`, `session/set_config_option` (seulement sur un changement de l'utilisateur, E7), `session/close`.
+- **Arrêter** : `session/cancel`, puis `cancelled` à chaque demande d'accord ouverte (spec v1) ; appels pas finis marqués « annulé » en local. Une demande se ferme aussi sur `$/cancel_request` (E9) ou quand son appel sort de `pending`.
+- **Webview** (E3) : React 18 en TypeScript, groupée par esbuild (`dist/webview.js`, `dist/webview.css`), CSP `default-src 'none'; style-src <webview>; font-src <webview>; img-src <webview>; script-src 'nonce-…'`, aucun script ni style inline, aucune source distante. Couleurs du thème VS Code. Sonde de test (`probe`) : la webview renvoie à l'hôte son texte affiché et ses sélecteurs, pour l'e2e ; rien ne sort de VS Code.
+- **CI** : `.github/workflows/ya-extension.yml` (`npm ci --ignore-scripts`, `tsc --noEmit`, eslint, tests unitaires, `vsce package` avec contrôle < 5 000 000 octets et liste des fichiers, `.vsix` en artefact `yusagent-vsix-<sha>`, e2e `xvfb-run` dans VS Code 1.146.0).
+- **Dépendances** (développement seulement, rien dans le `.vsix` hors du code groupé) : versions publiées depuis plus de deux semaines (`typescript-eslint` 8.72.1 et non 8.73.0, publié le 16/11/2026). `npm install` en local sans scripts d'installation (npm 11 les bloque ; esbuild prend son binaire dans sa dépendance de plateforme).
+
+### Tests
+
+- **Unitaires** (`npm run test:unit`, `node --test`) : 34 tests. Client ACP (8), état du chat (7), résolution du binaire (5), `ChatSession` contre l'agent factice, vrai processus et vraies trames sur stdio (14) : fixture des trames, Arrêter, `$/cancel_request`, sélecteurs, bandeau, authentification (deux formes), plantages (relance, arrêt au deuxième en moins de 60 s, relance à chaque fois au-delà), binaire absent, aucun dossier, version ACP inattendue, fermeture.
+  - Lancé par Claude Code en local : `cd extensions/vscode && npm run typecheck && npm run lint && npm run test:unit` → `ℹ tests 34`, `ℹ pass 34`, `ℹ fail 0`.
+  - Contrôle négatif : `clientInfo` ajouté à `initialize` → le test du fixture échoue (exit 1, diff `+ clientInfo`), aucun processus restant. Défaut trouvé au passage : un test en échec laissait l'agent factice vivant et `node --test` ne rendait pas la main ; corrigé (fermeture de chaque session après son test, `--test-timeout`).
+- **e2e** (`test/e2e/`, CI seulement : VS Code téléchargé) : 9 tests dans l'hôte d'extension contre l'agent factice : trames du fixture et CSP de la page, texte streamé affiché, bouton Arrêter et `cancelled`, sélecteurs affichés et `set_config_option` sur un changement seulement, message `/login`, plantage et relance, `session/close` à la fermeture de l'onglet, bandeau (annoncé à l'ouverture, puis par `config_option_update`), binaire absent. Rendu vérifié par la sonde.
+
+### Préfixe : preuves 1 et 2
+
+- **Preuve 1** : le fixture `extensions/vscode/test/fixtures/acp-frames.json` (3 trames : `initialize`, `session/new`, `session/prompt`) est comparé aux trames reçues par l'agent factice, par les tests unitaires et par l'e2e. Une trame en plus ou différente fait échouer.
+- **Preuve 2**, banc de capture, cas `acp-extension` : le fixture rejoué contre le binaire de `main` (`1b96bb645`, run 44893185253), avec le prompt du cas `acp`. Commande (Claude Code, 21/11/2026) : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 bench/tools/capture/run.py --binary ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent --out <scratchpad>/cap-pr2`. Sortie : `acp-extension : prompt={'stopReason': 'end_turn'} process restants=[]`, `prefix_paths_check` **CONFORME**, `extension_frames_check` : trames envoyées = fixture `oui`, `acp` 4 requêtes, `acp-extension` 4, **4 identiques, 0 différente, TOUT IDENTIQUE** ; `grep -l "kernel startup failed"` : 0.
+  - Contrôle négatif : `max_tokens` + 1 dans la requête 2 d'une copie de `acp-extension` → `| acp-extension | 4 | 3 | 1 |`, `DIFFÉRENCES`, exit 1.
+  - `spawn : ok=False` dans ce run : déjà présent dans les runs `ya24-main` et `ya24-branche` de Yusuf (`run.json`), sans lien avec cette PR.
+- **Prompt système et tools** : inchangés (aucun fichier du binaire touché).
+
+### Constat : identifiants absents, `kind: "other"` et non `authentication`
+
+- **Sur le vrai binaire** (`main` `1b96bb645`, HOME et dossier d'agent vides, sous `sandbox-exec`), le prompt échoue avec `{"code": -32603, "data": {"details": "yusagent turn failed: No API key found for amazon-bedrock.\n\nUse /login …", "kind": "other", "category": "other", "retryable": false}}`. La section 4 supposait `kind: "authentication"`.
+- **Cause** : le texte vient de `crates/pa-daemon/src/agent_engine/turn/model.rs:68` ; aucune règle du classifieur ne le reconnaît (`crates/pa-core/src/session_engine/error_classify.rs:260-357` : pas de statut HTTP, le jeton `missing_api_key` de `:135` n'y figure pas, pas de correspondance exacte ; la ligne `:9` n'est qu'une description). `kind: "authentication"` n'arrive que sur un 401/403 ou un jeton reconnu.
+- **Dans l'extension** (périmètre de la PR 2) : le message `/login` s'affiche sur `kind: "authentication"` **ou** sur un `details` qui contient « No API key found for » (`isAuthFailure`, `src/session.ts`), avec un test sur la forme relevée. **À valider par Yusuf.**
+- **Hors périmètre, non fait** : classer ce texte en `credential_missing` côté pont ou classifieur (fichier upstream `error_classify.rs`, ou `crates/pa-daemon/src/acp/mod.rs`). Proposition : ticket à part ; la reconnaissance du texte dans l'extension pourra alors partir.
+
+### Contrôle sur le vrai binaire (règle 13)
+
+`extensions/vscode/scripts/real-binary-check.mjs` lance `ChatSession` (le code de l'extension, hors VS Code) sur le binaire, en permissions « manual » puis « auto ». Aucun modèle joignable : HOME et dossier d'agent vides, environnement réduit sans clé, `sandbox-exec` (profil du banc, réseau limité à localhost), démon isolé.
+
+- Lancé par Claude Code sur le binaire de `main` : `cd extensions/vscode && npm run compile-tests && node scripts/real-binary-check.mjs ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent` → pour chaque mode : session ouverte, options `model`, `thought_level` (`medium`, 3 valeurs), `permissions` = le mode ; bandeau absent en manuel, affiché en auto ; effort `medium → low` par `set_config_option` ; dernier message « Authentification requise : lancez <chemin> dans un terminal, puis /login. » ; aucun processus restant. Verdict **CONFORME**, exit 0.
+- Premier lancement, avant `isAuthFailure` : **NON CONFORME** (2), le message `/login` absent : c'est ce lancement qui a révélé le constat ci-dessus.
+
+### CI de la PR 2 (PR #73)
+
+- **Premier push** (`95572b5ed`) : `ci` 44899188163, tous les jobs verts. `ya-extension` 44899188141 : `npm ci`, tsc, lint, tests unitaires, `.vsix` et artefact verts ; `.vsix` de **59 338 octets** (8 fichiers : `extension.js` 17 926 octets, `webview.js` 147 007, `webview.css` 2 457, `package.json`, `readme.md`, `LICENSE.txt`, manifeste). L'e2e (VS Code 1.146.0 téléchargé, xvfb) : 7 tests sur 9 verts (Arrêter, sélecteurs, `/login`, plantage, fermeture, bandeau ×2 : rendu vérifié par la sonde), puis **blocage** ; run annulé par Claude Code après 12 min sur l'étape e2e (et le run `push` 44899166566 en double, annulé aussi). Trois défauts, tous dans l'e2e ou à la fermeture :
+  1. test de la CSP faux : `webview.cspSource` est une source `https://*.vscode-cdn.net`, que le test refusait (« https? ») ; il vérifie maintenant que styles, polices et images n'ont que cette source, scripts par nonce seulement, ni `unsafe-`, ni `data:`, ni `*` ;
+  2. « Webview is disposed » : à la fermeture, le dernier état (`closed`) était envoyé à la webview fermée ; plus rien n'est envoyé après la fermeture ;
+  3. sonde sans délai : un message posté avant le chargement de la webview est perdu, le test « binaire absent » attendait sans fin ; la sonde rend `undefined` au bout de 1 s, et le test attend la webview montée.
+- Déclencheur `push` retiré de `ya-extension.yml` (deux runs par push d'une PR).
+- **Deuxième push** (`f9d4ba83d`) : `ya-extension` 44900324582, e2e **8 sur 9** ; « Webview is disposed » disparu du journal (0 occurrence). Seul échec : le test de la CSP, encore. Dans VS Code 1.146, `webview.cspSource` vaut deux sources, `'self'` et `https://*.vscode-cdn.net`, et le test n'en attendait qu'une. Il accepte maintenant exactement ces deux sources, les mêmes pour styles, polices et images.
+
+### Procédure de contrôle (Yusuf)
+
+Le `.vsix` vient de l'artefact du dernier run `ya-extension` vert de la branche. `install-vsix.sh` est d'abord lancé par Claude Code sur cet artefact, dans un dossier d'extensions isolé (règle 13) ; sa sortie est dans le compte rendu de la PR.
+
+```sh
+git fetch origin && git checkout ya-24-extension-pr2 && git pull --ff-only
+RUN=$(gh run list --repo YusufByn/yusagent --workflow ya-extension.yml --branch ya-24-extension-pr2 --status success --limit 1 --json databaseId --jq '.[0].databaseId'); echo "$RUN"
+extensions/vscode/scripts/install-vsix.sh "$RUN"
+# Facultatif : client de l'extension contre le vrai binaire, sans modèle joignable.
+(cd extensions/vscode && npm ci --ignore-scripts --no-audit --no-fund && npm run compile-tests && node scripts/real-binary-check.mjs ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent)
+```
+
+Attendu :
+- `install-vsix.sh` : taille < 5 000 000 octets, 8 fichiers (`[Content_Types].xml`, `extension.vsixmanifest`, `extension/package.json`, `extension/readme.md`, `extension/LICENSE.txt`, `extension/dist/extension.js`, `webview.js`, `webview.css`), puis `yusagent.yusagent@0.1.0` et `installé` ;
+- `real-binary-check.mjs` : `CONFORME`, `exit 0`.
+
+Dans VS Code, puis « Developer: Reload Window » :
+
+1. **Réglage** : `yusagent.binaryPath` = chemin absolu de ton `yusagent` (réglages utilisateur ; le défaut `yusagent` le cherche dans le `PATH` de VS Code).
+2. **Ouvrir un dossier jetable** (l'agent y travaille), puis « yusAgent: Nouveau chat » (palette de commandes). Attendu : onglet « yusAgent » à côté de l'éditeur ; en-tête avec le nom du dossier et « prêt » ; sous la saisie, les sélecteurs modèle et effort ; pas de bandeau en manuel.
+3. **Prompt texte** (appel réel à ton modèle, fait par toi) : « Réponds seulement : bonjour ». Attendu : le message de l'utilisateur, puis la réponse qui s'écrit au fil de l'eau ; « Envoyer » devient « Arrêter » pendant le tour, puis revient. Sans identifiants : « Authentification requise : lancez `<chemin du binaire>` dans un terminal, puis /login. »
+4. **Arrêter** : « Écris un texte de 1 000 mots sur les phares », puis « Arrêter » pendant l'écriture. Attendu : l'écriture s'arrête, « Arrêté. », le bouton redevient « Envoyer ». Avec un outil en mode manuel, la ligne « Demande d'autorisation en attente (boîte en PR 3) : Arrêter pour annuler » apparaît, et « Arrêter » la retire (appel « annulé »).
+5. **Sélecteurs** : changer l'effort, puis le modèle. Attendu : la valeur reste affichée (réponse de l'agent) ; sélecteurs grisés pendant un tour ; rien n'est envoyé à l'ouverture.
+6. **Bandeau en auto** : `"permissions": "auto"` dans `~/.yusagent/settings.json` (réglage global), puis un nouveau chat. Attendu : bandeau en haut, « ⚠ Mode auto sans sandbox : les cellules s'exécutent sans demander, avec vos droits. », impossible à fermer. Ne rien envoyer dans ce chat (les cellules tourneraient sans demander), puis remettre `"manual"`.
+7. **Binaire absent** : `yusagent.binaryPath` = `/nulle-part/yusagent`, nouveau chat. Attendu : « Binaire yusAgent introuvable : /nulle-part/yusagent… » avec « Ouvrir le réglage yusagent.binaryPath » et « Réessayer ». Remettre le bon chemin.
+
+Désinstaller : `code --uninstall-extension yusagent.yusagent`.
+

@@ -1,0 +1,32 @@
+{
+  "description": "Trames envoyées par l'extension à l'ouverture d'un chat puis pour un prompt texte (ticket 24, §5.4, preuve 1). Toute trame en plus ou différente fait échouer les tests. Rejoué tel quel contre le vrai binaire par le cas acp-extension du banc de capture (preuve 2). Jetons : <cwd> dossier du workspace, <sessionId> identifiant rendu par session/new, <prompt> texte du prompt.",
+  "frames": [
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "protocolVersion": 1,
+        "clientCapabilities": {
+          "fs": { "readTextFile": false, "writeTextFile": false },
+          "terminal": false
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "session/new",
+      "params": { "cwd": "<cwd>", "mcpServers": [] }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "session/prompt",
+      "params": {
+        "sessionId": "<sessionId>",
+        "prompt": [{ "type": "text", "text": "<prompt>" }]
+      }
+    }
+  ]
+}

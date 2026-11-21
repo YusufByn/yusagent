@@ -76,7 +76,7 @@ Fichiers **upstream** en plus de l'option A : `crates/pa-tui/src/tool_card/mod.r
 ### 3.3 Hors périmètre (constaté, non traité)
 
 - Le `✓` bref en mode « auto » avant le premier partiel (`ipython.rs:81`), comportement d'upstream.
-- ACP : la cellule y est annoncée `in_progress` avant la décision (`crates/pa-daemon/src/acp/wire_events.rs:156`, ticket 20 section 1.3) ; équivalent ACP du même défaut, pour YA-10.
+- ACP : **déjà corrigé** au ticket 20, PR 2 (constat du ticket 24, §1.7). En mode manuel, le `tool_call` part en `pending` avant la décision (`crates/pa-daemon/src/acp/ya_permissions.rs:281-296`, appelé depuis `crates/pa-daemon/src/acp/daemon.rs:378`), puis passe en `in_progress` à l'accord ; test `crates/pa-cli/tests/ya_permissions_acp_e2e.rs:387`. La phrase d'origine (« annoncée `in_progress` avant la décision », `wire_events.rs:156`) était périmée.
 - **K5, ticket à part (YA-10)** : un TUI qui s'attache pendant qu'une demande attend : le worker ne renvoie pas la demande ouverte à l'`attach` (`crates/pa-daemon/src/ya_permissions.rs:107-115` enregistre le répondant sans rejouer `pending`). **Non vérifié** à l'écran : ni panneau, ni carte juste, probablement. À juger à part.
 
 ## 4. Tests et contrôle (proposé)

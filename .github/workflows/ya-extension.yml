@@ -1,0 +1,65 @@
+# yusAgent (YA-10, ticket 24, PR 2) : extension VS Code (extensions/vscode/).
+# tsc, lint, tests unitaires, .vsix (contrôle < 5 Mo, publié en artefact), e2e dans VS Code
+# (ubuntu-latest + xvfb, E13) contre l'agent factice et le fixture des trames.
+# Check non requis par la protection de main pendant la PR 2 (E13) ; tant qu'il ne l'est pas,
+# le merge d'une PR qui touche extensions/vscode/ exige ce workflow vert sur la tête, vérifié
+# à la main (ticket 24).
+# Déclenché par les PR (pas par les push : chaque push d'une PR lançait deux runs). Le filtre de
+# chemins porte sur tout le diff de la PR : chaque push d'une PR qui touche extensions/vscode/ le
+# relance, même un push de doc.
+# Aucun secret, aucun modèle (règle 6) : seul github.token (lecture) est utilisé.
+name: ya-extension
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - ".github/workflows/ya-extension.yml"
+      - "extensions/vscode/**"
+
+permissions: {}
+
+concurrency:
+  group: ya-extension-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extension:
+    name: extension (tsc, lint, tests, vsix, e2e)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: extensions/vscode
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: extensions/vscode/package-lock.json
+      # Pas de scripts d'installation : esbuild prend son binaire dans sa dépendance
+      # optionnelle de plateforme ; keytar (dépendance de vsce, publication seulement) n'est
+      # ni compilé ni téléchargé.
+      - name: Install (npm ci, sans scripts)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Typecheck (tsc --noEmit)
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Package (.vsix < 5 Mo)
+        run: npm run package
+      - name: Upload .vsix
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: yusagent-vsix-${{ github.sha }}
+          path: extensions/vscode/yusagent.vsix
+          if-no-files-found: error
+      - name: e2e (VS Code 1.146.0 + xvfb, agent factice)
+        run: xvfb-run -a npm run test:e2e
