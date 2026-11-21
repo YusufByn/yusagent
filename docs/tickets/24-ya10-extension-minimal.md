@@ -749,7 +749,7 @@ Constat pour appliquer la règle :
 
 ### Merge de la PR #73
 
-- **Contrôle de Yusuf** : fait ; **résultat non transmis** (le message disait « Contrôle de la PR #73 fait : <résultat>. Merge. »). À compléter.
+- **Contrôle de Yusuf** : le message disait « Contrôle de la PR #73 fait : <résultat>. Merge. », sans résultat. **Remplacé par le contrôle de la PR #74**, même parcours (décision de Yusuf, 21/11/2026, section « Contrôle de Yusuf de la PR #74 »).
 - **Merge** : PR #73 mergée par Claude Code sur la demande de Yusuf, `main` à `8830b763d` ; tête `a8941b37f` avec `ci` 44900460119 (14 checks requis verts) et `ya-extension` 44900460206 vert.
 
 ## Points ouverts (comparaison et découpage)
@@ -801,4 +801,30 @@ Branche `ya-24-extension-import`, depuis `main` à `8830b763d`. Extension seule 
 ### CI de la PR I (PR #74)
 
 - **Premier push** (`2e6c6c6d0`) : `ya-extension` 44905938956 : étape « changements » `run=true` ; tsc, lint, tests unitaires et `.vsix` verts (**192 430 octets**, limite 5 000 000 hors binaire) ; e2e **5 sur 6** : vue et CSP (`default-src 'none'; style-src 'self' https://*.vscode-cdn.net; …; script-src 'nonce-…'`), trames du fixture, Stop et ligne d'attente, `/login`, plantage et « Restart », bandeau D4. Seul échec, dans le test : « sélecteurs », `0 !== 1`. Leur `setOption` affiche la nouvelle valeur avant d'envoyer la requête, et le test lisait le journal de l'agent factice avant qu'il ait reçu la trame. Le test attend maintenant la trame, puis vérifie qu'il n'y en a qu'une.
+
+### Contrôle de Yusuf de la PR #74 (21/11/2026)
+
+Sur l'artefact du run `ya-extension` 44906056126 :
+- installation ok (192 430 octets, 9 fichiers) ;
+- vue dans la barre latérale secondaire ok ;
+- message `/login` avec le chemin réel du binaire ok, puis `/login` fait dans le TUI ;
+- prompt en streaming ok ; Stop ok ;
+- bandeau en auto ok ;
+- en manuel, la ligne « Demande d'autorisation en attente » s'affiche et Stop annule.
+
+Ce contrôle remplace celui de la PR #73 (même parcours).
+
+**Nom de l'artefact** : il porte `5ef8db541`, pas la tête `ecdc840f8`. Vérifié : `5ef8db54106344dbd937a81a708e622c0c1f6fb2` est le commit de fusion de test de la PR (`refs/pull/74/merge`, message « Merge ecdc840f8… into 8830b763d… », parents `8830b763d`, `main` d'alors, et `ecdc840f8`, tête de la PR). Un run `pull_request` construit ce commit : `github.sha`, qui nomme l'artefact, est le sien ; `head_sha` du run est `ecdc840f8` (`gh api repos/YusufByn/yusagent/actions/runs/44906056126`).
+
+### Merge de la PR #74
+
+- CI de la tête `ecdc840f8` : `ya-extension` 44906056126 vert (e2e 6/6, `.vsix` 192 430 octets) ; `ci` 44906056143, 14 checks requis verts, aucun en skipping.
+- Script de contrôle lancé d'abord par Claude Code (règle 13) : `extensions/vscode/scripts/install-vsix.sh 44906056126 <dossier isolé>` → 192 430 octets, sha256 `898d620df0b02f531f22788ac39a9c51b825ba0e8655331db8ae52ed5e2f2eb2`, 9 fichiers attendus, `yusagent.yusagent@0.1.0`, `installé` (commentaire de la PR).
+- PR #74 mergée par Claude Code sur la demande de Yusuf : `main` à `52ca68d3d`.
+
+## PR 3 : défauts relevés par Yusuf, à corriger (21/11/2026)
+
+1. **« Ask Unharnessed » dans la zone de saisie** (`extensions/vscode/webview/Composer.tsx:56`, `PLACEHOLDER`). Chercher et remplacer **tous** les textes visibles « Unharnessed » (dont les chemins `~/.unharnessed` de ses écrans de réglages).
+2. **« Running servers » et « Agent's REPL variables » affichés** alors que le panneau du kernel n'est pas servi : `KernelTray` est rendu sans condition (`Composer.tsx:383`, titres `webview/Kernel.tsx:231`, `:247`). À masquer selon `features.kernel`.
+3. **Carte d'une cellule en attente d'accord** : elle affiche « Running pwd; ls… », même défaut que le ticket 22 côté TUI. Cause : le chat repris met tout `tool_call` en `running` (`extensions/vscode/src/chat.ts`, cas `tool_call`) et ignore le statut `pending` que le pont envoie en manuel (`crates/pa-daemon/src/acp/ya_permissions.rs:281-296`) ; le verbe vient de `webview/Chat.tsx:742-743`. Attendu : « Awaiting permission », sans état en cours, et la carte démarre à l'accord (`tool_call_update` `in_progress`).
 
