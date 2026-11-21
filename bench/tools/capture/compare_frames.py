@@ -8,10 +8,18 @@ YA-10 (ticket 24, PR 3). Vrai binaire : le dossier écrit par `acp_frames.py` (c
 seul côté, types différents, valeurs des champs constants (statuts, genres, titres, identifiants
 d'option, texte du refus, forme des identifiants de requête), trames de fin d'un tour de prompt.
 
+Ticket 26 : `--against <dossier acp_frames d'un autre binaire>` compare deux binaires sans l'agent
+factice : même suite de trames (sens, méthode, genre de mise à jour), puis, trame par trame, mêmes
+chemins de clés et types, mêmes valeurs des champs constants. Chaque `--expect <chemin>` est un
+chemin de clé ajouté attendu (présent dans `<dossier acp_frames>`, absent du dossier `--against`) :
+il n'est pas compté comme écart, et il doit apparaître au moins une fois, sinon c'est un écart.
+
 Usage :
     python3 -I bench/tools/capture/compare_frames.py <dossier acp_frames> [--fake <fake-agent.mjs>]
+    python3 -I bench/tools/capture/compare_frames.py <dossier branche> --against <dossier main> \
+      [--expect <chemin de clé>]...
 
-Code de sortie 0 si aucun écart (`écarts : 0`), 1 sinon. Node requis.
+Code de sortie 0 si aucun écart (`écarts : 0`), 1 sinon. Node requis (sauf avec `--against`).
 """
 
 from __future__ import annotations
@@ -33,6 +41,10 @@ _REPO = Path(__file__).resolve().parents[3]
 _parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 _parser.add_argument("captured", type=Path, help="dossier écrit par acp_frames.py")
 _parser.add_argument("--fake", type=Path, default=_REPO / "extensions/vscode/test/fake-agent/fake-agent.mjs")
+_parser.add_argument("--against", type=Path, help="ticket 26 : dossier acp_frames d'un autre binaire (main)")
+_parser.add_argument("--expect", action="append", default=[],
+                     help="ticket 26, avec --against : chemin de clé ajouté attendu, ex. "
+                          ".params.update.content[]._meta._yus/startColumn")
 _args = _parser.parse_args()
 fake, captured = _args.fake.resolve(), _args.captured.resolve()
 
@@ -155,6 +167,79 @@ def update(frames, kind, pred=lambda u: True):
             return frame
     return None
 
+
+def values_at(value, target: str, path: str = "") -> list:
+    """Les valeurs au chemin de clé `target` (même notation que `schema`)."""
+    if path == target and not isinstance(value, (dict, list)):
+        return [value]
+    out = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            out += values_at(item, target, f"{path}.{key}")
+    elif isinstance(value, list):
+        for item in value:
+            out += values_at(item, target, f"{path}[]")
+    return out
+
+
+def against(branch: Path, main: Path, expected: list[str]) -> int:
+    """Ticket 26 : deux binaires, trame par trame ; le nombre d'écarts."""
+    def rows(folder: Path, case: str) -> list[dict]:
+        return [json.loads(line) for line in (folder / case / "transcript.jsonl").read_text().splitlines()]
+
+    def kind(row: dict) -> tuple:
+        msg = row["msg"]
+        u = (msg.get("params") or {}).get("update") or {}
+        return (row["dir"], msg.get("method"), u.get("sessionUpdate"), "id" in msg, "result" in msg)
+
+    total, seen = 0, {key: [] for key in expected}
+    for case in ("A-display-auto", "B-basic-manual-reject"):
+        a, b = rows(main, case), rows(branch, case)
+        if [kind(r) for r in a] != [kind(r) for r in b]:
+            first = next((i for i, (x, y) in enumerate(zip(a, b)) if kind(x) != kind(y)), min(len(a), len(b)))
+            print(f"DIFFÉRENT : {case}, suite des trames (main {len(a)}, branche {len(b)}), "
+                  f"première différence à la trame {first}")
+            total += 1
+            continue
+        lines, with_expected = [], 0
+        for index, (x, y) in enumerate(zip(a, b)):
+            sa, sb = schema(x["msg"]), schema(y["msg"])
+            hit = False
+            for key in sorted(set(sa) | set(sb)):
+                if sa.get(key) == sb.get(key):
+                    continue
+                if key in seen and key not in sa:
+                    seen[key] += values_at(y["msg"], key)
+                    hit = True
+                    continue
+                side = "absent de la branche" if key not in sb else "en plus dans la branche" if key not in sa \
+                    else f"type main {sa[key]}, branche {sb[key]}"
+                lines.append(f"  trame {index} {kind(x)[1] or kind(x)[2]} : {key} ({side})")
+            ca, cb = constants(x["msg"]), constants(y["msg"])
+            for key in sorted(set(ca) & set(cb)):
+                if ca[key] != cb[key]:
+                    lines.append(f"  trame {index} : valeur {key} main {sorted(ca[key])}, branche {sorted(cb[key])}")
+            with_expected += hit
+        note = f" ; écart attendu dans {with_expected} trame(s)" if with_expected else ""
+        print(f"{'IDENTIQUE' if not lines else 'DIFFÉRENT'} : {case} ({len(a)} trames{note})")
+        for line in lines:
+            print(line)
+        total += len(lines)
+    for key, values in seen.items():
+        if values:
+            print(f"écart attendu présent : {key} (valeurs {values})")
+        else:
+            print(f"écart attendu ABSENT : {key}")
+            total += 1
+    return total
+
+
+if _args.against:
+    _total = against(captured, _args.against.resolve(), _args.expect)
+    print(f"\nécarts : {_total}")
+    sys.exit(1 if _total else 0)
+if _args.expect:
+    sys.exit("--expect demande --against")
 
 A, B = real_frames("A-display-auto"), real_frames("B-basic-manual-reject")
 carte, refus, lent = fake_frames("carte"), fake_frames("refus"), fake_frames("lent")
