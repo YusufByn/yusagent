@@ -208,3 +208,26 @@ Le tableau ci-dessus (lecture du code) est confirmé pour les trois commandes. P
 - E8 (accepté) ;
 - genres `heartbeat`, `goal`, `quota` : lus sur le premier message du tour, couverts par les tests unitaires, **non mesurés sur le binaire** ;
 - un worker perdu au milieu d'un tour de l'agent (aucun `agent_end`) laisse le prompt suivant en attente, comme un `prompt_and_wait` derrière un tour du worker aujourd'hui.
+
+### Contrôles du binaire de la branche (21/11/2026)
+
+Binaire `418fdb75d` (build macOS run 44936814942, empreinte de l'archive vérifiée par `SHA256SUMS`). Binaire de `main` : `1b96bb645`, aucun changement sous `crates/` jusqu'à `c2b1093c5` (`git diff --quiet 1b96bb645 c2b1093c5 -- crates/`). Commandes, avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short` (sorties dans `bench/tools/capture/runs/`, non versionné) :
+
+```
+python3 -I bench/tools/capture/run.py --binary <1b96bb645>/yusagent --out bench/tools/capture/runs/ya25-prefix-main-1b96bb645
+python3 -I bench/tools/capture/run.py --binary <418fdb75d>/yusagent --out bench/tools/capture/runs/ya25-prefix-branch-418fdb75d
+python3 -I bench/tools/capture/compare.py bench/tools/capture/runs/ya25-prefix-main-1b96bb645 bench/tools/capture/runs/ya25-prefix-branch-418fdb75d --all --out bench/tools/capture/runs/ya25-compare.md
+python3 -I bench/tools/capture/acp_frames.py --binary <418fdb75d>/yusagent --out bench/tools/capture/runs/ya25-frames-418fdb75d
+python3 -I bench/tools/capture/compare_frames.py bench/tools/capture/runs/ya25-frames-418fdb75d
+```
+
+- **Préfixe** : `compare.py --all` **TOUT IDENTIQUE** (chaque requête de chaque cas ; `acp`, `acp-extension`, `tui` : 4 requêtes de chaque côté, 0 différente). `prefix_paths_check` du run de la branche : `CONFORME` ; trames de l'extension (`acp-extension`) : `TOUT IDENTIQUE`. Le préfixe envoyé au modèle ne change pas.
+- **Trames** (`acp_frames.py`, `CONFORME`) : tour de prompt `1` ouvert par `turnStart` `{"origin": "prompt"}`, fermé par `responseBoundary`, l'enveloppe, `terminalQuiescence`, puis la réponse ; tour de réveil `2` : `turnStart` `{"origin": "wake", "wake": "bash"}`, son `agent_message_chunk`, `responseBoundary` (`result`), l'enveloppe, `terminalQuiescence`, sans réponse.
+- **Agent factice** : `compare_frames.py` : `écarts : 0` (dont `turnStart` d'un prompt, `turnStart` d'un réveil, fin du tour de réveil).
+- Note : le run de `main` signale des processus restants pour `acp` ; ce sont les processus du binaire `1b96bb645` déjà lancés hors du banc (extension VS Code et démons de Yusuf, parents relevés par `ps`), comptés parce que le contrôle cherche le chemin du binaire. Le run de la branche : aucun.
+
+### CI, premier run (`ci.yml` 44936818866, commit `418fdb75d`)
+
+Shard 3 en échec, deux causes (journal du job 136945243977) :
+- `acp_mode_e2e.rs` (test upstream) : deux assertions de forme exacte des trames d'un prompt (`:385`, `:447`) ; la trame `turnStart` en tête du tour est l'écart décidé (T1). Assertions adaptées, fichier listé dans `docs/fork-changes.md`.
+- `ya_acp_wake_turn_e2e.rs`, cas c : la cellule du premier réveil faisait `time.sleep(20)`, qui bloque la boucle du kernel ; le second avis `bash.completed` n'est parti qu'après l'arrêt de la cellule, donc après le Stop, sur une file vide : aucun second réveil, l'avis attend le prompt suivant. C'est E8, cette fois à travers le pont (trames du journal : `tool_call_update` `failed` « Tool execution aborted » sur le tour 2, puis plus rien). Le cas utilise maintenant `await asyncio.sleep(20)`, comme la mesure du §6, pour que l'avis soit en file au moment du Stop.

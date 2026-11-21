@@ -382,8 +382,16 @@ fn acp_prompt_stream_completion_envelope_and_stop_reason_match_ts() {
         Some("result".to_string()),
         None,
     );
+    // yusAgent (YA-10, ticket 25): `turnStart` opens the turn, before its content.
     assert_eq!(
-        shapes.first().map(|(tag, _, _, _)| tag.clone()),
+        updates.first().map(|update| {
+            update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["turnStart"]
+                .clone()
+        }),
+        Some(json!({ "origin": "prompt" }))
+    );
+    assert_eq!(
+        shapes.get(1).map(|(tag, _, _, _)| tag.clone()),
         Some("agent_message_chunk".to_string())
     );
     assert!(shapes.contains(&boundary), "shapes: {shapes:?}");
@@ -446,7 +454,8 @@ fn acp_prompt_chunk_carries_the_assistant_message_id() {
     );
     assert_eq!(
         chunk["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"],
-        json!({ "promptTurnId": 1, "eventSequence": 1, "phase": "event" })
+        // yusAgent (YA-10, ticket 25): sequence 1 is the turn's `turnStart`.
+        json!({ "promptTurnId": 1, "eventSequence": 2, "phase": "event" })
     );
 }
 

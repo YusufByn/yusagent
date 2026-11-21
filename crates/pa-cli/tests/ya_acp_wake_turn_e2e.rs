@@ -431,7 +431,10 @@ fn stop_during_a_wake_stops_only_that_turn() {
         { "text": "prompt done" },
         cell(
             "call-wake",
-            "import time\nopen('wake.txt', 'w').write('x')\ntime.sleep(20)\nopen('after.txt', 'w').write('x')",
+            // `asyncio.sleep`, not `time.sleep`: the kernel loop must stay free to send the second
+            // `bash.completed` while the cell runs (with a blocked loop, the notice only comes after
+            // the Stop, on an empty queue: E8).
+            "import asyncio\nopen('wake.txt', 'w').write('x')\nawait asyncio.sleep(20)\nopen('after.txt', 'w').write('x')",
         ),
         { "text": "second wake done" },
     ] }));
