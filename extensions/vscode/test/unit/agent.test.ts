@@ -359,28 +359,33 @@ test("sélecteurs : set_config_option seulement sur un changement", async () => 
   assert.ok(s?.kind === "open" && s.config.effort?.current === "xhigh");
 });
 
-test("yaMeta : notre espace de noms, début de tour déduit sur le contenu seulement, fin d'un tour de l'agent", () => {
+test("yaMeta : notre espace de noms, champs du pont tels quels (ticket 25 : turnStart vient du pont)", () => {
   const meta = (fields: object) => ({ "ai.primeintellect.prime-agent": { promptTurnId: 3, ...fields } });
-  const context = (known: boolean, prompting: boolean, ours = false) => ({ known: () => known, prompting, ours: () => ours });
-  const chunk = { sessionUpdate: "agent_message_chunk", _meta: meta({ phase: "event" }) };
-  assert.deepEqual(yaMeta(chunk, context(false, true)), { promptTurnId: 3, phase: "event", turnStart: { origin: "prompt" }, yaDeduced: true });
-  assert.deepEqual(yaMeta(chunk, context(false, false)), {
-    promptTurnId: 3,
-    phase: "event",
-    turnStart: { origin: "wake", wake: "bash" },
-    yaDeduced: true,
-  });
-  assert.deepEqual(yaMeta(chunk, context(true, true)), { promptTurnId: 3, phase: "event" });
-  // Constaté sur le vrai binaire : un `config_option_update` porte un `promptTurnId` ; il n'ouvre pas de tour.
-  assert.deepEqual(yaMeta({ sessionUpdate: "config_option_update", _meta: meta({ phase: "event" }) }, context(false, false)), {
-    promptTurnId: 3,
-    phase: "event",
-  });
+  const start = { sessionUpdate: "session_info_update", _meta: meta({ phase: "event", turnStart: { origin: "wake", wake: "bash" } }) };
+  assert.deepEqual(yaMeta(start), { promptTurnId: 3, phase: "event", turnStart: { origin: "wake", wake: "bash" } });
+  // Plus de début déduit : un contenu sans `turnStart` n'ouvre pas de tour, une frontière ne porte pas de `turnEnd`.
+  assert.deepEqual(yaMeta({ sessionUpdate: "agent_message_chunk", _meta: meta({ phase: "event" }) }), { promptTurnId: 3, phase: "event" });
   const boundary = { sessionUpdate: "session_info_update", _meta: meta({ phase: "responseBoundary", outcome: "result" }) };
-  assert.deepEqual(yaMeta<{ turnEnd?: unknown }>(boundary, context(true, false, false)).turnEnd, { state: "done" });
-  assert.equal(yaMeta<{ turnEnd?: unknown }>(boundary, context(true, false, true)).turnEnd, undefined, "un tour de l'extension finit à la réponse du prompt");
-  assert.deepEqual(yaMeta({ sessionUpdate: "x", _meta: { unharnessed: { promptTurnId: 1 } } }, context(false, true)), { promptTurnId: 1 });
-  assert.deepEqual(yaMeta({ sessionUpdate: "x" }, context(false, true)), {});
+  assert.deepEqual(yaMeta(boundary), { promptTurnId: 3, phase: "responseBoundary", outcome: "result" });
+  assert.deepEqual(yaMeta({ sessionUpdate: "x", _meta: { unharnessed: { promptTurnId: 1 } } }), { promptTurnId: 1 });
+  assert.deepEqual(yaMeta({ sessionUpdate: "x" }), {});
+});
+
+test("tour lancé par l'agent (ticket 25) : ouvert par turnStart, fermé sur sa frontière, le panneau se libère", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("réveil", []);
+  const wake = await waitFor(() => {
+    const turn = lastTurn(h);
+    return turn?.kind === "turn" && turn.wake === "bash" && turn.state === "done" ? turn : undefined;
+  }, "tour de réveil fini");
+  assert.equal(wake.prompt, undefined, "un tour de l'agent n'a pas de message");
+  await idle(h);
+  const turns = shown(h).chat.current.entries.filter((entry) => entry.kind === "turn");
+  assert.deepEqual(
+    turns.map((turn) => (turn.kind === "turn" ? [turn.wake ?? null, turn.state] : [])),
+    [[null, "done"], ["bash", "done"]],
+  );
 });
 
 test("Agent seul : binaryPath = chemin résolu", async () => {

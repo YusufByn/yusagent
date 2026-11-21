@@ -58,6 +58,8 @@ const WAKES: Record<NonNullable<Turn["wake"]>, string> = {
   bash: "a background command ended",
   quota: "the usage limit reset",
   goal: "the goal's pause ended",
+  // yusAgent (ticket 25, E2) : réveil planifié du démon.
+  heartbeat: "a scheduled heartbeat came",
 };
 
 export const EMPTY_CHAT: ChatState = {

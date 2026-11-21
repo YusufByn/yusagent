@@ -349,8 +349,8 @@ export type TurnHead = {
   id: number;
   /** What the user sent; absent on a turn the agent started on its own. */
   prompt?: { text: string; images: Thumb[] };
-  /** What woke the agent, on its own turns: a background command ended, a usage limit reset, a goal's pause ended. */
-  wake?: "bash" | "quota" | "goal";
+  /** What woke the agent, on its own turns: a background command ended, a usage limit reset, a goal's pause ended, a heartbeat (yusAgent, ticket 25). */
+  wake?: "bash" | "quota" | "goal" | "heartbeat";
   state: "running" | "done" | "cancelled" | "failed";
   error?: string;
   /** How long it worked, once done; absent on a turn the agent replays. */

@@ -107,6 +107,22 @@ const finish = (id) => {
   respond(id, { stopReason: "end_turn" });
 };
 const later = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Ticket 25 : le pont publie `turnStart` avant le contenu de chaque tour (`ya_turns.rs`).
+const turnStart = (start) => update({ sessionUpdate: "session_info_update", prime: { turnStart: start } });
+// Ticket 25 : un tour lancé par l'agent (avis `[bash-done]`) : son propre identifiant, `turnStart`,
+// son contenu ; `settle` le ferme comme le pont (frontière puis enveloppe, aucune réponse).
+const wake = () => {
+  promptTurnId += 1;
+  turnStart({ origin: "wake", wake: "bash" });
+};
+const settle = () => {
+  update({ sessionUpdate: "session_info_update", prime: { phase: "responseBoundary", outcome: "result", terminalQuiescenceExpected: true } });
+  update({ sessionUpdate: "session_info_update", prime: { quiescence: { outstandingSubagents: 0, remainingAutonomousContinuations: 0 } } });
+  update({
+    sessionUpdate: "session_info_update",
+    prime: { phase: "terminalQuiescence", outcome: "result", quiescence: { outstandingSubagents: 0, remainingAutonomousContinuations: 0 } },
+  });
+};
 
 /** Requêtes de l'agent vers le client en attente de réponse : id → résolution. */
 const waiting = new Map();
@@ -271,6 +287,27 @@ async function onPrompt(id, text) {
     case "crash":
       process.exit(3);
       return;
+    // Ticket 25 : le prompt finit, puis l'agent se réveille seul (avis `[bash-done]`).
+    case "réveil":
+      chunk("lancé");
+      finish(id);
+      await later(200);
+      wake();
+      chunk("réveil fini");
+      return settle();
+    // Ticket 25 (T4) : Stop pendant un réveil n'arrête que ce tour (`abort_and_send_queued`) : pas
+    // de frontière pour lui, puis l'avis resté en file réveille l'agent de nouveau.
+    case "réveil-lent":
+      chunk("lancé");
+      finish(id);
+      await later(200);
+      wake();
+      chunk("réveil en cours");
+      await new Promise((resolve) => (cancelled = resolve));
+      await later(50);
+      wake();
+      chunk("second réveil");
+      return settle();
     case "auto": {
       const option = config.find((candidate) => candidate.id === "permissions");
       if (option) option.currentValue = "auto";
@@ -305,6 +342,7 @@ function onMessage(message) {
     case "session/prompt": {
       promptTurnId += 1;
       eventSequence = 0;
+      turnStart({ origin: "prompt" });
       const text = (params?.prompt ?? []).map((block) => block.text ?? "").join("");
       void onPrompt(id, text);
       return;
