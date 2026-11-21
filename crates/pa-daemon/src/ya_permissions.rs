@@ -6,7 +6,9 @@
 //!   durable create so a respawned worker keeps it; only the ACP bridge does, until the TUI asks
 //!   in PR 3 of the ticket). Without it, a manual session is refused at creation, as in PR 1.
 //!   The clients that answer say so again on `attach` (the worker's `create` carries no client
-//!   id); a client that attaches without it only watches;
+//!   id); a client that attaches without it only watches. yusAgent (YA-10, ticket 24): a worker
+//!   relaunched after a crash gets the `create` again but no `attach`: the ACP bridge declares
+//!   its client again before each prompt (action `asker`);
 //! - a request is a session event [`REQUEST_EVENT`] (`requestId`, `toolCallId`, `toolName`,
 //!   `args`) to every attached client; the first answer wins (command [`COMMAND`], action
 //!   `respond`, `outcome` `"allow"`, `"cancelled"` for a withdrawn request, anything else for a
@@ -111,6 +113,14 @@ impl WorkerPermissions {
         if let Some(client_id) = payload.get("clientId").and_then(Value::as_str) {
             lock(&self.askers).insert(client_id.to_string());
         }
+    }
+
+    /// yusAgent (YA-10, ticket 24): whether the client of `payload` (`clientId`) answers.
+    pub(crate) fn has_asker(&self, payload: &Value) -> bool {
+        payload
+            .get("clientId")
+            .and_then(Value::as_str)
+            .is_some_and(|client_id| lock(&self.askers).contains(client_id))
     }
 
     /// A client detached (or disconnected): when no client that answers is left, the waiting
@@ -362,10 +372,21 @@ impl Worker {
                 let mode = permissions.mode(agent_dir).map(PermissionMode::label);
                 response_success(None, COMMAND, Some(json!({ "mode": mode })))
             }
+            // yusAgent (YA-10, ticket 24): the routed client answers again (the ACP bridge before
+            // each prompt): a relaunched worker replays the durable `create`, not the clients'
+            // `attach`, so it no longer knew its answering client.
+            Some("asker") => {
+                permissions.client_attached(payload);
+                response_success(
+                    None,
+                    COMMAND,
+                    Some(json!({ "asker": permissions.has_asker(payload) })),
+                )
+            }
             _ => response_failure(
                 None,
                 COMMAND,
-                "the action must be \"respond\", \"set_mode\" or \"get\"",
+                "the action must be \"respond\", \"set_mode\", \"get\" or \"asker\"",
                 None,
             ),
         }
@@ -417,6 +438,26 @@ mod tests {
         attach[ASKER_FIELD] = json!(true);
         permissions.client_attached(&attach);
         permissions
+    }
+
+    /// yusAgent (YA-10, ticket 24): the `asker` action registers its client, only in a session
+    /// that can ask.
+    #[test]
+    fn a_client_can_answer_again() {
+        let permissions = asking("bridge");
+        permissions.client_detached("bridge");
+        let mut again = json!({ "clientId": "bridge" });
+        assert!(!permissions.has_asker(&again));
+        again[ASKER_FIELD] = json!(true);
+        permissions.client_attached(&again);
+        assert!(permissions.has_asker(&again));
+
+        let cannot = WorkerPermissions::default();
+        cannot.client_attached(&again);
+        assert!(
+            !cannot.has_asker(&again),
+            "a session created without an asker"
+        );
     }
 
     /// One request through the engine's asker.

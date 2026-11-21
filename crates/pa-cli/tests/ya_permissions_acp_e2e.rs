@@ -19,6 +19,8 @@
 //!    stays attached without answering (as the TUI does): it does not keep the request waiting.
 //! d. The `permissions` selector: `auto` runs a cell without a request, back to `manual` asks
 //!    again; both changes are journaled.
+//! e. yusAgent (YA-10, ticket 24): the worker is killed between two turns and relaunched by the
+//!    supervisor: the next request still reaches the ACP client.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -634,4 +636,103 @@ fn the_permissions_selector_switches_to_auto_and_back() {
         "{journal:?}"
     );
     assert_eq!(decisions(&journal), vec!["allow"], "{journal:?}");
+}
+
+/// The pid of the session's worker, from its persisted descriptor under the agent dir
+/// (`daemon-workers/<socket hash>/*.json`, as `pa-daemon/tests/orphan_journal_e2e.rs`); `None`
+/// while no descriptor carries a live pid other than `not`.
+fn worker_pid(agent_dir: &Path, not: Option<i32>) -> Option<i32> {
+    let entries = std::fs::read_dir(agent_dir.join("daemon-workers")).ok()?;
+    for dir in entries.flatten() {
+        let Ok(files) = std::fs::read_dir(dir.path()) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(descriptor) = std::fs::read_to_string(&path)
+                .map_err(|_| ())
+                .and_then(|text| serde_json::from_str::<Value>(&text).map_err(|_| ()))
+            else {
+                continue;
+            };
+            let pid = descriptor["pid"]
+                .as_i64()
+                .and_then(|pid| i32::try_from(pid).ok());
+            if let Some(pid) = pid.filter(|pid| *pid > 0 && Some(*pid) != not) {
+                return Some(pid);
+            }
+        }
+    }
+    None
+}
+
+/// Polls [`worker_pid`] until it finds one.
+fn wait_worker_pid(agent_dir: &Path, not: Option<i32>) -> i32 {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Some(pid) = worker_pid(agent_dir, not) {
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "no worker pid (not {not:?})");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// e. yusAgent (YA-10, ticket 24): the worker dies between two turns and the supervisor relaunches
+/// it. The relaunch replays the durable `create`, not the clients' `attach`: without the bridge's
+/// `asker` action before each prompt, the next cell's request had no client to answer and was
+/// declined at once. With it, the request reaches the ACP client.
+#[test]
+fn a_relaunched_worker_still_asks_the_acp_client() {
+    // The relaunched worker reads the script again: whether it starts over or goes on, its next
+    // answer is a cell.
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        touch("call-relaunch", "relaunch.txt"),
+        { "text": "first turn done" },
+        touch("call-relaunch", "relaunch.txt"),
+        { "text": "second turn done" },
+    ] }));
+    let (session_id, _) = client.open_session();
+    let prompt = client.prompt(&session_id, "create relaunch.txt");
+    let (request, _) = client.wait_permission_request();
+    client.answer(
+        &request,
+        &json!({ "outcome": "selected", "optionId": "allow-once" }),
+    );
+    let (response, _) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    assert!(client.path("relaunch.txt").exists(), "the first cell ran");
+    std::fs::remove_file(client.path("relaunch.txt")).unwrap();
+
+    let agent_dir = client.home.path().join(".yusagent");
+    let first = wait_worker_pid(&agent_dir, None);
+    // SAFETY: a signal to the test's own worker process.
+    assert_eq!(
+        unsafe { libc::kill(first, libc::SIGKILL) },
+        0,
+        "kill {first}"
+    );
+    let second = wait_worker_pid(&agent_dir, Some(first));
+    assert_ne!(first, second);
+
+    let prompt = client.prompt(&session_id, "create relaunch.txt again");
+    let (frame, before) = client.wait_for(|frame| {
+        frame["method"] == "session/request_permission"
+            || (frame["id"] == json!(prompt)
+                && (frame.get("result").is_some() || frame.get("error").is_some()))
+    });
+    assert_eq!(
+        frame["method"], "session/request_permission",
+        "the relaunched worker asked the ACP client: {frame}; before: {before:?}"
+    );
+    client.answer(
+        &frame,
+        &json!({ "outcome": "selected", "optionId": "allow-once" }),
+    );
+    let (response, _) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    assert!(client.path("relaunch.txt").exists(), "the second cell ran");
 }
