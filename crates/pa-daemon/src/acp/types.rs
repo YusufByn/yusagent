@@ -212,17 +212,31 @@ impl TextBlock {
 }
 
 /// `{ "type": "content", "content": { ... } }` — the tool-call update shape.
+/// yusAgent (YA-10, ticket 24): an enum, for the ACP `diff` content as well.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolCallContent {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub content: TextBlock,
+#[serde(tag = "type")]
+pub enum ToolCallContent {
+    #[serde(rename = "content")]
+    Content { content: TextBlock },
+    /// yusAgent (YA-10, ticket 24): one `edit()` of the cell (ACP `diff`): `path` absolute,
+    /// `oldText` absent for a new file. The texts are the edit's replaced and new fragments,
+    /// not whole files; `_meta` carries `_yus/startLine`, the 1-based line where the fragment
+    /// starts.
+    #[serde(rename = "diff")]
+    Diff {
+        path: String,
+        #[serde(rename = "oldText", skip_serializing_if = "Option::is_none")]
+        old_text: Option<String>,
+        #[serde(rename = "newText")]
+        new_text: String,
+        #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<Value>,
+    },
 }
 
 impl ToolCallContent {
     pub fn new(text: impl Into<String>) -> Self {
-        ToolCallContent {
-            kind: "content".to_string(),
+        ToolCallContent::Content {
             content: TextBlock::new(text),
         }
     }

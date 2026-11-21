@@ -172,6 +172,13 @@ pub fn wire_updates(event: &Value, state: &mut WireMappingState) -> Vec<AcpSessi
                 .unwrap_or(false);
             let text = tool_result_text(event.get("result"));
             let rich = ipython_rich_output(event.get("result"));
+            // yusAgent (YA-10, ticket 24): the cell's edits as ACP diffs, its `bash()` results
+            // under `_meta` (`super::ya_cell_display`).
+            let mut content: Vec<_> = text
+                .into_iter()
+                .map(super::types::ToolCallContent::new)
+                .collect();
+            content.extend(super::ya_cell_display::diff_contents(event.get("result")));
             let update = AcpSessionUpdate::ToolCallUpdate {
                 tool_call_id,
                 status: Some(if is_error {
@@ -179,13 +186,16 @@ pub fn wire_updates(event: &Value, state: &mut WireMappingState) -> Vec<AcpSessi
                 } else {
                     AcpToolStatus::Completed
                 }),
-                content: text.map(|text| vec![super::types::ToolCallContent::new(text)]),
-                meta: rich.map(|rich| {
-                    prime_agent_meta(&PrimeAgentSessionMeta {
-                        ipython: Some(rich),
-                        ..Default::default()
-                    })
-                }),
+                content: (!content.is_empty()).then_some(content),
+                meta: super::ya_cell_display::with_bash_runs(
+                    rich.map(|rich| {
+                        prime_agent_meta(&PrimeAgentSessionMeta {
+                            ipython: Some(rich),
+                            ..Default::default()
+                        })
+                    }),
+                    super::ya_cell_display::bash_runs(event.get("result")),
+                ),
             };
             vec![update]
         }

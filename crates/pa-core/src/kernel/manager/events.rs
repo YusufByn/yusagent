@@ -244,6 +244,13 @@ impl Inner {
         {
             buffers.bash_failed_exit = Some(code);
         }
+        // yusAgent (YA-10, ticket 24): the `bash()` results the cell read, for display.
+        if let Some(run) = data
+            .get(crate::kernel::shared::YA_BASH_RUN_DISPLAY_MIME)
+            .and_then(crate::kernel::shared::parse_ya_bash_run_display)
+        {
+            buffers.bash_runs.push(run);
+        }
     }
 
     /// Unattributed stream text: attached to the active cell's background

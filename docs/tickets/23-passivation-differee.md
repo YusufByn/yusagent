@@ -144,3 +144,8 @@ Branche `ya-23-passivation`, depuis `main` à `99e801f50`.
   - `docs/fork-changes.md` : la section « Instabilité probable : `agent_family_e2e`, passivation (YA-16) » est retirée, et remplacée par « Passivation différée dans les tests (ticket 23) » (fichiers, hypothèse corrigée, note P3) ;
   - ticket 19, `:324` : hypothèse corrigée.
 - **Rien de livré ne change** : `git diff --stat main` ne liste que deux fichiers de `crates/pa-daemon/tests/` et des fichiers de `docs/`. La vérification du changelog passe sans fragment : elle exclut les dossiers `tests/` (`.github/workflows/changelog-fragment.yml:41`). Pas de build macOS ni de capture (décision de Yusuf). **Préfixe inchangé.**
+
+## CI et clôture
+
+- **CI** : run `ci` 44815545217 sur `5c17d0dc5` (dernier commit de la PR), succès ; 14 checks requis verts (`gh pr checks 71 --repo YusufByn/yusagent --required`), dont `test shard 1/8` à `8/8`, `check + clippy (workspace)`, `fmt` et `windows cross-check + clippy`.
+- **Clôture** : PR #71 mergée le 21/11/2026 (`main` à `746a95559`). Ticket clos.

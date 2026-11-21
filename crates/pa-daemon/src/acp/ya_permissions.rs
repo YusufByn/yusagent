@@ -17,6 +17,14 @@
 //! - The worker's request can overtake the `tool_execution_start` of its call (the worker
 //!   publishes the engine's events from its own queue): the bridge holds the request until the
 //!   `tool_call` is published, so the client always knows the call it is asked about.
+//! - yusAgent (YA-10, ticket 24): a request closed elsewhere while the client still holds it
+//!   (another client answered, or the worker withdrew it; never one the bridge still held) is
+//!   cancelled on the client with the
+//!   ACP notification [`CANCEL_REQUEST`] (`requestId`), so its permission box closes. The client
+//!   still answers it (`cancelled` or the error `-32800`, ACP cancellation): the answer is
+//!   dropped as stale.
+//! - yusAgent (YA-10, ticket 24): before each prompt the bridge declares again that its client
+//!   answers ([`rearm_asker`]): a worker relaunched after a crash only replays the `create`.
 //! - The selector `permissions` (`manual`, `auto`) applies the user's choice to the session
 //!   (action `set_mode`), journaled by the worker; it is only ever changed by the client.
 //!
@@ -46,6 +54,8 @@ pub const ALLOW_ONCE: &str = "allow-once";
 pub const REJECT_ONCE: &str = "reject-once";
 /// The id of the selector in `session/set_config_option`.
 pub const CONFIG_ID: &str = "permissions";
+/// yusAgent (YA-10, ticket 24): the ACP notification that cancels a request the bridge sent.
+pub const CANCEL_REQUEST: &str = "$/cancel_request";
 /// The prefix of the ids of the bridge's requests to the client.
 const ID_PREFIX: &str = "ya-permission-";
 
@@ -142,15 +152,38 @@ impl AcpPermissions {
     }
 
     /// The updates one worker event adds (before they are published): an allowed call goes
-    /// `in_progress`. A closed request is forgotten.
+    /// `in_progress`. A closed request is forgotten; one the client still holds is cancelled on
+    /// the client ([`CANCEL_REQUEST`]).
     pub(crate) fn updates(&self, event: &Value) -> Vec<AcpSessionUpdate> {
         if event.get("type").and_then(Value::as_str) != Some(RESOLVED_EVENT) {
             return Vec::new();
         }
         let request_id = text(event, "requestId");
         let tool_call_id = text(event, "toolCallId");
-        lock(&self.sent).retain(|_, sent| sent.request_id != request_id);
-        lock(&self.held).remove(&tool_call_id);
+        // A request still held (its `tool_call` not published yet) never reached the client:
+        // nothing to cancel there.
+        let held_id = lock(&self.held)
+            .remove(&tool_call_id)
+            .and_then(|frame| frame["id"].as_str().map(str::to_string));
+        let still_open: Vec<String> = {
+            let mut sent = lock(&self.sent);
+            let ids = sent
+                .iter()
+                .filter(|(id, sent)| {
+                    sent.request_id == request_id && held_id.as_deref() != Some(id.as_str())
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            sent.retain(|_, sent| sent.request_id != request_id);
+            ids
+        };
+        for id in still_open {
+            self.send(json!({
+                "jsonrpc": "2.0",
+                "method": CANCEL_REQUEST,
+                "params": { "requestId": id },
+            }));
+        }
         if text(event, "outcome") == "allow" {
             vec![AcpSessionUpdate::ToolCallUpdate {
                 tool_call_id,
@@ -317,6 +350,21 @@ pub(crate) fn push_option(options: &mut Vec<SessionConfigOption>, state: &Value)
     });
 }
 
+/// yusAgent (YA-10, ticket 24): declares again that this client answers the session's permission
+/// requests (action `asker`). Sent before each prompt: a worker relaunched after a crash replays
+/// the durable `create` but not the clients' `attach`, and would decline the next request at once
+/// for want of a client to answer. Best-effort: a failure leaves the worker as it was.
+pub(super) async fn rearm_asker(link: &DaemonLink, daemon_session_id: &str) {
+    let _ = link
+        .request(DaemonCommand::YaPermissions {
+            id: None,
+            active_session_id: daemon_session_id.to_string(),
+            action: "asker".to_string(),
+            rest: crate::ya_permissions::asker_fields(),
+        })
+        .await;
+}
+
 /// `session/set_config_option` on the selector: the user's choice, applied by the worker.
 pub(super) async fn apply_mode(
     link: &DaemonLink,
@@ -463,12 +511,18 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        // Withdrawn by the worker (`session/cancel`): the client's `cancelled` is dropped.
+        // Withdrawn by the worker (`session/cancel`): cancelled on the client (ticket 24), and
+        // the client's `cancelled` is dropped.
         let updates = feed(
             &permissions,
             &json!({ "type": RESOLVED_EVENT, "requestId": "r-1", "toolCallId": "call-1", "outcome": "cancelled" }),
         );
         assert!(updates.is_empty());
+        let cancel = client
+            .try_recv()
+            .expect("the request cancelled on the client");
+        assert_eq!(cancel["method"], CANCEL_REQUEST);
+        assert_eq!(cancel["params"]["requestId"], json!(id));
         let late = response(&id, &json!({ "outcome": { "outcome": "cancelled" } }));
         assert!(matches!(permissions.client_line(&late), ClientLine::Stale));
         // A request withdrawn while held is never sent.
@@ -495,6 +549,62 @@ mod tests {
                 content: None,
                 meta: None,
             }]
+        );
+    }
+
+    /// yusAgent (YA-10, ticket 24): another client (the TUI) answered: the bridge cancels the
+    /// request on its client; a request its own client answered is not cancelled.
+    #[test]
+    fn a_request_answered_elsewhere_is_cancelled_on_the_client() {
+        let (frames, mut client) = tokio::sync::mpsc::unbounded_channel();
+        let permissions = AcpPermissions::new(&frames);
+        let _ = feed(&permissions, &start("call-1"));
+        let _ = feed(
+            &permissions,
+            &json!({ "type": REQUEST_EVENT, "requestId": "r-1", "toolCallId": "call-1" }),
+        );
+        let id = client.try_recv().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let updates = feed(
+            &permissions,
+            &json!({ "type": RESOLVED_EVENT, "requestId": "r-1", "toolCallId": "call-1", "outcome": "allow" }),
+        );
+        assert_eq!(updates.len(), 1, "the call goes in_progress");
+        assert_eq!(
+            client.try_recv().expect("a cancel notification"),
+            json!({ "jsonrpc": "2.0", "method": CANCEL_REQUEST, "params": { "requestId": id } })
+        );
+        // The client's answer to the cancelled request is stale.
+        let late = response(&id, &json!({ "outcome": { "outcome": "cancelled" } }));
+        assert!(matches!(permissions.client_line(&late), ClientLine::Stale));
+
+        // Answered by this client: nothing to cancel when the worker resolves it.
+        let _ = feed(&permissions, &start("call-2"));
+        let _ = feed(
+            &permissions,
+            &json!({ "type": REQUEST_EVENT, "requestId": "r-2", "toolCallId": "call-2" }),
+        );
+        let id = client.try_recv().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let answer = response(
+            &id,
+            &json!({ "outcome": { "outcome": "selected", "optionId": REJECT_ONCE } }),
+        );
+        assert!(matches!(
+            permissions.client_line(&answer),
+            ClientLine::Answer(_)
+        ));
+        let _ = feed(
+            &permissions,
+            &json!({ "type": RESOLVED_EVENT, "requestId": "r-2", "toolCallId": "call-2", "outcome": "deny" }),
+        );
+        assert!(
+            client.try_recv().is_err(),
+            "no cancel for an answered request"
         );
     }
 

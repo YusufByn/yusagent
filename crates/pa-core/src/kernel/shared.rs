@@ -70,6 +70,9 @@ pub const BASH_COMMAND_DISPLAY_MIME: &str = "application/vnd.prime-agent.bash-co
 /// yusAgent (T05, YA-05): a cell read a `bash()` result with a non-zero exit code
 /// (`{"exitCode": n}`).
 pub const BASH_EXIT_DISPLAY_MIME: &str = "application/vnd.prime-agent.bash-exit+json";
+/// yusAgent (YA-10, ticket 24): one `bash()` result a cell read, for the editor's cell card
+/// (`prime-agent-runtime/src/rlm/bash.py`, `_emit_run`). Display only.
+pub const YA_BASH_RUN_DISPLAY_MIME: &str = "application/vnd.yusagent.bash-run+json";
 /// The kernel host request that reports a background bash completion
 /// (the `[bash-done]` lane). The daemon registers the handler
 /// (`bash_notices`), and the provisioner keys the bounded-await bootstrap
@@ -186,6 +189,28 @@ pub struct KernelBashCommands {
     pub lines: usize,
 }
 
+/// yusAgent (YA-10, ticket 24): one `bash()` result a cell read, captured from a
+/// [`YA_BASH_RUN_DISPLAY_MIME`] payload. The output is capped by the kernel (8 000 characters).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelBashRun {
+    pub command: String,
+    pub exit_code: i64,
+    pub output: String,
+    pub duration_ms: Option<u64>,
+}
+
+/// yusAgent (YA-10, ticket 24): parse a [`YA_BASH_RUN_DISPLAY_MIME`] payload; a malformed one is
+/// ignored.
+#[must_use]
+pub fn parse_ya_bash_run_display(payload: &Value) -> Option<KernelBashRun> {
+    Some(KernelBashRun {
+        command: payload.get("command")?.as_str()?.to_string(),
+        exit_code: payload.get("exitCode")?.as_i64()?,
+        output: payload.get("output")?.as_str()?.to_string(),
+        duration_ms: payload.get("durationMs").and_then(Value::as_u64),
+    })
+}
+
 /// A kernel error reported by a failed cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelError {
@@ -211,6 +236,8 @@ pub struct ExecuteResult {
     pub bash_commands: Option<KernelBashCommands>,
     /// yusAgent (T05, YA-05): the last non-zero exit code of a `bash()` result the cell read.
     pub bash_failed_exit: Option<i64>,
+    /// yusAgent (YA-10, ticket 24): the `bash()` results the cell read, in order.
+    pub bash_runs: Option<Vec<KernelBashRun>>,
     /// Output that arrived without this cell's id (user threads, other cells' leftovers, raw fd writes).
     pub background_output: Option<String>,
     pub status: ExecuteStatus,

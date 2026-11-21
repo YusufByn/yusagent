@@ -93,6 +93,8 @@ struct ExecBuffers {
     sent_agent_messages: Vec<KernelSentAgentMessage>,
     bash_commands: Option<KernelBashCommands>,
     bash_failed_exit: Option<i64>,
+    // yusAgent (YA-10, ticket 24).
+    bash_runs: Vec<crate::kernel::shared::KernelBashRun>,
     background_output: String,
     background_output_chars: usize,
     background_output_truncated: bool,
@@ -137,6 +139,7 @@ impl InternalExecuteResult {
                 sent_agent_messages: None,
                 bash_commands: None,
                 bash_failed_exit: None,
+                bash_runs: None,
                 background_output: None,
                 status: ExecuteStatus::Aborted,
                 error: None,

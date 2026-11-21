@@ -9,6 +9,8 @@ mod producer;
 mod types;
 mod wire_config;
 mod wire_events;
+// yusAgent (YA-10, ticket 24): a finished cell's diffs and `bash()` results for the editor.
+mod ya_cell_display;
 // yusAgent (YA-11, ticket 20): `session/request_permission` and the `permissions` selector.
 mod ya_permissions;
 

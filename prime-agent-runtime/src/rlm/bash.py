@@ -52,6 +52,11 @@ _BASH_COMMAND_MIME = "application/vnd.prime-agent.bash-command+json"
 # yusAgent (T05, YA-05): a cell read a bash() result with a non-zero exit code; the
 # host's masking guard keeps the last failed output in the model context.
 _BASH_EXIT_MIME = "application/vnd.prime-agent.bash-exit+json"
+# yusAgent (YA-10, ticket 24): one bash() result the cell read, for the editor's cell card
+# (command, exit code, output, duration). Display only: the host keeps it in the tool-result
+# details, never in the model's text. The output is capped at _BASH_RUN_OUTPUT_CAP characters.
+_BASH_RUN_MIME = "application/vnd.yusagent.bash-run+json"
+_BASH_RUN_OUTPUT_CAP = 8000
 _ASYNCIO_WRAPPER_CALLBACKS = {
     ("asyncio.tasks", "gather.<locals>._done_callback"),
     ("asyncio.tasks", "shield.<locals>._inner_done_callback"),
@@ -184,6 +189,38 @@ def _emit_failed_exit(result: "BashResult | None") -> None:
 
     if repl.is_active():
         repl.emit({_BASH_EXIT_MIME: {"exitCode": result.exit_code}})
+
+
+def _run_output(output: str) -> str:
+    """yusAgent (YA-10, ticket 24): the output of a bash-run record, head and tail of at most
+    _BASH_RUN_OUTPUT_CAP characters in all, with the omitted count between them."""
+    if len(output) <= _BASH_RUN_OUTPUT_CAP:
+        return output
+    # Room for the longest marker (the omitted count has at most the digits of the length).
+    keep = _BASH_RUN_OUTPUT_CAP - len(f"\n... [{len(output)} characters omitted] ...\n")
+    head = keep // 2
+    tail = keep - head
+    marker = f"\n... [{len(output) - keep} characters omitted] ...\n"
+    return output[:head] + marker + output[len(output) - tail:]
+
+
+def _emit_run(command: str, result: "BashResult | None") -> None:
+    """yusAgent (YA-10, ticket 24): the bash-run record of a result the cell read."""
+    if result is None:
+        return
+    from . import repl
+
+    if repl.is_active():
+        repl.emit(
+            {
+                _BASH_RUN_MIME: {
+                    "command": _capped(command),
+                    "exitCode": result.exit_code,
+                    "output": _run_output(result.output),
+                    "durationMs": int(result.duration * 1000),
+                }
+            }
+        )
 
 
 def _capped(command: str) -> str:
@@ -825,6 +862,7 @@ class BashHandle:
         if notice is not None:
             notice()
         _emit_failed_exit(self._result)
+        _emit_run(self.command, self._result)
 
     def _schedule_background_completion_notice(self) -> None:
         cell_finished = self._creating_cell_finished

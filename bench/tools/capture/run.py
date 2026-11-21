@@ -69,6 +69,9 @@ CASES = [
      [PROMPT], None),
     ("mask-on-anthropic", "anthropic-messages", "mask", ["--prefix-cache"], "agent-n",
      [PROMPT], {"masking": {"enabled": True}}),
+    # YA-10 (ticket 24) : bash() lu, bash() non lu (avis [bash-done] dans un tour de réveil à
+    # part), edit() : ce que l'extension affiche ne doit rien changer aux requêtes.
+    ("display-anthropic", "anthropic-messages", "display", [], "agent-d", [PROMPT], None),
 ]
 
 # YA-03 (PR 2) : famille Codex. Le provider intégré `openai`, surchargé dans models.json pour
@@ -244,6 +247,8 @@ def prepare(binary: Path, cache: Path, version: str) -> None:
     server = CaptureServer(warm / "cap", "basic", [])
     try:
         write_models_json(warm / "agent", "anthropic-messages", server.port)
+        # YA-10 (ticket 24) : la chauffe aussi en permissions « auto » (manuel refusé en -p).
+        write_settings(warm / "agent")
         env = base_env(cache / "home", warm / "agent", warm / "tmp")
         result = run_binary(agent_cmd(binary), env, warm / "project", warm, sandboxed=False)
     finally:
@@ -449,6 +454,59 @@ def _texts(value) -> list[str]:
     return lines
 
 
+def tui_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -> dict:
+    """YA-10 (ticket 24) : le même scénario par le TUI, sur un pty, avec un démon isolé.
+
+    Le TUI passe par le démon comme ACP : ses requêtes servent au contrôle des chemins
+    (`prefix_paths_check.py`). Pilote du pty et émulateur d'écran repris de
+    `bench/tools/ya_permissions_tui_demo.py` (`scripts/lifecycle_lib.py`).
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "ya_permissions_tui_demo", HERE.parent / "ya_permissions_tui_demo.py")
+    demo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(demo)
+    tui_dir = out / "tui"
+    tui_dir.mkdir(parents=True, exist_ok=True)
+    agent = work / "agent-tui"
+    socket = work / "t.sock"
+    server = CaptureServer(tui_dir / "cap", "basic", [])
+    write_models_json(agent, "anthropic-messages", server.port)
+    # Pas d'écran d'accueil.
+    write_settings(agent, {"defaultProvider": "capture", "defaultModel": "capture-model",
+                           "onboardingShown": True})
+    env = base_env(cache / "home", agent, work / "tmp") | {"TERM": "xterm-256color"}
+    pilot = None
+    error = None
+    try:
+        pilot = demo.Pilot(["/usr/bin/sandbox-exec", "-f", str(SANDBOX), str(binary),
+                            "--daemon-socket", str(socket)], env, project)
+        pilot.submit_until(PROMPT, "le premier appel au serveur",
+                           lambda _text: any((tui_dir / "cap").glob("*.body.json")))
+        pilot.wait("la fin du scénario", lambda text: "Capture : fin du scénario." in text)
+        (tui_dir / "screen.txt").write_text(pilot.text())
+    except SystemExit as exit_error:
+        error = str(exit_error)
+        if pilot is not None:
+            (tui_dir / "screen.txt").write_text(pilot.text())
+    finally:
+        if pilot is not None:
+            pilot.close()
+        subprocess.run(["pkill", "-TERM", "-f", "--", f"--daemon-socket {socket}"])
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and subprocess.run(
+                ["pgrep", "-f", str(socket)], capture_output=True).returncode == 0:
+            time.sleep(0.2)
+        server.stop()
+    leftovers = subprocess.run(["pgrep", "-f", str(socket)], capture_output=True, text=True)
+    return {
+        "requests": len(list((tui_dir / "cap").glob("*.body.json"))),
+        "error": error,
+        "leftover_processes": leftovers.stdout.split(),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--binary", required=True, type=Path)
@@ -463,6 +521,11 @@ def main() -> None:
     cache = args.cache.resolve()
     cache.mkdir(parents=True, exist_ok=True)
     out = args.out.resolve()
+    # YA-10 (ticket 24) : un dossier déjà rempli mélangerait deux runs (sessions copiées,
+    # corps de requête d'un run plus long) ; rien n'est supprimé ici.
+    if out.exists() and any(out.iterdir()):
+        sys.exit(f"--out {out} existe déjà et n'est pas vide : le supprimer "
+                 f"(rm -rf {out}) ou choisir un autre dossier")
     out.mkdir(parents=True, exist_ok=True)
 
     version = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
@@ -526,6 +589,9 @@ def main() -> None:
                                        suffix="" if index == 0 else f"-{index + 1}"))
         finally:
             server.stop()
+        if scenario == "display":
+            # YA-10 (ticket 24) : le fichier de session, pour `display_check.py`.
+            shutil.copytree(work / agent / "sessions", case_dir / "sessions", dirs_exist_ok=True)
         result = {"exit": [r["exit"] for r in runs], "seconds": [r["seconds"] for r in runs],
                   "api": api, "scenario": scenario, "server_args": extra, "agent_dir": agent,
                   "prompts": prompts, "settings": settings, "provider": provider,
@@ -546,6 +612,10 @@ def main() -> None:
     print(f"acp : prompt={run_info['acp']['prompt_result']} "
           f"process restants={run_info['acp']['leftover_processes']}")
 
+    run_info["tui"] = tui_check(binary, cache, work, project, out)
+    print(f"tui : requêtes={run_info['tui']['requests']} erreur={run_info['tui']['error']} "
+          f"process restants={run_info['tui']['leftover_processes']}")
+
     (out / "run.json").write_text(json.dumps(run_info, indent=2, ensure_ascii=False) + "\n")
     analysis_env = {"PATH": "/usr/bin:/bin", "HOME": str(cache / "home"),
                     "TIKTOKEN_CACHE_DIR": str(cache / "tiktoken")}
@@ -563,6 +633,11 @@ def main() -> None:
                     str(HERE / "masking_check.py"), str(out)],
                    check=True, env=analysis_env, cwd=cache)
     print(f"masquage : {out / 'masking-report.md'}")
+    # YA-10 (ticket 24) : préfixe des chemins avec démon (ACP, TUI) contre -p ; échoue si
+    # l'écart dépasse les deux lignes du prompt système liées au démon.
+    subprocess.run([sys.executable, "-I", str(HERE / "prefix_paths_check.py"), str(out)],
+                   check=True)
+    print(f"chemins : {out / 'prefix-paths-report.md'}")
 
 
 if __name__ == "__main__":

@@ -304,9 +304,16 @@ async fn ipython_details_carry_the_cell_edit_diffs() {
         .expect("cell executes");
     assert_eq!(
         result.details.expect("details")["diffs"],
+        // yusAgent (YA-10, ticket 24): `oldStr`, `newStr` and `startLine` added for the editor.
         serde_json::json!([
-            { "path": "src/app.py", "diff": "-10 x = 1\n+10 x = 2" },
-            { "path": "src/app.py", "diff": "-1 x = 1\n+1 x = 2" },
+            {
+                "path": "src/app.py", "diff": "-10 x = 1\n+10 x = 2",
+                "oldStr": "x = 1", "newStr": "x = 2", "startLine": 10,
+            },
+            {
+                "path": "src/app.py", "diff": "-1 x = 1\n+1 x = 2",
+                "oldStr": "x = 1", "newStr": "x = 2", "startLine": 1,
+            },
         ])
     );
 }

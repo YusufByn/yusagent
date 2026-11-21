@@ -14,7 +14,11 @@ doivent être extraits au même chemin (voir README) : sinon un binaire antérie
 Avec `--all` (T04), compare en plus chaque requête de chaque cas, corps entier,
 dans l'ordre d'arrivée au serveur. Seuls les UUID (identifiant de session, donc
 `prompt_cache_key` et les chemins qui le contiennent) sont remplacés par `<uuid>`
-avant comparaison : ils changent à chaque lancement, même binaire.
+avant comparaison : ils changent à chaque lancement, même binaire. Le pid des avis
+`[bash-done pid:N …]` aussi, remplacé par `<pid>`. YA-10 (ticket 24) :
+`--all` compare aussi les chemins qui passent par le démon, `acp` et `tui` (dossiers
+`<run>/acp/cap` et `<run>/tui/cap`, hors de `cases/`), et la section se termine par
+`TOUT IDENTIQUE` (mêmes nombres de requêtes, aucune requête différente) ou `DIFFÉRENCES`.
 
 Bibliothèque standard uniquement.
 """
@@ -28,6 +32,8 @@ import re
 from pathlib import Path
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+# YA-10 (ticket 24) : le pid d'un avis `[bash-done pid:N exit:…]` change à chaque lancement.
+BASH_DONE_PID = re.compile(r"\[bash-done pid:\d+")
 
 
 def compact(value) -> str:
@@ -105,16 +111,26 @@ def changes(a: str, b: str) -> list[dict]:
 
 
 def all_requests(case_dir: Path) -> list[str]:
-    """Chaque corps de requête du cas, JSON compact, UUID normalisés."""
-    return [UUID.sub("<uuid>", compact(json.loads(path.read_text())))
+    """Chaque corps de requête du cas, JSON compact, UUID normalisés (liste vide sans dossier)."""
+    if not (case_dir / "cap").is_dir():
+        return []
+    return [BASH_DONE_PID.sub("[bash-done pid:<pid>",
+                              UUID.sub("<uuid>", compact(json.loads(path.read_text()))))
             for path in sorted((case_dir / "cap").glob("*.body.json"))]
+
+
+# YA-10 (ticket 24) : chemins avec démon, à la racine du run.
+DAEMON_PATHS = ("acp", "tui")
 
 
 def compare_all(run_a: Path, run_b: Path, names: list[str]) -> dict:
     out = {}
-    for name in names:
-        bodies_a = all_requests(run_a / "cases" / name)
-        bodies_b = all_requests(run_b / "cases" / name)
+    dirs = [(name, Path("cases") / name) for name in names]
+    dirs += [(name, Path(name)) for name in DAEMON_PATHS
+             if (run_a / name / "cap").is_dir() or (run_b / name / "cap").is_dir()]
+    for name, rel in dirs:
+        bodies_a = all_requests(run_a / rel)
+        bodies_b = all_requests(run_b / rel)
         differing = []
         for index, (a, b) in enumerate(zip(bodies_a, bodies_b), start=1):
             if a != b:
@@ -194,6 +210,9 @@ def render(report: dict) -> str:
             out.append(f"| {name} | {data['requetes_a']} | {data['requetes_b']} | "
                        f"{data['identiques']} | {len(data['differentes'])} |")
         out.append("")
+        same = all(data["requetes_a"] == data["requetes_b"] and data["requetes_a"] > 0
+                   and not data["differentes"] for data in report["all_requests"].values())
+        out += ["TOUT IDENTIQUE" if same else "DIFFÉRENCES", ""]
         for name, data in report["all_requests"].items():
             for diff in data["differentes"]:
                 out += [f"### {name} : requête {diff['requete']}", ""]

@@ -1474,6 +1474,9 @@ async fn prompt_turn(
         producer.finish_prompt(turn_id).await;
         return cancelled_response(&id);
     }
+    // yusAgent (YA-10, ticket 24): this client answers the permission requests again, for a
+    // worker relaunched since the last turn (the relaunch replays `create`, not `attach`).
+    super::ya_permissions::rearm_asker(link, &hosted_daemon_session_id).await;
     let prompt = DaemonCommand::PromptAndWait {
         id: None,
         active_session_id: hosted_daemon_session_id.clone(),

@@ -64,7 +64,18 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 | `refine-anthropic` | (T04) Comme `compact-anthropic`, avec `harnessRefinements` et `autoRefine` réactivés : un appel `/refine` est journalisé |
 | `mask-off-anthropic` | (T05) Scénario `mask` : 25 tours, chaque cellule imprime environ 5 000 caractères, exception Python au tour 12, la cellule 25 relit la première sortie masquée (ligne `REREAD`). Cache simulé sur le préfixe réel (`--prefix-cache`). Réglage par défaut : aucun masquage |
 | `mask-on-anthropic` | (T05) Même scénario avec `"masking": {"enabled": true}` (fenêtre 10, palier 5) |
+| `display-anthropic` | (YA-10, ticket 24) Scénario `display` : un `bash()` lu par la cellule, un `bash()` qu'aucune cellule ne lit (`sleep 3; echo non-lu`, il finit après la réponse finale : son avis `[bash-done]` arrive toujours dans un 7ᵉ appel, tour de réveil à part), deux `edit()` (création puis modification) dans `ya-display/`, retiré à la fin. Le fichier de session est copié dans `cases/display-anthropic/sessions/` pour `display_check.py` |
 | ACP | `--mode acp` sur un daemon isolé (`--daemon-socket`) : `initialize`, `session/new`, `session/prompt` |
+| TUI | (YA-10, ticket 24) Le même scénario par le TUI, sur un pty (pilote et émulateur d'écran de `bench/tools/ya_permissions_tui_demo.py`), démon isolé : le prompt est tapé, la capture attend « Capture : fin du scénario. » à l'écran, puis `/quit`. Écran final dans `tui/screen.txt` |
+
+## Préfixe des chemins avec démon (ticket 24)
+
+`prefix_paths_check.py`, lancé par `run.py` à la fin (le run échoue s'il échoue) : chaque requête des cas `acp` et `tui` (chemins qui passent par le démon, comme l'extension et le TUI) contre la même requête de `s1-anthropic` (`-p`, chemin du smoke bench). Toutes les clés doivent être identiques (dates des messages normalisées), sauf le prompt système, dont l'écart est limité aux deux lignes liées au démon, écart accepté par Yusuf le 21/11/2026 (journal du CDC) :
+
+- en `-p` seulement, la ligne « This session has no daemon: … » ;
+- avec le démon seulement, le skill `rlm-heartbeat` dans la liste des skills.
+
+Rapport : `prefix-paths-report.md` et `.json`, dernière ligne `CONFORME` ou `NON CONFORME`. Lancement seul : `python3 -I bench/tools/capture/prefix_paths_check.py <run>`.
 | Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant relève les noms sensibles de son kernel (ligne `CHILD_ENV`) puis répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
 | `psenv` | **Hors sandbox** : `/bin/ps` est setuid et le profil `sandbox.sb` refuse de l'exécuter (code 126), ce qui casse aussi le shell persistant sur macOS (identité de démarrage lue par `ps`). Provider local, `PI_OFFLINE=1`. Ligne `PS_PARENT` (relevé YA-11) : `ps eww` lancé depuis le kernel sur le harness, avec la commande du parent, le code de sortie et les noms des variables factices visibles (jamais de valeur). Ligne `PERSISTENT` : noms sensibles vus par `printenv` dans un shell persistant |
 
@@ -104,7 +115,11 @@ python3 -I bench/tools/capture/compare.py <run A> <run B> --out <fichier>.md
 
 Pour chaque cas commun, la première requête : prompt système, chaque paramètre hors conversation et premier message utilisateur. Chaque bloc modifié est listé avec sa position en octets dans A et dans B, les octets retirés et ajoutés. `--out` écrit aussi le `.json` complet.
 
-`--all` (T04) compare en plus chaque requête de chaque cas, corps entier, dans l'ordre d'arrivée ; seuls les UUID (identifiant de session) sont normalisés.
+`--all` (T04) compare en plus chaque requête de chaque cas, corps entier, dans l'ordre d'arrivée ; seuls les UUID (identifiant de session) et le pid des avis `[bash-done pid:N …]` sont normalisés. Depuis le ticket 24, `--all` compare aussi `acp` et `tui` (hors de `cases/`) et la section finit par `TOUT IDENTIQUE` ou `DIFFÉRENCES`.
+
+## Données d'affichage des cellules (ticket 24)
+
+`python3 -I bench/tools/capture/display_check.py <run>`, sur un run d'un binaire qui porte le ticket 24 (pas lancé par `run.py` : un binaire antérieur n'a pas ces champs). Dans le fichier de session de `display-anthropic` : une seule entrée `details.bashRuns`, celle du `bash()` lu ; deux `details.diffs` avec `oldStr`, `newStr` et `startLine` ; dernière requête = avis `[bash-done]` de la commande non lue. Dernière ligne `CONFORME` ou `NON CONFORME` (code de sortie 1), rapport `display-report.md`.
 
 ## Serveur seul
 
