@@ -1191,6 +1191,19 @@ Constat, décisions et plan : `docs/tickets/24-ya10-extension-minimal.md`. Ce qu
 
 Limites connues : un `bash()` dont la cellule ne lit pas le résultat (commande détachée) n'a pas d'enregistrement `bash-run` : son résultat arrive par l'avis `[bash-done]`. Un worker relancé au milieu d'un tour n'a pas de répondant jusqu'au prompt suivant (la demande est refusée aussitôt). Un changement d'effort qui ne change pas l'effort envoyé (niveau ramené au même par le modèle) n'est pas journalisé.
 
+## Extension VS Code, PR 2 : squelette de l'extension (YA-10, ticket 24)
+
+Décisions, contrôles et résultats : `docs/tickets/24-ya10-extension-minimal.md`, section « PR 2 ». **Aucun fichier upstream ni sous `crates/`** : le binaire et ce qui part au modèle ne changent pas. Trames de l'extension figées par un fixture (preuve 1) et rejouées contre le binaire par le banc de capture (preuve 2, `TOUT IDENTIQUE` avec le cas `acp`).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `extensions/vscode/` | nouveau | Extension : lancement du binaire (`yusagent.binaryPath`, portée `machine`), client ACP écrit à la main (`src/acp/`), état du chat (`src/shared/state.ts`), session et relance (`src/session.ts`), onglet et webview React groupée par esbuild sous CSP stricte (`src/panel.ts`, `webview/`). Tests unitaires (`node --test`), agent factice et fixture des trames (`test/`), e2e dans VS Code (`test/e2e/`), scripts de contrôle (`scripts/`). | YA-10 (ticket 24) |
+| `.github/workflows/ya-extension.yml` | nouveau | tsc, lint, tests unitaires, `vsce package` avec contrôle < 5 Mo et `.vsix` en artefact, e2e (`ubuntu-latest` + xvfb, VS Code 1.146.0) contre l'agent factice. Check non requis pendant la PR 2. | YA-10 (ticket 24) |
+| `bench/tools/capture/run.py` | modif. (outil du fork) | Cas `acp-extension` : `acp_check` rejoue le fixture de l'extension (mêmes trames, prompt du cas `acp`, agent et socket à part) ; appel de `extension_frames_check.py`. | YA-10 (ticket 24) |
+| `bench/tools/capture/compare.py` | modif. (outil du fork) | `--all` compare aussi `acp-extension`. | YA-10 (ticket 24) |
+| `bench/tools/capture/extension_frames_check.py` | nouveau (outil du fork) | Preuve 2 : chaque requête de `acp-extension` identique à celle de `acp`, trames envoyées = fixture ; code de sortie 1 sinon. | YA-10 (ticket 24) |
+| `bench/tools/capture/README.md` | modif. (doc du fork) | Cas `acp-extension` et contrôle. | YA-10 (ticket 24) |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :
