@@ -892,3 +892,91 @@ Section de reprise pour une nouvelle session. Ce qui est décidé plus haut fait
 - **Scripts de mesure jetables, non versionnés** : `lifecycle.py` (arrêt, reprise `--continue` et `--resume`) et `eof_turn.py` (fin de stdin pendant un tour) étaient dans le scratchpad de la session du 21/11. Leurs commandes et résultats sont dans ce ticket ; les verser au banc si Yusuf le veut (à réécrire, le scratchpad ne survit pas à la session).
 - **Ensuite** (découpage) : (2) reprise et historique ; (3) skills, MCP, réglages ; (4) message pendant un tour ; (5) login dans l'extension ; (6) retour en arrière et panneau du kernel. Sandbox et `.vsix` par plateforme restent liés à d'autres utilisateurs.
 
+
+## PR 3 : constat et plan (21/11/2026)
+
+Branche `ya-24-extension-pr3` (commits de doc locaux, partent avec le premier push). **Constat et plan seulement, aucun code.** Unharnessed relu à `157dcdc1d` (clone jetable du scratchpad, lecture seule).
+
+### Constat
+
+**Ce qu'Unharnessed a, et n'a pas**
+
+- **Pas de boîte de permission** : choix de conception (« Unharnessed never asks before running a command », `README.md:41`, `:354-356`) ; aucun `session/request_permission` dans `vscode/`. Tous les choix de la boîte sont donc à nous.
+- **Pas de vrais diffs** : son pont n'envoie que `diffCount` (`crates/uh-daemon/src/acp/events.rs:322-336`). Le diff de ses cartes est **deviné du code** de la cellule (`.replace(a, b)` et `write_text(...)`, `vscode/src/cell.ts:201-245`), sans les lignes du fichier autour. Ni `vscode.diff`, ni `applyEdit`, ni rejet.
+- **Ses cartes** (reprises telles quelles chez nous) : verbe selon le type deviné (`webview/Chat.tsx:735-744`, `Editing/Edited`, `Running/Ran`…), fichiers ou commande dans l'en-tête, feuille dépliée avec le code, les lignes du diff deviné (+/−, 3 lignes de contexte) et la sortie coupée à 20 000 caractères (`src/chat.ts:31`), ouvrables en entier dans un onglet (`src/tabs.ts`, `src/view.ts` `openTool`) ; cellules à la suite repliées en « Ran N Python cells », travail replié en « Worked for … · N cells +a −b » une fois le tour fini.
+
+**Ce que notre pont envoie** (PR 1, binaire `main` `1b96bb645`)
+
+- `tool_call` en `pending` en manuel, puis `tool_call_update` `in_progress` à l'accord (`crates/pa-daemon/src/acp/ya_permissions.rs:157-197`).
+- Demande : `toolCallId` et deux options, `allow-once` « Allow », `reject-once` « Reject » ; **pas le code** (`ya_permissions.rs:262-271`) : la boîte le prend dans le `rawInput` du `tool_call`.
+- Refus : `tool_call_update` `failed` avec le texte fixe `[permission-denied] The user declined this cell; nothing was executed.` (`crates/pa-core/src/session_engine/ya_permissions.rs:63-64`, test `crates/pa-cli/tests/ya_permissions_acp_e2e.rs:430-434`), puis fin du tour (D7).
+- Fin de cellule : texte du résultat, puis un contenu `diff` par `edit()` (`crates/pa-daemon/src/acp/wire_events.rs:177-181`, `ya_cell_display.rs:28-52`), et `_meta` `_yus/bashRuns` (`wire_events.rs:190-197`).
+- **Diffs = fragments** : `oldText`/`newText` sont les `old_str`/`new_str` d'`edit()`, `_yus/startLine` la ligne où commence `old_str` (`skills/edit/src/edit/__init__.py:76-82`). Pas de colonne. Fichier créé : `oldText` absent, et `edit()` refuse de créer un fichier qui existe (`:56-67`), donc « absent » veut bien dire « créé par cette cellule ».
+
+**Défauts et manques dans le code importé**
+
+1. **Statut** : `tool_call` toujours mis en `running` (`src/chat.ts:739-757`), `pending` ignoré ; `in_progress` ignoré par `toolDone` (`:912-930`) ; type `"running" | "done" | "failed"` (`src/protocol.ts:278`). Défaut 3 de la PR #74.
+2. **Contenus `diff` ignorés** : `toolDone` ne lit que `block.content.text` (`src/chat.ts:917-918`) ; un bloc `diff` y donne une ligne vide.
+3. **`_yus/bashRuns` ignoré** : le type `Meta` ne le connaît pas (`src/chat.ts:60-75`).
+4. **`edit()` et `read()` inconnus de `readCell`** : il ne reconnaît que `open`, `write_text`, `.replace(`, `bash(`… (`src/cell.ts:54-73`). Une cellule `await edit("a.py", …)` s'affiche « Ran » + première ligne de code, sans fichier.
+5. **Refus = « Failed »** : rien ne distingue une cellule refusée d'une cellule en erreur.
+6. **Boîte** : `Permissions` ne sait répondre que `cancelled` (`src/ya/permissions.ts:24-33`, `:44-50`) ; la ligne d'attente (`src/chat.ts:604-620`) est à remplacer.
+7. **Textes « Unharnessed » visibles** : `webview/Composer.tsx:56` (« Ask Unharnessed », aussi en `aria-label` `:455` et dans l'animation `:932`), schéma des onglets `unharnessed-tool` (`src/tabs.ts:6`, visible dans l'info-bulle de l'onglet), `~/.unharnessed/settings.json` (`webview/Settings.tsx:185`, écran masqué), `.unharnessed/skills` (`webview/SettingsSkills.tsx:230`, écran masqué). Type MIME interne `application/x-unharnessed-queued` (`Composer.tsx:766`) : invisible, renommé quand même. Défaut 1.
+8. **`KernelTray` sans condition** : `webview/Composer.tsx:383`, titres `webview/Kernel.tsx:231`, `:247`. Défaut 2.
+
+**Reconstruire l'« avant » d'un diff** (E6)
+
+- L'extension lit le fichier à la réception du `tool_call_update` final : c'est l'« après » de la cellule (instantané gardé avec la carte). L'« avant » s'obtient en défaisant les `edit()` de la cellule sur ce fichier, du dernier au premier : `newText` remplacé par `oldText` à la ligne `startLine`.
+- **Cas ambigus sans colonne** : `newText` vide (suppression pure) qui ne commence pas en début de ligne, ou `newText` présent plusieurs fois sur sa ligne. Ambiguïté détectée (plusieurs « avant » possibles) : pas de vue ni de « Rejeter » pour ce fichier, message dans la carte. Choix C14.
+- **Garde-fou 2** : « Rejeter » compare le texte actuel du document (tampon de l'éditeur s'il est ouvert, modifications non enregistrées comprises, sinon disque) à l'instantané ; différent → refus avec message. Conséquence voulue : sur un fichier modifié par deux cellules, seule la dernière se rejette ; une fois rejetée, le fichier redevient l'« après » de la précédente, qui se rejette à son tour.
+- **Restauration** : `workspace.applyEdit` (annulable par Ctrl+Z dans l'éditeur), puis enregistrement du document ; fichier créé : `deleteFile` (dossiers créés par `edit()` laissés).
+- **Limites** : un `bash()` détaché qui écrit le fichier entre la fin de la cellule et la lecture de l'instantané fausse l'« après » (contrôle : `newText` doit être à sa place dans l'instantané, sinon pas de rejet) ; `edit()` lit en UTF-8 avec conversion des fins de ligne (`read_text`/`write_text`, `__init__.py:68`, `:80`) : un fichier CRLF est déjà réécrit en LF par `edit()`, la restauration rend le texte d'avant en LF.
+
+**Texte au modèle après un rejet** (§5.4)
+
+- `[user-reverted] <chemin>` à la fin du bloc texte du message suivant de l'utilisateur, jamais au préfixe. Ne change ni l'ouverture ni un prompt sans rejet : fixture des trames et cas `acp-extension` inchangés ; nouveau fixture pour un prompt après rejet.
+- **Limite** : un tour lancé par l'agent (avis `[bash-done]`) avant le message suivant ne sait pas encore le rejet.
+
+**e2e contre le vrai binaire** (E13)
+
+- Faisable sans modèle : `PRIME_AGENT_FAUX_SCRIPT` est lu par le binaire produit, pas seulement en debug (`crates/pa-cli/src/print_runtime.rs:195-199`, passé au worker par la config de création, `crates/pa-daemon/src/agent_engine/model.rs:318`).
+- Le kernel a besoin de son venv (uv, réseau à la première fois), comme les shards de `ci.yml` (`.github/workflows/ci.yml:315-318`, étape « Bootstrap the kernel venv »).
+- Isolation : `HOME` temporaire dans `extensionTestsEnv` (démon et socket sous ce `HOME`), relevé des processus restants à la fin (comme `vscode/test/e2e/run.mjs:1-24` d'Unharnessed).
+- `ci.yml` a un cache cargo partagé `test-shards` en restauration seule sur les PR (`ci.yml:298-314`), réutilisable par le job de l'extension. Durée du build à froid : **non mesurée**.
+
+### Plan (commits de la PR 3, extension seule sauf choix C14 (b))
+
+1. **Défauts** : textes « Unharnessed » (placeholder, schéma `yusagent-tool`, MIME, chemins des écrans masqués) ; `KernelTray` masqué sans `features.kernel` ; statut `pending` (« Awaiting permission », sans animation) puis `running` à `in_progress`.
+2. **Cartes** : `bashRuns` lus (type `Meta`) et rangés dans la carte ; `readCell` apprend `edit(` et `read(` ; vrais diffs à la place du diff deviné quand la cellule a des `edit()` ; état « refusé » lu du texte fixe.
+3. **Boîte de permission** : `Permissions.answer(toolCallId, optionId)` ; message webview → hôte ; composant ; fermeture sur `$/cancel_request`, sortie de `pending`, Stop (déjà en place) ; libellés pris dans `options[].name` de la trame.
+4. **Diffs** : module pur `src/ya/diffs.ts` (avant reconstruit, ambiguïté, instantané, garde-fous) testé par `node --test` ; partie VS Code mince (fournisseur de documents virtuels avant/après, `vscode.diff`, `applyEdit` + enregistrement, suppression) ; rejets en attente ajoutés au prompt suivant.
+5. **Agent factice et e2e factice** : `pending`, `bashRuns`, contenus `diff`, refus, tour de réveil avec `responseBoundary`.
+6. **e2e vrai binaire** : job à part dans `ya-extension.yml` (binaire debug construit dans le job, cache cargo, uv, venv du kernel), scripts du provider factice. Cas : cellule avec `bash()` (carte : commande, code de sortie, sortie) ; accord (fichier créé) puis refus (fichier absent, carte « refusé », tour fini) ; `edit()` puis « Rejeter » (fichier restauré, puis `[user-reverted]` lu dans le fichier de session après le prompt suivant) ; garde-fous (Rejeter grisé pendant un tour, refusé après une modification) ; « auto » et bandeau ; Stop ; **tour lancé par l'agent** (`bash()` non lu, avis `[bash-done]`, tour fermé sur `responseBoundary`, prompt suivant envoyé tout de suite) ; processus restants : aucun.
+7. **Contrôle remis à Yusuf** (règle 13) : `real-binary-check.mjs` étendu aux mêmes cas hors VS Code, lancé d'abord par Claude Code sur le binaire de `main` `1b96bb645` (macOS, provider factice, `sandbox-exec`, venv du kernel préparé avec réseau).
+8. **Doc** : `docs/fork-changes.md` (fichiers repris d'Unharnessed modifiés), ce ticket, phrase du ticket 22 déjà corrigée.
+9. **`ya-extension` requis** (E13) : une fois la PR verte, demande à Yusuf (protection de `main`, Claude Code n'y touche pas).
+
+**Préfixe** : aucun fichier sous `crates/` (sauf C14 (b)) ; ouverture et prompt sans rejet inchangés (fixture, cas `acp-extension`). Seul ajout : la ligne `[user-reverted]` en fin de message après un rejet.
+
+### Choix de Yusuf (interface)
+
+Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation est la nôtre. Visuel provisoire dans tous les cas.
+
+| | Choix | Unharnessed | Recommandé |
+|---|---|---|---|
+| C1 | Langue des textes nouveaux (boîte, cartes, rejet) | anglais | anglais, comme l'interface reprise et les noms d'options du pont (« Allow », « Reject ») ; placeholder « Ask yusAgent ». Ou français (« Autoriser » / « Refuser ») |
+| C2 | Place de la boîte | — | au-dessus de la saisie, fixe (visible quel que soit le défilement), code de la cellule dépliable ; la carte dit « Awaiting permission ». Ou dans la carte |
+| C3 | Raccourcis clavier | — | aucun (un Entrée réflexe autoriserait une cellule) |
+| C4 | Demande quand le panneau est caché | — | badge sur l'icône de la vue ; pas de notification |
+| C5 | Cellule refusée | — | « Declined », distinct de « Failed » |
+| C6 | `bash()` dans la carte | commande devinée du code (1re ligne de la 1re) | en-tête : commande réelle une fois finie, « exit N » si non nul ; feuille : une ligne par commande (commande, code, durée), sortie repliée |
+| C7 | `edit()`, `read()` et diffs devinés | diff deviné du code | `readCell` apprend `edit(`/`read(` ; vrais diffs quand il y en a ; diff deviné gardé pour les écritures hors `edit()`, sans « Rejeter » |
+| C8 | Granularité de « Rejeter » | — | par fichier et par cellule. Ou par `edit()`, ou cellule entière |
+| C9 | `vscode.diff` | — | avant/après de la cellule, deux côtés en lecture seule. Ou après = fichier réel, éditable (montre aussi les changements postérieurs) |
+| C10 | Ouverture et bouton | — | clic sur le fichier dans la carte → `vscode.diff` ; diff en ligne gardé ; « Rejeter » dans la carte seulement. Ou aussi dans la barre de titre du diff |
+| C11 | Texte au modèle | — | `[user-reverted] <chemin relatif au dossier>`, une ligne par fichier, après une ligne vide dans le même bloc texte, et visible sous la bulle du message. Ou chemin absolu, ou bloc séparé |
+| C12 | Rejet d'un fichier créé | — | suppression du fichier. Ou le vider |
+| C13 | Rejet après « Restart » (nouvelle session) | — | indisponible pour les cartes de l'ancienne session (le modèle de la nouvelle ne connaît pas la modification) |
+| C14 | Position ambiguë (pas de colonne) | — | (a) dans la PR 3 : pas de rejet pour ces cas, message. (b) PR Rust à part : `startOffset` dans `edit()`, `details.diffs` et `_meta` (binaire changé, captures `main` contre branche) |
+| C15 | Quand tourne l'e2e vrai binaire | e2e vrai binaire, un VS Code par scénario | sur les changements de `extensions/vscode/`, `crates/pa-daemon/src/acp/`, `prime-agent-runtime/src/rlm/bash.py`, `skills/edit/`. Ou extension seule |
+| C16 | Checks requis (E13) | — | les deux jobs (`extension`, vrai binaire), chacun avec sortie rapide en succès hors de son périmètre |
