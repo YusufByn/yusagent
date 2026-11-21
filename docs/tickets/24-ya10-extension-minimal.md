@@ -1192,3 +1192,15 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - session en « auto » : bandeau, cellule sans demande ;
   - fin : agents arrêtés, démon arrêté, **aucun processus restant** exigé.
   - Le tour lancé par l'agent est au ticket 25.
+- **CI de l'étape 6** (job `real-binary`, durées tirées de l'API GitHub, étapes du job) :
+
+  | Run | Tête | Cache restauré | Restauration | Build | Venv | e2e réel | Job | Résultat |
+  |---|---|---|---|---|---|---|---|---|
+  | 44917998768 | `afd3c566d` | `v0-rust-test-shards-Linux-x64-fcc63f3e-94c07680`, `full match: true` | 19 s | 52 s | 3 s | 113 s | 3,7 min | e2e 2/5 |
+  | 44918462066 | `4263f4613` | idem | 9 s | 68 s | 2 s | 113 s | 3,6 min | e2e 2/5 (diagnostic) |
+  | 44918908271 | `ac7499d24` | idem | 14 s | 57 s | 9 s | 24 s | 2,2 min | **e2e 5/5**, aucun processus restant |
+
+  - **Cache** : le cache des shards de `ci.yml` se restaure tel quel depuis `ya-extension` (clé exacte), comme prévu par la lecture de la clé. Pas de cache propre. Premier et deuxième run restaurent le même cache de `main` (lecture seule) : il n'y a pas d'écart « froid / chaud ». **Build entre 52 et 68 s**, loin du seuil de 5 min.
+  - **Échecs des deux premiers runs** : la cellule `edit()` levait `RuntimeError: Python skill edit is unavailable in this kernel. Import error: No module named 'edit'` (diagnostic ajouté au test). Cause : avec `PRIME_AGENT_KERNEL_PYTHON`, le binaire traite ce Python comme celui de l'appelant et désactive les skills Python absents (`crates/pa-core/src/kernel/bootstrap/mod.rs:184-214`). Correctif : `PRIME_AGENT_KERNEL_VENV` (le dossier du venv préparé dans le job, `venv/layout.rs:20-29`) ; le binaire y installe alors ses skills. Les deux autres échecs en découlaient : le test arrêté laissait une réponse du script, servie au cas suivant. En local, sur le binaire de `main` avec le venv du banc, la même cellule créait bien `ok.txt` (script jetable `edit_probe.py`).
+  - Les 113 s des deux premiers runs comprennent une attente de 90 s arrivée à son délai (cas Stop) ; l'e2e réussi prend 24 s.
+  - **« Stop : tour fini en 26 ms »** mesure le panneau, qui marque le tour annulé dès l'envoi de `session/cancel`. Ce n'est pas l'arrêt du kernel : moins de 1 s mesuré par `crates/pa-cli/tests/ya_acp_cancel_e2e.rs` (PR 1, E12).
