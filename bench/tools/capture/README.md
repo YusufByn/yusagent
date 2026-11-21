@@ -66,6 +66,7 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 | `mask-on-anthropic` | (T05) Même scénario avec `"masking": {"enabled": true}` (fenêtre 10, palier 5) |
 | `display-anthropic` | (YA-10, ticket 24) Scénario `display` : un `bash()` lu par la cellule, un `bash()` qu'aucune cellule ne lit (`sleep 3; echo non-lu`, il finit après la réponse finale : son avis `[bash-done]` arrive toujours dans un 7ᵉ appel, tour de réveil à part), deux `edit()` (création puis modification) dans `ya-display/`, retiré à la fin. Le fichier de session est copié dans `cases/display-anthropic/sessions/` pour `display_check.py` |
 | ACP | `--mode acp` sur un daemon isolé (`--daemon-socket`) : `initialize`, `session/new`, `session/prompt` |
+| ACP extension | (YA-10, ticket 24, PR 2) Les trames de l'extension VS Code, rejouées telles quelles depuis `extensions/vscode/test/fixtures/acp-frames.json` (`initialize` avec les capacités de l'extension, `session/new` avec `mcpServers: []`), avec le prompt du cas ACP ; dossier `acp-extension/`, agent et socket à part |
 | TUI | (YA-10, ticket 24) Le même scénario par le TUI, sur un pty (pilote et émulateur d'écran de `bench/tools/ya_permissions_tui_demo.py`), démon isolé : le prompt est tapé, la capture attend « Capture : fin du scénario. » à l'écran, puis `/quit`. Écran final dans `tui/screen.txt` |
 
 ## Préfixe des chemins avec démon (ticket 24)
@@ -76,6 +77,10 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 - avec le démon seulement, le skill `rlm-heartbeat` dans la liste des skills.
 
 Rapport : `prefix-paths-report.md` et `.json`, dernière ligne `CONFORME` ou `NON CONFORME`. Lancement seul : `python3 -I bench/tools/capture/prefix_paths_check.py <run>`.
+
+## Trames de l'extension VS Code (ticket 24, PR 2)
+
+`extension_frames_check.py`, lancé par `run.py` après `prefix_paths_check.py` (le run échoue s'il échoue) : chaque requête du cas `acp-extension` doit être identique, corps entier (UUID normalisés), à la même requête du cas `acp`, et les trames envoyées doivent être exactement celles du fixture. C'est la preuve que l'extension ne change rien à ce qui part au modèle (ticket 24, §5.4, preuve 2). Rapport : `extension-frames-report.md` et `.json`, dernière ligne `TOUT IDENTIQUE` ou `DIFFÉRENCES`. Lancement seul : `python3 -I bench/tools/capture/extension_frames_check.py <run>`.
 | Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant relève les noms sensibles de son kernel (ligne `CHILD_ENV`) puis répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
 | `psenv` | **Hors sandbox** : `/bin/ps` est setuid et le profil `sandbox.sb` refuse de l'exécuter (code 126), ce qui casse aussi le shell persistant sur macOS (identité de démarrage lue par `ps`). Provider local, `PI_OFFLINE=1`. Ligne `PS_PARENT` (relevé YA-11) : `ps eww` lancé depuis le kernel sur le harness, avec la commande du parent, le code de sortie et les noms des variables factices visibles (jamais de valeur). Ligne `PERSISTENT` : noms sensibles vus par `printenv` dans un shell persistant |
 

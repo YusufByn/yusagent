@@ -33,6 +33,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SANDBOX = HERE / "sandbox.sb"
+# YA-10 (ticket 24, PR 2) : trames de l'extension VS Code (preuve 1 du préfixe), rejouées par le
+# cas `acp-extension` contre le vrai binaire (preuve 2).
+EXTENSION_FIXTURE = HERE.parents[2] / "extensions" / "vscode" / "test" / "fixtures" / "acp-frames.json"
 TIKTOKEN_REQ = "tiktoken==0.12.0"
 PROMPT = "Exécute le scénario de capture."
 PROMPT_2 = "Deuxième message : réponds sans outil."
@@ -283,17 +286,44 @@ def network_control(out: Path) -> dict:
             "exit": proc.returncode, "stderr": proc.stderr.strip()}
 
 
-def acp_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -> dict:
+def fixture_frames(fixture: Path, project: Path) -> list[dict]:
+    """Trames du fixture de l'extension, `<cwd>` et `<prompt>` remplacés (`<sessionId>` à l'envoi)."""
+    frames = json.loads(fixture.read_text())["frames"]
+
+    def walk(value):
+        if value == "<cwd>":
+            return str(project)
+        if value == "<prompt>":
+            return PROMPT
+        if isinstance(value, list):
+            return [walk(item) for item in value]
+        if isinstance(value, dict):
+            return {key: walk(item) for key, item in value.items()}
+        return value
+
+    frames = [walk(frame) for frame in frames]
+    methods = [frame["method"] for frame in frames]
+    if methods != ["initialize", "session/new", "session/prompt"]:
+        sys.exit(f"fixture {fixture} : trames inattendues {methods}")
+    return frames
+
+
+def acp_check(binary: Path, cache: Path, work: Path, project: Path, out: Path,
+              name: str = "acp", fixture: Path | None = None) -> dict:
     """Échange ACP minimal (initialize, session/new, session/prompt) sur un daemon isolé.
 
     Le mode ACP passe par le daemon : `--daemon-socket` le garde hors du socket
     partagé par défaut (/tmp/prime-agent-<uid>/daemon.sock), et il est arrêté
     à la fin quoi qu'il arrive.
+
+    YA-10 (ticket 24, PR 2) : avec `fixture`, les trames sont celles de l'extension VS Code,
+    telles quelles (mêmes id, mêmes paramètres), avec le prompt du cas `acp` (cas
+    `acp-extension`, dossier, agent et socket à part).
     """
-    acp_dir = out / "acp"
+    acp_dir = out / name
     acp_dir.mkdir(parents=True, exist_ok=True)
-    agent = work / "agent-acp"
-    socket = work / "d.sock"
+    agent = work / ("agent-acp" if fixture is None else f"agent-{name}")
+    socket = work / ("d.sock" if fixture is None else "e.sock")
     server = CaptureServer(acp_dir / "cap", "basic", [])
     write_models_json(agent, "anthropic-messages", server.port)
     write_settings(agent, {"defaultProvider": "capture", "defaultModel": "capture-model"})
@@ -327,11 +357,19 @@ def acp_check(binary: Path, cache: Path, work: Path, project: Path, out: Path) -
         return None
 
     try:
-        init = request(1, "initialize", {"protocolVersion": 1, "clientCapabilities": {}})
-        new = request(2, "session/new", {"cwd": str(project), "mcpServers": []})
-        session_id = ((new or {}).get("result") or {}).get("sessionId")
-        prompt = request(3, "session/prompt", {
-            "sessionId": session_id, "prompt": [{"type": "text", "text": PROMPT}]})
+        if fixture is None:
+            init = request(1, "initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+            new = request(2, "session/new", {"cwd": str(project), "mcpServers": []})
+            session_id = ((new or {}).get("result") or {}).get("sessionId")
+            prompt = request(3, "session/prompt", {
+                "sessionId": session_id, "prompt": [{"type": "text", "text": PROMPT}]})
+        else:
+            frames = fixture_frames(fixture, project)
+            init = request(frames[0]["id"], frames[0]["method"], frames[0]["params"])
+            new = request(frames[1]["id"], frames[1]["method"], frames[1]["params"])
+            session_id = ((new or {}).get("result") or {}).get("sessionId")
+            prompt = request(frames[2]["id"], frames[2]["method"],
+                             {**frames[2]["params"], "sessionId": session_id})
     finally:
         proc.stdin.close()
         try:
@@ -612,6 +650,11 @@ def main() -> None:
     print(f"acp : prompt={run_info['acp']['prompt_result']} "
           f"process restants={run_info['acp']['leftover_processes']}")
 
+    run_info["acp-extension"] = acp_check(binary, cache, work, project, out, "acp-extension",
+                                          EXTENSION_FIXTURE)
+    print(f"acp-extension : prompt={run_info['acp-extension']['prompt_result']} "
+          f"process restants={run_info['acp-extension']['leftover_processes']}")
+
     run_info["tui"] = tui_check(binary, cache, work, project, out)
     print(f"tui : requêtes={run_info['tui']['requests']} erreur={run_info['tui']['error']} "
           f"process restants={run_info['tui']['leftover_processes']}")
@@ -638,6 +681,11 @@ def main() -> None:
     subprocess.run([sys.executable, "-I", str(HERE / "prefix_paths_check.py"), str(out)],
                    check=True)
     print(f"chemins : {out / 'prefix-paths-report.md'}")
+    # YA-10 (ticket 24, PR 2) : trames de l'extension (`acp-extension`) contre le cas `acp` ;
+    # échoue si une requête au modèle diffère.
+    subprocess.run([sys.executable, "-I", str(HERE / "extension_frames_check.py"), str(out)],
+                   check=True)
+    print(f"extension : {out / 'extension-frames-report.md'}")
 
 
 if __name__ == "__main__":

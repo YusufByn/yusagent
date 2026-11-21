@@ -16,8 +16,8 @@ dans l'ordre d'arrivée au serveur. Seuls les UUID (identifiant de session, donc
 `prompt_cache_key` et les chemins qui le contiennent) sont remplacés par `<uuid>`
 avant comparaison : ils changent à chaque lancement, même binaire. Le pid des avis
 `[bash-done pid:N …]` aussi, remplacé par `<pid>`. YA-10 (ticket 24) :
-`--all` compare aussi les chemins qui passent par le démon, `acp` et `tui` (dossiers
-`<run>/acp/cap` et `<run>/tui/cap`, hors de `cases/`), et la section se termine par
+`--all` compare aussi les chemins qui passent par le démon, `acp`, `acp-extension` (PR 2) et
+`tui` (dossiers `<run>/<chemin>/cap`, hors de `cases/`), et la section se termine par
 `TOUT IDENTIQUE` (mêmes nombres de requêtes, aucune requête différente) ou `DIFFÉRENCES`.
 
 Bibliothèque standard uniquement.
@@ -120,7 +120,7 @@ def all_requests(case_dir: Path) -> list[str]:
 
 
 # YA-10 (ticket 24) : chemins avec démon, à la racine du run.
-DAEMON_PATHS = ("acp", "tui")
+DAEMON_PATHS = ("acp", "acp-extension", "tui")
 
 
 def compare_all(run_a: Path, run_b: Path, names: list[str]) -> dict:
