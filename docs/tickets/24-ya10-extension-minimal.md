@@ -1232,3 +1232,19 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
 ### PR 3, étape 9 : `ya-extension` requis (E13, C16)
 
 - Les deux jobs de `ya-extension` tournent sur chaque PR et sortent vite en succès hors de leur périmètre : `extension (tsc, lint, tests, vsix, e2e)` (extension et workflow) et `e2e vrai binaire (build debug, provider factice)` (périmètre de C15). **Demande à Yusuf** : les ajouter aux checks requis de la protection de `main` (Claude Code n'y touche pas).
+
+### CI complète et `.vsix` de la tête `3920923ac` (21/11/2026)
+
+- **`ya-extension`** 44920060932 : `extension (tsc, lint, tests, vsix, e2e)` succès, e2e 9/9, `.vsix` 198 934 octets ; `e2e vrai binaire (build debug, provider factice)` succès, e2e 5/5, aucun processus restant (cache 11 s, build 50 s, venv 2 s, e2e 21 s, job 1,9 min).
+- **PR sortie du brouillon** (`gh pr ready 75`) une fois tous les runs de la tête finis. **`ci`** 44920281632 (`pull_request`, après le passage en prêt) : succès. `gh pr checks 75 --required` : **14 checks requis en succès**, aucun en skipping ; sur l'ensemble, 26 en succès et 5 en skipping (non requis).
+- **`install-vsix.sh`** lancé par Claude Code (règle 13) dans un dossier d'extensions isolé : `extensions/vscode/scripts/install-vsix.sh 44920060932 <scratchpad>/ext-isole` → taille 198 934 octets (limite 5 000 000), sha256 `641163df25e99c48a03e8a55ca617267974c89e00afa4bc2f85e2cd87e251b4f`. Les 9 fichiers attendus : `[Content_Types].xml`, `extension.vsixmanifest`, `extension/LICENSE.txt`, `extension/dist/extension.js`, `extension/dist/webview/main.css`, `extension/dist/webview/main.js`, `extension/media/icon.svg`, `extension/package.json`, `extension/readme.md`. Puis `yusagent.yusagent@0.1.0`, `installé`.
+
+### `PRIME_AGENT_KERNEL_PYTHON` retirée de l'environnement du binaire (décision de Yusuf, 21/11/2026)
+
+- **Unharnessed** (`157dcdc1d`, clone de lecture) :
+  - **binaire** : son équivalent renommé `UNHARNESSED_KERNEL_PYTHON` est traité comme chez nous. Python de l'appelant, skills Python absents désactivés avec un avertissement (`crates/uh-core/src/kernel/bootstrap/mod.rs:192-226`) ;
+  - **extension** : aucun filtrage. `spawn(this.binary, args, { cwd: this.cwd, stdio: "pipe" })` sans option `env` (`vscode/src/agent.ts:96`), donc tout l'environnement de VS Code passe ; aucune mention de `KERNEL_PYTHON` dans `vscode/src` ;
+  - son e2e passe `UNHARNESSED_KERNEL_VENV`, pas le Python (`vscode/test/e2e/run.mjs:1060`), comme notre étape 6.
+- **Donc, comme décidé** : notre extension retire `PRIME_AGENT_KERNEL_PYTHON` de l'environnement passé au binaire, sans réglage avancé (`extensions/vscode/src/ya/env.ts`, `agentEnv` ; accroche dans `src/agent.ts`, `spawn`). `PRIME_AGENT_KERNEL_VENV` et le reste passent ; l'environnement de VS Code n'est pas modifié.
+- **Test** (`agent.test.ts`, « environnement du binaire ») : l'agent factice note les deux variables reçues. `PRIME_AGENT_KERNEL_PYTHON` absente, `PRIME_AGENT_KERNEL_VENV` présente. `ℹ tests 51`, `ℹ pass 51`. **Contrôle négatif** (`spawn` avec `this.env`) : `ℹ fail 1`, « PRIME_AGENT_KERNEL_PYTHON ne passe pas au binaire » ; fichier restauré.
+- Remplace le « non corrigé, à trancher » de la section « Limites du job `real-binary` ».
