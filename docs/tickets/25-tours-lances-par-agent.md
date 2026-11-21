@@ -185,3 +185,26 @@ Le tableau ci-dessus (lecture du code) est confirmé pour les trois commandes. P
 - deux réveils peuvent se suivre à 5 ms d'écart (`agent_end` puis `agent_start`) : chacun son identifiant ;
 - l'issue d'un réveil se lit sur la raison d'arrêt du dernier message assistant (déjà suivie par le pont, `assistant_stop_reason`) ; un réveil arrêté par le Stop du pont ne publie ni frontière ni enveloppe, comme Unharnessed (`settle_turn`, chemin d'annulation) ;
 - le genre se lit sur le message `custom` qui ouvre le tour (`async_bash_completion` → `bash`).
+
+## 7. Réalisation (branche `ya-25-tours-reveil`)
+
+**Pont** (`crates/pa-daemon/src/acp/ya_turns.rs`, accroches dans `daemon.rs`, champ `turn_start` dans `meta.rs`) :
+- `agent_start` du worker hors prompt du pont (identifiant de tour actif à `0`) : le pont prend un identifiant au compteur de `begin_prompt` et le tour devient actif ; ses mises à jour portent cet identifiant ;
+- `turnStart` est publié avant la première mise à jour du tour, au premier message : `custom` `async_bash_completion` → `wake: "bash"`, `heartbeat_prompt` → `"heartbeat"`, `goal_context` → `"goal"` ; message utilisateur qui porte `<provider_quota_resumed>` → `"quota"` ; autre message utilisateur (TUI attaché, prompt planifié) → `origin: "prompt"` sans `rewindTo` (E4) ; autre premier message → `wake` sans genre. Un prompt du pont publie `turnStart` (`origin: "prompt"`) juste après `begin_prompt`. `rewindTo` n'est jamais rempli (pas de retour en arrière dans le pont) ;
+- `agent_end` : `responseBoundary` (`result`, ou `error` si le dernier message assistant finit en erreur, comme un prompt en échec, sans enveloppe), l'identifiant est rendu, puis l'enveloppe de fin (événement de quiescence, `terminalQuiescence`) est publiée par une tâche à part après une lecture au démon (`wait_for_headless_completion` avec la barrière de quiescence, `get_rlm_children` ; E5 : deux requêtes par réveil) ;
+- un tour arrêté par le Stop du pont ne publie ni frontière ni enveloppe (Unharnessed, `settle_turn`) ;
+- **T3** : un prompt du pont prend son identifiant quand aucun tour de l'agent ne tourne (essai toutes les 50 ms, sous le verrou de l'état de session que prend aussi la boucle d'événements) ; il n'attend pas l'enveloppe : sa lecture attend un worker au repos et une file vide (`crates/pa-daemon/src/worker/lifecycle.rs:638-654`), et une file suspendue par l'abort d'un autre client ne reprend qu'au prompt suivant, ce qui aurait bloqué ce prompt ;
+- **T4** : `session/cancel` sans prompt du pont, pendant un tour de l'agent : `abort_and_send_queued` (`CancelOrder::AgentTurnStop`). Le Stop d'un prompt du pont (y compris un prompt qui attend la fin d'un réveil) garde `abort_and_clear_queue`.
+
+**Extension** : `src/ya/meta.ts` ne déduit plus rien ; `chat.ts` traite `turnStart` comme le code d'Unharnessed et ferme un tour de l'agent sur sa `responseBoundary` (`info`) ; genre `heartbeat` ajouté.
+
+**Tests** :
+- Rust, unitaires (`ya_turns.rs`) : origine lue sur le premier message, forme de `turnStart`, deux réveils et deux identifiants, tour dans un prompt du pont non compté, réveil arrêté sans trame, réveil en erreur ;
+- Rust, e2e (`crates/pa-cli/tests/ya_acp_wake_turn_e2e.rs`, provider factice, vrai kernel) : (a) `turnStart` de chaque tour, deux réveils fermés par leur frontière puis `terminalQuiescence`, aucune réponse pour eux ; (b) prompt envoyé pendant un réveil, admis après sa frontière ; (c) Stop pendant un réveil : pas de frontière pour lui, suite de sa cellule non exécutée, l'avis resté en file réveille l'agent ;
+- extension : unitaires (adaptateur, tour de l'agent ouvert et fermé), e2e agent factice (tour de l'agent puis message suivant envoyé tout de suite ; Stop pendant un réveil), e2e vrai binaire (session « auto » : tour lancé par l'agent fermé sur `responseBoundary`, message suivant envoyé tout de suite).
+
+**Limites connues** :
+- un tour lancé par un autre client (E4) pendant qu'un prompt de l'extension attend son début serait rattaché à ce prompt (`chat.ts`, `begin`, `origin: "prompt"` avec un prompt envoyé) ; course étroite, l'extension n'envoie pas de prompt pendant un tour affiché ;
+- E8 (accepté) ;
+- genres `heartbeat`, `goal`, `quota` : lus sur le premier message du tour, couverts par les tests unitaires, **non mesurés sur le binaire** ;
+- un worker perdu au milieu d'un tour de l'agent (aucun `agent_end`) laisse le prompt suivant en attente, comme un `prompt_and_wait` derrière un tour du worker aujourd'hui.
