@@ -41,7 +41,9 @@ Tests exploratoires jetables, retirés après la mesure : l'agent factice rejoue
 
 - **Le panneau reste occupé** : `busy` vrai 2 s après le réveil ; un message envoyé reste en file (`session/prompt` reçus 1, en file 1).
 - **Stop le débloque** : le tour de réveil passe « cancelled », `session/cancel` est envoyé, la file n'est pas en pause, et le message suivant part (`session/prompt` reçus 2, en file 0).
-  - **Limites** : le tour, fini en réalité, s'affiche « Stopped ». Sur le vrai pont, `session/cancel` hors prompt mène à `AbortAndClearQueue` dans le worker (`daemon.rs:886-900`, `stop_session_work`), ce qui peut vider d'autres travaux en file, par exemple un autre avis `[bash-done]`. **Non mesuré sur le binaire.**
+  - **Limites** : le tour, fini en réalité, s'affiche « Stopped ». **Corrigé le 21/11/2026 (relecture de `main` `c2b1093c5`)** : sur le vrai pont, `session/cancel` hors prompt **n'a aucun effet**. `arm_cancel_locked` répond `CancelOrder::None` quand aucun tour du pont n'est en cours et qu'aucun arrêt n'a échoué (`crates/pa-daemon/src/acp/daemon.rs:811`) ; `stop_session_work` et son `AbortAndClearQueue` (`daemon.rs:894`) ne sont atteints que pendant un prompt. Le tour de réveil continue donc dans le worker ; le Stop de l'extension n'est qu'affiché.
+  - **Les avis `[bash-done]` sont des lignes de la file `steering` du worker** (`admit_kernel_notice`, `crates/pa-daemon/src/worker/queue.rs:531-581`) : ligne visible si la session est occupée, invisible (`Injected`) si elle est au repos (`:550-554`).
+  - **Après un abort, la file est suspendue** (`queued_input_suspended`, posé par `request_abort`, `crates/pa-daemon/src/worker/commands.rs:335`, et par `abort_and_clear_queue`, `:693`) : le runner ne prend plus rien (`crates/pa-daemon/src/worker/turn.rs:59`) jusqu'à un point de reprise. Le prompt suivant du pont en est un : il porte `streamingBehavior` (`daemon.rs:1500`), qui lève la suspension (`crates/pa-daemon/src/worker/input.rs:54-64`).
 - **Deux réveils** partageraient l'identifiant `0` : le second irait dans le tour du premier (`known(0)` dans `meta.ts`).
 - **Début de tour déduit** (`meta.ts`) : premier événement de contenu d'un `promptTurnId` inconnu. Un `config_option_update` porte aussi un `promptTurnId` (défaut corrigé à la PR I). La déduction est fragile ; un signal explicite du pont la remplace.
 
@@ -71,7 +73,7 @@ Tests exploratoires jetables, retirés après la mesure : l'agent factice rejoue
 
 ## 4. Choix à trancher
 
-**T1, T2, T3 tranchés par la décision de Yusuf du 21/11/2026 (section 5) ; T4 reste ouvert.**
+**T1, T2, T3 tranchés par la décision de Yusuf du 21/11/2026 (section 5) ; T4 tranché le 21/11/2026 (section 6).**
 
 1. **T1, forme du signal de début** :
    - (a) dans l'espace du pont (`ai.primeintellect.prime-agent`), champ `turnStart` à la forme d'Unharnessed (`origin`, `wake`) : l'extension reprise le lit déjà ;
@@ -84,7 +86,7 @@ Tests exploratoires jetables, retirés après la mesure : l'agent factice rejoue
 ## Points ouverts
 
 - `agent_start`/`agent_end` d'un tour de réveil vus par le pont : non mesurés (plan, étape 1).
-- Effet de `session/cancel` hors prompt sur la file du worker : non mesuré.
+- Effet de `session/cancel` hors prompt sur la file du worker : aucun sur `main` (§1.4, corrigé) ; effet des commandes d'arrêt du démon pendant un réveil : mesure de la section 6.
 - Tours lancés par le worker autres que `[bash-done]` : à lister et mesurer (1.5).
 
 ## 5. Décision de Yusuf (21/11/2026) : la solution d'Unharnessed
@@ -103,7 +105,7 @@ Le signal de début `turnStart` (`origin: "prompt"`) vaut aussi pour les tours d
 - **T1** : (a) dans l'espace du `_meta` du pont, à côté de `phase`, `outcome` et `promptTurnId`, comme Unharnessed les range ensemble dans le sien. Les noms de champs sont ceux d'Unharnessed ; l'extension reprise les lit déjà (`turnStart`, `chat.ts`). Ma recommandation (b) `_yus/turnStart` est écartée par la décision.
 - **T2** : `responseBoundary` puis l'enveloppe de fin, comme Unharnessed et comme nos tours de prompt.
 - **T3** : comme Unharnessed, un prompt qui arrive pendant un tour de réveil **attend** sa fin, puis est admis (`handle_session_prompt`, `prompt.rs:38-61`, essai toutes les 50 ms). Il n'est pas refusé, contrairement à ma recommandation.
-- **T4** (Stop pendant un réveil) : reste ouvert, voir l'écart E6.
+- **T4** (Stop pendant un réveil) : tranché le 21/11/2026, section 6.
 - Tests : ceux de §2.4, plus un prompt envoyé pendant un réveil (admis après sa fin, pas refusé).
 
 ### Écarts imposés par notre démon, avec leur raison
@@ -115,7 +117,7 @@ Le signal de début `turnStart` (`origin: "prompt"`) vaut aussi pour les tours d
 | **E3, avis pendant un tour** | Un avis n'entre jamais dans un tour en cours : il attend la fin du tour (`wakes.rs:10-12`). | Le démon peut glisser un avis `[bash-done]` dans un tour en cours (file `steering` du worker) : alors pas de tour de réveil, l'avis s'affiche dans le tour en cours. | Comportement du worker du démon ; changer la file sort de ce ticket (le regroupement des avis dans le démon est E11, ticket à part). |
 | **E4, tour lancé par un autre client** | Sans objet (pas de démon, pas de TUI attaché). | Un TUI attaché à la même session (K5) peut lancer un prompt : pour le client ACP, c'est un tour qu'il n'a pas lancé. Proposé : même forme, `origin: "prompt"` sans `rewindTo` ; l'extension l'affiche comme un tour de l'agent. **À confirmer.** | Session résidente du démon, partageable entre clients (ticket 24, écart 7). |
 | **E5, enveloppe de fin** | Construite dans le processus (`publish_completion_envelope`, `session.rs:583-624`). | Même enveloppe, mêmes noms. Ses données (quiescence, objectif, sous-agents) demandent une requête au démon (`fetch_autonomous_status`, comme après un prompt, `daemon.rs:1592-1620`) : une requête de plus par réveil. | Les données vivent dans le worker du démon. |
-| **E6, Stop pendant un réveil** (T4) | `session/cancel` arrête la tâche du tour ; pas de frontière, pas de réponse (`settle_turn`, chemin d'annulation, `prompt.rs:870-880`). L'extension marque le tour « Stopped » d'elle-même. | `session/cancel` mène à `AbortAndClearQueue` (`daemon.rs:886-900`) : il arrête le tour, **et vide aussi la file du worker** (d'autres avis en attente). Effet non mesuré. | Sémantique d'arrêt du démon (`stop_session_work`). Proposé : mesurer, puis, si des avis sont perdus, un arrêt du seul tour en cours (`Abort` sans vider la file, si le démon l'offre), à trancher. |
+| **E6, Stop pendant un réveil** (T4) | `session/cancel` arrête la tâche du tour ; pas de frontière, pas de réponse (`settle_turn`, chemin d'annulation, `prompt.rs:870-880`). L'extension marque le tour « Stopped » d'elle-même. | **Corrigé le 21/11/2026** : sur `main`, `session/cancel` pendant un réveil n'a aucun effet (`daemon.rs:811`, §1.4) ; le tour continue. Une fois le tour de réveil connu du pont, le Stop passe par une commande d'arrêt du démon. Celle des prompts, `AbortAndClearQueue` (`daemon.rs:894`), arrête le tour **et vide la file du worker** (`commands.rs:593-633`), donc les avis `[bash-done]` en attente. Toute commande d'arrêt suspend la file jusqu'au prompt suivant (§1.4). | Sémantique d'arrêt du démon (`stop_session_work`). Proposé : mesurer, puis, si des avis sont perdus, un arrêt du seul tour en cours (`Abort` sans vider la file, si le démon l'offre), à trancher. |
 | **E7, ordre des identifiants** | Un seul compteur, la couche ACP lance chaque tour. | Même compteur, mais un prompt et un réveil peuvent se croiser : le prompt attend la fin du réveil (T3) avant `begin_prompt`, pour qu'aucun événement du réveil ne prenne l'identifiant du prompt. | Le worker peut commencer un réveil pendant que le pont admet un prompt. |
 
 ### Fichiers (mise à jour de §3)
@@ -130,3 +132,23 @@ Le signal de début `turnStart` (`origin: "prompt"`) vaut aussi pour les tours d
 - **E4 validé** : un tour lancé par un TUI attaché à la même session a `turnStart` avec `origin: "prompt"`, sans `rewindTo` ; l'extension l'affiche comme un tour de l'agent.
 - **E6 à mesurer dans ce ticket**, avec un test qui montre ce que Stop pendant un réveil retire de la file du worker. Proposition de cas (test e2e du pont, provider factice) : deux `bash()` non lus qui finissent à quelques secondes d'écart ; Stop pendant le premier réveil ; on relève si le second avis `[bash-done]` arrive encore (nouveau tour de réveil) ou s'il a été retiré par `AbortAndClearQueue`, et ce que contient la file du worker avant et après. Selon le résultat, choix T4 (garder `AbortAndClearQueue`, ou n'arrêter que le tour en cours).
 - **Cas de E6 validé par Yusuf (21/11/2026)** : deux `bash()` non lus qui finissent à quelques secondes d'écart ; Stop pendant le premier tour de réveil ; on regarde si le second avis `[bash-done]` arrive encore (second tour de réveil) ou s'il a été retiré de la file du worker par `AbortAndClearQueue`. Test e2e du pont, provider factice, aucun modèle. Le résultat décide T4.
+
+## 6. T4 et E6 : décisions de Yusuf (21/11/2026)
+
+### Les trois commandes d'arrêt du démon (lecture du code de `main` `c2b1093c5`, avant mesure)
+
+| Commande | Tour en cours | Avis déjà en file au Stop | Avis arrivé après le Stop |
+|---|---|---|---|
+| `abort_and_clear_queue` (Stop d'un prompt dans le pont, `daemon.rs:894`) | arrêté | perdu (`commands.rs:593-633`) | suspendu jusqu'au prompt suivant |
+| `abort` | arrêté | gardé, suspendu jusqu'au prompt suivant (`request_abort` ne retire que les lignes invisibles, `commands.rs:328-360`) | suspendu jusqu'au prompt suivant |
+| `abort_and_send_queued` (Stop du TUI, `crates/pa-tui/src/session_ui/apply.rs:27-33`) | arrêté | gardé et livré tout de suite, nouveau tour de réveil (`commands.rs:299-322`) | suspendu jusqu'au prompt suivant si la file était vide au Stop (`:317-319`) |
+
+Unharnessed (`157dcdc1d`) : Stop n'arrête que le tour en cours ; les avis en attente restent (`drop_notices`, `crates/uh-core/src/session_engine/wakes.rs:192`, n'est appelé qu'à la fin d'un objectif, `:225-237`) et réveillent la session une fois l'annulation finie (`start_wake_turn`, `crates/uh-daemon/src/acp/prompt.rs:216-229`).
+
+### Décisions
+
+- **T4** : un Stop pendant un tour de réveil envoie **`abort_and_send_queued`**. Le Stop d'un tour de prompt reste `abort_and_clear_queue` (upstream).
+- **E8 accepté** : un avis qui arrive après un Stop, file vide au Stop, attend le prompt suivant (file suspendue) ; Unharnessed réveillerait la session. Cet avis passe alors avant le prompt, et son contenu s'affiche dans le tour de ce prompt. Ligne au journal du CDC.
+- **E6 mesuré au niveau du démon**, et non par un test du pont : sur `main`, le pont ne transmet pas le Stop d'un réveil (§1.4). Script commité (`bench/tools/capture/wake_turns.py`) et lancé sur le binaire de référence `1b96bb645` avant toute ligne de code du pont. Pour chacune des trois commandes : la file avant et après le Stop, si un second tour de réveil démarre, et si chaque requête envoyée au provider après le Stop garde le prompt système et les tools identiques, avec l'historique en ajout seul par rapport à la requête précédente.
+- **Arrêt et compte rendu avant le pont** si `agent_start`/`agent_end` n'arrivent pas tels quels, si la mesure contredit le tableau pour `abort_and_send_queued`, ou si une requête après le Stop casse le préfixe avec `abort_and_send_queued`.
+- Commits préfixés `YA-10: ticket 25 : …`.
