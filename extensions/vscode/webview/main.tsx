@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./powder";
+import "./ya-probe"; // yusAgent : sonde des tests e2e
 import "./styles.css";
 import { post } from "./vscode";
 

@@ -20,6 +20,7 @@ import { SignIn } from "./SignIn";
 import { Splash } from "./Splash";
 import { Status } from "./Status";
 import { onHostMessage, post, saveDraft, savedDraft } from "./vscode";
+import { FeaturesContext, NO_FEATURES } from "./ya-features"; // yusAgent
 
 type Phase = "boot" | "splash" | "main";
 export type ProviderResult = Extract<HostMessage, { type: "providerResult" }>;
@@ -29,6 +30,8 @@ export type SettingResult = Extract<HostMessage, { type: "settingResult" }>;
 
 export function App() {
   const [phase, setPhase] = useState<Phase>("boot");
+  // yusAgent : fonctions montrées (message `init`).
+  const [features, setFeatures] = useState(NO_FEATURES);
   const [agent, setAgent] = useState<AgentState | null>(null);
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [login, setLogin] = useState<LoginState | null>(null);
@@ -66,6 +69,7 @@ export function App() {
     const off = onHostMessage((message) => {
       switch (message.type) {
         case "init":
+          setFeatures(message.features);
           setAgent(message.agent);
           setProviders(message.providers);
           setLogin(message.login);
@@ -201,6 +205,7 @@ export function App() {
       );
     default:
       return (
+        <FeaturesContext.Provider value={features}>
         <PathsContext.Provider value={paths}>
           <Status
             agent={agent}
@@ -219,6 +224,7 @@ export function App() {
             history={history}
           />
         </PathsContext.Provider>
+        </FeaturesContext.Provider>
       );
   }
 }

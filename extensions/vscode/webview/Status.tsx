@@ -1,3 +1,4 @@
+import { useFeatures } from "./ya-features"; // yusAgent
 import { useEffect, useState } from "react";
 import type { AgentState, ChatState, HistoryState, KernelState, Provider, SessionState } from "../src/protocol";
 import { Transcript } from "./Chat";
@@ -52,6 +53,9 @@ export function Status({
   history: HistoryState;
 }) {
   const [browsing, setBrowsing] = useState(false);
+  // yusAgent : entrées masquées tant que le pont ne sert pas leurs méthodes ; bandeau D4.
+  const features = useFeatures();
+  const auto = session?.kind === "open" && session.config.permissions === "auto";
   // The agent lists the conversations: the menu closes when it stops.
   useEffect(() => {
     if (agent.kind !== "ready") setBrowsing(false);
@@ -68,6 +72,7 @@ export function Status({
             className="icon-button"
             type="button"
             aria-label="Providers"
+            hidden={!features.providers}
             data-tip="Providers"
             data-tip-side="below"
             disabled={agent.kind !== "ready"}
@@ -79,6 +84,7 @@ export function Status({
             className="icon-button"
             type="button"
             aria-label="Settings"
+            hidden={!features.settings}
             data-tip="Settings"
             data-tip-side="below"
             disabled={agent.kind !== "ready"}
@@ -90,6 +96,7 @@ export function Status({
             className={browsing ? "icon-button is-open" : "icon-button"}
             type="button"
             aria-label="History"
+            hidden={!features.history}
             aria-haspopup="menu"
             aria-expanded={browsing}
             data-tip={browsing ? undefined : "History"}
@@ -116,6 +123,11 @@ export function Status({
         </div>
         {browsing && <HistoryMenu history={history} draft={draft} onClose={() => setBrowsing(false)} />}
       </header>
+      {auto && (
+        <div className="ya-banner" role="alert">
+          ⚠ Mode auto sans sandbox : les cellules s'exécutent sans demander, avec vos droits.
+        </div>
+      )}
       <Transcript chat={chat} editing={editing}>
         {kind && (
           <div className={`agent-line is-${kind}`}>

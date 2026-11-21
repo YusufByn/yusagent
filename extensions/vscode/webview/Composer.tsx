@@ -45,6 +45,7 @@ import {
 } from "./icons";
 import { ProviderLogo } from "./logos";
 import { findPaths, knows, MentionText, nameOf, PathsContext, type Paths } from "./mentions";
+import { useFeatures } from "./ya-features"; // yusAgent
 import { KernelTray } from "./Kernel";
 import { isLocal, ModelList, providerName } from "./models";
 import { PickMenu } from "./PickMenu";
@@ -181,8 +182,10 @@ export function Composer({
   }, [menu, pickers]);
 
   const slash = slashCommands(draft.text, chat.commands);
+  // yusAgent : pas de mentions tant que le prompt reste en blocs texte (§5.4).
+  const features = useFeatures();
   // While a command's text is written, an `@` in it opens the files.
-  const word = slash === null || slash.arg !== null ? mentionQuery(draft.text, caret) : null;
+  const word = features.attachments && (slash === null || slash.arg !== null) ? mentionQuery(draft.text, caret) : null;
   /** What a dismissal holds for: the text; while a command's text is written, the command. */
   const shutKey =
     word === null && slash?.arg != null ? draft.text.slice(0, draft.text.length - slash.arg.length) : draft.text;
@@ -240,6 +243,7 @@ export function Composer({
   };
 
   const addFiles = (files: File[]) => {
+    if (!features.attachments) return; // yusAgent : pas d'images (§5.4)
     const found = files.filter((file) => IMAGE_TYPES.includes(file.type) || file.type.startsWith("image/"));
     if (found.length === 0) return;
     if (images.block) {
@@ -495,6 +499,7 @@ export function Composer({
               data-tip={images.block ? "Images are blocked in the settings" : "Attach images, or drop them with Shift held"}
               data-tip-align="start"
               disabled={images.block}
+              hidden={!features.attachments}
               onClick={() => picker.current?.click()}
             >
               <IconPlus />
@@ -768,6 +773,8 @@ const QUEUED = "application/x-unharnessed-queued";
  */
 function Queue({ queue, paused, busy }: { queue: QueuedMessage[]; paused: boolean; busy: boolean }) {
   const [open, setOpen] = useState(true);
+  // yusAgent : « Send now » pendant un tour seulement si le pont sert le message pendant un tour.
+  const { steer } = useFeatures();
   const [dragged, setDragged] = useState<number | null>(null);
   /** Where the dragged one would land: before the waiting message at this place, or last past them. */
   const [target, setTarget] = useState<number | null>(null);
@@ -880,6 +887,7 @@ function Queue({ queue, paused, busy }: { queue: QueuedMessage[]; paused: boolea
                       className="queued-action is-now"
                       type="button"
                       aria-label="Send now"
+                      hidden={busy && !steer}
                       data-tip={busy ? "Send now: the agent reads it at its next step" : "Send now"}
                       onClick={() => post({ type: "sendNow", id: message.id })}
                     >
