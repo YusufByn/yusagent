@@ -4,6 +4,30 @@ Demande de Yusuf du 21/11/2026. Branche `ya-24-extension`, depuis `main` à `746
 
 Référence : YA-10 du CDC (`docs/yusAgent-cdc.md:365-391`).
 
+## Décisions de Yusuf (21/11/2026)
+
+- **E1** : `extensions/vscode/`.
+- **E2** : client ACP écrit à la main.
+- **E3** : **React en TypeScript** (CDC), pour ne pas réécrire l'interface quand elle grossira après les testeurs. CSP stricte, sans script inline, tout groupé par esbuild. Taille du .vsix mesurée dans la PR 2.
+- **E4** : réglage `yusagent.binaryPath`, binaire hors du .vsix.
+- **E5** : option B, plafond de **8 000 caractères par appel**, pour l'affichage seulement (rien de plus vers le modèle).
+- **E6** : option (a), avec deux garde-fous :
+  - « Rejeter » n'est disponible que lorsqu'aucun tour n'est en cours ;
+  - la restauration est refusée, avec un message, si le contenu actuel du fichier n'est plus celui laissé par cette modification (modification plus récente, ou changement de Yusuf).
+- **E7** : rien envoyé à l'ouverture.
+- **E8** : bandeau calculé par l'extension.
+- **E9** : `$/cancel_request` envoyé par le pont, et fermeture de la boîte par l'extension.
+- **E10** : dans la PR 1.
+- **E11** : ticket à part, avant les testeurs.
+- **E12** : correctif dans ce ticket s'il reste dans le pont ou le worker.
+- **E13** : `ubuntu-latest` + `xvfb` ; check requis à partir de la PR 3.
+- **E14, E15** : reportés.
+- **PR 1, en plus** :
+  - mesurer par capture l'égalité du préfixe entre le chemin ACP et `-p`. **Si le préfixe diffère : arrêt et compte rendu à Yusuf avant d'aller plus loin** ;
+  - vérifier que changer de modèle ou d'effort en cours de session est journalisé comme invalidation de cache (`docs/yusAgent-cdc.md:19`).
+- **Journal du CDC** : écarts portés le 21/11/2026 (`docs/yusAgent-cdc.md:92`).
+- PR 1 sur la même branche, pushs regroupés, pas de merge.
+
 ## 1. Inventaire
 
 ### 1.1 Aucun client éditeur, ni chez nous ni chez upstream
@@ -272,3 +296,38 @@ Le prompt système et les tools viennent du binaire seul.
 - Changement de modèle ou d'effort en cours de session « journalisé comme invalidation de cache » (`docs/yusAgent-cdc.md:19`) : non vérifié dans le pont.
 - Écart à porter au journal du CDC après décision : indicateur de cache reporté (section 2). Les autres reports (Zed, Windows/WSL, terminal, captures, clés, par hunk) sont demandés par Yusuf ; à porter aussi.
 - Ticket 22, `:79` : phrase périmée, à corriger avec le premier push de code.
+
+## PR 1 : vérifications préalables (21/11/2026)
+
+### Préfixe ACP contre `-p` : **différent, arrêt**
+
+- **Binaire** : `main` (arbre de `746a95559`, identique à `5c17d0dc5` : `git diff --stat 5c17d0dc5 746a95559` vide), artefact du run `ya-build-macos-arm64` 44815536790, `SHA256SUMS` vérifié, `yusagent --version` = `0.10.2-continuous.5c17d0dc5…`.
+- **Commande** : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 bench/tools/capture/run.py --binary <dossier>/yusagent --out <scratchpad>/cap-main`, puis comparaison des 4 requêtes du cas `s1-anthropic` (`-p`) avec les 4 du cas `acp` (`run.py:281-355`, même scénario `basic`, même projet, mêmes réglages, permissions « auto »), clé par clé (script de comparaison dans le scratchpad de Claude Code, à verser au banc si Yusuf le veut).
+- **Correctif du banc nécessaire pour lancer la mesure** : la chauffe (`prepare`) n'écrivait pas `settings.json`, donc tournait en permissions « manual » et le binaire refusait de démarrer en `-p` (message de D6 du ticket 20). `bench/tools/capture/run.py` : `write_settings(warm / "agent")` ajouté dans `prepare`. Fichier du fork, sans effet sur ce qui est mesuré.
+- **Résultat** : `tools`, `messages` et toutes les autres clés identiques sur les 4 requêtes ; **`system` diffère** sur les 4 (5 286 caractères en `-p`, 5 265 en ACP) :
+
+  ```diff
+  --- p (s1-anthropic)
+  +++ acp
+  @@ -41,2 +41,3 @@
+   - `mcp`: call tools on the user's MCP services. `$PRIME_AGENT_BUNDLED_SKILLS_DIR/mcp/SKILL.md`
+  +- `rlm-heartbeat` (import `rlm_heartbeat`): schedule a recurring wake-up when the user asks for one. `$PRIME_AGENT_BUNDLED_SKILLS_DIR/rlm-heartbeat/SKILL.md`
+
+  @@ -45,3 +46 @@
+   Image input: this model cannot see images; `attach_image` errors for it.
+  -
+  -This session has no daemon: heartbeats never fire. Commands that end after their cell wake you with a `[bash-done]` message; the run waits for running commands before it exits.
+  ```
+
+- **Origine** (comportement d'upstream, repris par le prompt v2) :
+  - la ligne « no daemon » n'est ajoutée qu'aux sessions sans démon (`crates/pa-core/src/prompts/system_prompt.rs:378-391`, `options.daemonless`), au texte v2 de `crates/pa-core/src/prompts/ya_prompt_v2.rs:108` ;
+  - le skill `rlm-heartbeat` n'est montré que si le gestionnaire `rlm_heartbeat.create` est enregistré (`crates/pa-core/src/session_engine/runtime_wiring.rs:196-216`, `model_visible_skills`) : c'est le cas dans le worker du démon, pas en `-p`.
+- **Conséquence** : le banc (`-p`) ne mesure pas exactement le préfixe que verra l'extension (démon). Les deux sont stables chacun de son côté (aucun élément volatil dans le diff) ; l'écart est structurel : démon contre sans démon. Le TUI passe aussi par le démon : il a très probablement le préfixe d'ACP (non mesuré).
+- **Arrêt** (décision de Yusuf) : rien d'autre dans la PR 1 avant sa décision.
+
+### Changement de modèle ou d'effort : **pas journalisé comme invalidation**
+
+- Le changement écrit une ligne `model_change` ou `thinking_level_change` dans le fichier de session (`crates/pa-core/src/session_engine/mod.rs:349-404`).
+- Le journal d'usage écrit le provider, le modèle et l'effort de **chaque** appel (`crates/pa-core/src/session_engine/usage_log.rs:398-401`) : le changement s'y voit en comparant deux lignes.
+- Mais aucun champ `invalidation` n'est écrit pour ce changement : le seul appel de `note_invalidation` est celui du masquage (`crates/pa-core/src/session_engine/masking.rs:177`). Le critère du CDC (`docs/yusAgent-cdc.md:19`, « changement en cours de session journalisé comme invalidation de cache ») **n'est pas tenu**.
+- Pas de correctif sans décision : il toucherait `session_engine/mod.rs` (fichier upstream) ou le chemin de `set_model` du worker.
