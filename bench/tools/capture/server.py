@@ -195,6 +195,15 @@ SCENARIOS: dict[str, list[str]] = {
         "print(await edit('ya-display/a.txt', 'un', 'deux'))",
         "import shutil\nshutil.rmtree('ya-display')\nprint('NETTOYE')",
     ],
+    # YA-10 (ticket 25) : Stop pendant un tour de réveil. Deux bash() non lus ; le second finit
+    # avant le Stop (`-avant`, la commande d'arrêt part pendant que son avis attend en file) ou
+    # après (`-apres`). Les tours de réveil jouent `WAKE_STOP_CELLS` (voir `wake_cell`).
+    "wake-stop-avant": [
+        "h1 = bash('sleep 2; echo un')\nh2 = bash('sleep 6; echo deux')\nprint('LANCES')",
+    ],
+    "wake-stop-apres": [
+        "h1 = bash('sleep 2; echo un')\nh2 = bash('sleep 20; echo deux')\nprint('LANCES')",
+    ],
     # Smoke bench (T06, YA-14) : chaque scénario résout sa tâche d'exemple en
     # quelques cellules, après la sonde réseau ; `smoke-fail` ne corrige rien.
     "smoke-probe": [NET_PROBE, READ_PROBE],
@@ -321,6 +330,29 @@ CHILD_CELLS = [
     + "print('CHILD_ENV', ya_sensitive(os.environ), os.environ.get('YA_CAPTURE_ALLOWED'))\n"
     "await agent_message.send('YA_CHILD_RESULT', receiver_role='parent')\nprint('SENT')",
 ]
+# YA-10 (ticket 25) : cellule d'un tour de réveil des scénarios `wake-stop-*`. Le premier réveil
+# occupe le kernel 15 s (le Stop tombe dedans) ; les suivants impriment leur rang.
+WAKE_STOP_SLEEP_S = 15
+BASH_DONE_MARK = "[bash-done"
+
+
+def wake_cell(body: dict) -> str | None:
+    """Cellule du tour de réveil quand le dernier message est un avis `[bash-done]` (aucun résultat
+    de tool après lui), sinon None. Le rang est le nombre d'avis dans la conversation."""
+    messages = body.get("messages") or []
+    if not messages or messages[-1].get("role") != "user":
+        return None
+    last = strings(messages[-1].get("content"))
+    if not any(BASH_DONE_MARK in text for text in last):
+        return None
+    rank = sum(text.count(BASH_DONE_MARK) for message in messages
+               if message.get("role") == "user" for text in strings(message.get("content")))
+    if rank == 1:
+        return (f"import asyncio\nprint('REVEIL 1 debut')\nawait asyncio.sleep({WAKE_STOP_SLEEP_S})\n"
+                "print('REVEIL 1 fin')")
+    return f"print('REVEIL', {rank})"
+
+
 CHILD_FINAL_TEXT = "YA_CHILD_DONE"
 FINAL_TEXT = "Capture : fin du scénario."
 AUX_TEXT = (
@@ -474,6 +506,7 @@ class CaptureState:
         self.out_dir = out_dir
         self.usage = UsageModel(prefix_cache)
         self.usage_split = usage_split
+        self.wake_stop = scenario.startswith("wake-stop-")
         self.cells = [cell.replace(CONNECT_PROXY_PORT, str(connect_proxy_port or 9))
                       .replace(READ_PROBE_PATHS, repr(list(read_probe_paths)))
                       for cell in SCENARIOS[scenario]]
@@ -504,6 +537,9 @@ class CaptureState:
                             freeform=True)
             return Plan("final", text=FINAL_TEXT)
         cells, final = (CHILD_CELLS, CHILD_FINAL_TEXT) if child else (self.cells, FINAL_TEXT)
+        wake = wake_cell(body or {}) if self.wake_stop and not child else None
+        if wake is not None:
+            return Plan("tool", tool_name=first_tool_name(tools), code=wake)
         if turn < len(cells):
             code = reread_cell(body or {}) if cells[turn] == REREAD else cells[turn]
             return Plan("tool", tool_name=first_tool_name(tools), code=code)

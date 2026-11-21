@@ -148,7 +148,40 @@ Unharnessed (`157dcdc1d`) : Stop n'arrête que le tour en cours ; les avis en at
 ### Décisions
 
 - **T4** : un Stop pendant un tour de réveil envoie **`abort_and_send_queued`**. Le Stop d'un tour de prompt reste `abort_and_clear_queue` (upstream).
-- **E8 accepté** : un avis qui arrive après un Stop, file vide au Stop, attend le prompt suivant (file suspendue) ; Unharnessed réveillerait la session. Cet avis passe alors avant le prompt, et son contenu s'affiche dans le tour de ce prompt. Ligne au journal du CDC.
+- **E8 accepté** : un avis qui arrive après un Stop, file vide au Stop, attend le prompt suivant (file suspendue) ; Unharnessed réveillerait la session. **Précisé par la mesure ci-dessous** : cet avis passe juste après le tour de ce prompt, dans le même tour du pont (même `promptTurnId`, avant la réponse du prompt), et son contenu s'affiche donc dans le tour de ce prompt. Ligne au journal du CDC.
 - **E6 mesuré au niveau du démon**, et non par un test du pont : sur `main`, le pont ne transmet pas le Stop d'un réveil (§1.4). Script commité (`bench/tools/capture/wake_turns.py`) et lancé sur le binaire de référence `1b96bb645` avant toute ligne de code du pont. Pour chacune des trois commandes : la file avant et après le Stop, si un second tour de réveil démarre, et si chaque requête envoyée au provider après le Stop garde le prompt système et les tools identiques, avec l'historique en ajout seul par rapport à la requête précédente.
 - **Arrêt et compte rendu avant le pont** si `agent_start`/`agent_end` n'arrivent pas tels quels, si la mesure contredit le tableau pour `abort_and_send_queued`, ou si une requête après le Stop casse le préfixe avec `abort_and_send_queued`.
 - Commits préfixés `YA-10: ticket 25 : …`.
+
+### Mesure (21/11/2026), binaire de référence `1b96bb645`
+
+Commande (la sortie complète est dans `bench/tools/capture/runs/ya25-wake-turns-1b96bb645.log`, dossier non versionné) :
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/wake_turns.py \
+  --binary ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent \
+  --out bench/tools/capture/runs/ya25-wake-turns-1b96bb645
+```
+
+Sortie : six cas, chacun avec ses deux prompts finis par `end_turn`, aucun processus restant, `CONFORME`. Le pont mène la session (`--mode acp`) ; un second client du socket (`attach`) relève les événements du worker et envoie la commande d'arrêt. Scénarios `wake-stop-avant` et `wake-stop-apres` du serveur de capture : deux `bash()` non lus (`sleep 2` puis `sleep 6` ou `sleep 20`), le premier réveil exécute une cellule de 15 s.
+
+**(a) Tours de réveil vus par le pont** (tous les cas) : chaque réveil arrive comme un tour du worker complet, dans cet ordre : `agent_start`, `turn_start`, le message `custom` de l'avis (`customType: "async_bash_completion"`, `details.pid`, `details.command`), l'assistant, `tool_execution_start`/`end`, le `toolResult`, `turn_end`, `agent_end` (`abort_and_send_queued-avant/events.jsonl`, 2,277 s à 6,422 s). `agent_end` ne porte que `messages` : ni issue, ni cause. Le pont relaie le contenu avec `promptTurnId: 0`, sans frontière (trames ACP du même cas). Condition d'arrêt non atteinte.
+
+**(b) Stop pendant le premier réveil**
+
+| Cas | File au Stop | Juste après la commande | Tours démarrés entre la commande et « suite » | Le second avis |
+|---|---|---|---|---|
+| `abort_and_clear_queue-avant` | avis 2 en file | file vide (la réponse liste l'avis retiré) | 0 | **perdu** : jamais envoyé au provider (1 seul avis dans la requête de « suite ») |
+| `abort-avant` | avis 2 en file | avis 2 gardé | 0 | encore en file 25 s après ; livré juste après le tour de « suite » |
+| `abort_and_send_queued-avant` | avis 2 en file | avis 2 gardé | **1** (démarré 5 ms après la fin du premier réveil, 6,427 s) | livré tout de suite, second tour de réveil complet |
+| `…-apres`, les trois commandes | vide | vide | 0 | arrivé après le Stop, en file à la fin de l'observation (suspendue) ; livré juste après le tour de « suite », dans le même tour du pont (`promptTurnId` 2, avant la réponse) |
+
+Le tableau ci-dessus (lecture du code) est confirmé pour les trois commandes. Pour `abort_and_send_queued` : condition d'arrêt non atteinte.
+
+**Préfixe des requêtes après le Stop** (`analyze.compare_pair`, chaque requête contre la précédente) : 1 requête après la commande pour `abort_and_clear_queue-avant`, 3 pour chacun des cinq autres cas. Pour toutes : prompt système identique, tools identiques, historique en ajout seul ; la seule différence avec la requête précédente est le déplacement du marqueur `cache_control` sur le dernier message (contenu identique sans le marqueur). Le tour arrêté laisse dans l'historique son appel de tool suivi d'un résultat `"Tool execution aborted"` (`is_error: true`), ajouté en fin de conversation. Condition d'arrêt non atteinte.
+
+**Conséquences pour le pont** :
+- un `agent_start` reçu pendant un prompt du pont appartient à ce prompt (cas « après » : deux tours du worker dans un seul prompt du pont) ; seul un `agent_start` hors prompt ouvre un tour de réveil ;
+- deux réveils peuvent se suivre à 5 ms d'écart (`agent_end` puis `agent_start`) : chacun son identifiant ;
+- l'issue d'un réveil se lit sur la raison d'arrêt du dernier message assistant (déjà suivie par le pont, `assistant_stop_reason`) ; un réveil arrêté par le Stop du pont ne publie ni frontière ni enveloppe, comme Unharnessed (`settle_turn`, chemin d'annulation) ;
+- le genre se lit sur le message `custom` qui ouvre le tour (`async_bash_completion` → `bash`).
