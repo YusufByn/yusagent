@@ -59,9 +59,13 @@ const tests: [string, () => Promise<void>][] = [
       }));
       assert.deepEqual(Object.keys(directives), ["default-src", "style-src", "font-src", "img-src", "script-src"]);
       assert.deepEqual(directives["default-src"], ["'none'"]);
-      const [resources] = directives["style-src"];
-      assert.ok(resources && !resources.startsWith("'"), `source des ressources : ${resources}`);
-      for (const name of ["style-src", "font-src", "img-src"]) assert.deepEqual(directives[name], [resources]);
+      // `webview.cspSource` de VS Code 1.146 : `'self'` et l'hôte des ressources de l'extension.
+      const resources = directives["style-src"];
+      assert.ok(
+        resources.length > 0 && resources.every((source: string) => source === "'self'" || /^https:\/\/\*\.vscode-cdn\.net$/.test(source)),
+        `sources des ressources : ${resources.join(" ")}`,
+      );
+      for (const name of ["style-src", "font-src", "img-src"]) assert.deepEqual(directives[name], resources);
       assert.equal(directives["script-src"].length, 1);
       assert.match(directives["script-src"][0], /^'nonce-[A-Za-z0-9+/=]+'$/);
       assert.doesNotMatch(csp, /unsafe-|data:|blob:|(^|\s)\*(\s|;|$)/);
