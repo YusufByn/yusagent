@@ -1133,3 +1133,43 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
     - « diffs » : tout passe dans VS Code, jusqu'au texte fixe (`vscode.diff`, Revert par `applyEdit` et enregistrement, `neuf.txt` à la corbeille). Seul l'ordre des deux lignes diffère : elles suivent l'ordre de fin des restaurations, lancées ensemble. Le test compare maintenant sans ordre.
     - « cartes » : il tourne après « diffs », dont la carte dit déjà « Edited ». Le test attendait ce mot et lisait la page avant le lot du chat qui porte sa carte ; il attend maintenant `exit 1`, propre à sa carte.
   - `.vsix` : 198 873 octets.
+
+### Décisions de Yusuf après l'étape 4 (21/11/2026)
+
+- **C14** : l'option (b) passe au **ticket 26** (`docs/tickets/26-colonne-diff.md`, Rust : colonne de départ dans le contenu `diff` du pont), **après le ticket 25**. Sa capture devra montrer prompt et requêtes inchangés : seules les trames `diff` changent. **Dans la PR 3, (a) reste**, avec la raison affichée.
+- **Limite de la PR 3 (suppressions pures)** : un `edit()` dont `new_str` est vide ne se rejette presque jamais. Sans colonne, toute place sur la ligne annoncée donne un « avant » valide, même pour une suppression de lignes entières ; seule exception, une ligne d'arrivée vide. La carte affiche « Revert unavailable: the edit's place on line N is ambiguous. ». Levée par le ticket 26.
+- **Libellé « Revert »** : validé.
+- **Étape 6** : options pour réutiliser le binaire de `ci.yml` présentées d'abord ; rien dans `ci.yml` avant la décision.
+
+### Étape 6 : options pour réutiliser le binaire de `ci.yml` (constat, rien de modifié)
+
+**Ce que fait `ci.yml` aujourd'hui** (fichier upstream) :
+- les 8 shards construisent les binaires debug (`cargo build --locked --workspace --bins`, `.github/workflows/ci.yml:337-339`, binaire `target/debug/prime-agent`) puis préparent le venv du kernel (étape « Bootstrap the kernel venv »), sauf si leur sélection est vide ;
+- **sur une PR qui touche un fichier hors des crates** (doc, `extensions/`, workflows), la sélection est complète (`scripts/ci_pr_crates.py:104`, « non-crate path … the full selection runs ») : les 8 shards construisent ;
+- **rien sur une PR en brouillon** (`if: … !github.event.pull_request.draft`, `ci.yml:124`, `:281`) ;
+- aucun binaire publié en artefact (les `upload-artifact` de `ci.yml:396` et `:407` publient manifestes et reçus).
+
+**Mesures** (API GitHub, runs `ci` 44906056143 et 44885855759, PR #74 et PR #72 ; `ya-extension` 44916223644) :
+
+| | Run 44906056143 | Run 44885855759 |
+|---|---|---|
+| Durée de `ci` (début → fin) | 13,2 min | 12,7 min |
+| Shard 1 (le plus long, fixe la fin de `ci`) | 11,8 min, fini à +12,8 min | 11,9 min, fini à +12,3 min |
+| Shard 7 (le plus court) | 6,6 min, fini à +7,7 min | 7,1 min, fini à +7,5 min |
+| « Build the workspace bins » (shard 1, cache cargo partagé `test-shards`) | 49 s | 49 s |
+| Binaire prêt (fin du build, depuis le début du run) | +2,4 min | +1,9 min |
+
+`ya-extension` aujourd'hui : 1,0 min, dont e2e (agent factice) 24 s. **Non mesurés, estimations** : la durée de l'e2e contre le vrai binaire (estimé 1 à 3 min : démon, kernel, plusieurs scénarios) et la taille du binaire debug (estimée plusieurs centaines de Mo ; le binaire de release fait 62 Mo).
+
+**Options**
+
+| | Montage | Temps ajouté sur une PR (fin de la CI) | Fichiers upstream touchés | Points faibles |
+|---|---|---|---|---|
+| **A** | e2e vrai binaire dans un shard de `ci.yml`, après son build : étapes `if: matrix.shard == 7` (Node, `npm ci`, e2e sous `xvfb` avec `target/debug/prime-agent`) | **≈ 0** si l'e2e tient dans la marge du shard 7 (fini vers +7,7 min, `ci` finit vers +12,8 min : environ 5 min de marge) ; +1 à 3 min de runner (estimation) | `ci.yml` : environ 20 à 25 lignes ajoutées dans le job `test-shard` (4 étapes et un commentaire) | Le résultat se lit dans « test shard 7/8 », déjà requis : pas de nouveau check requis, mais un échec de l'extension rend rouge un shard Rust. La marge dépend du découpage des shards, qu'upstream peut changer. Conflits possibles au `cherry-pick` d'un changement upstream du job `test-shard`. |
+| **A′** | Même chose dans le shard 1 | **+1 à 3 min** (estimation) : le shard 1 est le plus long | même nombre de lignes | Allonge chaque PR ; aucun avantage sur A |
+| **B** | `ci.yml` publie le binaire en artefact (shard 7, après son build) ; `ya-extension` a un job « e2e vrai binaire » qui attend cet artefact (API : run `ci` du même commit), le télécharge et lance l'e2e | **≈ 0** : `ya-extension` finit vers +5 à 7 min (artefact vers +2 à 3 min, plus téléchargement et e2e, estimation), avant `ci` | `ci.yml` : environ 7 à 8 lignes (une étape `upload-artifact`) | Couplage entre deux workflows (attente active, qui garde un runner pendant environ 2 à 3 min) ; stockage d'un artefact de plusieurs centaines de Mo par run (rétention courte à fixer) ; nouveau check à rendre requis ; en brouillon, `ci` ne tourne pas : le job doit sortir vite. |
+| **C** | Comme B, mais `ya-extension` déclenché par `workflow_run` à la fin de `ci` | **+3 à 5 min** (estimation) : l'e2e commence après la fin de `ci` | `ci.yml` : 7 à 8 lignes | Un run `workflow_run` ne s'attache pas comme check de la PR (contexte de la branche par défaut) : difficile à rendre requis. Déconseillé. |
+
+**Pour comparaison** (écarté par la décision de réutiliser le binaire) : un build à part dans `ya-extension` avec le cache cargo partagé coûterait environ 1 min de plus dans `ya-extension` (restauration du cache 16 s et build 49 s, mesurés dans le shard 1), sans fichier upstream touché. Non vérifié : que le cache `test-shards` se restaure depuis un autre workflow.
+
+**Recommandation** : **A** (shard 7). Aucun temps ajouté sur la durée de la CI tant que l'e2e tient dans la marge, pas d'artefact ni de couplage entre workflows, résultat dans un check déjà requis. Seul défaut notable : environ 20 à 25 lignes dans un fichier upstream. Si Yusuf préfère un check à part ou moins de lignes upstream : **B**.
