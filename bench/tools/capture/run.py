@@ -69,6 +69,9 @@ CASES = [
      [PROMPT], None),
     ("mask-on-anthropic", "anthropic-messages", "mask", ["--prefix-cache"], "agent-n",
      [PROMPT], {"masking": {"enabled": True}}),
+    # YA-10 (ticket 24) : bash() lu, bash() non lu (avis [bash-done] dans un tour de réveil à
+    # part), edit() : ce que l'extension affiche ne doit rien changer aux requêtes.
+    ("display-anthropic", "anthropic-messages", "display", [], "agent-d", [PROMPT], None),
 ]
 
 # YA-03 (PR 2) : famille Codex. Le provider intégré `openai`, surchargé dans models.json pour
@@ -581,6 +584,9 @@ def main() -> None:
                                        suffix="" if index == 0 else f"-{index + 1}"))
         finally:
             server.stop()
+        if scenario == "display":
+            # YA-10 (ticket 24) : le fichier de session, pour `display_check.py`.
+            shutil.copytree(work / agent / "sessions", case_dir / "sessions", dirs_exist_ok=True)
         result = {"exit": [r["exit"] for r in runs], "seconds": [r["seconds"] for r in runs],
                   "api": api, "scenario": scenario, "server_args": extra, "agent_dir": agent,
                   "prompts": prompts, "settings": settings, "provider": provider,

@@ -182,6 +182,19 @@ SCENARIOS: dict[str, list[str]] = {
         "print('COLLECT', r[0].status, r[0].settled, r[0].answer_text)",
     ],
     "mask": [mask_cell(turn) for turn in range(1, MASK_TURNS + 1)],
+    # YA-10 (ticket 24) : données d'affichage des cellules (`details.bashRuns`, `details.diffs`).
+    # Un bash() que la cellule lit ; un bash() qu'aucune cellule ne lit, dont la commande finit
+    # après la réponse finale : son avis [bash-done] arrive toujours dans un tour de réveil à
+    # part, jamais en concurrence avec une requête de la boucle ; deux edit() (création puis
+    # modification) dans un dossier retiré à la fin, pour ne rien laisser aux cas suivants
+    # (`git status` du scénario `basic`).
+    "display": [
+        "r = await bash('echo lu')\nprint('LU', r.exit_code, r.output.strip())",
+        "h = bash('sleep 3; echo non-lu')\nprint('NON_LU lance')",
+        "print(await edit('ya-display/a.txt', '', 'un\\n'))",
+        "print(await edit('ya-display/a.txt', 'un', 'deux'))",
+        "import shutil\nshutil.rmtree('ya-display')\nprint('NETTOYE')",
+    ],
     # Smoke bench (T06, YA-14) : chaque scénario résout sa tâche d'exemple en
     # quelques cellules, après la sonde réseau ; `smoke-fail` ne corrige rien.
     "smoke-probe": [NET_PROBE, READ_PROBE],
