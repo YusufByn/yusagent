@@ -20,7 +20,7 @@ const workspace = process.env.YUSAGENT_E2E_WORKSPACE as string;
 const chats = async () => (await vscode.commands.executeCommand<ChatView[]>("yusagent._test.chats")) ?? [];
 const chat = async (index = 0) => (await chats())[index];
 const message = (msg: ToHost, index = 0) => vscode.commands.executeCommand("yusagent._test.message", index, msg);
-const probe = (index = 0) => vscode.commands.executeCommand<Probe>("yusagent._test.probe", index);
+const probe = (index = 0) => vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probe", index);
 const lastPid = () => starts(control).at(-1)!.pid;
 
 async function openChat(scenario: object = {}): Promise<number> {
@@ -51,9 +51,21 @@ const tests: [string, () => Promise<void>][] = [
       const pid = await openChat();
       const view = await chat();
       const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(view.html)?.[1] ?? "";
-      assert.match(csp, /^default-src 'none'; /);
-      assert.match(csp, /script-src 'nonce-[A-Za-z0-9+/=]+'$/);
-      assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval|https?:/);
+      // Seule source autorisée : `webview.cspSource` (ressources de l'extension), la même pour
+      // les styles, les polices et les images ; scripts par nonce seulement.
+      const directives = Object.fromEntries(csp.split("; ").map((part) => {
+        const [name, ...sources] = part.split(" ");
+        return [name, sources];
+      }));
+      assert.deepEqual(Object.keys(directives), ["default-src", "style-src", "font-src", "img-src", "script-src"]);
+      assert.deepEqual(directives["default-src"], ["'none'"]);
+      const [resources] = directives["style-src"];
+      assert.ok(resources && !resources.startsWith("'"), `source des ressources : ${resources}`);
+      for (const name of ["style-src", "font-src", "img-src"]) assert.deepEqual(directives[name], [resources]);
+      assert.equal(directives["script-src"].length, 1);
+      assert.match(directives["script-src"][0], /^'nonce-[A-Za-z0-9+/=]+'$/);
+      assert.doesNotMatch(csp, /unsafe-|data:|blob:|(^|\s)\*(\s|;|$)/);
+      console.log(`CSP : ${csp.replace(/'nonce-[^']+'/, "'nonce-…'")}`);
       const scripts = view.html.match(/<script[^>]*>/g) ?? [];
       assert.equal(scripts.length, 1);
       assert.match(scripts[0], / nonce="[^"]+" src="[^"]+webview\.js"/);
@@ -86,7 +98,7 @@ const tests: [string, () => Promise<void>][] = [
   [
     "sélecteurs : affichés, set_config_option seulement sur un changement",
     async () => {
-      const { selects } = await probe();
+      const { selects } = await waitFor(async () => await probe(), "sonde");
       assert.deepEqual(selects.map((select) => [select.label, select.value, select.disabled]), [
         ["Model", "capture/model-a", false],
         ["Reasoning effort", "high", false],
@@ -97,7 +109,7 @@ const tests: [string, () => Promise<void>][] = [
       await message({ type: "setConfig", configId: "thought_level", value: "xhigh" });
       await waitFor(async () => (await chat()).state.configOptions.find((option) => option.id === "thought_level")?.currentValue === "xhigh", "effort changé");
       assert.equal(count(), 1);
-      await waitFor(async () => (await probe()).selects[1]?.value === "xhigh", "sélecteur à jour");
+      await waitFor(async () => (await probe())?.selects[1]?.value === "xhigh", "sélecteur à jour");
     },
   ],
   [
@@ -152,6 +164,7 @@ const tests: [string, () => Promise<void>][] = [
         const before = starts(control).length;
         await vscode.commands.executeCommand("yusagent.newChat");
         await waitFor(async () => (await chat())?.state.phase === "stopped", "arrêt");
+        await waitFor(async () => (await chat())?.rendered, "webview montée");
         const shown = await shows("/nulle-part/yusagent", "message binaire absent");
         assert.ok(shown.includes("Ouvrir le réglage yusagent.binaryPath") && shown.includes("Réessayer"));
         assert.equal(starts(control).length, before);

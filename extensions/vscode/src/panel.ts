@@ -13,8 +13,9 @@ export class ChatPanel {
   readonly session: ChatSession;
   private readonly panel: vscode.WebviewPanel;
   private webviewReady = false;
+  private disposed = false;
   private flushTimer: NodeJS.Timeout | undefined;
-  private probes: ((probe: Probe) => void)[] = [];
+  private probes: ((probe: Probe | undefined) => void)[] = [];
 
   constructor(
     context: vscode.ExtensionContext,
@@ -42,7 +43,9 @@ export class ChatPanel {
 
     this.panel.webview.onDidReceiveMessage((message: ToHost) => this.handle(message));
     this.panel.onDidDispose(() => {
+      this.disposed = true;
       if (this.flushTimer) clearTimeout(this.flushTimer);
+      for (const resolveProbe of this.probes.splice(0)) resolveProbe(undefined);
       void this.session.dispose();
       this.onDisposed(this);
     });
@@ -62,10 +65,21 @@ export class ChatPanel {
     return this.webviewReady;
   }
 
-  /** Texte affiché par la webview (tests e2e). */
-  probe(): Promise<Probe> {
+  /** Texte affiché par la webview (tests e2e) ; `undefined` sans réponse en 1 s (webview pas
+   * encore chargée : un message posté avant son chargement est perdu) ou après la fermeture. */
+  probe(): Promise<Probe | undefined> {
+    if (this.disposed) return Promise.resolve(undefined);
     return new Promise((resolveProbe) => {
-      this.probes.push(resolveProbe);
+      const timer = setTimeout(() => {
+        const index = this.probes.indexOf(answer);
+        if (index >= 0) this.probes.splice(index, 1);
+        resolveProbe(undefined);
+      }, 1_000);
+      const answer = (probe: Probe | undefined) => {
+        clearTimeout(timer);
+        resolveProbe(probe);
+      };
+      this.probes.push(answer);
       const message: ToWebview = { type: "probe" };
       void this.panel.webview.postMessage(message);
     });
@@ -105,7 +119,7 @@ export class ChatPanel {
 
   /** Le streaming envoie un état par morceau : regroupé sur ~16 ms. */
   private scheduleFlush(): void {
-    if (this.flushTimer) return;
+    if (this.flushTimer || this.disposed) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = undefined;
       this.flush();
@@ -113,7 +127,7 @@ export class ChatPanel {
   }
 
   private flush(): void {
-    if (!this.webviewReady) return;
+    if (!this.webviewReady || this.disposed) return;
     const message: ToWebview = { type: "state", state: this.session.state };
     void this.panel.webview.postMessage(message);
   }
