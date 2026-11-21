@@ -1204,3 +1204,31 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - **Échecs des deux premiers runs** : la cellule `edit()` levait `RuntimeError: Python skill edit is unavailable in this kernel. Import error: No module named 'edit'` (diagnostic ajouté au test). Cause : avec `PRIME_AGENT_KERNEL_PYTHON`, le binaire traite ce Python comme celui de l'appelant et désactive les skills Python absents (`crates/pa-core/src/kernel/bootstrap/mod.rs:184-214`). Correctif : `PRIME_AGENT_KERNEL_VENV` (le dossier du venv préparé dans le job, `venv/layout.rs:20-29`) ; le binaire y installe alors ses skills. Les deux autres échecs en découlaient : le test arrêté laissait une réponse du script, servie au cas suivant. En local, sur le binaire de `main` avec le venv du banc, la même cellule créait bien `ok.txt` (script jetable `edit_probe.py`).
   - Les 113 s des deux premiers runs comprennent une attente de 90 s arrivée à son délai (cas Stop) ; l'e2e réussi prend 24 s.
   - **« Stop : tour fini en 26 ms »** mesure le panneau, qui marque le tour annulé dès l'envoi de `session/cancel`. Ce n'est pas l'arrêt du kernel : moins de 1 s mesuré par `crates/pa-cli/tests/ya_acp_cancel_e2e.rs` (PR 1, E12).
+  - **Run 44919167201** (`68871e2a7`) : même cache restauré (`full match: true`), restauration 14 s, build 68 s, venv 3 s, e2e 25 s, job 2,3 min, **e2e 5/5**, aucun processus restant.
+- **Limites du job `real-binary`** (demande de Yusuf) :
+  1. **Cache en lecture seule** : le job lit le cache des shards sauvé sur `main` sans jamais l'écrire. Une PR qui change `Cargo.lock`, la toolchain épinglée ou une variable `CARGO*`/`RUST*` change la clé. Elle restaure au mieux un cache partiel (préfixe jusqu'à l'empreinte d'environnement : un `Cargo.lock` différent garde ce préfixe, une toolchain différente non) ou fait un **build à froid, durée non mesurée**. Le cache de `main` ne se met à jour qu'après le merge (push de `ci.yml`).
+  2. **`PRIME_AGENT_KERNEL_PYTHON` désactive les skills Python absents** du Python désigné (`crates/pa-core/src/kernel/bootstrap/mod.rs:184-214`) : le job passe `PRIME_AGENT_KERNEL_VENV`. Vérification (`git grep -n PRIME_AGENT_KERNEL_PYTHON -- extensions bench scripts .github`) :
+     - **extension** : ne la pose jamais. Mais elle lance le binaire avec tout l'environnement de VS Code (`extensions/vscode/src/agent.ts:129`, `env: this.env`, `process.env` par défaut) : si la variable est exportée dans l'environnement qui a lancé VS Code, le binaire l'hérite et les skills Python manquants de ce Python sont désactivés. Non corrigé (hors demande) ; à trancher : la retirer de l'environnement passé au binaire, ou la laisser comme réglage avancé ;
+     - **banc** : le smoke bench passe `PRIME_AGENT_KERNEL_VENV` (`bench/smoke/run.py:295`) ; le banc de capture (`run.py`, `acp_frames.py`) n'en passe aucune (venv dans le HOME du banc) ; `real-binary-check.mjs` passe `PRIME_AGENT_KERNEL_VENV` (étape 7). Seul `bench/smoke/tools/notice-batch-repro.sh:28` passe `PRIME_AGENT_KERNEL_PYTHON`, volontairement : ce rejeu n'utilise que `bash()`, pas de skill ;
+     - **`ci.yml`** (upstream) la passe aux tests Rust et aux contrôles du cycle de vie (`ci.yml:373-378`). Upstream en connaît l'effet : `scripts/lifecycle_lib.py:69-75` met les sources des skills dans `PYTHONPATH` pour cette raison.
+
+### PR 3, étape 7 : contrôle sur le vrai binaire (règle 13)
+
+- `extensions/vscode/scripts/real-binary-check.mjs` : nouveau cas « PR 3 : cellules, boîte, diffs » (manual, provider factice, kernel réel sur le venv du banc par `PRIME_AGENT_KERNEL_VENV`, sous `sandbox-exec`, démon isolé) :
+  - cellule avec `bash()`, accord, carte (`echo lu`, exit 0, sortie) ;
+  - `edit()` qui crée `ok.txt`, vrai diff, Revert (fichier retiré) ;
+  - refus (Declined, fichier absent), `[user-reverted] ok.txt` à la fin du message dans le fichier de session, réponse suivante non demandée ;
+  - Stop pendant une cellule de 30 s ;
+  - aucun processus restant.
+  - Les deux cas existants (« manual », « auto », message `/login`) sont inchangés.
+- **Lancé par Claude Code** sur le binaire de `main` `1b96bb645` : `cd extensions/vscode && npm run compile-tests && DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short node scripts/real-binary-check.mjs ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent`.
+  - **Premier lancement : NON CONFORME (1)**, `[user-reverted] ok.txt` absent du fichier de session. **Défaut réel** : le diff montrait le chemin absolu `/private/var/folders/…/project/ok.txt`. Le dossier du projet était `/var/folders/…` (macOS : `/var` est un lien vers `/private/var`) et le pont donne le chemin résolu. Le même défaut apparaît dans VS Code pour un dossier ouvert par un lien ; l'e2e Linux ne le voyait pas (`/tmp` n'y est pas un lien). Correctif : le chemin montré est aussi calculé par rapport au dossier résolu (`src/ya/cells.ts`, `shownPath`) ; test unitaire avec un lien symbolique (`ℹ tests 50`, `ℹ pass 50`). Contrôle négatif sans le correctif : `ℹ fail 1`.
+  - **Second lancement : CONFORME**, exit 0. Les trois cas sont à `oui`, dont `diff : ok.txt, créé true`, `[user-reverted] ok.txt à la fin du message`, `Stop : tour annulé (panneau libre en 102 ms)`, `aucun processus restant`.
+
+### PR 3, étape 8 : doc
+
+- `docs/fork-changes.md`, section « Extension VS Code, PR 3 » : tous les fichiers touchés (repris d'Unharnessed, du fork, banc, workflow). Ce ticket : constat, décisions, étapes, mesures. Phrase périmée du ticket 22 : déjà corrigée (PR 2).
+
+### PR 3, étape 9 : `ya-extension` requis (E13, C16)
+
+- Les deux jobs de `ya-extension` tournent sur chaque PR et sortent vite en succès hors de leur périmètre : `extension (tsc, lint, tests, vsix, e2e)` (extension et workflow) et `e2e vrai binaire (build debug, provider factice)` (périmètre de C15). **Demande à Yusuf** : les ajouter aux checks requis de la protection de `main` (Claude Code n'y touche pas).
