@@ -236,7 +236,10 @@ const tests: [string, () => Promise<void>][] = [
       const prompt = received(control, lastPid())
         .filter((frame) => frame.method === "session/prompt")
         .at(-1) as { params: { prompt: { text: string }[] } };
-      assert.equal(prompt.params.prompt[0].text, "bonjour\n\n[user-reverted] a.txt\n[user-reverted] neuf.txt");
+      // Une ligne par fichier, dans l'ordre où les restaurations ont fini (les deux Revert partent ensemble).
+      const [text, lines] = prompt.params.prompt[0].text.split("\n\n");
+      assert.equal(text, "bonjour");
+      assert.deepEqual(lines.split("\n").sort(), ["[user-reverted] a.txt", "[user-reverted] neuf.txt"]);
       await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     },
   ],
@@ -246,8 +249,9 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "send", text: "carte", images: [] });
       await idle();
       // En-tête : type et fichiers d'après les vrais diffs, lignes changées, premier `bash()` en erreur.
-      const shown = await shows("Edited", "carte d'une cellule qui édite");
-      for (const part of ["a.py", "neuf.txt", "+3", "−1", "exit 1"]) assert.ok(shown.includes(part), `en-tête : ${part}`);
+      // `exit 1` n'est que sur cette carte (une carte plus ancienne dit aussi « Edited »).
+      const shown = await shows("exit 1", "carte d'une cellule qui édite");
+      for (const part of ["Edited", "a.py", "neuf.txt", "+3", "−1"]) assert.ok(shown.includes(part), `en-tête : ${part}`);
       await post({ type: "send", text: "refus", images: [] });
       await idle();
       await shows("Declined", "carte d'une cellule refusée");

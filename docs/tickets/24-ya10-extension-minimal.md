@@ -1128,3 +1128,8 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - **Premiers lancements** : 3 échecs, tous dans mes données de test : un cas « `ab ab ab` », vraiment ambigu ; la suppression de lignes entières (constat corrigé ci-dessus) ; un `edit()` invalide (`old_str` non unique) ; et un premier `sed` (`DEUX` → `DEUX!`) qui laissait `new_str` à sa ligne, rejet donc possible d'après la règle. Code inchangé.
   - **Contrôles négatifs** : garde-fou 1 retiré → `ℹ fail 2` ; garde-fou 2 retiré → `ℹ fail 2` ; texte fixe non ajouté → `ℹ fail 1` ; fichiers restaurés, 49/49.
 - **e2e** (CI) : `vscode.diff` ouvert (avant `un\ndeux\ntrois\n`, après `un\nDEUX\ntrois\n`), Revert de `a.txt` par `applyEdit` (fichier restauré et enregistré), `neuf.txt` à la corbeille, texte fixe dans le `session/prompt` suivant.
+- **CI de l'étape 4** :
+  - **Premier push** (`9ec9d2d8a`, `ya-extension` 44916075383) : **échec**, e2e 7/9, deux défauts de mes tests.
+    - « diffs » : tout passe dans VS Code, jusqu'au texte fixe (`vscode.diff`, Revert par `applyEdit` et enregistrement, `neuf.txt` à la corbeille). Seul l'ordre des deux lignes diffère : elles suivent l'ordre de fin des restaurations, lancées ensemble. Le test compare maintenant sans ordre.
+    - « cartes » : il tourne après « diffs », dont la carte dit déjà « Edited ». Le test attendait ce mot et lisait la page avant le lot du chat qui porte sa carte ; il attend maintenant `exit 1`, propre à sa carte.
+  - `.vsix` : 198 873 octets.
