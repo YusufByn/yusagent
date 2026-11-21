@@ -1,0 +1,239 @@
+// Le code repris d'Unharnessed, adapté (agent, session, chat, conversations, fournisseurs, réglages,
+// historique), contre l'agent factice : vrai processus, vraies trames sur stdio, sans VS Code.
+
+import assert from "node:assert/strict";
+import { mkdtempSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, test } from "node:test";
+
+import { Agent } from "../../src/agent";
+import { Conversations } from "../../src/conversations";
+import type { Files } from "../../src/files";
+import { History } from "../../src/history";
+import type { TurnItem } from "../../src/protocol";
+import { Providers } from "../../src/providers";
+import { Settings } from "../../src/settings";
+import { ShownAgent } from "../../src/shown";
+import { authText } from "../../src/ya/auth";
+import { yaMeta } from "../../src/ya/meta";
+import { fakeAgentPath, fixtureFrames, newControlDir, normalize, received, starts, waitFor } from "../helpers";
+
+const log = new Proxy({} as Record<string, unknown>, { get: () => () => undefined }) as never;
+const files = { cwd: "", links: () => [], list: async () => ({ files: [], open: [] }) } as unknown as Files;
+
+interface Harness {
+  conversations: Conversations;
+  dir: string;
+  cwd: string;
+}
+
+const opened: Conversations[] = [];
+afterEach(async () => {
+  await Promise.all(opened.splice(0).map((conversations) => conversations.stopAll()));
+});
+
+function open(scenario: object = {}, overrides: { binary?: string; cwd?: string } = {}): Harness {
+  const dir = newControlDir(scenario);
+  process.env.FAKE_ACP_DIR = dir;
+  const cwd = overrides.cwd ?? realpathSync(mkdtempSync(join(tmpdir(), "yusagent-ws-")));
+  const shown = new ShownAgent(log);
+  // Comme `activate` : ces modules écoutent l'agent montré et l'interrogent à son démarrage.
+  new Providers(shown, log);
+  new Settings(shown, log);
+  const conversations = new Conversations(overrides.binary ?? fakeAgentPath(), cwd, "0", { ...files, cwd } as Files, shown, log);
+  new History(shown, conversations, cwd, log);
+  opened.push(conversations);
+  conversations.start();
+  return { conversations, dir, cwd };
+}
+
+const shown = (h: Harness) => h.conversations.shown;
+const ready = (h: Harness) => waitFor(() => shown(h).session.current?.kind === "open", "session ouverte");
+const idle = (h: Harness) => waitFor(() => !shown(h).chat.current.busy, "tour fini");
+const lastPid = (h: Harness) => starts(h.dir).at(-1)!.pid;
+const methods = (h: Harness) => received(h.dir, lastPid(h)).map((frame) => frame.method ?? `réponse:${String(frame.id)}`);
+const items = (h: Harness): TurnItem[] =>
+  shown(h).chat.current.entries.flatMap((entry) => (entry.kind === "turn" ? entry.items : []));
+const texts = (h: Harness, kind: string) =>
+  items(h).filter((item) => item.kind === kind).map((item) => ("text" in item ? item.text : ""));
+const lastTurn = (h: Harness) => shown(h).chat.current.entries.filter((entry) => entry.kind === "turn").at(-1);
+
+test("ouverture puis prompt : exactement les trames du fixture (preuve 1), rien d'autre à l'ouverture", async () => {
+  const h = open();
+  await ready(h);
+  // Fournisseurs, réglages, historique interrogent l'agent au démarrage : rien ne part (méthodes non servies).
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.deepEqual(methods(h), ["initialize", "session/new"]);
+  const { cwd, argv } = starts(h.dir).at(-1)!;
+  assert.deepEqual(argv, ["--mode", "acp"]);
+  assert.equal(cwd, h.cwd);
+  shown(h).chat.send("bonjour", []);
+  await idle(h);
+  assert.deepEqual(texts(h, "text"), ["Bonjour"]);
+  assert.equal((lastTurn(h) as { state?: string }).state, "done");
+  assert.deepEqual(normalize(received(h.dir, lastPid(h)), { cwd: h.cwd, sessionId: "fake-session-1", prompt: "bonjour" }), fixtureFrames());
+});
+
+test("méthode non servie : rejet sur place, aucune trame", async () => {
+  const h = open();
+  await ready(h);
+  const before = received(h.dir, lastPid(h)).length;
+  await assert.rejects(shown(h).agent.request("session/list", {}), /pas encore servie/);
+  await assert.rejects(shown(h).agent.request("_unharnessed/session/steer", {}), /pas encore servie/);
+  shown(h).agent.notify("_unharnessed/whatever", {});
+  assert.equal(received(h.dir, lastPid(h)).length, before);
+});
+
+test("Arrêter : session/cancel, puis cancelled à la demande ouverte ; ligne d'attente puis fermée", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("lent", []);
+  await waitFor(() => shown(h).agent.permissions.waiting === 1, "demande ouverte");
+  await waitFor(() => texts(h, "notice").some((text) => text.startsWith("Demande d'autorisation en attente")), "ligne d'attente");
+  shown(h).chat.cancel();
+  await idle(h);
+  const frames = received(h.dir, lastPid(h));
+  const cancel = frames.findIndex((frame) => frame.method === "session/cancel");
+  const answer = frames.findIndex((frame) => frame.id === "ya-perm-1");
+  assert.ok(cancel >= 0 && answer > cancel, "session/cancel puis la réponse");
+  assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-perm-1", result: { outcome: { outcome: "cancelled" } } });
+  assert.ok(texts(h, "notice").includes("Demande d'autorisation fermée."));
+  assert.equal((lastTurn(h) as { state?: string }).state, "cancelled");
+});
+
+test("$/cancel_request du pont : réponse cancelled, le tour continue", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("retire", []);
+  await idle(h);
+  assert.deepEqual(received(h.dir, lastPid(h)).find((frame) => frame.id === "ya-perm-1"), {
+    jsonrpc: "2.0",
+    id: "ya-perm-1",
+    result: { outcome: { outcome: "cancelled" } },
+  });
+  assert.equal(shown(h).agent.permissions.waiting, 0);
+  assert.deepEqual(texts(h, "text"), ["retirée"]);
+});
+
+test("authentification : message fixe avec le chemin du binaire, deux formes", async () => {
+  const h = open();
+  await ready(h);
+  for (const prompt of ["auth", "sanscle"]) {
+    shown(h).chat.send(prompt, []);
+    await idle(h);
+    const turn = lastTurn(h) as { state?: string; error?: string };
+    assert.equal(turn.state, "failed");
+    assert.equal(turn.error, authText(fakeAgentPath()));
+  }
+});
+
+test("plantage : pas de relance automatique, fin du stderr, Relancer", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("crash", []);
+  await waitFor(() => shown(h).agent.current.kind === "failed", "arrêt");
+  const state = shown(h).agent.current;
+  assert.ok(state.kind === "failed" && state.error.includes("code 3"));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(starts(h.dir).length, 1, "aucune relance automatique");
+  await h.conversations.restart();
+  await ready(h);
+  assert.equal(starts(h.dir).length, 2);
+});
+
+test("arrêt : fin de stdin, sortie du processus, ni session/close ni signal", async () => {
+  const h = open();
+  await ready(h);
+  const pid = lastPid(h);
+  const began = Date.now();
+  await shown(h).agent.stop();
+  assert.ok(Date.now() - began < 10_000);
+  await waitFor(() => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch {
+      return true;
+    }
+  }, "fin du processus");
+  assert.equal(methods(h).includes("session/close"), false);
+});
+
+test("binaire absent, aucun dossier, version ACP inattendue : pas de session", async () => {
+  const absent = open({}, { binary: "/nulle-part/yusagent" });
+  await waitFor(() => shown(absent).agent.current.kind === "failed", "binaire absent");
+  const a = shown(absent).agent.current;
+  assert.ok(a.kind === "failed" && a.error.includes("/nulle-part/yusagent"));
+  assert.equal(starts(absent.dir).length, 0);
+
+  const noFolder = open({}, { cwd: "" });
+  await waitFor(() => shown(noFolder).agent.current.kind === "failed", "aucun dossier");
+  const b = shown(noFolder).agent.current;
+  assert.ok(b.kind === "failed" && b.error.startsWith("Ouvrez un dossier"));
+  assert.equal(starts(noFolder.dir).length, 0);
+
+  const version = open({ protocolVersion: 2 });
+  await waitFor(() => shown(version).agent.current.kind === "failed", "version");
+  const c = shown(version).agent.current;
+  assert.ok(c.kind === "failed" && c.error.includes("ACP version 2"));
+});
+
+test("bandeau D4 : permissions annoncé à l'ouverture, puis config_option_update", async () => {
+  const auto = open({ permissions: "auto" });
+  await ready(auto);
+  const a = shown(auto).session.current;
+  assert.ok(a?.kind === "open" && a.config.permissions === "auto");
+
+  const manual = open();
+  await ready(manual);
+  const b = shown(manual).session.current;
+  assert.ok(b?.kind === "open" && b.config.permissions === "manual");
+  shown(manual).chat.send("auto", []);
+  await waitFor(() => {
+    const s = shown(manual).session.current;
+    return s?.kind === "open" && s.config.permissions === "auto";
+  }, "auto annoncé");
+});
+
+test("sélecteurs : set_config_option seulement sur un changement", async () => {
+  const h = open();
+  await ready(h);
+  await shown(h).session.setOption({ configId: "thought_level", value: "xhigh" });
+  const sets = received(h.dir, lastPid(h)).filter((frame) => frame.method === "session/set_config_option");
+  assert.deepEqual(sets.map((frame) => frame.params), [{ sessionId: "fake-session-1", configId: "thought_level", value: "xhigh" }]);
+  const s = shown(h).session.current;
+  assert.ok(s?.kind === "open" && s.config.effort?.current === "xhigh");
+});
+
+test("yaMeta : notre espace de noms, début de tour déduit sur le contenu seulement, fin d'un tour de l'agent", () => {
+  const meta = (fields: object) => ({ "ai.primeintellect.prime-agent": { promptTurnId: 3, ...fields } });
+  const context = (known: boolean, prompting: boolean, ours = false) => ({ known: () => known, prompting, ours: () => ours });
+  const chunk = { sessionUpdate: "agent_message_chunk", _meta: meta({ phase: "event" }) };
+  assert.deepEqual(yaMeta(chunk, context(false, true)), { promptTurnId: 3, phase: "event", turnStart: { origin: "prompt" }, yaDeduced: true });
+  assert.deepEqual(yaMeta(chunk, context(false, false)), {
+    promptTurnId: 3,
+    phase: "event",
+    turnStart: { origin: "wake", wake: "bash" },
+    yaDeduced: true,
+  });
+  assert.deepEqual(yaMeta(chunk, context(true, true)), { promptTurnId: 3, phase: "event" });
+  // Constaté sur le vrai binaire : un `config_option_update` porte un `promptTurnId` ; il n'ouvre pas de tour.
+  assert.deepEqual(yaMeta({ sessionUpdate: "config_option_update", _meta: meta({ phase: "event" }) }, context(false, false)), {
+    promptTurnId: 3,
+    phase: "event",
+  });
+  const boundary = { sessionUpdate: "session_info_update", _meta: meta({ phase: "responseBoundary", outcome: "result" }) };
+  assert.deepEqual(yaMeta<{ turnEnd?: unknown }>(boundary, context(true, false, false)).turnEnd, { state: "done" });
+  assert.equal(yaMeta<{ turnEnd?: unknown }>(boundary, context(true, false, true)).turnEnd, undefined, "un tour de l'extension finit à la réponse du prompt");
+  assert.deepEqual(yaMeta({ sessionUpdate: "x", _meta: { unharnessed: { promptTurnId: 1 } } }, context(false, true)), { promptTurnId: 1 });
+  assert.deepEqual(yaMeta({ sessionUpdate: "x" }, context(false, true)), {});
+});
+
+test("Agent seul : binaryPath = chemin résolu", async () => {
+  const dir = newControlDir();
+  const agent = new Agent("yusagent-introuvable-xyz", "/tmp", "0", log, { ...process.env, PATH: "/nulle-part", FAKE_ACP_DIR: dir });
+  agent.start();
+  assert.equal(agent.current.kind, "failed");
+  assert.equal(agent.binaryPath, "yusagent-introuvable-xyz");
+});
