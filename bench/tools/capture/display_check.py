@@ -13,7 +13,9 @@ champs : NON CONFORME attendu). Lit le fichier de session du cas, copié par `ru
   - la dernière requête capturée est le tour de réveil de l'avis `[bash-done …]` de la
     commande non lue.
 
-Code de sortie 1 si une vérification échoue. Bibliothèque standard uniquement.
+Refuse (code de sortie 1, sans rapport) un dossier qui contient plus d'une session : un dossier de
+run réutilisé mélangerait deux runs. Code de sortie 1 si une vérification échoue. Bibliothèque
+standard uniquement.
 """
 
 from __future__ import annotations
@@ -38,6 +40,12 @@ def details(run: Path) -> list[dict]:
 
 def main() -> None:
     run = Path(sys.argv[1])
+    # Une seule session : un dossier de run réutilisé en contiendrait plusieurs.
+    sessions = sorted((run / CASE / "sessions").rglob("*.jsonl"))
+    if len(sessions) > 1:
+        print(f"NON CONFORME : {len(sessions)} sessions dans {run / CASE / 'sessions'}, une "
+              "seule attendue (dossier de run réutilisé ?) : supprimer le run et le relancer")
+        sys.exit(1)
     found = details(run)
     runs = [item for d in found for item in d.get("bashRuns", [])]
     diffs = [item for d in found for item in d.get("diffs", [])]

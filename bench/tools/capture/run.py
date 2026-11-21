@@ -521,6 +521,11 @@ def main() -> None:
     cache = args.cache.resolve()
     cache.mkdir(parents=True, exist_ok=True)
     out = args.out.resolve()
+    # YA-10 (ticket 24) : un dossier déjà rempli mélangerait deux runs (sessions copiées,
+    # corps de requête d'un run plus long) ; rien n'est supprimé ici.
+    if out.exists() and any(out.iterdir()):
+        sys.exit(f"--out {out} existe déjà et n'est pas vide : le supprimer "
+                 f"(rm -rf {out}) ou choisir un autre dossier")
     out.mkdir(parents=True, exist_ok=True)
 
     version = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
