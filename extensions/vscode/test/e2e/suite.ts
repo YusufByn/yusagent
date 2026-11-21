@@ -101,9 +101,9 @@ const tests: [string, () => Promise<void>][] = [
       await idle();
       const frames = received(control, lastPid());
       const cancel = frames.findIndex((frame) => frame.method === "session/cancel");
-      const answer = frames.findIndex((frame) => frame.id === "ya-perm-1");
+      const answer = frames.findIndex((frame) => frame.id === "ya-permission-1");
       assert.ok(cancel >= 0 && answer > cancel, "session/cancel puis la réponse");
-      assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-perm-1", result: { outcome: { outcome: "cancelled" } } });
+      assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-permission-1", result: { outcome: { outcome: "cancelled" } } });
       await shows("Demande d'autorisation fermée.", "ligne fermée");
       await shows("Not run", "carte jamais lancée après Arrêter");
     },

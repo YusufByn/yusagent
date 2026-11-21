@@ -74,12 +74,12 @@ test("requête reçue : réponse différée, une seule réponse", async () => {
   const { connection, sent } = harness({
     onRequest: () => new Promise((resolve) => (answer = resolve)),
   });
-  connection.feed(JSON.stringify({ jsonrpc: "2.0", id: "ya-perm-1", method: "session/request_permission", params: {} }) + "\n");
+  connection.feed(JSON.stringify({ jsonrpc: "2.0", id: "ya-permission-1", method: "session/request_permission", params: {} }) + "\n");
   await tick();
   assert.equal(sent.length, 0);
   answer({ outcome: { outcome: "cancelled" } });
   await tick();
-  assert.deepEqual(sent, [{ jsonrpc: "2.0", id: "ya-perm-1", result: { outcome: { outcome: "cancelled" } } }]);
+  assert.deepEqual(sent, [{ jsonrpc: "2.0", id: "ya-permission-1", result: { outcome: { outcome: "cancelled" } } }]);
 });
 
 test("$/cancel_request : rappel de la requête visée, puis sa réponse", async () => {

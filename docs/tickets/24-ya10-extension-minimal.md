@@ -1010,3 +1010,27 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - **Contrôles négatifs** : appel de `yaCellData` retiré de `toolDone` → `ℹ pass 32`, `ℹ fail 1` ; reconnaissance d'`edit()`/`read()` coupée dans `readCell` → `ℹ pass 31`, `ℹ fail 2` ; fichiers restaurés, 33/33.
 - **e2e** (CI) : nouveau test « cartes » : « Edited », `a.py`, `neuf.txt`, `+3`, `−1`, `exit 1` dans l'en-tête ; « Declined » pour la cellule refusée.
 - **Préfixe** : inchangé (aucune trame nouvelle, fixture inchangé, rien sous `crates/`).
+
+### PR 3 : trames de l'agent factice comparées au vrai binaire (21/11/2026)
+
+- **Origine** : les trames `_yus/bashRuns`, `diff` et de refus de l'agent factice (`extensions/vscode/test/fake-agent/fake-agent.mjs`, commit `46919eabc`) étaient **écrites à la main**, d'après le test unitaire de `crates/pa-daemon/src/acp/ya_cell_display.rs`. Aucune capture.
+- **Capture** (Claude Code, binaire de `main` `1b96bb645`, run 44893185253) : pilote jetable `acp_frames.py` (scratchpad de Claude Code) qui réutilise les fonctions de `bench/tools/capture/run.py` sans le modifier : serveur de capture en modèle factice, `sandbox-exec` (réseau localhost), démon isolé (`--daemon-socket`), préparation du venv refaite (marqueur `prepared-09be962946881b07` retiré). Deux sessions ACP :
+  - A, scénario `display` en « auto » : `bash()` lu, `bash()` non lu, `edit()` de création puis de modification ;
+  - B, scénario `basic` en « manual », première demande refusée.
+  - Commande : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I acp_frames.py <dépôt> ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent <sortie>` → `A-display-auto : prompt={'stopReason': 'end_turn'}`, `B-basic-manual-reject : prompt={'stopReason': 'end_turn'}`. Aucun processus restant sur les sockets isolés (les processus listés par `pgrep` sont ceux du démon partagé, lancés 38 à 50 min avant, hors du run).
+- **Comparaison champ par champ** : script jetable `compare_frames.py` (scratchpad) : il fait jouer à l'agent factice `carte`, `refus` et `lent`, puis compare chemins de clés, types et valeurs constantes (statuts, genres, titres, options, texte du refus, forme des identifiants, trames de fin de tour). Commande : `python3 -I compare_frames.py extensions/vscode/test/fake-agent/fake-agent.mjs <sortie>`.
+  - **Avant correction, 6 écarts**. `_yus/bashRuns` et les contenus `diff` (`path`, `oldText` absent à la création, `newText`, `_meta._yus/startLine`) étaient **identiques**. Les écarts :
+    - `ipython.diffCount` absent du `_meta` du pont quand la cellule a des diffs (2 trames) ;
+    - identifiant de la demande d'accord `ya-perm-N` au lieu de `ya-permission-N` (préfixe `ID_PREFIX` du pont) ;
+    - pas de `responseBoundary`, `event` (quiescence), `terminalQuiescence` avant la réponse d'un prompt (`crates/pa-daemon/src/acp/daemon.rs:1592-1620`) ;
+    - pas de `messageId` sur les `agent_message_chunk`.
+  - **Correction de l'agent factice** : ces quatre points (fonction `finish` pour la fin d'un tour réussi, champ `prime` pour l'espace du pont, `messageId` par message) ; tests mis à jour pour l'identifiant `ya-permission-1`.
+  - **Après correction : `écarts : 0`, exit 0.** Tests unitaires : `ℹ tests 33`, `ℹ pass 33`, `ℹ fail 0`.
+
+### PR 3 : constat sur les tours lancés par l'agent (bloquant pour l'étape 6, hors périmètre)
+
+- **Capture A, 40 s après la réponse du prompt** : le tour de réveil (avis `[bash-done]` du `bash()` non lu ; 7ᵉ requête au modèle reçue par le serveur de capture) n'envoie qu'**un** `agent_message_chunk`, avec **`promptTurnId: 0`**. Ni `responseBoundary` ni `terminalQuiescence` ne suivent.
+- **Cause** : le pont ne publie la fin d'un tour (`responseBoundary`, quiescence) que dans le chemin d'un `session/prompt` (`crates/pa-daemon/src/acp/daemon.rs:1592-1620` ; erreur `:1724-1734`). Un tour lancé par le worker porte le `promptTurnId` actif, `0` hors prompt (`crates/pa-daemon/src/acp/producer.rs`, `active_prompt_turn_id`).
+- **Effet dans l'extension, reproduit** : l'hypothèse de la PR I (fin d'un tour de l'agent sur `responseBoundary`, `extensions/vscode/src/ya/meta.ts`) ne tient pas. Avec ces trames rejouées par l'agent factice (test exploratoire jetable, retiré) : `busy 2 s après le réveil : true`, puis un message envoyé reste en file (`session/prompt reçus par l'agent : 1 ; en file : 1`). Le panneau reste occupé après tout `bash()` non lu, jusqu'à une action de l'utilisateur. Non vérifié : si « Stop » le débloque.
+- **Deux tours de réveil** partageraient aussi l'identifiant `0`.
+- **Correction** : l'extension ne peut pas déduire la fin d'un tour sans signal. Il faut que le pont publie le début et la fin des tours lancés par le worker (identifiant propre, `responseBoundary`). C'est du Rust dans `crates/pa-daemon/src/acp/`, hors du périmètre de la PR 3 (extension seule) : **arrêt sur ce point, décision de Yusuf**. L'étape 3 n'en dépend pas.

@@ -68,19 +68,37 @@ const fail = (id, code, message, data) => send({ id, error: { code, message, ...
 // `_meta` de notre pont (`crates/pa-daemon/src/acp/meta.rs`) : tour du prompt en cours, ordre.
 let promptTurnId = 0;
 let eventSequence = 0;
-const update = (body) =>
+// PR 3 : trames comparées champ par champ à celles du binaire de `main` 1b96bb645 (capture du
+// 21/11/2026, ticket 24, « PR 3, trames de l'agent factice ») : `_yus/*` du corps gardé à côté de
+// l'espace du pont ; `prime` ajoute des champs dans cet espace (`ipython.diffCount`, `phase`…).
+const update = ({ prime, ...body }) =>
   send({
     method: "session/update",
     params: {
       sessionId: SESSION_ID,
       update: {
         ...body,
-        // `_yus/*` du corps (PR 3 : `_yus/bashRuns`) gardé à côté de l'espace du pont.
-        _meta: { ...body._meta, "ai.primeintellect.prime-agent": { promptTurnId, eventSequence: ++eventSequence, phase: "event" } },
+        _meta: {
+          ...body._meta,
+          "ai.primeintellect.prime-agent": { promptTurnId, eventSequence: ++eventSequence, phase: "event", ...prime },
+        },
       },
     },
   });
-const chunk = (text, kind = "agent_message_chunk") => update({ sessionUpdate: kind, content: { type: "text", text } });
+// Comme le pont : un `messageId` par message de l'agent (`prime-agent-assistant-<n>`).
+const chunk = (text, kind = "agent_message_chunk") =>
+  update({ sessionUpdate: kind, messageId: `prime-agent-assistant-${promptTurnId}`, content: { type: "text", text } });
+// Fin d'un tour de prompt réussi, comme le pont (`crates/pa-daemon/src/acp/daemon.rs:1592-1620`) :
+// `responseBoundary`, l'enveloppe de quiescence, `terminalQuiescence`, puis la réponse.
+const finish = (id) => {
+  update({ sessionUpdate: "session_info_update", prime: { phase: "responseBoundary", outcome: "result", terminalQuiescenceExpected: true } });
+  update({ sessionUpdate: "session_info_update", prime: { quiescence: { outstandingSubagents: 0, remainingAutonomousContinuations: 0 } } });
+  update({
+    sessionUpdate: "session_info_update",
+    prime: { phase: "terminalQuiescence", outcome: "result", quiescence: { outstandingSubagents: 0, remainingAutonomousContinuations: 0 } },
+  });
+  respond(id, { stopReason: "end_turn" });
+};
 const later = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Requêtes de l'agent vers le client en attente de réponse : id → résolution. */
@@ -89,7 +107,8 @@ let cancelled = null;
 let nextRequest = 0;
 
 function askPermission(toolCallId) {
-  const id = `ya-perm-${++nextRequest}`;
+  // Préfixe des identifiants du pont (`ID_PREFIX`, `crates/pa-daemon/src/acp/ya_permissions.rs`).
+  const id = `ya-permission-${++nextRequest}`;
   send({
     id,
     method: "session/request_permission",
@@ -111,16 +130,16 @@ async function onPrompt(id, text) {
       chunk("Bon");
       await later(20);
       chunk("jour");
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     case "pense":
       chunk("je réfléchis", "agent_thought_chunk");
       chunk("ok");
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     case "outil":
       update({ sessionUpdate: "tool_call", toolCallId: "call-1", title: "Python cell", kind: "execute", status: "in_progress", rawInput: { code: "print(1)" } });
       update({ sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "completed" });
       chunk("fait");
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     case "lent": {
       chunk("Je commence");
       update({ sessionUpdate: "tool_call", toolCallId: "call-2", title: "Python cell", kind: "execute", status: "pending", rawInput: { code: "1" } });
@@ -140,7 +159,7 @@ async function onPrompt(id, text) {
       await later(150);
       update({ sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "completed" });
       chunk("retirée");
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     }
     // PR 3 : une cellule finie avec les données de carte du pont (`ya_cell_display.rs`) : deux
     // `bash()` lus (le second sorti en 1), un `edit()` d'un fichier existant, un fichier créé.
@@ -162,8 +181,9 @@ async function onPrompt(id, text) {
             { command: "false", exitCode: 1, output: "", durationMs: 3 },
           ],
         },
+        prime: { ipython: { diffCount: 2 } },
       });
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     }
     // PR 3 : une cellule refusée, comme le pont la termine (`failed`, texte fixe), puis fin du tour (D7).
     case "refus":
@@ -174,7 +194,7 @@ async function onPrompt(id, text) {
         status: "failed",
         content: [{ type: "content", content: { type: "text", text: "[permission-denied] The user declined this cell; nothing was executed." } }],
       });
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     case "auth":
       return fail(id, -32603, "Internal error", {
         details: "No API key found for capture",
@@ -197,11 +217,11 @@ async function onPrompt(id, text) {
       const option = config.find((candidate) => candidate.id === "permissions");
       if (option) option.currentValue = "auto";
       update({ sessionUpdate: "config_option_update", configOptions: config });
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     }
     default:
       chunk(`écho : ${text}`);
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
   }
 }
 

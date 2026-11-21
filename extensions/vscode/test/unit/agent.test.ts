@@ -99,9 +99,9 @@ test("Arrêter : session/cancel, puis cancelled à la demande ouverte ; ligne d'
   assert.equal(toolStatus(h, "call-2"), "pending", "jamais lancée : la carte n'est pas passée en cours");
   const frames = received(h.dir, lastPid(h));
   const cancel = frames.findIndex((frame) => frame.method === "session/cancel");
-  const answer = frames.findIndex((frame) => frame.id === "ya-perm-1");
+  const answer = frames.findIndex((frame) => frame.id === "ya-permission-1");
   assert.ok(cancel >= 0 && answer > cancel, "session/cancel puis la réponse");
-  assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-perm-1", result: { outcome: { outcome: "cancelled" } } });
+  assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-permission-1", result: { outcome: { outcome: "cancelled" } } });
   assert.ok(texts(h, "notice").includes("Demande d'autorisation fermée."));
   assert.equal((lastTurn(h) as { state?: string }).state, "cancelled");
 });
@@ -115,9 +115,9 @@ test("$/cancel_request du pont : réponse cancelled, le tour continue", async ()
   await waitFor(() => toolStatus(h, "call-3") === "running", "carte en cours après in_progress");
   await idle(h);
   assert.equal(toolStatus(h, "call-3"), "done");
-  assert.deepEqual(received(h.dir, lastPid(h)).find((frame) => frame.id === "ya-perm-1"), {
+  assert.deepEqual(received(h.dir, lastPid(h)).find((frame) => frame.id === "ya-permission-1"), {
     jsonrpc: "2.0",
-    id: "ya-perm-1",
+    id: "ya-permission-1",
     result: { outcome: { outcome: "cancelled" } },
   });
   assert.equal(shown(h).agent.permissions.waiting, 0);
