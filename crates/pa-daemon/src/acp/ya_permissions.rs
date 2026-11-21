@@ -18,7 +18,8 @@
 //!   publishes the engine's events from its own queue): the bridge holds the request until the
 //!   `tool_call` is published, so the client always knows the call it is asked about.
 //! - yusAgent (YA-10, ticket 24): a request closed elsewhere while the client still holds it
-//!   (another client answered, or the worker withdrew it) is cancelled on the client with the
+//!   (another client answered, or the worker withdrew it; never one the bridge still held) is
+//!   cancelled on the client with the
 //!   ACP notification [`CANCEL_REQUEST`] (`requestId`), so its permission box closes. The client
 //!   still answers it (`cancelled` or the error `-32800`, ACP cancellation): the answer is
 //!   dropped as stale.
@@ -159,11 +160,18 @@ impl AcpPermissions {
         }
         let request_id = text(event, "requestId");
         let tool_call_id = text(event, "toolCallId");
+        // A request still held (its `tool_call` not published yet) never reached the client:
+        // nothing to cancel there.
+        let held_id = lock(&self.held)
+            .remove(&tool_call_id)
+            .and_then(|frame| frame["id"].as_str().map(str::to_string));
         let still_open: Vec<String> = {
             let mut sent = lock(&self.sent);
             let ids = sent
                 .iter()
-                .filter(|(_, sent)| sent.request_id == request_id)
+                .filter(|(id, sent)| {
+                    sent.request_id == request_id && held_id.as_deref() != Some(id.as_str())
+                })
                 .map(|(id, _)| id.clone())
                 .collect();
             sent.retain(|_, sent| sent.request_id != request_id);
@@ -176,7 +184,6 @@ impl AcpPermissions {
                 "params": { "requestId": id },
             }));
         }
-        lock(&self.held).remove(&tool_call_id);
         if text(event, "outcome") == "allow" {
             vec![AcpSessionUpdate::ToolCallUpdate {
                 tool_call_id,
