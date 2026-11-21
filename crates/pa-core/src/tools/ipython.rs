@@ -21,6 +21,10 @@ use diff::generate_diff_string;
 /// Mime types the model context accepts as images.
 pub const IMAGE_MIME_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
+/// yusAgent (YA-10, ticket 24): the tool-result details field of the `bash()` results a cell
+/// read (display only).
+pub const YA_BASH_RUNS_DETAIL: &str = "bashRuns";
+
 // Kernel execution types
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -67,6 +71,9 @@ pub struct ExecuteResult {
     /// yusAgent (T05, YA-05): the last non-zero exit code of a `bash()` result the cell read
     /// (`bashFailedExit` on the tool-result details).
     pub bash_failed_exit: Option<i64>,
+    /// yusAgent (YA-10, ticket 24): the `bash()` results the cell read, for display
+    /// (`bashRuns` on the tool-result details; never in the model's text).
+    pub bash_runs: Vec<crate::kernel::shared::KernelBashRun>,
 }
 
 /// The wire form of one sent agent message (TS `KernelSentAgentMessage`):
@@ -470,6 +477,19 @@ pub async fn execute_ipython(
     if let Some(code) = r.bash_failed_exit {
         details[crate::session_engine::masking::BASH_FAILED_EXIT_DETAIL] = json!(code);
     }
+    // yusAgent (YA-10, ticket 24): display data for the editor, never in the model's text.
+    if !r.bash_runs.is_empty() {
+        details[YA_BASH_RUNS_DETAIL] = json!(r
+            .bash_runs
+            .iter()
+            .map(|run| json!({
+                "command": run.command,
+                "exitCode": run.exit_code,
+                "output": run.output,
+                "durationMs": run.duration_ms,
+            }))
+            .collect::<Vec<_>>());
+    }
     if let Some(background) = &r.background_output {
         details["backgroundOutput"] = json!(background);
     }
@@ -490,9 +510,14 @@ pub async fn execute_ipython(
                     .start_line
                     .and_then(|line| usize::try_from(line).ok())
                     .unwrap_or(1);
+                // yusAgent (YA-10, ticket 24): the raw edit rides along for the editor's diff
+                // view (`oldStr`, `newStr`, `startLine`); display only.
                 json!({
                     "path": diff.path,
                     "diff": generate_diff_string(&diff.old_str, &diff.new_str, 4, start_line),
+                    "oldStr": diff.old_str,
+                    "newStr": diff.new_str,
+                    "startLine": start_line,
                 })
             })
             .collect::<Vec<_>>());
