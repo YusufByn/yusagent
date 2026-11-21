@@ -1,15 +1,19 @@
 # yusAgent pour VS Code
 
-Chat avec l'agent de code yusAgent, par ACP (Agent Client Protocol) sur stdio.
+Agent de code yusAgent dans VS Code, par ACP (Agent Client Protocol) sur stdio.
 
+Base : l'extension d'Unharnessed (MIT, `github.com/unharnessed-agent/Unharnessed`, commit `157dcdc1d`, dossier `vscode/`), adaptée à notre binaire. Le visuel est provisoire ; celui de yusAgent viendra plus tard.
+
+- **Où** : une vue « yusAgent » dans la barre latérale secondaire ; bouton dans la barre de titre de l'éditeur, ou commande « yusAgent: Ouvrir yusAgent ».
 - **Binaire à part** : l'extension lance `yusagent --mode acp` (réglage `yusagent.binaryPath`, nom seul cherché dans le `PATH`). Réglage utilisateur seulement : un workspace ne peut pas choisir le binaire lancé.
-- **Un chat = un processus**, lancé dans le premier dossier du workspace. Commande : « yusAgent: Nouveau chat ».
-- **Connexion** : l'extension ne gère pas l'authentification. Une fois, dans un terminal : `yusagent`, puis `/login`.
+- **Une conversation = un processus**, lancé dans le premier dossier du workspace. Sans dossier ouvert, rien ne démarre.
+- **Connexion** : pas encore dans l'extension. Une fois, dans un terminal : `yusagent`, puis `/login`.
 - **Sélecteurs** de modèle et d'effort : rien n'est envoyé à l'ouverture, seulement quand on change une valeur.
 - **Bandeau** « Mode auto sans sandbox » quand l'agent annonce `permissions` = `auto`.
-- **Plantage** : relance automatique avec une nouvelle session ; deux arrêts en moins de 60 s, plus de relance (bouton « Réessayer »).
+- **Plantage** : pas de relance automatique ; la fin du journal du binaire s'affiche, avec « Restart ».
+- **Arrêt** : fin de stdin, puis SIGKILL au bout de 10 s ; la session reste dans le démon, qui la met en veille après 90 min.
 
-Version minimale (YA-10, ticket 24, PR 2) : pas encore de cartes de cellule, de boîte de permission ni de diffs (PR 3). En mode manuel, une demande d'autorisation reste en attente : « Arrêter » l'annule.
+Pas encore servi par le pont, donc masqué : historique et reprise, message pendant un tour, retour en arrière, panneau du kernel, fournisseurs et login, réglages, skills, MCP, mentions `@fichier` et images. En mode manuel, une demande d'autorisation reste en attente : « Stop » l'annule (boîte en PR 3).
 
 ## Développement
 

@@ -1,5 +1,6 @@
-// Groupage (E3) : l'hôte de l'extension (CommonJS, Node) et la webview (IIFE + CSS, navigateur),
-// minifiés, sans source map dans le .vsix.
+// Groupage (E3) : l'hôte de l'extension (CommonJS, Node) dans dist/extension.js, et la webview
+// React (IIFE + CSS, navigateur) dans dist/webview/main.js et main.css. Minifiés, sans source map.
+// Repris d'Unharnessed (157dcdc1d, vscode/esbuild.mjs), sans le mode --watch ni les polices.
 import { build } from "esbuild";
 
 const common = { bundle: true, minify: true, sourcemap: false, logLevel: "info", legalComments: "none" };
@@ -16,11 +17,11 @@ await Promise.all([
   }),
   build({
     ...common,
-    entryPoints: ["webview/index.tsx"],
-    outfile: "dist/webview.js",
+    entryPoints: { main: "webview/main.tsx" },
+    outdir: "dist/webview",
     platform: "browser",
     format: "iife",
-    target: "es2022",
+    target: "chrome120",
     jsx: "automatic",
     define: { "process.env.NODE_ENV": '"production"' },
   }),

@@ -1,7 +1,7 @@
 {
   "name": "yusagent",
   "displayName": "yusAgent",
-  "description": "Chat avec l'agent de code yusAgent (ACP), binaire installé à part.",
+  "description": "Agent de code yusAgent dans VS Code (ACP). Base : l'extension d'Unharnessed (MIT). Binaire installé à part.",
   "version": "0.1.0",
   "publisher": "yusagent",
   "license": "MIT",
@@ -12,7 +12,7 @@
     "directory": "extensions/vscode"
   },
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.110.0"
   },
   "categories": [
     "AI",
@@ -23,11 +23,38 @@
   "contributes": {
     "commands": [
       {
-        "command": "yusagent.newChat",
-        "title": "Nouveau chat",
-        "category": "yusAgent"
+        "command": "yusagent.open",
+        "title": "Ouvrir yusAgent",
+        "category": "yusAgent",
+        "icon": "media/icon.svg"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "yusagent.open",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "yusagent",
+          "title": "yusAgent",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "yusagent": [
+        {
+          "type": "webview",
+          "id": "yusagent.chat",
+          "name": "Chat"
+        }
+      ]
+    },
     "configuration": {
       "title": "yusAgent",
       "properties": {
@@ -42,25 +69,27 @@
   },
   "scripts": {
     "build": "node esbuild.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p webview/tsconfig.json --noEmit",
     "lint": "eslint .",
     "compile-tests": "tsc -p tsconfig.json --outDir out",
-    "test:unit": "npm run compile-tests && node --test --test-timeout=60000 \"out/test/unit/**/*.test.js\"",
+    "test:unit": "npm run compile-tests && node --require ./out/test/unit/setup.js --test --test-timeout=60000 \"out/test/unit/**/*.test.js\"",
     "test:e2e": "npm run build && npm run compile-tests && node out/test/e2e/run.js",
     "package": "npm run build && vsce package --no-dependencies --out yusagent.vsix && node scripts/check-size.mjs yusagent.vsix"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
     "@types/node": "22.20.5",
-    "@types/react": "18.3.31",
-    "@types/react-dom": "18.3.7",
-    "@types/vscode": "1.90.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/vscode": "1.110.0",
     "@vscode/test-electron": "2.5.2",
     "@vscode/vsce": "3.9.2",
     "esbuild": "0.25.12",
     "eslint": "9.39.5",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.1"
   }
