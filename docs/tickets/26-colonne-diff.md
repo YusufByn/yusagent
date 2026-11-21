@@ -66,3 +66,42 @@ Tests demandés : runtime et extension, un emoji avant une suppression pure et l
 
 - Sessions enregistrées avant ce ticket : sans colonne, l'extension garde C14 (a).
 - `edit()` convertit les fins de ligne `\r\n` de tout le fichier : `docs/tickets/27-edit-fins-de-ligne.md` (constat seulement).
+
+## 5. Réalisation (branche `ya-26-colonne-diff`)
+
+- **Runtime** (`skills/edit/src/edit/__init__.py:80`, envoi `:84`) : `start_column = match_index - (content.rfind("\n", 0, match_index) + 1)`, envoyée dans le MIME ; création : 0 (`:61`).
+- **Hôte** : `KernelDiffDisplay.start_column` lu par `parse_diff_display` (`crates/pa-core/src/kernel/shared.rs`) ; `startColumn` dans `details.diffs` seulement quand il est là (`crates/pa-core/src/tools/ipython.rs`).
+- **Pont** : `_yus/startColumn` à côté de `_yus/startLine`, chacun quand il est là (`crates/pa-daemon/src/acp/ya_cell_display.rs`, `position_meta`) ; commentaire de `types.rs`.
+- **Extension** : `fragments` lit `_yus/startColumn` (entier positif, sinon ignorée) (`extensions/vscode/src/ya/cells.ts`) ; `undo` (`src/ya/diffs.ts`) : avec la colonne, une seule place (`columnIndex` : points de code → unités UTF-16 sur la ligne), `new_str` à cette place et `old_str` une seule fois dans le candidat, sinon refus avec la raison ; sans colonne, C14 (a). Agent factice : `_yus/startColumn` sur ses contenus `diff`.
+- **Banc** : `compare_frames.py --against … --expect …` ; `display_check.py` vérifie `startColumn`.
+
+### Tests
+
+- Runtime (`prime-agent-runtime/test/test_ya_edit.py`, `test_the_diff_display_carries_the_start_column`) : suppression pure après un emoji (ligne 2, colonne 4), remplacement en milieu de ligne, création (colonne 0). **Vu en échec sans le correctif** (skill de `main`, test de la branche : `KeyError: 'start_column'`, `FAILED (errors=1)`), puis `OK` (6 tests) ; suite du runtime : `OK`.
+- Cœur (`golden_replay.rs`) : `diff_display_reads_the_start_column_when_present` (avec, sans, valeur non entière) ; `ipython_details_carry_the_cell_edit_diffs` : `startColumn` présent quand le kernel l'envoie, absent sinon. Pont (`ya_cell_display.rs`) : contenus avec et sans colonne.
+- Extension, unitaires (55 tests) : « undo avec la colonne : emoji avant une suppression pure, lignes entières, milieu de ligne » et « colonne fausse sur un remplacement, refus avec la raison ». **Vus en échec sans le correctif** (`src/ya/diffs.ts` de `main`, type `Fragment` de la branche : `ℹ fail 2` ; le premier rend `the edit's place on line 2 is ambiguous` au lieu de l'« avant », le second rend `ok: true` au lieu du refus), puis `ℹ pass 55`. Les cas C14 (a) sans colonne sont gardés (`withoutColumn`).
+- e2e vrai binaire (`extensions/vscode/test/e2e/suite-real.ts`) : `emoji.txt` = `garder\n😀 un deux\nfin\n`, `edit('emoji.txt', 'un ', '')`, « Revert » par des clics sur l'élément réellement sous le pointeur (`Worked`, `Edited`, `Revert`), fichier comparé octet pour octet. CI `ya-extension` run 44945205641 : `ok - suppression pure après un emoji (ticket 26) : Revert par un clic, fichier revenu octet pour octet`, `e2e vrai binaire : 7/7 réussis`, `processus restants : aucun` ; e2e agent factice `11/11`.
+
+### Contrôles du binaire de la branche (21/11/2026)
+
+Binaire `750b9885e` (build macOS run 44945162571, `SHA256SUMS` vérifié). Binaire de `main` : `ea3908688`. Commandes, avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short` (sorties dans `bench/tools/capture/runs/`, non versionné) :
+
+```
+python3 -I bench/tools/capture/run.py --binary <ea3908688>/yusagent --out bench/tools/capture/runs/ya26-prefix-main-ea3908688
+python3 -I bench/tools/capture/run.py --binary <750b9885e>/yusagent --out bench/tools/capture/runs/ya26-prefix-branch-750b9885e
+python3 -I bench/tools/capture/compare.py bench/tools/capture/runs/ya26-prefix-main-ea3908688 bench/tools/capture/runs/ya26-prefix-branch-750b9885e --all --out bench/tools/capture/runs/ya26-compare.md
+python3 -I bench/tools/capture/display_check.py bench/tools/capture/runs/ya26-prefix-branch-750b9885e
+python3 -I bench/tools/capture/acp_frames.py --binary <750b9885e>/yusagent --out bench/tools/capture/runs/ya26-frames-750b9885e
+python3 -I bench/tools/capture/compare_frames.py bench/tools/capture/runs/ya26-frames-750b9885e --against bench/tools/capture/runs/ya25-frames-main-ea3908688 --expect '.params.update.content[]._meta._yus/startColumn'
+python3 -I bench/tools/capture/compare_frames.py bench/tools/capture/runs/ya26-frames-750b9885e
+```
+
+- **Préfixe** : `compare.py --all` **TOUT IDENTIQUE** (17 cas, chaque requête, UUID normalisés ; `acp`, `acp-extension`, `tui` : 4 requêtes de chaque côté, 0 différente ; `display-anthropic` : 7 et 7). Seul écart des tableaux par morceau : `prompt_cache_key`, identifiant de session, différent à chaque run. `prefix_paths_check` de la branche : `CONFORME` ; trames de l'extension (`acp-extension`) : `TOUT IDENTIQUE`. Le préfixe envoyé au modèle ne change pas.
+- **Affichage** : `display_check.py` sur la branche : `CONFORME` (`startColumn 0 sur chaque diff`) ; sur `main` : `NON CONFORME` sur ce seul point, attendu.
+- **Trames, binaire contre binaire** (`--against`, capture de `main` du ticket 25) : `A-display-auto` 26 trames et `B-basic-manual-reject` 14 trames `IDENTIQUE`, écart attendu dans 2 trames de A, `écart attendu présent : .params.update.content[]._meta._yus/startColumn (valeurs [0, 0])`, `écarts : 0`. Avant le choix de K3, le même outil sur deux captures sans ce changement (`418fdb75d`, `ea3908688`) : `écarts : 0`, et `écart attendu ABSENT` avec `--expect` (code de sortie 1).
+- **Agent factice contre binaire de la branche** : `compare_frames.py` : `écarts : 0`.
+- Note : le run de `main` signale des processus restants pour `acp` (`18217`, `18535`, `19819`) : le démon de Yusuf lancé à 20:43 avec le binaire `ea3908688` (socket par défaut) et ses workers, antérieurs au banc (`ps -o pid,ppid,lstart,command`). Le run de la branche : aucun.
+
+### CI
+
+Commit `750b9885e` : `ci.yml` run 44945205612 vert (shards 1 à 8, `runtime suite (python 3.11)`, `fmt`, `check + clippy`), `ya-extension` run 44945205641 vert (tsc, lint, unitaires, `.vsix`, e2e agent factice et vrai binaire), build macOS run 44945162571.
