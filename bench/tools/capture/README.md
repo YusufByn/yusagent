@@ -65,6 +65,16 @@ Pour OpenAI Responses : `"api": "openai-responses"` et `baseUrl` suffixé de `/v
 | `mask-off-anthropic` | (T05) Scénario `mask` : 25 tours, chaque cellule imprime environ 5 000 caractères, exception Python au tour 12, la cellule 25 relit la première sortie masquée (ligne `REREAD`). Cache simulé sur le préfixe réel (`--prefix-cache`). Réglage par défaut : aucun masquage |
 | `mask-on-anthropic` | (T05) Même scénario avec `"masking": {"enabled": true}` (fenêtre 10, palier 5) |
 | ACP | `--mode acp` sur un daemon isolé (`--daemon-socket`) : `initialize`, `session/new`, `session/prompt` |
+| TUI | (YA-10, ticket 24) Le même scénario par le TUI, sur un pty (pilote et émulateur d'écran de `bench/tools/ya_permissions_tui_demo.py`), démon isolé : le prompt est tapé, la capture attend « Capture : fin du scénario. » à l'écran, puis `/quit`. Écran final dans `tui/screen.txt` |
+
+## Préfixe des chemins avec démon (ticket 24)
+
+`prefix_paths_check.py`, lancé par `run.py` à la fin (le run échoue s'il échoue) : chaque requête des cas `acp` et `tui` (chemins qui passent par le démon, comme l'extension et le TUI) contre la même requête de `s1-anthropic` (`-p`, chemin du smoke bench). Toutes les clés doivent être identiques (dates des messages normalisées), sauf le prompt système, dont l'écart est limité aux deux lignes liées au démon, écart accepté par Yusuf le 21/11/2026 (journal du CDC) :
+
+- en `-p` seulement, la ligne « This session has no daemon: … » ;
+- avec le démon seulement, le skill `rlm-heartbeat` dans la liste des skills.
+
+Rapport : `prefix-paths-report.md` et `.json`, dernière ligne `CONFORME` ou `NON CONFORME`. Lancement seul : `python3 -I bench/tools/capture/prefix_paths_check.py <run>`.
 | Sous-agent | Scénario `spawn` (hors analyse de préfixe) : le parent lance `rlm.spawn`, l'enfant relève les noms sensibles de son kernel (ligne `CHILD_ENV`) puis répond par `agent_message.send`, le parent attend avec `rlm.collect`. OK si la ligne `COLLECT` est réglée (`True`), porte la réponse finale de l'enfant, et si la réponse `agent_message` arrive dans le contexte du parent |
 | `psenv` | **Hors sandbox** : `/bin/ps` est setuid et le profil `sandbox.sb` refuse de l'exécuter (code 126), ce qui casse aussi le shell persistant sur macOS (identité de démarrage lue par `ps`). Provider local, `PI_OFFLINE=1`. Ligne `PS_PARENT` (relevé YA-11) : `ps eww` lancé depuis le kernel sur le harness, avec la commande du parent, le code de sortie et les noms des variables factices visibles (jamais de valeur). Ligne `PERSISTENT` : noms sensibles vus par `printenv` dans un shell persistant |
 
