@@ -235,3 +235,29 @@ Shard 3 en échec, deux causes (journal du job 136945243977) :
 ### CI, second run (`ci.yml` 44938061484, commit `c8ca4898b`)
 
 Les tests du ticket passent (`ya_acp_wake_turn_e2e.rs` : 3 sur 3). Shard 3 en échec sur un test upstream qui avait passé au premier run : `acp_daemon_attached_cancels_mid_turn` (`acp_mode_e2e.rs:902`, journal du job 136949054503) exige qu'aucune trame n'arrive avant la réponse `cancelled` ; le `session/cancel` part juste après le prompt, et selon l'ordre, le `turnStart` du prompt est publié avant ou après l'annulation. Ce n'est pas une instabilité du test mais une course introduite par `turnStart` : l'assertion admet maintenant ce seul `turnStart`, et toujours aucune frontière (intention du test, « no boundary frames »). Unharnessed publie aussi `turnStart` avant de lancer le tour.
+
+### Capture sur le binaire de `main` `ea3908688` (après le merge de la PR #76)
+
+Ajoutée au ticket 26 (demande de Yusuf). Binaire `~/.cache/yusagent-bin/ea39086880d1cfa5d90f558043fc4b8d577d3504/yusagent` (version `0.10.2-continuous.ea39086880d1cfa5d90f558043fc4b8d577d3504`). Capture `acp_frames.py` du 21/11/2026, 20:34 (`bench/tools/capture/runs/ya25-frames-main-ea3908688/`, non versionné ; `acp-frames.json` : cas A 26 trames, cas B 14, deux `end_turn`, aucun processus restant). La sortie de `compare_frames.py` n'avait pas été gardée : relancée le 21/11/2026 sur cette capture (agent factice de `main`, aucun modèle), sortie gardée dans `bench/tools/capture/runs/ya25-compare-frames-main-ea3908688.log` :
+
+```
+python3 -I bench/tools/capture/compare_frames.py bench/tools/capture/runs/ya25-frames-main-ea3908688
+IDENTIQUE : tool_call (auto, in_progress)
+IDENTIQUE : tool_call_update : _meta._yus/bashRuns
+IDENTIQUE : tool_call_update, edit() qui modifie (contenu diff, _meta)
+IDENTIQUE : tool_call_update, edit() qui crée (contenu diff sans oldText, _meta)
+IDENTIQUE : tool_call (manuel, pending)
+IDENTIQUE : session/request_permission
+  id réel 'ya-permission-1', factice 'ya-permission-1' (même forme)
+IDENTIQUE : tool_call_update refusé (failed, texte fixe)
+  texte du refus identique
+fin de tour avant la réponse : réel ['responseBoundary', 'event', 'terminalQuiescence'], factice ['responseBoundary', 'event', 'terminalQuiescence'] (IDENTIQUE)
+IDENTIQUE : session_info_update turnStart (prompt)
+IDENTIQUE : session_info_update turnStart (wake)
+fin du tour de réveil : réel ['responseBoundary', 'event', 'terminalQuiescence'], factice ['responseBoundary', 'event', 'terminalQuiescence'] (IDENTIQUE)
+IDENTIQUE : agent_message_chunk
+
+écarts : 0
+```
+
+Relance faite avec l'agent factice et `compare_frames.py` de `main` (`ea3908688`) : sur la branche du ticket 26, avant tout changement de fichier.
