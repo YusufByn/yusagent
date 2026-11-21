@@ -346,3 +346,25 @@ button.ya-run-head {
 .ya-revert-note.is-warning {
   color: var(--vscode-editorWarning-foreground);
 }
+
+/*
+ * yusAgent (PR 3, contrôle de Yusuf) : un repli fermé est masqué, comme chez Unharnessed
+ * (`styles.css:3912-4047` à 157dcdc1d, `grid-template-rows: 0fr`). Le code repris rend le contenu
+ * d'un repli fermé `inert` : affiché sans ces règles, il ignorait les clics (cartes impossibles à
+ * déplier). Sans animation : visuel provisoire.
+ */
+.call-fold,
+.work-fold {
+  display: none;
+}
+
+.call.is-open > .call-fold,
+.call-group.is-open > .call-fold,
+.work-group.is-open > .work-fold {
+  display: block;
+}
+
+.call-group.is-flat > .call-head-wrap,
+.work-group.is-flat > .work-head-wrap {
+  display: none;
+}
