@@ -391,7 +391,9 @@ Branche `ya-24-extension`. Pas de build ni de test Rust en local (règle 8) : fo
 
 ### Points ouverts de la PR 1
 
-- Invalidation : faite dans le journal d'usage (fichier du fork), pas dans `session_engine/mod.rs` (upstream) comme le supposait la consigne ; à valider par Yusuf.
+- Invalidation : faite dans le journal d'usage (fichier du fork), pas dans `session_engine/mod.rs` (upstream) comme le supposait la consigne. **Écart accepté par Yusuf (21/11/2026).**
+- Banc de capture, venv du kernel partagé : tous les binaires utilisent le même venv (`~/.cache/yusagent-capture/home/.yusagent/kernel-venv`), reconstruit quand le hash des sources du runtime change (`crates/pa-core/src/kernel/bootstrap/venv/runtime_source.rs:63`). La PR modifie `bash.py` : passer de `main` à la branche (ou l'inverse) demande une reconstruction, qui peut échouer sous le sandbox sans réseau (vu une fois : 88 requêtes de `main` avec « kernel startup failed … uv venv … --seed failed with exit code 2 »). Parade : retirer le marqueur `prepared-<16 premiers caractères du sha256 du binaire>` avant chaque run, pour refaire la chauffe avec réseau. Les captures notées plus haut ne contiennent aucun échec du kernel (vérifié : 0 requête avec « kernel startup failed » dans chacune).
+- Couverture des captures : aucune ne contient de `bash()` non lu ni d'`edit()` (les modifications de `smoke-py-example-001` passent par `pathlib`, `bench/tools/capture/server.py:193-195`) ; les nouveaux champs `oldStr`/`newStr`/`startLine` de `details.diffs` ne sont donc pas exercés par la comparaison avec `main`. Cas à ajouter proposé à Yusuf avant le merge.
 - Relance du worker au milieu d'un tour : pas de répondant jusqu'au prompt suivant.
 - `bash()` dont la cellule ne lit pas le résultat : pas d'enregistrement `bash-run` (résultat par l'avis `[bash-done]`).
 - Sortie partielle d'une cellule en cours (E15) et `session/load` (E14) : reportés.
