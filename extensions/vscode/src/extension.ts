@@ -64,6 +64,8 @@ export function activate(context: vscode.ExtensionContext): void {
         };
       }),
       vscode.commands.registerCommand("yusagent._test.probe", () => view.probe()),
+      // yusAgent (PR 3, étape 6) : arrêt de tous les agents (e2e vrai binaire, relevé des processus restants).
+      vscode.commands.registerCommand("yusagent._test.stopAll", () => all.stopAll()),
       // yusAgent (PR 3) : saisie, focus, touches et clic dans la webview.
       vscode.commands.registerCommand("yusagent._test.probeInput", (input: ProbeInput) => view.probeInput(input)),
     );

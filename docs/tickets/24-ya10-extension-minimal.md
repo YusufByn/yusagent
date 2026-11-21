@@ -1173,3 +1173,22 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
 **Pour comparaison** (écarté par la décision de réutiliser le binaire) : un build à part dans `ya-extension` avec le cache cargo partagé coûterait environ 1 min de plus dans `ya-extension` (restauration du cache 16 s et build 49 s, mesurés dans le shard 1), sans fichier upstream touché. Non vérifié : que le cache `test-shards` se restaure depuis un autre workflow.
 
 **Recommandation** : **A** (shard 7). Aucun temps ajouté sur la durée de la CI tant que l'e2e tient dans la marge, pas d'artefact ni de couplage entre workflows, résultat dans un check déjà requis. Seul défaut notable : environ 20 à 25 lignes dans un fichier upstream. Si Yusuf préfère un check à part ou moins de lignes upstream : **B**.
+
+### Étape 6 : e2e contre le vrai binaire, option D (décision de Yusuf, 21/11/2026)
+
+- **Décision** : ni A ni B. Option D : build du binaire dans `ya-extension`, aucune ligne upstream, seulement sur le périmètre de C15 (sortie rapide sinon). Si le build dépasse 5 min avec le cache chaud : arrêt et retour vers Yusuf avec l'option B.
+- **Cache cargo de `ci.yml` depuis `ya-extension`** (vérifié avant d'écrire le job) :
+  - **clé** (Swatinem/rust-cache à `6323deb10`, `src/config.ts:73-131`) : `v0-rust-<shared-key>-<OS>-<arch>-<empreinte d'environnement>-<empreinte des lockfiles>`. Avec `shared-key`, **ni le workflow ni le job n'y entrent**. L'empreinte d'environnement prend la version de `rustc` et les variables qui commencent par `CARGO`, `CC`, `CFLAGS`, `CXX`, `CMAKE`, `RUST`. La toolchain épinglée (`dtolnay/rust-toolchain@ce678459e`) pose elle-même `CARGO_HOME`, `CARGO_INCREMENTAL=0`, `CARGO_TERM_COLOR=always` et le protocole du registre (`action.yml:65-139`), et tous les jobs Linux de `ci.yml` partagent l'empreinte (`fcc63f3e` dans `v0-rust-test-shards-Linux-x64-fcc63f3e-94c07680`, `clippy-test`, `windows-cross`, `gh cache list`) ;
+  - **restauration** : clé exacte, sinon le préfixe jusqu'à l'empreinte d'environnement (`src/restore.ts:41`) ;
+  - **portée** : un run de PR lit les caches de sa branche et de `main`, quel que soit le workflow ; `v0-rust-test-shards-…` est sauvé sur `main` par les pushs (`save-if` des shards) ;
+  - **donc restaurable** si le job a la même toolchain, la même image (`ubuntu-24.04`), aucune variable `CARGO*`/`RUST*`/`CC*` en plus et le même `Cargo.lock`. Vérification sur le premier run : ligne `Restored from cache key`.
+  - **Lecture seule** (`save-if: false`) : le quota de caches est plein (dizaines de clés de 200 à 635 Mo), une écriture de plus pousserait à l'éviction des caches de `ci.yml`.
+- **Job `real-binary`** (`.github/workflows/ya-extension.yml`) : `cargo build --locked --workspace --bins` (comme les shards, pour réutiliser les mêmes dépendances compilées), uv, venv du kernel (`--prime-agent-bootstrap`), `npm ci`, e2e sous `xvfb` (`npm run test:e2e:real`).
+- **e2e** (`test/e2e/run-real.ts`, `suite-real.ts`) : binaire debug, provider factice (`PRIME_AGENT_FAUX_SCRIPT`, aucun modèle), HOME et TMPDIR temporaires (démon isolé). Cas :
+  - cellule avec `bash()`, accord par le bouton de la boîte, carte (`echo lu`, exit 0) ;
+  - `edit()` créant `ok.txt`, Revert (corbeille) ;
+  - refus : fichier absent, « Declined », le tour s'arrête ; `[user-reverted] ok.txt` à la fin du message, lu dans le fichier de session ; la réponse non demandée revient au prompt suivant ;
+  - Stop pendant une cellule de 30 s ;
+  - session en « auto » : bandeau, cellule sans demande ;
+  - fin : agents arrêtés, démon arrêté, **aucun processus restant** exigé.
+  - Le tour lancé par l'agent est au ticket 25.

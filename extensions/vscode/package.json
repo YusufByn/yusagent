@@ -74,6 +74,7 @@
     "compile-tests": "tsc -p tsconfig.json --outDir out",
     "test:unit": "npm run compile-tests && node --require ./out/test/unit/setup.js --test --test-timeout=60000 \"out/test/unit/**/*.test.js\"",
     "test:e2e": "npm run build && npm run compile-tests && node out/test/e2e/run.js",
+    "test:e2e:real": "npm run build && npm run compile-tests && node out/test/e2e/run-real.js",
     "package": "npm run build && vsce package --no-dependencies --out yusagent.vsix && node scripts/check-size.mjs yusagent.vsix"
   },
   "devDependencies": {
