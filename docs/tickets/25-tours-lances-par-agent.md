@@ -71,6 +71,8 @@ Tests exploratoires jetables, retirés après la mesure : l'agent factice rejoue
 
 ## 4. Choix à trancher
 
+**T1, T2, T3 tranchés par la décision de Yusuf du 21/11/2026 (section 5) ; T4 reste ouvert.**
+
 1. **T1, forme du signal de début** :
    - (a) dans l'espace du pont (`ai.primeintellect.prime-agent`), champ `turnStart` à la forme d'Unharnessed (`origin`, `wake`) : l'extension reprise le lit déjà ;
    - (b) sous `_yus/turnStart` (décision du 19/11/2026 pour nos ajouts, `docs/yusAgent-cdc.md:89`).
@@ -84,3 +86,41 @@ Tests exploratoires jetables, retirés après la mesure : l'agent factice rejoue
 - `agent_start`/`agent_end` d'un tour de réveil vus par le pont : non mesurés (plan, étape 1).
 - Effet de `session/cancel` hors prompt sur la file du worker : non mesuré.
 - Tours lancés par le worker autres que `[bash-done]` : à lister et mesurer (1.5).
+
+## 5. Décision de Yusuf (21/11/2026) : la solution d'Unharnessed
+
+**On reprend la solution d'Unharnessed** pour un tour « wake » :
+- identifiant de tour propre, pris au même compteur que les prompts (`begin_prompt`) ;
+- `turnStart` avec `origin: "wake"` (et `wake`, le genre), publié avant le contenu du tour ;
+- `responseBoundary`, puis l'enveloppe de fin (événement de quiescence, puis `terminalQuiescence`), comme pour un prompt, sans réponse JSON-RPC ;
+- **mêmes noms de champs** qu'Unharnessed (`turnStart`, `origin`, `wake`, `rewindTo` ; `phase`, `outcome`).
+
+Le signal de début `turnStart` (`origin: "prompt"`) vaut aussi pour les tours de prompt et remplace la déduction de l'extension (`src/ya/meta.ts`). Le ticket reste **à faire après la PR 3** du ticket 24.
+
+### Le plan suit la décision
+
+- §2.2 : l'identifiant, `turnStart` et la fin du tour sont ceux d'Unharnessed (`prompt.rs:217-245`, `:332-357`, `settle_turn` `:857`, `:891`, `:925` ; enveloppe `crates/uh-daemon/src/acp/session.rs:583-624`).
+- **T1** : (a) dans l'espace du `_meta` du pont, à côté de `phase`, `outcome` et `promptTurnId`, comme Unharnessed les range ensemble dans le sien. Les noms de champs sont ceux d'Unharnessed ; l'extension reprise les lit déjà (`turnStart`, `chat.ts`). Ma recommandation (b) `_yus/turnStart` est écartée par la décision.
+- **T2** : `responseBoundary` puis l'enveloppe de fin, comme Unharnessed et comme nos tours de prompt.
+- **T3** : comme Unharnessed, un prompt qui arrive pendant un tour de réveil **attend** sa fin, puis est admis (`handle_session_prompt`, `prompt.rs:38-61`, essai toutes les 50 ms). Il n'est pas refusé, contrairement à ma recommandation.
+- **T4** (Stop pendant un réveil) : reste ouvert, voir l'écart E6.
+- Tests : ceux de §2.4, plus un prompt envoyé pendant un réveil (admis après sa fin, pas refusé).
+
+### Écarts imposés par notre démon, avec leur raison
+
+| | Unharnessed (`157dcdc1d`) | Chez nous | Raison |
+|---|---|---|---|
+| **E1, qui lance le réveil** | La couche ACP lance le tour elle-même (`start_wake_turn`, `prompt.rs:217-245` ; `admit_wake`, `:250-258`). Les réveils ont été sortis du worker du démon pour aller dans l'hôte en processus (`crates/uh-core/src/session_engine/wakes.rs:1-5`). | Le worker du démon lance le tour depuis sa file (`custom_message`, `crates/pa-daemon/src/worker/queue.rs:347-352`). Le pont **observe** le début (`agent_start` hors prompt) et alloue l'identifiant à ce moment-là. | Notre pont passe toujours par le démon (ticket 24, §1.2) ; la file et les avis appartiennent au worker, partagé avec le TUI et les tâches planifiées. À mesurer en premier (§2.1) : l'ordre `agent_start`, contenu, `agent_end` vu par le pont. |
+| **E2, genre du réveil** (`wake`) | Connu à la source : `bash`, `quota`, `goal` (`Wake::kind`, `wakes.rs:49-53`). | Déduit par le pont du premier message du tour (avis `[bash-done]`, reprise après limite, objectif). Un genre non reconnu : champ `wake` absent. **Genre en plus** : `heartbeat` (`rlm-heartbeat`, réveil planifié qui n'existe qu'avec le démon). | Le pont ne voit que les événements du worker, pas la cause du réveil. Le heartbeat est propre au démon (ticket 24, écart de préfixe du 21/11). |
+| **E3, avis pendant un tour** | Un avis n'entre jamais dans un tour en cours : il attend la fin du tour (`wakes.rs:10-12`). | Le démon peut glisser un avis `[bash-done]` dans un tour en cours (file `steering` du worker) : alors pas de tour de réveil, l'avis s'affiche dans le tour en cours. | Comportement du worker du démon ; changer la file sort de ce ticket (le regroupement des avis dans le démon est E11, ticket à part). |
+| **E4, tour lancé par un autre client** | Sans objet (pas de démon, pas de TUI attaché). | Un TUI attaché à la même session (K5) peut lancer un prompt : pour le client ACP, c'est un tour qu'il n'a pas lancé. Proposé : même forme, `origin: "prompt"` sans `rewindTo` ; l'extension l'affiche comme un tour de l'agent. **À confirmer.** | Session résidente du démon, partageable entre clients (ticket 24, écart 7). |
+| **E5, enveloppe de fin** | Construite dans le processus (`publish_completion_envelope`, `session.rs:583-624`). | Même enveloppe, mêmes noms. Ses données (quiescence, objectif, sous-agents) demandent une requête au démon (`fetch_autonomous_status`, comme après un prompt, `daemon.rs:1592-1620`) : une requête de plus par réveil. | Les données vivent dans le worker du démon. |
+| **E6, Stop pendant un réveil** (T4) | `session/cancel` arrête la tâche du tour ; pas de frontière, pas de réponse (`settle_turn`, chemin d'annulation, `prompt.rs:870-880`). L'extension marque le tour « Stopped » d'elle-même. | `session/cancel` mène à `AbortAndClearQueue` (`daemon.rs:886-900`) : il arrête le tour, **et vide aussi la file du worker** (d'autres avis en attente). Effet non mesuré. | Sémantique d'arrêt du démon (`stop_session_work`). Proposé : mesurer, puis, si des avis sont perdus, un arrêt du seul tour en cours (`Abort` sans vider la file, si le démon l'offre), à trancher. |
+| **E7, ordre des identifiants** | Un seul compteur, la couche ACP lance chaque tour. | Même compteur, mais un prompt et un réveil peuvent se croiser : le prompt attend la fin du réveil (T3) avant `begin_prompt`, pour qu'aucun événement du réveil ne prenne l'identifiant du prompt. | Le worker peut commencer un réveil pendant que le pont admet un prompt. |
+
+### Fichiers (mise à jour de §3)
+
+- `crates/pa-daemon/src/acp/ya_turns.rs` (nouveau) : début et fin des tours que le pont n'a pas lancés, genre du réveil, attente d'un prompt pendant un réveil.
+- `crates/pa-daemon/src/acp/meta.rs` (upstream) : champ `turnStart` (`origin`, `wake`, `rewindTo`) dans le `_meta` du pont, ajout minimal.
+- `crates/pa-daemon/src/acp/daemon.rs` (upstream) : accroches dans la boucle d'événements et dans l'admission d'un prompt.
+- Extension : `src/ya/meta.ts` lit `turnStart` et la frontière ; la déduction est retirée.
