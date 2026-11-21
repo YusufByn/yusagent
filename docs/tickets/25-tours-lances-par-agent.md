@@ -124,3 +124,8 @@ Le signal de début `turnStart` (`origin: "prompt"`) vaut aussi pour les tours d
 - `crates/pa-daemon/src/acp/meta.rs` (upstream) : champ `turnStart` (`origin`, `wake`, `rewindTo`) dans le `_meta` du pont, ajout minimal.
 - `crates/pa-daemon/src/acp/daemon.rs` (upstream) : accroches dans la boucle d'événements et dans l'admission d'un prompt.
 - Extension : `src/ya/meta.ts` lit `turnStart` et la frontière ; la déduction est retirée.
+
+### Décisions de Yusuf sur E4 et E6 (21/11/2026)
+
+- **E4 validé** : un tour lancé par un TUI attaché à la même session a `turnStart` avec `origin: "prompt"`, sans `rewindTo` ; l'extension l'affiche comme un tour de l'agent.
+- **E6 à mesurer dans ce ticket**, avec un test qui montre ce que Stop pendant un réveil retire de la file du worker. Proposition de cas (test e2e du pont, provider factice) : deux `bash()` non lus qui finissent à quelques secondes d'écart ; Stop pendant le premier réveil ; on relève si le second avis `[bash-done]` arrive encore (nouveau tour de réveil) ou s'il a été retiré par `AbortAndClearQueue`, et ce que contient la file du worker avant et après. Selon le résultat, choix T4 (garder `AbortAndClearQueue`, ou n'arrêter que le tour en cours).
