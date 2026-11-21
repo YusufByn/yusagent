@@ -2,7 +2,7 @@
 // historique), contre l'agent factice : vrai processus, vraies trames sur stdio, sans VS Code.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -57,6 +57,8 @@ const items = (h: Harness): TurnItem[] =>
   shown(h).chat.current.entries.flatMap((entry) => (entry.kind === "turn" ? entry.items : []));
 const texts = (h: Harness, kind: string) =>
   items(h).filter((item) => item.kind === kind).map((item) => ("text" in item ? item.text : ""));
+const toolStatus = (h: Harness, id: string) =>
+  items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === id)?.status;
 const lastTurn = (h: Harness) => shown(h).chat.current.entries.filter((entry) => entry.kind === "turn").at(-1);
 
 test("ouverture puis prompt : exactement les trames du fixture (preuve 1), rien d'autre à l'ouverture", async () => {
@@ -85,20 +87,31 @@ test("méthode non servie : rejet sur place, aucune trame", async () => {
   assert.equal(received(h.dir, lastPid(h)).length, before);
 });
 
-test("Arrêter : session/cancel, puis cancelled à la demande ouverte ; ligne d'attente puis fermée", async () => {
+test("Arrêter : session/cancel, puis cancelled à la demande ouverte, demande retirée de la boîte", async () => {
   const h = open();
   await ready(h);
   shown(h).chat.send("lent", []);
   await waitFor(() => shown(h).agent.permissions.waiting === 1, "demande ouverte");
-  await waitFor(() => texts(h, "notice").some((text) => text.startsWith("Demande d'autorisation en attente")), "ligne d'attente");
+  assert.deepEqual(shown(h).agent.permissions.asks, [
+    {
+      toolCallId: "call-2",
+      options: [
+        { optionId: "allow-once", name: "Allow", kind: "allow_once" },
+        { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+      ],
+    },
+  ]);
+  assert.equal(toolStatus(h, "call-2"), "pending", "carte en attente d'accord, pas en cours (défaut 3)");
   shown(h).chat.cancel();
   await idle(h);
+  assert.equal(toolStatus(h, "call-2"), "pending", "jamais lancée : la carte n'est pas passée en cours");
   const frames = received(h.dir, lastPid(h));
   const cancel = frames.findIndex((frame) => frame.method === "session/cancel");
-  const answer = frames.findIndex((frame) => frame.id === "ya-perm-1");
+  const answer = frames.findIndex((frame) => frame.id === "ya-permission-1");
   assert.ok(cancel >= 0 && answer > cancel, "session/cancel puis la réponse");
-  assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-perm-1", result: { outcome: { outcome: "cancelled" } } });
-  assert.ok(texts(h, "notice").includes("Demande d'autorisation fermée."));
+  assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-permission-1", result: { outcome: { outcome: "cancelled" } } });
+  assert.deepEqual(shown(h).agent.permissions.asks, [], "demande retirée de la boîte");
+  assert.ok(!texts(h, "notice").some((text) => text.includes("Demande d'autorisation")), "plus de ligne d'attente");
   assert.equal((lastTurn(h) as { state?: string }).state, "cancelled");
 });
 
@@ -106,14 +119,154 @@ test("$/cancel_request du pont : réponse cancelled, le tour continue", async ()
   const h = open();
   await ready(h);
   shown(h).chat.send("retire", []);
+  // Défaut 3 : `pending` à l'annonce, `running` seulement à `in_progress`.
+  await waitFor(() => toolStatus(h, "call-3") === "pending", "carte en attente d'accord");
+  await waitFor(() => toolStatus(h, "call-3") === "running", "carte en cours après in_progress");
   await idle(h);
-  assert.deepEqual(received(h.dir, lastPid(h)).find((frame) => frame.id === "ya-perm-1"), {
+  assert.equal(toolStatus(h, "call-3"), "done");
+  assert.deepEqual(received(h.dir, lastPid(h)).find((frame) => frame.id === "ya-permission-1"), {
     jsonrpc: "2.0",
-    id: "ya-perm-1",
+    id: "ya-permission-1",
     result: { outcome: { outcome: "cancelled" } },
   });
   assert.equal(shown(h).agent.permissions.waiting, 0);
   assert.deepEqual(texts(h, "text"), ["retirée"]);
+});
+
+test("cartes (PR 3, étape 2) : bash() réels, vrais diffs, sortie sans les blocs diff ; refus", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("carte", []);
+  await idle(h);
+  const tool = items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-c")!;
+  assert.equal(tool.status, "done");
+  assert.equal(tool.output, "Edited a.py", "les contenus diff ne s'ajoutent pas à la sortie");
+  assert.deepEqual(tool.runs, [
+    { command: "echo lu", exitCode: 0, output: "lu\n", durationMs: 6 },
+    { command: "false", exitCode: 1, output: "", durationMs: 3 },
+  ]);
+  assert.deepEqual(
+    tool.edits?.map(({ path, shown, created, lines }) => ({ path, shown, created, lines })),
+    [
+      { path: join(h.cwd, "src/a.py"), shown: "src/a.py", created: false, lines: [["-", "x = 1"], ["+", "x = 2"]] },
+      { path: join(h.cwd, "neuf.txt"), shown: "neuf.txt", created: true, lines: [["+", "un"], ["+", "deux"]] },
+    ],
+  );
+  assert.equal(tool.cell?.kind, "edit");
+  assert.deepEqual(tool.cell?.files, ["src/a.py", "neuf.txt"]);
+  assert.deepEqual([tool.cell?.diff?.added, tool.cell?.diff?.removed], [3, 1]);
+  assert.equal(tool.declined, undefined);
+
+  shown(h).chat.send("refus", []);
+  await idle(h);
+  const declined = items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-r")!;
+  assert.equal(declined.status, "failed");
+  assert.equal(declined.declined, true);
+});
+
+test("boîte (PR 3, étape 3) : Allow → selected allow-once, la cellule tourne ; Reject → reject-once, Declined", async () => {
+  const h = open();
+  await ready(h);
+  const permissions = shown(h).agent.permissions;
+  shown(h).chat.send("accord", []);
+  await waitFor(() => permissions.waiting === 1, "demande ouverte");
+  assert.equal(permissions.answer("call-a", "autre-option"), false, "option inconnue : ignorée");
+  assert.equal(permissions.answer("call-x", "allow-once"), false, "appel inconnu : ignoré");
+  assert.equal(permissions.waiting, 1, "toujours ouverte");
+  assert.equal(permissions.answer("call-a", "allow-once"), true);
+  await idle(h);
+  const frames = received(h.dir, lastPid(h));
+  assert.deepEqual(frames.find((frame) => frame.id === "ya-permission-1"), {
+    jsonrpc: "2.0",
+    id: "ya-permission-1",
+    result: { outcome: { outcome: "selected", optionId: "allow-once" } },
+  });
+  assert.equal(toolStatus(h, "call-a"), "done");
+  assert.equal(permissions.answer("call-a", "allow-once"), false, "déjà réglée : rien ne part");
+  assert.equal(received(h.dir, lastPid(h)).filter((frame) => frame.id === "ya-permission-1").length, 1, "une seule réponse");
+
+  shown(h).chat.send("accord", []);
+  await waitFor(() => permissions.waiting === 1, "deuxième demande");
+  assert.equal(permissions.answer("call-a", "reject-once"), true);
+  await idle(h);
+  assert.deepEqual(received(h.dir, lastPid(h)).find((frame) => frame.id === "ya-permission-2"), {
+    jsonrpc: "2.0",
+    id: "ya-permission-2",
+    result: { outcome: { outcome: "selected", optionId: "reject-once" } },
+  });
+  const declined = items(h).filter((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-a").at(-1)!;
+  assert.equal(declined.status, "failed");
+  assert.equal(declined.declined, true);
+  assert.equal(permissions.waiting, 0);
+});
+
+test("diffs (PR 3, étape 4) : « Rejeter » restaure, retire le fichier créé, texte fixe au message suivant", async () => {
+  const h = open();
+  await ready(h);
+  const a = join(h.cwd, "a.txt");
+  const created = join(h.cwd, "neuf.txt");
+  writeFileSync(a, "un\ndeux\ntrois\n");
+  const tool = () => items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-d");
+  const states = () => tool()?.edits?.map((edit) => edit.revert);
+  // Garde-fou 1 : pas pendant un tour (une demande d'accord tient le tour ouvert).
+  shown(h).chat.send("diff", []);
+  await idle(h);
+  await waitFor(() => states()?.every((status) => status?.state === "ready"), "après lu, avant retrouvé");
+  assert.equal(readFileSync(a, "utf8"), "un\nDEUX\ntrois\n");
+  shown(h).chat.send("lent", []);
+  await waitFor(() => shown(h).agent.permissions.waiting === 1, "un tour en cours");
+  await shown(h).chat.yaRevert("call-d", a);
+  assert.deepEqual(states()?.[0], { state: "ready", refused: "Not while a turn runs." });
+  assert.equal(readFileSync(a, "utf8"), "un\nDEUX\ntrois\n", "rien d'écrit pendant le tour");
+  shown(h).chat.cancel();
+  await idle(h);
+  // Hors tour : restauré ; le fichier créé est retiré.
+  await shown(h).chat.yaRevert("call-d", a);
+  await shown(h).chat.yaRevert("call-d", created);
+  assert.deepEqual(states(), [{ state: "reverted" }, { state: "reverted" }]);
+  assert.equal(readFileSync(a, "utf8"), "un\ndeux\ntrois\n");
+  assert.equal(existsSync(created), false);
+  // Une commande `/…` ne porte pas le texte fixe ; le message suivant, si.
+  shown(h).chat.send("/rien", []);
+  await idle(h);
+  shown(h).chat.send("bonjour", []);
+  await idle(h);
+  const prompts = received(h.dir, lastPid(h))
+    .filter((frame) => frame.method === "session/prompt")
+    .map((frame) => (frame.params as { prompt: { text: string }[] }).prompt);
+  assert.deepEqual(prompts.at(-2), [{ type: "text", text: "/rien" }]);
+  assert.deepEqual(prompts.at(-1), [{ type: "text", text: "bonjour\n\n[user-reverted] a.txt\n[user-reverted] neuf.txt" }]);
+  const last = lastTurn(h) as { prompt?: { text: string } };
+  assert.equal(last.prompt?.text, "bonjour\n\n[user-reverted] a.txt\n[user-reverted] neuf.txt", "visible dans la bulle");
+});
+
+test("diffs (PR 3, étape 4) : edit() puis sed -i sur le même texte, « Rejeter » impossible avec la raison", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("diffsed", []);
+  await idle(h);
+  const tool = () => items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-d");
+  await waitFor(() => tool()?.edits?.[0].revert?.state === "blocked", "rejet impossible");
+  assert.deepEqual(tool()?.edits?.[0].revert, { state: "blocked", reason: "the edit's new text is no longer at line 2" });
+  assert.deepEqual(tool()?.edits?.[1].revert, { state: "ready" }, "l'autre fichier de la cellule reste rejetable");
+  await shown(h).chat.yaRevert("call-d", join(h.cwd, "a.txt"));
+  assert.equal(readFileSync(join(h.cwd, "a.txt"), "utf8"), "un\nDeux\ntrois\n", "rien d'écrit");
+});
+
+test("environnement du binaire (PR 3) : PRIME_AGENT_KERNEL_PYTHON retirée, PRIME_AGENT_KERNEL_VENV passée", async () => {
+  process.env.PRIME_AGENT_KERNEL_PYTHON = "/chemin/python-de-l-appelant";
+  process.env.PRIME_AGENT_KERNEL_VENV = "/chemin/kernel-venv";
+  try {
+    const h = open();
+    await ready(h);
+    const start = starts(h.dir).at(-1)!;
+    assert.equal(start.kernelPython, null, "PRIME_AGENT_KERNEL_PYTHON ne passe pas au binaire");
+    assert.equal(start.kernelVenv, "/chemin/kernel-venv", "les autres variables passent");
+    assert.equal(process.env.PRIME_AGENT_KERNEL_PYTHON, "/chemin/python-de-l-appelant", "l'environnement de VS Code n'est pas modifié");
+  } finally {
+    delete process.env.PRIME_AGENT_KERNEL_PYTHON;
+    delete process.env.PRIME_AGENT_KERNEL_VENV;
+  }
 });
 
 test("authentification : message fixe avec le chemin du binaire, deux formes", async () => {

@@ -66,11 +66,14 @@ export function readCell(source: string): Cell {
     viewed = true;
     for (const arg of args(code, call.index + call[0].length - 1)) add(views, literal(cell, names, arg));
   }
+  // yusAgent (PR 3, C7) : `edit(path, old_str, new_str)` et `read(path)`, fonctions du kernel.
+  const edited = yaKernelFiles(cell, names, file);
   const commands: (string | undefined)[] = [];
   for (const call of code.matchAll(/(?<![\w.])(?:bash|os\.system|subprocess\.(?:run|call|check_call|check_output|Popen))\(/g)) {
     const command = args(code, call.index + call[0].length - 1)[0];
     commands.push(command === undefined ? undefined : literal(cell, names, command));
   }
+  if (edited) return { kind: edited.kind, files: [...writes], ...(edited.diff && { diff: edited.diff }) };
   if (wrote) {
     const edit = EDIT.test(code) || [...writes].some((path) => reads.has(path));
     if (!edit) {
@@ -248,6 +251,64 @@ function dedent(text: string): string {
   let common = indents[0] ?? "";
   for (const indent of indents) while (!indent.startsWith(common)) common = common.slice(0, -1);
   return lines.map((line) => (line.trim() ? line.slice(common.length) : line.replace(/^[ \t]+$/, ""))).join("\n");
+}
+
+/**
+ * yusAgent (PR 3, C7) : les appels `edit()` et `read()` du kernel (`skills/edit`, prompt v2).
+ * Les fichiers vont dans les écritures ou les lectures (`file`) ; pour `edit()`, le type (`write`
+ * si chaque appel crée son fichier, `old_str=""`) et le diff deviné de ses textes quand le code
+ * les écrit. Undefined sans `edit()`. Une supposition : les vrais diffs arrivent à la fin.
+ */
+function yaKernelFiles(
+  cell: Skeleton,
+  names: Map<string, string>,
+  file: (path: string | undefined, writing: boolean) => void,
+): { kind: "edit" | "write"; diff?: Cell["diff"] } | undefined {
+  const { code } = cell;
+  const text = texts(cell);
+  const argument = (given: string[], at: number, name: string): string | undefined => {
+    const named = given.find((arg) => new RegExp(`^${name}\\s*=(?!=)`).test(arg));
+    if (named !== undefined) return named.replace(/^\w+\s*=\s*/, "");
+    const positional = given.slice(0, at + 1);
+    return positional.length > at && !/^\w+\s*=(?!=)/.test(positional[at]) ? positional[at] : undefined;
+  };
+  for (const call of code.matchAll(/(?<![\w.])read\(/g)) {
+    const path = argument(args(code, call.index + call[0].length - 1), 0, "path");
+    if (path !== undefined) file(literal(cell, names, path), false);
+  }
+  let calls = 0;
+  let created = true;
+  const lines: DiffLine[] = [];
+  for (const call of code.matchAll(/(?<![\w.])edit\(/g)) {
+    const given = args(code, call.index + call[0].length - 1);
+    const path = argument(given, 0, "path");
+    if (path === undefined) continue;
+    calls++;
+    file(literal(cell, names, path), true);
+    const oldArg = argument(given, 1, "old_str");
+    const newArg = argument(given, 2, "new_str");
+    const before = oldArg === undefined ? undefined : text(oldArg, call.index);
+    const after = newArg === undefined ? undefined : text(newArg, call.index);
+    if (before !== "") created = false;
+    if (before === undefined || after === undefined || before === after) continue;
+    if (lines.length > 0) lines.push(["…", ""]);
+    lines.push(...fragmentLines(before, after));
+  }
+  if (calls === 0) return undefined;
+  if (lines.length === 0) return { kind: created ? "write" : "edit" };
+  const count = (sign: DiffLine[0]) => lines.filter((line) => line[0] === sign).length;
+  return { kind: created ? "write" : "edit", diff: { lines, added: count("+"), removed: count("-") } };
+}
+
+/**
+ * yusAgent (PR 3) : les lignes d'un fragment `old` → `new` (un `edit()`) ; `old` vide : un
+ * fichier créé, toutes ses lignes ajoutées.
+ */
+export function fragmentLines(before: string, after: string): DiffLine[] {
+  if (before !== "") return hunk(before, after);
+  const rows = after.split("\n");
+  if (rows.length > 1 && rows.at(-1) === "") rows.pop();
+  return after === "" ? [] : rows.map((row): DiffLine => ["+", row]);
 }
 
 /** One replacement, `before` to `after`, line by line; kept lines far from a change fold into `…`. */

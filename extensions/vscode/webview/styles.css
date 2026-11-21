@@ -229,3 +229,142 @@ pre {
 .logo {
   font-weight: 600;
 }
+
+/* yusAgent (PR 3) : cartes de cellule, lisibles en attendant le visuel. */
+.call-lines {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.call-line.is-add,
+.add {
+  color: var(--vscode-gitDecoration-addedResourceForeground);
+}
+
+.call-line.is-del,
+.del,
+.ya-run-exit.is-error {
+  color: var(--vscode-gitDecoration-deletedResourceForeground);
+}
+
+.ya-run-head {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  text-align: left;
+}
+
+button.ya-run-head {
+  cursor: pointer;
+}
+
+.ya-run-command {
+  font-family: var(--vscode-editor-font-family);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* yusAgent (PR 3, C2) : boîte de permission au-dessus de la saisie, provisoire. */
+.ya-permission {
+  margin: 0 10px 6px;
+  padding: 8px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-focusBorder));
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+}
+
+.ya-permission:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.ya-permission-code {
+  max-height: 240px;
+  overflow: auto;
+  margin: 6px 0;
+  padding: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family);
+  background: var(--vscode-textCodeBlock-background);
+}
+
+.ya-permission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ya-permission-fold {
+  border: none;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  padding: 0;
+}
+
+.button.is-secondary {
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+}
+
+.ya-permission-keys {
+  opacity: 0.7;
+}
+
+/* yusAgent (PR 3) : boutons de la boîte grisés pendant leur délai d'1 s. */
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* yusAgent (PR 3, étape 4) : diffs des cellules, provisoire. */
+.ya-edit .call-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ya-edit-file {
+  border: none;
+  padding: 0;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+}
+
+.ya-revert {
+  padding: 1px 8px;
+}
+
+.ya-revert-note.is-warning {
+  color: var(--vscode-editorWarning-foreground);
+}
+
+/*
+ * yusAgent (PR 3, contrôle de Yusuf) : un repli fermé est masqué, comme chez Unharnessed
+ * (`styles.css:3912-4047` à 157dcdc1d, `grid-template-rows: 0fr`). Le code repris rend le contenu
+ * d'un repli fermé `inert` : affiché sans ces règles, il ignorait les clics (cartes impossibles à
+ * déplier). Sans animation : visuel provisoire.
+ */
+.call-fold,
+.work-fold {
+  display: none;
+}
+
+.call.is-open > .call-fold,
+.call-group.is-open > .call-fold,
+.work-group.is-open > .work-fold {
+  display: block;
+}
+
+.call-group.is-flat > .call-head-wrap,
+.work-group.is-flat > .work-head-wrap {
+  display: none;
+}

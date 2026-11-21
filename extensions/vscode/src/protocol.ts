@@ -142,7 +142,7 @@ export type ConfigChange =
 
 /** The global settings, as `_unharnessed/settings/get` gives them. Keys are the file's dotted paths. */
 export type SettingsView = {
-  /** Each key's value in `~/.unharnessed/settings.json`; `null` when unset. */
+  /** Each key's value in `~/.yusagent/settings.json`; `null` when unset. */
   values: Record<string, unknown>;
   /** What the agent uses for an unset key; `null`: nothing. */
   defaults: Record<string, unknown>;
@@ -259,6 +259,40 @@ export type Cell = {
   diff?: { lines: DiffLine[]; added: number; removed: number };
 };
 
+/** yusAgent (PR 3, C6) : un `bash()` lu par la cellule (`_meta` `_yus/bashRuns` du pont). */
+export type BashRun = { command: string; exitCode: number | null; output: string; durationMs?: number };
+
+/**
+ * yusAgent (PR 3, C7) : les `edit()` d'une cellule sur un fichier (contenus ACP `diff` du pont) :
+ * chemin absolu, chemin montré, fichier créé, lignes des fragments et leur compte.
+ */
+export type FileEdit = {
+  path: string;
+  shown: string;
+  created: boolean;
+  lines: DiffLine[];
+  added: number;
+  removed: number;
+  /** yusAgent (PR 3, étape 4) : où en est « Rejeter » pour ce fichier ; absent tant que la cellule n'a pas fini. */
+  revert?: RevertStatus;
+};
+
+/**
+ * yusAgent (PR 3, étape 4, E6 a) : `checking` (lecture de l'après), `ready` (« Rejeter » possible ;
+ * `refused` : pourquoi le dernier essai a été refusé), `blocked` (impossible, `reason`), `reverted`.
+ */
+export type RevertStatus =
+  | { state: "checking" }
+  | { state: "ready"; refused?: string }
+  | { state: "blocked"; reason: string }
+  | { state: "reverted" };
+
+/** yusAgent (PR 3) : une option d'une demande d'accord du pont (`allow-once` « Allow », `reject-once` « Reject »). */
+export type PermissionOption = { optionId: string; name: string; kind: string };
+
+/** yusAgent (PR 3) : une demande d'accord ouverte, pour la boîte (le code vient de la carte de l'appel). */
+export type PermissionAsk = { toolCallId: string; options: PermissionOption[] };
+
 /** A line of a diff: kept, removed or added; `…` stands for lines left out. */
 export type DiffLine = [" " | "-" | "+" | "…", string];
 
@@ -275,7 +309,11 @@ export type TurnItem =
       id: string;
       /** `Python cell`, or the tool's name. */
       title: string;
-      status: "running" | "done" | "failed";
+      /**
+       * yusAgent (PR 3, défaut 3) : `pending`, annoncé en attente d'accord (mode manuel,
+       * `crates/pa-daemon/src/acp/ya_permissions.rs`) ; `running` à l'accord (`in_progress`).
+       */
+      status: "pending" | "running" | "done" | "failed";
       /** The cell's code, or the tool's input as JSON. */
       input: string;
       output?: string;
@@ -285,6 +323,12 @@ export type TurnItem =
       images?: number;
       /** The exception a failed cell raised: `AssertionError`. */
       error?: string;
+      /** yusAgent (PR 3, C6) : les `bash()` lus par la cellule. */
+      runs?: BashRun[];
+      /** yusAgent (PR 3, C7) : ses vrais diffs, un par fichier. */
+      edits?: FileEdit[];
+      /** yusAgent (PR 3, C5) : refusée (texte fixe `[permission-denied]`), pas en erreur. */
+      declined?: boolean;
     }
   /**
    * The conversation compacted into a summary: on its own (`auto`), or by
@@ -519,6 +563,14 @@ export type HostMessage =
   | { type: "kernelPreview"; name: string; preview: VariablePreview }
   | { type: "history"; history: HistoryState }
   | { type: "chatPatch"; patch: ChatPatch }
+  /** yusAgent (PR 3) : les demandes d'accord ouvertes de la conversation montrée, dans l'ordre. */
+  | { type: "yaPermissions"; asks: PermissionAsk[] }
+  /**
+   * yusAgent (PR 3, tests e2e) : une action comme celle d'un utilisateur, puis `probeResult` :
+   * texte tapé dans la zone de message, focus donné à la boîte ou retiré, touches, clic sur un
+   * bouton de la boîte (par son nom).
+   */
+  | { type: "probeInput"; input: ProbeInput }
   /**
    * A sent prompt, back in the message box to be changed and sent again in
    * place of turn `id`'s; or waiting message `id`, to be changed in its place.
@@ -551,12 +603,46 @@ export type HostMessage =
 export type Probe = {
   text: string;
   selects: { label: string | null; value: string; disabled: boolean; options: string[] }[];
+  /** Le nom de la zone de saisie (`aria-label`), son texte d'invite (PR 3, défaut 1). */
+  input: string | null;
+  /** PR 3 : l'élément qui a le focus (`box` : la boîte de permission, `composer` : la zone de message). */
+  focused: "box" | "composer" | "other";
+  /** PR 3 : les boutons de la boîte de permission, avec leur état. */
+  boxButtons: { name: string; disabled: boolean }[];
+  /** PR 3 : l'issue du dernier `userClick`. */
+  clicked?: "clicked" | "inert" | "covered" | "missing";
+  /**
+   * Contrôle de Yusuf : les blocs `inert` affichés (taille non nulle). Ce qu'ils contiennent se voit
+   * mais ignore les clics ; il en faut 0.
+   */
+  visibleInert: number;
+};
+
+/** yusAgent (PR 3, tests e2e) : voir `probeInput`. */
+export type ProbeInput = {
+  type?: string;
+  focus?: "box" | "none";
+  keys?: string[];
+  click?: string;
+  /**
+   * Contrôle de Yusuf : un clic comme celui d'un utilisateur sur le dernier bouton dont le texte est
+   * ce texte (sinon le contient). Bouton amené à l'écran, élément réellement sous le pointeur
+   * (`elementFromPoint`) ; rien si cet élément est inerte, ou si ce n'est pas le bouton (recouvert,
+   * masqué) ; sinon pointeur et souris enfoncés, relâchés, puis `click` sur cet élément.
+   */
+  userClick?: string;
 };
 
 export type WebviewMessage =
   | { type: "ready" }
   /** yusAgent : réponse de la webview à `probe` (tests e2e). */
   | { type: "probeResult"; probe: Probe }
+  /** yusAgent (PR 3) : la réponse de la boîte à la demande d'accord de `toolCallId`. */
+  | { type: "permission"; toolCallId: string; optionId: string }
+  /** yusAgent (PR 3, étape 4) : l'avant et l'après d'un fichier modifié par une cellule, dans `vscode.diff`. */
+  | { type: "yaOpenDiff"; toolId: string; path: string }
+  /** yusAgent (PR 3, étape 4) : « Rejeter » la modification d'un fichier par une cellule. */
+  | { type: "yaRevert"; toolId: string; path: string }
   /** The screen now on display, for the log. */
   | { type: "screen"; screen: Screen }
   /** The panel crashed: what threw, and where. */

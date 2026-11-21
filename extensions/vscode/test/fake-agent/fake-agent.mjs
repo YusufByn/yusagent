@@ -9,7 +9,7 @@
 // - `<dir>/starts.log` : une ligne par lancement (pid, cwd, arguments).
 // Le comportement d'un prompt dépend de son texte (voir `onPrompt`).
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -21,7 +21,14 @@ const scenario =
 if (dir) {
   appendFileSync(
     join(dir, "starts.log"),
-    JSON.stringify({ pid: process.pid, cwd: process.cwd(), argv: process.argv.slice(2) }) + "\n",
+    JSON.stringify({
+      pid: process.pid,
+      cwd: process.cwd(),
+      argv: process.argv.slice(2),
+      // PR 3 : les variables du kernel reçues (l'extension retire PRIME_AGENT_KERNEL_PYTHON).
+      kernelPython: process.env.PRIME_AGENT_KERNEL_PYTHON ?? null,
+      kernelVenv: process.env.PRIME_AGENT_KERNEL_VENV ?? null,
+    }) + "\n",
   );
 }
 
@@ -68,18 +75,37 @@ const fail = (id, code, message, data) => send({ id, error: { code, message, ...
 // `_meta` de notre pont (`crates/pa-daemon/src/acp/meta.rs`) : tour du prompt en cours, ordre.
 let promptTurnId = 0;
 let eventSequence = 0;
-const update = (body) =>
+// PR 3 : trames comparées champ par champ à celles du binaire de `main` 1b96bb645 (capture du
+// 21/11/2026, ticket 24, « PR 3, trames de l'agent factice ») : `_yus/*` du corps gardé à côté de
+// l'espace du pont ; `prime` ajoute des champs dans cet espace (`ipython.diffCount`, `phase`…).
+const update = ({ prime, ...body }) =>
   send({
     method: "session/update",
     params: {
       sessionId: SESSION_ID,
       update: {
         ...body,
-        _meta: { "ai.primeintellect.prime-agent": { promptTurnId, eventSequence: ++eventSequence, phase: "event" } },
+        _meta: {
+          ...body._meta,
+          "ai.primeintellect.prime-agent": { promptTurnId, eventSequence: ++eventSequence, phase: "event", ...prime },
+        },
       },
     },
   });
-const chunk = (text, kind = "agent_message_chunk") => update({ sessionUpdate: kind, content: { type: "text", text } });
+// Comme le pont : un `messageId` par message de l'agent (`prime-agent-assistant-<n>`).
+const chunk = (text, kind = "agent_message_chunk") =>
+  update({ sessionUpdate: kind, messageId: `prime-agent-assistant-${promptTurnId}`, content: { type: "text", text } });
+// Fin d'un tour de prompt réussi, comme le pont (`crates/pa-daemon/src/acp/daemon.rs:1592-1620`) :
+// `responseBoundary`, l'enveloppe de quiescence, `terminalQuiescence`, puis la réponse.
+const finish = (id) => {
+  update({ sessionUpdate: "session_info_update", prime: { phase: "responseBoundary", outcome: "result", terminalQuiescenceExpected: true } });
+  update({ sessionUpdate: "session_info_update", prime: { quiescence: { outstandingSubagents: 0, remainingAutonomousContinuations: 0 } } });
+  update({
+    sessionUpdate: "session_info_update",
+    prime: { phase: "terminalQuiescence", outcome: "result", quiescence: { outstandingSubagents: 0, remainingAutonomousContinuations: 0 } },
+  });
+  respond(id, { stopReason: "end_turn" });
+};
 const later = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Requêtes de l'agent vers le client en attente de réponse : id → résolution. */
@@ -88,7 +114,8 @@ let cancelled = null;
 let nextRequest = 0;
 
 function askPermission(toolCallId) {
-  const id = `ya-perm-${++nextRequest}`;
+  // Préfixe des identifiants du pont (`ID_PREFIX`, `crates/pa-daemon/src/acp/ya_permissions.rs`).
+  const id = `ya-permission-${++nextRequest}`;
   send({
     id,
     method: "session/request_permission",
@@ -104,22 +131,43 @@ function askPermission(toolCallId) {
   return { id, answer: new Promise((resolve) => waiting.set(id, resolve)) };
 }
 
+/** Une cellule `edit()` : `a.txt` laissé à `after`, `neuf.txt` créé, diffs à la forme du pont. */
+function editCell(id, after) {
+  const cwd = process.cwd();
+  writeFileSync(join(cwd, "a.txt"), after);
+  writeFileSync(join(cwd, "neuf.txt"), "nouveau\n");
+  const code = "await edit('a.txt', 'deux', 'DEUX')\nawait edit('neuf.txt', '', 'nouveau\\n')";
+  update({ sessionUpdate: "tool_call", toolCallId: "call-d", title: "Python cell", kind: "execute", status: "in_progress", rawInput: { code } });
+  update({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "call-d",
+    status: "completed",
+    content: [
+      { type: "content", content: { type: "text", text: `Edited ${cwd}/a.txt` } },
+      { type: "diff", path: `${cwd}/a.txt`, oldText: "deux", newText: "DEUX", _meta: { "_yus/startLine": 2 } },
+      { type: "diff", path: `${cwd}/neuf.txt`, newText: "nouveau\n", _meta: { "_yus/startLine": 1 } },
+    ],
+    prime: { ipython: { diffCount: 2 } },
+  });
+  return finish(id);
+}
+
 async function onPrompt(id, text) {
   switch (text) {
     case "bonjour":
       chunk("Bon");
       await later(20);
       chunk("jour");
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     case "pense":
       chunk("je réfléchis", "agent_thought_chunk");
       chunk("ok");
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     case "outil":
       update({ sessionUpdate: "tool_call", toolCallId: "call-1", title: "Python cell", kind: "execute", status: "in_progress", rawInput: { code: "print(1)" } });
       update({ sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "completed" });
       chunk("fait");
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     case "lent": {
       chunk("Je commence");
       update({ sessionUpdate: "tool_call", toolCallId: "call-2", title: "Python cell", kind: "execute", status: "pending", rawInput: { code: "1" } });
@@ -135,10 +183,76 @@ async function onPrompt(id, text) {
       send({ method: "$/cancel_request", params: { requestId: request.id } });
       await request.answer;
       update({ sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "in_progress" });
+      // La cellule tourne un moment : l'état `running` de la carte se voit (PR 3, défaut 3).
+      await later(150);
       update({ sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "completed" });
       chunk("retirée");
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     }
+    // PR 3 : une cellule finie avec les données de carte du pont (`ya_cell_display.rs`) : deux
+    // `bash()` lus (le second sorti en 1), un `edit()` d'un fichier existant, un fichier créé.
+    case "carte": {
+      const code = "r = await bash('echo lu')\nawait bash('false')\nawait edit('src/a.py', 'x = 1\\n', 'x = 2\\n')\nawait edit('neuf.txt', '', 'un\\ndeux\\n')";
+      update({ sessionUpdate: "tool_call", toolCallId: "call-c", title: "Python cell", kind: "execute", status: "in_progress", rawInput: { code } });
+      update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-c",
+        status: "completed",
+        content: [
+          { type: "content", content: { type: "text", text: "Edited a.py" } },
+          { type: "diff", path: `${process.cwd()}/src/a.py`, oldText: "x = 1\n", newText: "x = 2\n", _meta: { "_yus/startLine": 3 } },
+          { type: "diff", path: `${process.cwd()}/neuf.txt`, newText: "un\ndeux\n", _meta: { "_yus/startLine": 1 } },
+        ],
+        _meta: {
+          "_yus/bashRuns": [
+            { command: "echo lu", exitCode: 0, output: "lu\n", durationMs: 6 },
+            { command: "false", exitCode: 1, output: "", durationMs: 3 },
+          ],
+        },
+        prime: { ipython: { diffCount: 2 } },
+      });
+      return finish(id);
+    }
+    // PR 3 : une cellule refusée, comme le pont la termine (`failed`, texte fixe), puis fin du tour (D7).
+    case "refus":
+      update({ sessionUpdate: "tool_call", toolCallId: "call-r", title: "Python cell", kind: "execute", status: "pending", rawInput: { code: "await bash('rm -rf build')" } });
+      update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-r",
+        status: "failed",
+        content: [{ type: "content", content: { type: "text", text: "[permission-denied] The user declined this cell; nothing was executed." } }],
+      });
+      return finish(id);
+    // PR 3 : une demande d'accord à laquelle la boîte répond ; la suite comme le pont
+    // (`crates/pa-cli/tests/ya_permissions_acp_e2e.rs:400-434`, trames capturées le 21/11/2026) :
+    // accord → `in_progress` puis `completed` ; refus ou `cancelled` → `failed` avec le texte fixe,
+    // et le tour s'arrête (D7).
+    case "accord": {
+      update({ sessionUpdate: "tool_call", toolCallId: "call-a", title: "Python cell", kind: "execute", status: "pending", rawInput: { code: "print('accord')" } });
+      const request = askPermission("call-a");
+      const result = await request.answer;
+      if (result?.outcome?.outcome === "selected" && result.outcome.optionId === "allow-once") {
+        update({ sessionUpdate: "tool_call_update", toolCallId: "call-a", status: "in_progress" });
+        update({ sessionUpdate: "tool_call_update", toolCallId: "call-a", status: "completed", content: [{ type: "content", content: { type: "text", text: "accord\n" } }] });
+        chunk("autorisée");
+      } else {
+        update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call-a",
+          status: "failed",
+          content: [{ type: "content", content: { type: "text", text: "[permission-denied] The user declined this cell; nothing was executed." } }],
+        });
+      }
+      return finish(id);
+    }
+    // PR 3, étape 4 : une cellule qui modifie `a.txt` (`deux` → `DEUX`, ligne 2) et crée `neuf.txt`,
+    // fichiers écrits dans le dossier de travail comme le ferait le kernel, puis les diffs du pont.
+    case "diff":
+      return editCell(id, "un\nDEUX\ntrois\n");
+    // PR 3, étape 4 (demande de Yusuf) : `edit()` puis `bash("sed -i 's/DEUX/Deux/' a.txt")` sur le
+    // même fichier : le texte de l'edit n'est plus à sa ligne, « Rejeter » est impossible.
+    case "diffsed":
+      return editCell(id, "un\nDeux\ntrois\n");
     case "auth":
       return fail(id, -32603, "Internal error", {
         details: "No API key found for capture",
@@ -161,11 +275,11 @@ async function onPrompt(id, text) {
       const option = config.find((candidate) => candidate.id === "permissions");
       if (option) option.currentValue = "auto";
       update({ sessionUpdate: "config_option_update", configOptions: config });
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
     }
     default:
       chunk(`écho : ${text}`);
-      return respond(id, { stopReason: "end_turn" });
+      return finish(id);
   }
 }
 

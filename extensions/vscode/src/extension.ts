@@ -9,8 +9,10 @@ import { Providers } from "./providers";
 import { Settings } from "./settings";
 import { ShownAgent } from "./shown";
 import { ToolTabs } from "./tabs";
-import type { WebviewMessage } from "./protocol";
+import type { ProbeInput, WebviewMessage } from "./protocol";
 import { ChatViewProvider } from "./view";
+import { setDiffFiles } from "./ya/diff-files";
+import { DiffDocuments, vscodeDiffFiles } from "./ya/diff-files-vscode";
 
 let conversations: Conversations | undefined;
 
@@ -22,6 +24,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const folder = vscode.workspace.workspaceFolders?.[0];
   const cwd = folder?.uri.scheme === "file" ? folder.uri.fsPath : "";
   const version = String(context.extension.packageJSON.version);
+  // yusAgent (PR 3, étape 4) : diffs des cellules et « Rejeter » avec les fichiers de VS Code.
+  const diffDocuments = new DiffDocuments();
+  setDiffFiles(vscodeDiffFiles(diffDocuments));
   const shown = new ShownAgent(log);
   // Before the first conversation: they listen to every agent's notifications.
   const providers = new Providers(shown, log);
@@ -36,6 +41,8 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
     tabs,
     vscode.workspace.registerTextDocumentContentProvider(ToolTabs.scheme, tabs),
+    diffDocuments, // yusAgent (PR 3)
+    vscode.workspace.registerTextDocumentContentProvider(DiffDocuments.scheme, diffDocuments),
     vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, view),
     // The button in the editor's title bar: the panel opens, its side bar with it.
     vscode.commands.registerCommand("yusagent.open", () => vscode.commands.executeCommand(`${ChatViewProvider.viewId}.focus`)),
@@ -47,9 +54,20 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.registerCommand("yusagent._test.post", (message: WebviewMessage) => view.receive(message)),
       vscode.commands.registerCommand("yusagent._test.state", () => {
         const { agent, session, chat } = all.shown;
-        return { agent: agent.current, session: session.current, chat: chat.current, html: view.html, rendered: view.rendered };
+        return {
+          agent: agent.current,
+          session: session.current,
+          chat: chat.current,
+          html: view.html,
+          rendered: view.rendered,
+          badge: view.badgeValue, // yusAgent (PR 3)
+        };
       }),
       vscode.commands.registerCommand("yusagent._test.probe", () => view.probe()),
+      // yusAgent (PR 3, étape 6) : arrêt de tous les agents (e2e vrai binaire, relevé des processus restants).
+      vscode.commands.registerCommand("yusagent._test.stopAll", () => all.stopAll()),
+      // yusAgent (PR 3) : saisie, focus, touches et clic dans la webview.
+      vscode.commands.registerCommand("yusagent._test.probeInput", (input: ProbeInput) => view.probeInput(input)),
     );
   }
   conversations.start();

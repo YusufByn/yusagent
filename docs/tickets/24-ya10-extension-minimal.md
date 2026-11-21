@@ -749,7 +749,7 @@ Constat pour appliquer la règle :
 
 ### Merge de la PR #73
 
-- **Contrôle de Yusuf** : fait ; **résultat non transmis** (le message disait « Contrôle de la PR #73 fait : <résultat>. Merge. »). À compléter.
+- **Contrôle de Yusuf** : le message disait « Contrôle de la PR #73 fait : <résultat>. Merge. », sans résultat. **Remplacé par le contrôle de la PR #74**, même parcours (décision de Yusuf, 21/11/2026, section « Contrôle de Yusuf de la PR #74 »).
 - **Merge** : PR #73 mergée par Claude Code sur la demande de Yusuf, `main` à `8830b763d` ; tête `a8941b37f` avec `ci` 44900460119 (14 checks requis verts) et `ya-extension` 44900460206 vert.
 
 ## Points ouverts (comparaison et découpage)
@@ -802,3 +802,474 @@ Branche `ya-24-extension-import`, depuis `main` à `8830b763d`. Extension seule 
 
 - **Premier push** (`2e6c6c6d0`) : `ya-extension` 44905938956 : étape « changements » `run=true` ; tsc, lint, tests unitaires et `.vsix` verts (**192 430 octets**, limite 5 000 000 hors binaire) ; e2e **5 sur 6** : vue et CSP (`default-src 'none'; style-src 'self' https://*.vscode-cdn.net; …; script-src 'nonce-…'`), trames du fixture, Stop et ligne d'attente, `/login`, plantage et « Restart », bandeau D4. Seul échec, dans le test : « sélecteurs », `0 !== 1`. Leur `setOption` affiche la nouvelle valeur avant d'envoyer la requête, et le test lisait le journal de l'agent factice avant qu'il ait reçu la trame. Le test attend maintenant la trame, puis vérifie qu'il n'y en a qu'une.
 
+### Contrôle de Yusuf de la PR #74 (21/11/2026)
+
+Sur l'artefact du run `ya-extension` 44906056126 :
+- installation ok (192 430 octets, 9 fichiers) ;
+- vue dans la barre latérale secondaire ok ;
+- message `/login` avec le chemin réel du binaire ok, puis `/login` fait dans le TUI ;
+- prompt en streaming ok ; Stop ok ;
+- bandeau en auto ok ;
+- en manuel, la ligne « Demande d'autorisation en attente » s'affiche et Stop annule.
+
+Ce contrôle remplace celui de la PR #73 (même parcours).
+
+**Nom de l'artefact** : il porte `5ef8db541`, pas la tête `ecdc840f8`. Vérifié : `5ef8db54106344dbd937a81a708e622c0c1f6fb2` est le commit de fusion de test de la PR (`refs/pull/74/merge`, message « Merge ecdc840f8… into 8830b763d… », parents `8830b763d`, `main` d'alors, et `ecdc840f8`, tête de la PR). Un run `pull_request` construit ce commit : `github.sha`, qui nomme l'artefact, est le sien ; `head_sha` du run est `ecdc840f8` (`gh api repos/YusufByn/yusagent/actions/runs/44906056126`).
+
+### Merge de la PR #74
+
+- CI de la tête `ecdc840f8` : `ya-extension` 44906056126 vert (e2e 6/6, `.vsix` 192 430 octets) ; `ci` 44906056143, 14 checks requis verts, aucun en skipping.
+- Script de contrôle lancé d'abord par Claude Code (règle 13) : `extensions/vscode/scripts/install-vsix.sh 44906056126 <dossier isolé>` → 192 430 octets, sha256 `898d620df0b02f531f22788ac39a9c51b825ba0e8655331db8ae52ed5e2f2eb2`, 9 fichiers attendus, `yusagent.yusagent@0.1.0`, `installé` (commentaire de la PR).
+- PR #74 mergée par Claude Code sur la demande de Yusuf : `main` à `52ca68d3d`.
+
+## PR 3 : défauts relevés par Yusuf, à corriger (21/11/2026)
+
+1. **« Ask Unharnessed » dans la zone de saisie** (`extensions/vscode/webview/Composer.tsx:56`, `PLACEHOLDER`). Chercher et remplacer **tous** les textes visibles « Unharnessed » (dont les chemins `~/.unharnessed` de ses écrans de réglages).
+2. **« Running servers » et « Agent's REPL variables » affichés** alors que le panneau du kernel n'est pas servi : `KernelTray` est rendu sans condition (`Composer.tsx:383`, titres `webview/Kernel.tsx:231`, `:247`). À masquer selon `features.kernel`.
+3. **Carte d'une cellule en attente d'accord** : elle affiche « Running pwd; ls… », même défaut que le ticket 22 côté TUI. Cause : le chat repris met tout `tool_call` en `running` (`extensions/vscode/src/chat.ts`, cas `tool_call`) et ignore le statut `pending` que le pont envoie en manuel (`crates/pa-daemon/src/acp/ya_permissions.rs:281-296`) ; le verbe vient de `webview/Chat.tsx:742-743`. Attendu : « Awaiting permission », sans état en cours, et la carte démarre à l'accord (`tool_call_update` `in_progress`).
+
+## Reprise : état au 21/11/2026 et périmètre de la PR 3
+
+Section de reprise pour une nouvelle session. Ce qui est décidé plus haut fait foi ; ceci rassemble les repères.
+
+### État de `main` et des branches
+
+- **`main`** : `52ca68d3d` (merge de la PR #74). Les trois PR du ticket sont mergées : PR #72 (`ya-24-extension`, tête `1b06cc054`, cœur et pont ACP), PR #73 (`ya-24-extension-pr2`, tête `a8941b37f`, squelette de l'extension, remplacé par l'import), PR #74 (`ya-24-extension-import`, tête `ecdc840f8`, extension sur la base d'Unharnessed).
+- **Branche de la PR 3** : `ya-24-extension-pr3`, depuis `main` à `52ca68d3d` ; contient seulement des commits de doc de ce ticket, non poussés. Pas encore de PR ouverte.
+- **Binaire de référence** : `main` n'a rien changé sous `crates/` depuis la PR #72 ; binaire du build `ya-build-macos-arm64` 44893185253 (`0.10.2-continuous.1b96bb645…`), extrait sous `~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent` (`SHA256SUMS` vérifié).
+- **Protection de `main`** : `ya-extension` n'est pas requis. E13 le rend requis à partir de la PR 3. Il tourne désormais sur chaque PR, avec une sortie rapide en succès sans changement de l'extension (décision du 21/11). **La protection est à changer par Yusuf**, Claude Code ne la touche pas.
+
+### Périmètre de la PR 3 (section 5.1, point 3 ; découpage, étape 1)
+
+1. **Cartes de cellule** : code de la cellule (`rawInput.code`), et pour chaque `bash()` lu par la cellule, la commande, le code de sortie et la sortie repliable. Données : `_meta` `_yus/bashRuns` du `tool_call_update` final (PR 1 ; sortie plafonnée à 8 000 caractères, E5). Le code repris a déjà ses cartes (`extensions/vscode/src/cell.ts`, `webview/Chat.tsx`, `KINDS` vers `:735`) : les brancher sur nos données plutôt que les réécrire.
+2. **Boîte de permission**, à la place de la ligne d'attente : « Autoriser » (`allow-once`) et « Refuser » (`reject-once`), pas de « toujours » (D3).
+   - Elle se ferme sur `$/cancel_request` (E9) ou quand l'appel sort de `pending`.
+   - Stop répond `cancelled` (déjà fait, `extensions/vscode/src/ya/permissions.ts`).
+   - Après un refus, le tour s'arrête (D7, côté pont).
+3. **Diffs** : contenu ACP `diff` des `tool_call_update` (`path` absolu, `oldText` absent pour un fichier créé, fragments, `_meta` `_yus/startLine`, PR 1). Affichage `vscode.diff` et « Rejeter » (E6 a) :
+   - restauration par `workspace.applyEdit` ;
+   - texte fixe `[user-reverted] <chemin>` à la **fin** du message suivant, jamais au préfixe (§5.4) ;
+   - « Rejeter » seulement sans tour en cours ;
+   - restauration refusée, avec un message, si le fichier n'est plus celui laissé par cette modification.
+4. **Les trois défauts** de la section précédente (« Unharnessed » visible, `KernelTray` non masqué, carte « Running » pendant une demande d'accord).
+5. **e2e contre le vrai binaire** (en plus de l'agent factice) :
+   - provider factice (`PRIME_AGENT_FAUX_SCRIPT`, comme `crates/pa-cli/tests/acp_mode_e2e.rs:216-235`), `--daemon-socket` isolé ;
+   - cas : cellule avec `bash()`, accord puis refus (fichier créé, fichier absent), « auto » et bandeau, Stop ;
+   - E13 : binaire Linux construit dans le job avec le cache cargo ; aucun modèle réel (règle 6).
+6. **`ya-extension` requis** (E13) une fois la PR 3 verte : demande à Yusuf (protection de `main`).
+
+### Repères dans le code importé
+
+- **Adaptations à notre pont** : `extensions/vscode/src/ya/` :
+  - `methods.ts` : méthodes servies et `features()` ;
+  - `meta.ts` : `_meta` de notre pont et début/fin de tour déduits ;
+  - `auth.ts` : message `/login` ;
+  - `permissions.ts` : demandes d'accord.
+- **Webview** : `webview/ya-features.tsx` (contexte `useFeatures()`), `webview/ya-probe.ts` (sonde e2e).
+- **Dans les fichiers repris**, les adaptations sont marquées « yusAgent ».
+- **Fichiers visuels** : bouchons ; feuille `webview/styles.css` minimale et provisoire.
+- **Méthode non servie** : rejetée sur place, sans trame (`Agent.request`). Ajouter une méthode au pont = l'ajouter dans `methods.ts`, ce qui démasque l'entrée correspondante.
+- **Tests** :
+  - `cd extensions/vscode && npm ci --ignore-scripts && npm run typecheck && npm run lint && npm run test:unit` ; 25 tests, dont 12 contre l'agent factice (`test/fake-agent/fake-agent.mjs`, comportement selon le texte du prompt : `bonjour`, `pense`, `outil`, `lent`, `retire`, `auth`, `sanscle`, `crash`, `auto`) ;
+  - l'agent factice porte le `_meta` de notre pont ;
+  - e2e en CI seulement.
+- **Preuves du préfixe** :
+  - fixture `test/fixtures/acp-frames.json` (preuve 1) ;
+  - cas `acp-extension` du banc de capture et `bench/tools/capture/extension_frames_check.py` (preuve 2).
+  - Une trame nouvelle à l'ouverture ou dans un prompt (par exemple un bloc de plus) change le fixture : capture à refaire et à signaler.
+- **Contrôles remis à Yusuf** (règle 13) : `extensions/vscode/scripts/install-vsix.sh <run>`, `extensions/vscode/scripts/real-binary-check.mjs <binaire>` (après `npm run compile-tests`).
+
+### Limites et points ouverts (rassemblés)
+
+- **Fin des tours lancés par l'agent** (avis `[bash-done]`) : déduite de `responseBoundary`, jamais exercée contre le vrai binaire ; à couvrir par l'e2e du vrai binaire.
+- **Supprimer une conversation** devrait arrêter sa session dans le démon ; sinon worker et kernel restent jusqu'à la veille, 90 min (écart 7).
+- **Relance du worker au milieu d'un tour** : pas de répondant jusqu'au prompt suivant (PR 1).
+- **`bash()` non lu par la cellule** : pas d'enregistrement `bash-run`, son résultat arrive par l'avis `[bash-done]` (PR 1).
+- **Identifiants absents** : le pont les classe `kind: "other"` ; l'extension reconnaît le texte « No API key found for ». Correction du classement côté pont : ticket à part, proposé, non tranché.
+- **Reprise après un changement de skills ou de MCP** : un miss, à journaliser comme invalidation (étape 3 du découpage).
+- **Clés figées pour la session** (`yaRequest`, `editTool`, `shellTool`) : hors de l'écran des réglages par défaut ; Yusuf tranche sur la liste (étape 3).
+- **Rendu provisoire** : menus, info-bulles et pastilles d'Unharnessed sans style jusqu'au visuel. Commandes `/…` du panneau : seulement `/new`, notre pont n'envoie pas `available_commands_update`.
+- **Scripts de mesure jetables, non versionnés** : `lifecycle.py` (arrêt, reprise `--continue` et `--resume`) et `eof_turn.py` (fin de stdin pendant un tour) étaient dans le scratchpad de la session du 21/11. Leurs commandes et résultats sont dans ce ticket ; les verser au banc si Yusuf le veut (à réécrire, le scratchpad ne survit pas à la session).
+- **Ensuite** (découpage) : (2) reprise et historique ; (3) skills, MCP, réglages ; (4) message pendant un tour ; (5) login dans l'extension ; (6) retour en arrière et panneau du kernel. Sandbox et `.vsix` par plateforme restent liés à d'autres utilisateurs.
+
+
+## PR 3 : constat et plan (21/11/2026)
+
+Branche `ya-24-extension-pr3` (commits de doc locaux, partent avec le premier push). **Constat et plan seulement, aucun code.** Unharnessed relu à `157dcdc1d` (clone jetable du scratchpad, lecture seule).
+
+### Constat
+
+**Ce qu'Unharnessed a, et n'a pas**
+
+- **Pas de boîte de permission** : choix de conception (« Unharnessed never asks before running a command », `README.md:41`, `:354-356`) ; aucun `session/request_permission` dans `vscode/`. Tous les choix de la boîte sont donc à nous.
+- **Pas de vrais diffs** : son pont n'envoie que `diffCount` (`crates/uh-daemon/src/acp/events.rs:322-336`). Le diff de ses cartes est **deviné du code** de la cellule (`.replace(a, b)` et `write_text(...)`, `vscode/src/cell.ts:201-245`), sans les lignes du fichier autour. Ni `vscode.diff`, ni `applyEdit`, ni rejet.
+- **Ses cartes** (reprises telles quelles chez nous) : verbe selon le type deviné (`webview/Chat.tsx:735-744`, `Editing/Edited`, `Running/Ran`…), fichiers ou commande dans l'en-tête, feuille dépliée avec le code, les lignes du diff deviné (+/−, 3 lignes de contexte) et la sortie coupée à 20 000 caractères (`src/chat.ts:31`), ouvrables en entier dans un onglet (`src/tabs.ts`, `src/view.ts` `openTool`) ; cellules à la suite repliées en « Ran N Python cells », travail replié en « Worked for … · N cells +a −b » une fois le tour fini.
+
+**Ce que notre pont envoie** (PR 1, binaire `main` `1b96bb645`)
+
+- `tool_call` en `pending` en manuel, puis `tool_call_update` `in_progress` à l'accord (`crates/pa-daemon/src/acp/ya_permissions.rs:157-197`).
+- Demande : `toolCallId` et deux options, `allow-once` « Allow », `reject-once` « Reject » ; **pas le code** (`ya_permissions.rs:262-271`) : la boîte le prend dans le `rawInput` du `tool_call`.
+- Refus : `tool_call_update` `failed` avec le texte fixe `[permission-denied] The user declined this cell; nothing was executed.` (`crates/pa-core/src/session_engine/ya_permissions.rs:63-64`, test `crates/pa-cli/tests/ya_permissions_acp_e2e.rs:430-434`), puis fin du tour (D7).
+- Fin de cellule : texte du résultat, puis un contenu `diff` par `edit()` (`crates/pa-daemon/src/acp/wire_events.rs:177-181`, `ya_cell_display.rs:28-52`), et `_meta` `_yus/bashRuns` (`wire_events.rs:190-197`).
+- **Diffs = fragments** : `oldText`/`newText` sont les `old_str`/`new_str` d'`edit()`, `_yus/startLine` la ligne où commence `old_str` (`skills/edit/src/edit/__init__.py:76-82`). Pas de colonne. Fichier créé : `oldText` absent, et `edit()` refuse de créer un fichier qui existe (`:56-67`), donc « absent » veut bien dire « créé par cette cellule ».
+
+**Défauts et manques dans le code importé**
+
+1. **Statut** : `tool_call` toujours mis en `running` (`src/chat.ts:739-757`), `pending` ignoré ; `in_progress` ignoré par `toolDone` (`:912-930`) ; type `"running" | "done" | "failed"` (`src/protocol.ts:278`). Défaut 3 de la PR #74.
+2. **Contenus `diff` ignorés** : `toolDone` ne lit que `block.content.text` (`src/chat.ts:917-918`) ; un bloc `diff` y donne une ligne vide.
+3. **`_yus/bashRuns` ignoré** : le type `Meta` ne le connaît pas (`src/chat.ts:60-75`).
+4. **`edit()` et `read()` inconnus de `readCell`** : il ne reconnaît que `open`, `write_text`, `.replace(`, `bash(`… (`src/cell.ts:54-73`). Une cellule `await edit("a.py", …)` s'affiche « Ran » + première ligne de code, sans fichier.
+5. **Refus = « Failed »** : rien ne distingue une cellule refusée d'une cellule en erreur.
+6. **Boîte** : `Permissions` ne sait répondre que `cancelled` (`src/ya/permissions.ts:24-33`, `:44-50`) ; la ligne d'attente (`src/chat.ts:604-620`) est à remplacer.
+7. **Textes « Unharnessed » visibles** : `webview/Composer.tsx:56` (« Ask Unharnessed », aussi en `aria-label` `:455` et dans l'animation `:932`), schéma des onglets `unharnessed-tool` (`src/tabs.ts:6`, visible dans l'info-bulle de l'onglet), `~/.unharnessed/settings.json` (`webview/Settings.tsx:185`, écran masqué), `.unharnessed/skills` (`webview/SettingsSkills.tsx:230`, écran masqué). Type MIME interne `application/x-unharnessed-queued` (`Composer.tsx:766`) : invisible, renommé quand même. Défaut 1.
+8. **`KernelTray` sans condition** : `webview/Composer.tsx:383`, titres `webview/Kernel.tsx:231`, `:247`. Défaut 2.
+
+**Reconstruire l'« avant » d'un diff** (E6)
+
+- L'extension lit le fichier à la réception du `tool_call_update` final : c'est l'« après » de la cellule (instantané gardé avec la carte). L'« avant » s'obtient en défaisant les `edit()` de la cellule sur ce fichier, du dernier au premier : `newText` remplacé par `oldText` à la ligne `startLine`.
+- **Cas ambigus sans colonne** : `newText` vide (suppression pure) qui ne commence pas en début de ligne, ou `newText` présent plusieurs fois sur sa ligne. Ambiguïté détectée (plusieurs « avant » possibles) : pas de vue ni de « Rejeter » pour ce fichier, message dans la carte. Choix C14.
+- **Garde-fou 2** : « Rejeter » compare le texte actuel du document (tampon de l'éditeur s'il est ouvert, modifications non enregistrées comprises, sinon disque) à l'instantané ; différent → refus avec message. Conséquence voulue : sur un fichier modifié par deux cellules, seule la dernière se rejette ; une fois rejetée, le fichier redevient l'« après » de la précédente, qui se rejette à son tour.
+- **Restauration** : `workspace.applyEdit` (annulable par Ctrl+Z dans l'éditeur), puis enregistrement du document ; fichier créé : `deleteFile` (dossiers créés par `edit()` laissés).
+- **Limites** : un `bash()` détaché qui écrit le fichier entre la fin de la cellule et la lecture de l'instantané fausse l'« après » (contrôle : `newText` doit être à sa place dans l'instantané, sinon pas de rejet) ; `edit()` lit en UTF-8 avec conversion des fins de ligne (`read_text`/`write_text`, `__init__.py:68`, `:80`) : un fichier CRLF est déjà réécrit en LF par `edit()`, la restauration rend le texte d'avant en LF.
+
+**Texte au modèle après un rejet** (§5.4)
+
+- `[user-reverted] <chemin>` à la fin du bloc texte du message suivant de l'utilisateur, jamais au préfixe. Ne change ni l'ouverture ni un prompt sans rejet : fixture des trames et cas `acp-extension` inchangés ; nouveau fixture pour un prompt après rejet.
+- **Limite** : un tour lancé par l'agent (avis `[bash-done]`) avant le message suivant ne sait pas encore le rejet.
+
+**e2e contre le vrai binaire** (E13)
+
+- Faisable sans modèle : `PRIME_AGENT_FAUX_SCRIPT` est lu par le binaire produit, pas seulement en debug (`crates/pa-cli/src/print_runtime.rs:195-199`, passé au worker par la config de création, `crates/pa-daemon/src/agent_engine/model.rs:318`).
+- Le kernel a besoin de son venv (uv, réseau à la première fois), comme les shards de `ci.yml` (`.github/workflows/ci.yml:315-318`, étape « Bootstrap the kernel venv »).
+- Isolation : `HOME` temporaire dans `extensionTestsEnv` (démon et socket sous ce `HOME`), relevé des processus restants à la fin (comme `vscode/test/e2e/run.mjs:1-24` d'Unharnessed).
+- `ci.yml` a un cache cargo partagé `test-shards` en restauration seule sur les PR (`ci.yml:298-314`), réutilisable par le job de l'extension. Durée du build à froid : **non mesurée**.
+
+### Plan (commits de la PR 3, extension seule sauf choix C14 (b))
+
+1. **Défauts** : textes « Unharnessed » (placeholder, schéma `yusagent-tool`, MIME, chemins des écrans masqués) ; `KernelTray` masqué sans `features.kernel` ; statut `pending` (« Awaiting permission », sans animation) puis `running` à `in_progress`.
+2. **Cartes** : `bashRuns` lus (type `Meta`) et rangés dans la carte ; `readCell` apprend `edit(` et `read(` ; vrais diffs à la place du diff deviné quand la cellule a des `edit()` ; état « refusé » lu du texte fixe.
+3. **Boîte de permission** : `Permissions.answer(toolCallId, optionId)` ; message webview → hôte ; composant ; fermeture sur `$/cancel_request`, sortie de `pending`, Stop (déjà en place) ; libellés pris dans `options[].name` de la trame.
+4. **Diffs** : module pur `src/ya/diffs.ts` (avant reconstruit, ambiguïté, instantané, garde-fous) testé par `node --test` ; partie VS Code mince (fournisseur de documents virtuels avant/après, `vscode.diff`, `applyEdit` + enregistrement, suppression) ; rejets en attente ajoutés au prompt suivant.
+5. **Agent factice et e2e factice** : `pending`, `bashRuns`, contenus `diff`, refus, tour de réveil avec `responseBoundary`.
+6. **e2e vrai binaire** : job à part dans `ya-extension.yml` (binaire debug construit dans le job, cache cargo, uv, venv du kernel), scripts du provider factice. Cas : cellule avec `bash()` (carte : commande, code de sortie, sortie) ; accord (fichier créé) puis refus (fichier absent, carte « refusé », tour fini) ; `edit()` puis « Rejeter » (fichier restauré, puis `[user-reverted]` lu dans le fichier de session après le prompt suivant) ; garde-fous (Rejeter grisé pendant un tour, refusé après une modification) ; « auto » et bandeau ; Stop ; **tour lancé par l'agent** (`bash()` non lu, avis `[bash-done]`, tour fermé sur `responseBoundary`, prompt suivant envoyé tout de suite) ; processus restants : aucun.
+7. **Contrôle remis à Yusuf** (règle 13) : `real-binary-check.mjs` étendu aux mêmes cas hors VS Code, lancé d'abord par Claude Code sur le binaire de `main` `1b96bb645` (macOS, provider factice, `sandbox-exec`, venv du kernel préparé avec réseau).
+8. **Doc** : `docs/fork-changes.md` (fichiers repris d'Unharnessed modifiés), ce ticket, phrase du ticket 22 déjà corrigée.
+9. **`ya-extension` requis** (E13) : une fois la PR verte, demande à Yusuf (protection de `main`, Claude Code n'y touche pas).
+
+**Préfixe** : aucun fichier sous `crates/` (sauf C14 (b)) ; ouverture et prompt sans rejet inchangés (fixture, cas `acp-extension`). Seul ajout : la ligne `[user-reverted]` en fin de message après un rejet.
+
+### Choix de Yusuf (interface)
+
+Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation est la nôtre. Visuel provisoire dans tous les cas.
+
+| | Choix | Unharnessed | Recommandé |
+|---|---|---|---|
+| C1 | Langue des textes nouveaux (boîte, cartes, rejet) | anglais | anglais, comme l'interface reprise et les noms d'options du pont (« Allow », « Reject ») ; placeholder « Ask yusAgent ». Ou français (« Autoriser » / « Refuser ») |
+| C2 | Place de la boîte | — | au-dessus de la saisie, fixe (visible quel que soit le défilement), code de la cellule dépliable ; la carte dit « Awaiting permission ». Ou dans la carte |
+| C3 | Raccourcis clavier | — | aucun (un Entrée réflexe autoriserait une cellule) |
+| C4 | Demande quand le panneau est caché | — | badge sur l'icône de la vue ; pas de notification |
+| C5 | Cellule refusée | — | « Declined », distinct de « Failed » |
+| C6 | `bash()` dans la carte | commande devinée du code (1re ligne de la 1re) | en-tête : commande réelle une fois finie, « exit N » si non nul ; feuille : une ligne par commande (commande, code, durée), sortie repliée |
+| C7 | `edit()`, `read()` et diffs devinés | diff deviné du code | `readCell` apprend `edit(`/`read(` ; vrais diffs quand il y en a ; diff deviné gardé pour les écritures hors `edit()`, sans « Rejeter » |
+| C8 | Granularité de « Rejeter » | — | par fichier et par cellule. Ou par `edit()`, ou cellule entière |
+| C9 | `vscode.diff` | — | avant/après de la cellule, deux côtés en lecture seule. Ou après = fichier réel, éditable (montre aussi les changements postérieurs) |
+| C10 | Ouverture et bouton | — | clic sur le fichier dans la carte → `vscode.diff` ; diff en ligne gardé ; « Rejeter » dans la carte seulement. Ou aussi dans la barre de titre du diff |
+| C11 | Texte au modèle | — | `[user-reverted] <chemin relatif au dossier>`, une ligne par fichier, après une ligne vide dans le même bloc texte, et visible sous la bulle du message. Ou chemin absolu, ou bloc séparé |
+| C12 | Rejet d'un fichier créé | — | suppression du fichier. Ou le vider |
+| C13 | Rejet après « Restart » (nouvelle session) | — | indisponible pour les cartes de l'ancienne session (le modèle de la nouvelle ne connaît pas la modification) |
+| C14 | Position ambiguë (pas de colonne) | — | (a) dans la PR 3 : pas de rejet pour ces cas, message. (b) PR Rust à part : `startOffset` dans `edit()`, `details.diffs` et `_meta` (binaire changé, captures `main` contre branche) |
+| C15 | Quand tourne l'e2e vrai binaire | e2e vrai binaire, un VS Code par scénario | sur les changements de `extensions/vscode/`, `crates/pa-daemon/src/acp/`, `prime-agent-runtime/src/rlm/bash.py`, `skills/edit/`. Ou extension seule |
+| C16 | Checks requis (E13) | — | les deux jobs (`extension`, vrai binaire), chacun avec sortie rapide en succès hors de son périmètre |
+
+### Décisions de Yusuf sur la PR 3 (21/11/2026)
+
+- **Comme recommandé** : C1, C2, C4 à C11, C13, C15, C16. **C14 : option (a)** (pas de rejet sur une position ambiguë, avec un message).
+- **C3, clavier** : mêmes touches que le TUI, `y` (autoriser), `n` (refuser), `Esc` (refuser) ; **fenêtre de calme de 1 s** après l'ouverture de la boîte, pendant laquelle les touches ne font rien ; touches actives **seulement quand la boîte a le focus** ; **jamais Entrée**.
+- **C12** : fichier créé rejeté = **mis à la corbeille** (`workspace.fs.delete(uri, { useTrash: true })`).
+- **Diffs, contrôle de chaque fragment** : avant de défaire un fragment, vérifier que `new_str` est présent à la ligne annoncée (`startLine`) ; sinon pas de « Rejeter » pour ce fichier, avec un message (même traitement que C14 a). **Test** : une cellule qui fait `edit()` puis `bash("sed -i …")` sur le même fichier.
+- **Job e2e vrai binaire** : réutiliser le binaire construit par `ci.yml` plutôt qu'un build à part ; sa durée mesurée est donnée avant la demande de rendre les checks requis.
+  - Constat pour l'étape 6 : `ci.yml` construit les binaires debug dans chaque shard (`cargo build --locked --workspace --bins`, `.github/workflows/ci.yml:337-339`) mais ne les publie pas en artefact (ses deux `upload-artifact`, `:396`, `:407`, publient les manifestes et les reçus des contrôles). Le réutiliser demande soit un ajout à `ci.yml` (fichier upstream : publication du binaire du shard 1, et job e2e dans `ci.yml` ou attente croisée depuis `ya-extension`), soit un autre montage. Options et coût exposés à Yusuf au début de l'étape 6, avant tout changement de `ci.yml`.
+- **Ordre** : étape 1 du plan d'abord (défauts).
+
+### PR 3, étape 1 : les trois défauts (21/11/2026)
+
+- **Défaut 1** : invite « Ask yusAgent » (`webview/Composer.tsx:56`, aussi `aria-label`) ; schéma des onglets `yusagent-tool` (`src/tabs.ts:6`) ; type MIME du glisser `application/x-yusagent-queued` ; textes des écrans masqués : `~/.yusagent/skills`, `.yusagent/skills` (dossiers lus par le fork : `CONFIG_DIR_NAME`, `crates/pa-core/src/skills/loader.rs:27`, et `.agents/skills`, `crates/pa-core/src/packages/resolve/auto.rs:55`), `~/.yusagent/settings.json`.
+- **Défaut 2** : `KernelTray` rendu seulement si `features.kernel` (`webview/Composer.tsx`).
+- **Défaut 3** : statut `pending` lu du `tool_call` (`src/chat.ts`, cas `tool_call`), `running` au `tool_call_update` `in_progress` (`toolDone`). Carte : « Awaiting permission » sans état en cours et sans la ligne « Working » ; « Not run » si le tour finit (Arrêter) sans que l'appel sorte de `pending` (`webview/Chat.tsx`, `ToolCall`, `YA_VERBS`). La ligne d'attente reste jusqu'à la boîte (étape 3).
+- **Tests** (Claude Code, en local) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run build && npm run test:unit` → `ℹ tests 25`, `ℹ pass 25`, `ℹ fail 0`. Assertions ajoutées : carte `pending` pendant la demande, toujours `pending` après Arrêter ; `pending` puis `running` après `in_progress`, puis `done`.
+  - **Contrôle négatif** : `status: "running"` remis dans le cas `tool_call` → `ℹ pass 23`, `ℹ fail 2` (« carte en attente d'accord, pas en cours (défaut 3) », « délai dépassé : carte en attente d'accord ») ; fichier restauré.
+- **e2e** (CI seulement) : aucun « Unharnessed » dans le texte visible, ni « Running servers » ni « REPL variables », invite « Ask yusAgent » (sonde : `aria-label` de la saisie) ; « Awaiting permission » sans « Running » pendant la demande ; « Not run » après Arrêter.
+
+### PR 3, étape 2 : cartes de cellule (21/11/2026)
+
+- **Données du pont** (`extensions/vscode/src/ya/cells.ts`) : `_yus/bashRuns` (commande, code de sortie, sortie, durée), contenus ACP `diff` (fragments, `_yus/startLine`, `oldText` absent = fichier créé), texte fixe `[permission-denied]`. `toolDone` n'ajoute plus les blocs `diff` à la sortie (une ligne vide chacun avant).
+- **C5** : cellule refusée « Declined », distincte de « Failed ».
+- **C6** : une fois finie, l'en-tête prend la vraie commande (première ligne du premier `bash()` lu) et `exit N` du premier `bash()` sorti en erreur ; la feuille dépliée montre une ligne par `bash()` (`$ commande`, `exit N`, durée, « no output »), sortie repliée qui s'ouvre au clic.
+- **C7** : `readCell` reconnaît `edit()` et `read()` (positionnels ou nommés) : pendant la cellule, la carte dit « Editing a.py » (ou « Writing » si chaque `edit()` crée son fichier) avec le diff deviné de ses textes. À la fin, les vrais diffs remplacent la supposition : type, fichiers (chemin relatif au dossier), lignes `+`/`−`, un bloc par fichier dans la feuille. Diff deviné gardé pour les écritures hors `edit()`. Les vrais diffs se montrent et se comptent même si la cellule a échoué après ses `edit()` (le fichier a changé). « Rejeter » : étape 4.
+- **Tests** (Claude Code, en local) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run build && npm run test:unit` → `ℹ tests 33`, `ℹ pass 33`, `ℹ fail 0` (7 nouveaux dans `test/unit/cells.test.ts`, 1 dans `agent.test.ts` contre l'agent factice, scénarios `carte` et `refus` à la forme des trames du pont).
+  - **Contrôles négatifs** : appel de `yaCellData` retiré de `toolDone` → `ℹ pass 32`, `ℹ fail 1` ; reconnaissance d'`edit()`/`read()` coupée dans `readCell` → `ℹ pass 31`, `ℹ fail 2` ; fichiers restaurés, 33/33.
+- **e2e** (CI) : nouveau test « cartes » : « Edited », `a.py`, `neuf.txt`, `+3`, `−1`, `exit 1` dans l'en-tête ; « Declined » pour la cellule refusée.
+- **Préfixe** : inchangé (aucune trame nouvelle, fixture inchangé, rien sous `crates/`).
+
+### PR 3 : trames de l'agent factice comparées au vrai binaire (21/11/2026)
+
+- **Origine** : les trames `_yus/bashRuns`, `diff` et de refus de l'agent factice (`extensions/vscode/test/fake-agent/fake-agent.mjs`, commit `46919eabc`) étaient **écrites à la main**, d'après le test unitaire de `crates/pa-daemon/src/acp/ya_cell_display.rs`. Aucune capture.
+- **Capture** (Claude Code, binaire de `main` `1b96bb645`, run 44893185253) : pilote jetable `acp_frames.py` (scratchpad de Claude Code) qui réutilise les fonctions de `bench/tools/capture/run.py` sans le modifier : serveur de capture en modèle factice, `sandbox-exec` (réseau localhost), démon isolé (`--daemon-socket`), préparation du venv refaite (marqueur `prepared-09be962946881b07` retiré). Deux sessions ACP :
+  - A, scénario `display` en « auto » : `bash()` lu, `bash()` non lu, `edit()` de création puis de modification ;
+  - B, scénario `basic` en « manual », première demande refusée.
+  - Commande : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I acp_frames.py <dépôt> ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent <sortie>` → `A-display-auto : prompt={'stopReason': 'end_turn'}`, `B-basic-manual-reject : prompt={'stopReason': 'end_turn'}`. Aucun processus restant sur les sockets isolés (les processus listés par `pgrep` sont ceux du démon partagé, lancés 38 à 50 min avant, hors du run).
+- **Comparaison champ par champ** : script jetable `compare_frames.py` (scratchpad) : il fait jouer à l'agent factice `carte`, `refus` et `lent`, puis compare chemins de clés, types et valeurs constantes (statuts, genres, titres, options, texte du refus, forme des identifiants, trames de fin de tour). Commande : `python3 -I compare_frames.py extensions/vscode/test/fake-agent/fake-agent.mjs <sortie>`.
+  - **Avant correction, 6 écarts**. `_yus/bashRuns` et les contenus `diff` (`path`, `oldText` absent à la création, `newText`, `_meta._yus/startLine`) étaient **identiques**. Les écarts :
+    - `ipython.diffCount` absent du `_meta` du pont quand la cellule a des diffs (2 trames) ;
+    - identifiant de la demande d'accord `ya-perm-N` au lieu de `ya-permission-N` (préfixe `ID_PREFIX` du pont) ;
+    - pas de `responseBoundary`, `event` (quiescence), `terminalQuiescence` avant la réponse d'un prompt (`crates/pa-daemon/src/acp/daemon.rs:1592-1620`) ;
+    - pas de `messageId` sur les `agent_message_chunk`.
+  - **Correction de l'agent factice** : ces quatre points (fonction `finish` pour la fin d'un tour réussi, champ `prime` pour l'espace du pont, `messageId` par message) ; tests mis à jour pour l'identifiant `ya-permission-1`.
+  - **Après correction : `écarts : 0`, exit 0.** Tests unitaires : `ℹ tests 33`, `ℹ pass 33`, `ℹ fail 0`.
+
+### PR 3 : constat sur les tours lancés par l'agent (bloquant pour l'étape 6, hors périmètre)
+
+- **Capture A, 40 s après la réponse du prompt** : le tour de réveil (avis `[bash-done]` du `bash()` non lu ; 7ᵉ requête au modèle reçue par le serveur de capture) n'envoie qu'**un** `agent_message_chunk`, avec **`promptTurnId: 0`**. Ni `responseBoundary` ni `terminalQuiescence` ne suivent.
+- **Cause** : le pont ne publie la fin d'un tour (`responseBoundary`, quiescence) que dans le chemin d'un `session/prompt` (`crates/pa-daemon/src/acp/daemon.rs:1592-1620` ; erreur `:1724-1734`). Un tour lancé par le worker porte le `promptTurnId` actif, `0` hors prompt (`crates/pa-daemon/src/acp/producer.rs`, `active_prompt_turn_id`).
+- **Effet dans l'extension, reproduit** : l'hypothèse de la PR I (fin d'un tour de l'agent sur `responseBoundary`, `extensions/vscode/src/ya/meta.ts`) ne tient pas. Avec ces trames rejouées par l'agent factice (test exploratoire jetable, retiré) : `busy 2 s après le réveil : true`, puis un message envoyé reste en file (`session/prompt reçus par l'agent : 1 ; en file : 1`). Le panneau reste occupé après tout `bash()` non lu, jusqu'à une action de l'utilisateur. Non vérifié : si « Stop » le débloque.
+- **Deux tours de réveil** partageraient aussi l'identifiant `0`.
+- **Correction** : l'extension ne peut pas déduire la fin d'un tour sans signal. Il faut que le pont publie le début et la fin des tours lancés par le worker (identifiant propre, `responseBoundary`). C'est du Rust dans `crates/pa-daemon/src/acp/`, hors du périmètre de la PR 3 (extension seule) : **arrêt sur ce point, décision de Yusuf**. L'étape 3 n'en dépend pas.
+
+### PR 3, étape 3 : boîte de permission (21/11/2026)
+
+- **C2** : la boîte s'affiche au-dessus de la saisie (`webview/ya-permission.tsx`, rendue dans `webview/Status.tsx`) pour la première demande ouverte de la conversation montrée : « Allow this Python cell to run? », « 1 of N » s'il y en a plusieurs, le code de la cellule pris dans sa carte (`pending`), replié au-delà de 8 lignes (« Show all N lines »), caractères de contrôle et invisibles écrits `\u{…}` comme le TUI (T2 du ticket 20). Une action par option du pont, avec son nom (« Allow », « Reject » ; D3). La ligne d'attente de la PR I est retirée.
+- **Fermeture** : la boîte suit les demandes ouvertes de l'hôte (`Permissions.asks`). Une demande se ferme sur une réponse, sur « Stop » (`cancelled`), sur `$/cancel_request` (E9) ou quand son appel sort de `pending`.
+- **Réponse** : message `permission` de la webview → `Permissions.answer` : `selected` avec l'option, seulement si c'est une option de la demande et si elle est encore ouverte (sinon ignorée, journalisée), une seule fois.
+- **C3** : `y` autorise, `n` ou `Esc` refuse, **seulement quand la boîte a le focus** ; **fenêtre de calme de 1 s** depuis l'ouverture de la boîte (ou l'arrivée de la demande suivante), **relancée par chaque frappe** pendant ce temps et par toute autre touche ensuite, comme le TUI (`crates/pa-tui/src/ya_permission_panel.rs:7-13`, `:29`) ; touches avec Ctrl, Cmd ou Alt ignorées ; **jamais Entrée** (`src/ya/permission-keys.ts`). La boîte ne prend pas le focus d'elle-même : un texte en cours de saisie dans la zone de message ne peut pas devenir une réponse. Il faut cliquer dans la boîte (ou y aller par Tab).
+- **C4** : badge sur l'icône de la vue tant qu'une demande attend, toutes conversations comprises (`src/view.ts`, `badge`) ; pas de notification.
+- **Préfixe** : inchangé. Ni l'ouverture ni le prompt ne changent (fixture des trames inchangé) ; la réponse à la demande est celle que le TUI donne déjà.
+- **Tests** (Claude Code, en local) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run build && npm run test:unit` → `ℹ tests 38`, `ℹ pass 38`, `ℹ fail 0`. Nouveaux : `test/unit/permission-keys.test.ts` (4 : fenêtre de calme, Entrée, modificateurs, `reset`, `visibleCode`) ; `agent.test.ts` « boîte » contre le scénario `accord` de l'agent factice (option ou appel inconnus ignorés, `selected allow-once` puis carte `done`, réponse unique, `reject-once` puis « Declined ») ; test « Arrêter » réécrit (demande retirée de la boîte, plus de ligne).
+  - **Premier lancement** : 2 échecs dans mes propres tests de la fenêtre de calme. Mon calcul oubliait qu'une frappe trop tôt relance la fenêtre ; tests corrigés, code inchangé.
+  - **Contrôles négatifs** : Entrée accepté comme accord → `ℹ fail 1` ; fenêtre de calme supprimée → `ℹ fail 3` ; `answer` sans contrôle de l'option → `ℹ fail 1`. Fichiers restaurés, 38/38.
+- **e2e** (CI) : test « boîte de permission » :
+  - code et actions affichés, badge à 1 ;
+  - `y` pendant la fenêtre de calme sans effet, `Entrée` sans effet, `y` sans le focus sans effet, aucune réponse partie ;
+  - puis `y` avec le focus → `selected allow-once`, cellule tournée, boîte fermée, badge retiré ;
+  - `Esc` → `reject-once`, « Declined » ;
+  - message `permission` du bouton → `reject-once`.
+  - Le test « Arrêter » vérifie la boîte puis sa fermeture.
+- **CI de l'étape 2** (rappel, run `ya-extension` 44912572991 sur `46919eabc`) : succès, e2e 7/7, `.vsix` 194 460 octets.
+- **CI, premier push de l'étape 3** (`355f9411a`, `ya-extension` 44913960665) : **échec**, e2e 4/8.
+  - Premier échec : la boîte affichée sans le code (`boîte : print('accord')`). Cause : la demande d'accord part tout de suite vers la webview, alors que la carte de son appel arrive avec le lot suivant du chat (`src/chat.ts:1063-1066`, `FLUSH_MS`). La boîte s'affichait donc un instant avec un code vide. **Défaut du produit** : on ne doit pas pouvoir autoriser une cellule sans voir son code. Correction : pas de boîte tant que la carte de l'appel n'est pas arrivée ; la fenêtre de calme part à l'affichage.
+  - Les trois autres échecs (« cartes », « authentification », « plantage », délais dépassés) en découlent : le test arrêté laissait la demande ouverte et le tour sans fin. Le test de la boîte annule maintenant le tour en cours s'il échoue.
+  - `.vsix` 195 886 octets.
+- **Non fait, à trancher** : les boutons sont actifs dès l'ouverture. La fenêtre de calme ne vise que les touches (C3), donc un clic au moment où la boîte apparaît compte.
+
+### Décisions de Yusuf après l'étape 3 (21/11/2026)
+
+1. **Tours lancés par l'agent** : ticket à part, **ticket 25** (`docs/tickets/25-tours-lances-par-agent.md`, constat et plan). Rien dans la PR 3. Le cas e2e « tour lancé par l'agent » **sort de l'étape 6** et passe au ticket 25, avec le signal de début de tour par le pont (qui remplacera la déduction sur `promptTurnId`, `src/ya/meta.ts`). Vérifications demandées, résultats dans le ticket 25 (§1.2 à 1.4) :
+   - les lignes de `crates/pa-daemon/src/acp/daemon.rs:1592-1620` sont **upstream** (`git blame` : #2524, #3264, #3256) ;
+   - **upstream ne l'a pas corrigé** depuis notre base (`c83ac68b3..783acb5d7`) : `ad1613303` (#3866) ajoute seulement `outstandingBackgroundJobs` à la quiescence d'un tour de prompt ;
+   - **Unharnessed** fait de chaque réveil un tour de sa couche ACP : `start_wake_turn` (`crates/uh-daemon/src/acp/prompt.rs:217-245`, identifiant de tour `:231`), `turnStart` `origin: "wake"` (`:332-357`), `responseBoundary` (`:891`) puis l'enveloppe de fin (`:925`) dans `settle_turn` (`:857`) ;
+   - **Stop débloque le panneau** (agent factice, test jetable) : tour de réveil « cancelled », message suivant envoyé. Limites : le tour, fini en réalité, s'affiche « Stopped » ; effet de `session/cancel` hors prompt sur la file du worker (`AbortAndClearQueue`) non mesuré sur le binaire.
+2. **Boutons de la boîte** inactifs et grisés pendant 1 s après son ouverture, sans relance par les frappes. Test demandé.
+3. **Focus** : la boîte le prend d'elle-même seulement si la zone de message est vide ; sinon rien ne change. Test demandé.
+4. **`acp_frames.py` et `compare_frames.py` versés au banc** (règle 13), avec leur commande dans le ticket.
+5. Puis l'étape 4 (diffs), push à sa fin.
+
+### PR 3, étape 3 (suite) : boutons et focus de la boîte
+
+- **Boutons** : inactifs et grisés pendant 1 s après l'ouverture de la boîte (`BUTTONS_DELAY_MS`, `buttonsReady` dans `src/ya/permission-keys.ts`). Le délai part de l'ouverture et **aucune frappe ne le relance** (contrairement à la fenêtre des touches). Le minuteur repart s'il se déclenche avant l'échéance mesurée.
+- **Focus** : à l'ouverture, la boîte prend le focus **seulement si la zone de message est vide** (`takesFocus`, texte strictement vide) ; sinon le focus ne bouge pas.
+- **Sonde e2e** : `probeKeys` remplacé par `probeInput` (texte tapé dans la zone de message, focus donné à la boîte ou retiré, touches, clic sur un bouton de la boîte par son nom ; un clic sur un bouton désactivé ne fait rien, comme dans le navigateur). La sonde rend aussi l'élément qui a le focus et l'état des boutons de la boîte.
+- **Tests** (Claude Code, en local) : `npm run typecheck && npm run lint && npm run build && npm run test:unit` → `ℹ tests 40`, `ℹ pass 40`, `ℹ fail 0`. Deux nouveaux tests unitaires :
+  - délai des boutons : 999 ms non, 1 000 ms oui ; une frappe à 900 ms relance les touches, pas les boutons ;
+  - `takesFocus` : `""` oui, `" "` et un texte non.
+  - **Contrôles négatifs** : `takesFocus` toujours vrai → `ℹ fail 1` ; `buttonsReady` toujours vrai → `ℹ fail 1` ; fichier restauré, 40/40.
+- **e2e** (CI), test « boîte » réécrit :
+  - zone de message vide : la boîte a le focus, boutons grisés, un clic sur « Allow » grisé n'envoie rien ;
+  - une frappe vers 0,8 s relance les touches mais pas les boutons : boutons actifs vers 1,15 s, `y` encore sans effet ;
+  - puis Entrée, `y` sans focus, et `y` avec focus comme avant ; `Esc` refuse ;
+  - zone de message non vide (« brouillon en cours ») : le focus y reste quand la boîte s'ouvre ; le bouton « Reject », actif après 1 s, refuse.
+
+### Scripts de capture des trames versés au banc (règle 13)
+
+- `bench/tools/capture/acp_frames.py` (capture ACP du vrai binaire, sessions `A-display-auto` et `B-basic-manual-reject`) et `bench/tools/capture/compare_frames.py` (agent factice contre binaire, champ par champ) : reprise des scripts jetables de la comparaison, avec arguments nommés, verdict et code de sortie. `acp_frames.py` relève les processus restants par différence avec ceux du binaire avant chaque session : le démon partagé d'un autre usage n'est plus compté. Documentés dans `bench/tools/capture/README.md`.
+- **Commandes** :
+
+  ```sh
+  export DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short
+  rm -rf <dossier>
+  python3 -I bench/tools/capture/acp_frames.py --binary ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent --out <dossier>
+  python3 -I bench/tools/capture/compare_frames.py <dossier>
+  ```
+
+- **Lancés par Claude Code** sur le binaire de `main` `1b96bb645` :
+  - `acp_frames.py` : `A-display-auto : prompt={'stopReason': 'end_turn'} trames=21 processus restants=[]`, `B-basic-manual-reject : prompt={'stopReason': 'end_turn'} trames=13 processus restants=[]`, `CONFORME`, exit 0 ;
+  - `compare_frames.py` : 8 comparaisons `IDENTIQUE` (dont `_yus/bashRuns`, les deux contenus `diff`, la demande d'accord, le refus, la fin de tour, `agent_message_chunk`), `écarts : 0`, exit 0.
+  - **Contrôle négatif** : `--fake` sur l'agent factice d'avant l'alignement (`git show 46919eabc:extensions/vscode/test/fake-agent/fake-agent.mjs`) → 5 paires `DIFFÉRENT`, `écarts : 6`, exit 1.
+
+### PR 3, étape 4 : diffs et « Rejeter » (21/11/2026)
+
+- **Avant retrouvé** (`extensions/vscode/src/ya/diffs.ts`, logique pure) : à la fin de la cellule, l'« après » de chaque fichier est lu **sur disque** (pas dans un éditeur ouvert, qui ne recharge qu'un peu après l'écriture du kernel). Les fragments sont défaits du dernier au premier. Avant chaque fragment, `new_str` doit commencer à la ligne annoncée (décision de Yusuf) ; les « avant » candidats où `old_str` n'est pas unique sont écartés, comme `edit()` le refuserait. Fichier créé : l'« après » doit être `new_str` en entier, l'« avant » est « absent ». Sinon, pas de « Rejeter », avec la raison (`the edit's new text is no longer at line N`, `the edit's place on line N is ambiguous`…).
+- **Correction du constat de la PR 3** : une **suppression pure** (`new_str` vide) est ambiguë **même de lignes entières**, pas seulement en milieu de ligne. `garder\nfin\n` après la suppression de `retirer\n` admet aussi l'« avant » `garder\nfretirer\nin\n`, et rien dans les données du pont ne donne la colonne. Seule exception : la ligne d'arrivée est vide. **Avec C14 (a), une suppression pure ne se rejette donc presque jamais** ; l'option (b) (colonne envoyée par le pont, PR Rust à part) le lèverait. Point à trancher par Yusuf.
+- **« Rejeter »** (`src/ya/reverts.ts`) : par fichier et par cellule (C8) ;
+  - refusé pendant un tour (garde-fou 1, bouton grisé, refus aussi côté hôte) ;
+  - refusé si le texte actuel n'est plus l'« après » de la cellule (garde-fou 2 : texte de l'éditeur s'il est ouvert, modifications non enregistrées comprises, sinon disque), avec un message ;
+  - impossible pour une cellule d'une session précédente (C13 : identifiant de session de la cellule) ;
+  - restauration par `workspace.applyEdit` puis enregistrement ; fichier créé à la corbeille (`useTrash`, C12) ;
+  - sur un fichier modifié par deux cellules, seule la dernière se rejette ; une fois rejetée, la précédente se rejette à son tour (test).
+- **Texte au modèle** (C11) : `[user-reverted] <chemin relatif>`, une ligne par fichier, une seule fois, ajouté au bloc texte du message suivant après une ligne vide, visible dans la bulle. Une commande `/…` ne le porte pas ; il attend le message suivant.
+- **Diff** (C9, C10) : le nom du fichier dans la carte ouvre `vscode.diff` entre l'avant et l'après de la cellule, deux documents en lecture seule (schéma `yusagent-diff`). Le diff en ligne de la carte reste. Bouton **« Revert »** (C1 : anglais ; « Reject » est déjà le refus de la boîte de permission), puis « Reverted » et « The agent learns it with your next message. ».
+- **Accès aux fichiers** derrière une interface (`src/ya/diff-files.ts`) : Node par défaut (tests unitaires), VS Code branché à l'activation (`src/ya/diff-files-vscode.ts`).
+- **Préfixe** : ouverture et prompt sans rejet inchangés (fixture des trames inchangé). Après un rejet, seul le texte du message suivant change, à sa fin ; trame exacte vérifiée par les tests unitaires et e2e (`bonjour\n\n[user-reverted] a.txt\n[user-reverted] neuf.txt`).
+- **Tests** (Claude Code, en local) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run build && npm run test:unit` → `ℹ tests 49`, `ℹ pass 49`, `ℹ fail 0`.
+  - `test/unit/diffs.test.ts` (7) :
+    - fragments multiples ; création, et création puis modification (fragments de la capture `display`) ;
+    - **`edit()` puis `sed -i`** (demande de Yusuf) : texte de l'edit changé → refusé (`no longer at line 2`) ; ligne insérée avant → refusé ; autre ligne changée → fragment défait, le changement de `sed` reste ; fin du fichier retirée → refusé ;
+    - position sur la ligne, suppressions, ligne absente ;
+    - `Reverts` : restauration, fichier créé, texte fixe unique, garde-fous (tour, fichier changé, tampon non enregistré, autre session), deux cellules sur un fichier.
+  - `agent.test.ts` (2), contre l'agent factice qui écrit de vrais fichiers (scénarios `diff` et `diffsed`) : refus pendant un tour, restauration, fichier créé retiré, `/rien` sans le texte fixe puis `bonjour` avec ; `edit()` puis `sed -i 's/DEUX/Deux/'` → impossible avec la raison, l'autre fichier de la cellule reste rejetable.
+  - **Premiers lancements** : 3 échecs, tous dans mes données de test : un cas « `ab ab ab` », vraiment ambigu ; la suppression de lignes entières (constat corrigé ci-dessus) ; un `edit()` invalide (`old_str` non unique) ; et un premier `sed` (`DEUX` → `DEUX!`) qui laissait `new_str` à sa ligne, rejet donc possible d'après la règle. Code inchangé.
+  - **Contrôles négatifs** : garde-fou 1 retiré → `ℹ fail 2` ; garde-fou 2 retiré → `ℹ fail 2` ; texte fixe non ajouté → `ℹ fail 1` ; fichiers restaurés, 49/49.
+- **e2e** (CI) : `vscode.diff` ouvert (avant `un\ndeux\ntrois\n`, après `un\nDEUX\ntrois\n`), Revert de `a.txt` par `applyEdit` (fichier restauré et enregistré), `neuf.txt` à la corbeille, texte fixe dans le `session/prompt` suivant.
+- **CI de l'étape 4** :
+  - **Premier push** (`9ec9d2d8a`, `ya-extension` 44916075383) : **échec**, e2e 7/9, deux défauts de mes tests.
+    - « diffs » : tout passe dans VS Code, jusqu'au texte fixe (`vscode.diff`, Revert par `applyEdit` et enregistrement, `neuf.txt` à la corbeille). Seul l'ordre des deux lignes diffère : elles suivent l'ordre de fin des restaurations, lancées ensemble. Le test compare maintenant sans ordre.
+    - « cartes » : il tourne après « diffs », dont la carte dit déjà « Edited ». Le test attendait ce mot et lisait la page avant le lot du chat qui porte sa carte ; il attend maintenant `exit 1`, propre à sa carte.
+  - `.vsix` : 198 873 octets.
+
+### Décisions de Yusuf après l'étape 4 (21/11/2026)
+
+- **C14** : l'option (b) passe au **ticket 26** (`docs/tickets/26-colonne-diff.md`, Rust : colonne de départ dans le contenu `diff` du pont), **après le ticket 25**. Sa capture devra montrer prompt et requêtes inchangés : seules les trames `diff` changent. **Dans la PR 3, (a) reste**, avec la raison affichée.
+- **Limite de la PR 3 (suppressions pures)** : un `edit()` dont `new_str` est vide ne se rejette presque jamais. Sans colonne, toute place sur la ligne annoncée donne un « avant » valide, même pour une suppression de lignes entières ; seule exception, une ligne d'arrivée vide. La carte affiche « Revert unavailable: the edit's place on line N is ambiguous. ». Levée par le ticket 26.
+- **Libellé « Revert »** : validé.
+- **Étape 6** : options pour réutiliser le binaire de `ci.yml` présentées d'abord ; rien dans `ci.yml` avant la décision.
+
+### Étape 6 : options pour réutiliser le binaire de `ci.yml` (constat, rien de modifié)
+
+**Ce que fait `ci.yml` aujourd'hui** (fichier upstream) :
+- les 8 shards construisent les binaires debug (`cargo build --locked --workspace --bins`, `.github/workflows/ci.yml:337-339`, binaire `target/debug/prime-agent`) puis préparent le venv du kernel (étape « Bootstrap the kernel venv »), sauf si leur sélection est vide ;
+- **sur une PR qui touche un fichier hors des crates** (doc, `extensions/`, workflows), la sélection est complète (`scripts/ci_pr_crates.py:104`, « non-crate path … the full selection runs ») : les 8 shards construisent ;
+- **rien sur une PR en brouillon** (`if: … !github.event.pull_request.draft`, `ci.yml:124`, `:281`) ;
+- aucun binaire publié en artefact (les `upload-artifact` de `ci.yml:396` et `:407` publient manifestes et reçus).
+
+**Mesures** (API GitHub, runs `ci` 44906056143 et 44885855759, PR #74 et PR #72 ; `ya-extension` 44916223644) :
+
+| | Run 44906056143 | Run 44885855759 |
+|---|---|---|
+| Durée de `ci` (début → fin) | 13,2 min | 12,7 min |
+| Shard 1 (le plus long, fixe la fin de `ci`) | 11,8 min, fini à +12,8 min | 11,9 min, fini à +12,3 min |
+| Shard 7 (le plus court) | 6,6 min, fini à +7,7 min | 7,1 min, fini à +7,5 min |
+| « Build the workspace bins » (shard 1, cache cargo partagé `test-shards`) | 49 s | 49 s |
+| Binaire prêt (fin du build, depuis le début du run) | +2,4 min | +1,9 min |
+
+`ya-extension` aujourd'hui : 1,0 min, dont e2e (agent factice) 24 s. **Non mesurés, estimations** : la durée de l'e2e contre le vrai binaire (estimé 1 à 3 min : démon, kernel, plusieurs scénarios) et la taille du binaire debug (estimée plusieurs centaines de Mo ; le binaire de release fait 62 Mo).
+
+**Options**
+
+| | Montage | Temps ajouté sur une PR (fin de la CI) | Fichiers upstream touchés | Points faibles |
+|---|---|---|---|---|
+| **A** | e2e vrai binaire dans un shard de `ci.yml`, après son build : étapes `if: matrix.shard == 7` (Node, `npm ci`, e2e sous `xvfb` avec `target/debug/prime-agent`) | **≈ 0** si l'e2e tient dans la marge du shard 7 (fini vers +7,7 min, `ci` finit vers +12,8 min : environ 5 min de marge) ; +1 à 3 min de runner (estimation) | `ci.yml` : environ 20 à 25 lignes ajoutées dans le job `test-shard` (4 étapes et un commentaire) | Le résultat se lit dans « test shard 7/8 », déjà requis : pas de nouveau check requis, mais un échec de l'extension rend rouge un shard Rust. La marge dépend du découpage des shards, qu'upstream peut changer. Conflits possibles au `cherry-pick` d'un changement upstream du job `test-shard`. |
+| **A′** | Même chose dans le shard 1 | **+1 à 3 min** (estimation) : le shard 1 est le plus long | même nombre de lignes | Allonge chaque PR ; aucun avantage sur A |
+| **B** | `ci.yml` publie le binaire en artefact (shard 7, après son build) ; `ya-extension` a un job « e2e vrai binaire » qui attend cet artefact (API : run `ci` du même commit), le télécharge et lance l'e2e | **≈ 0** : `ya-extension` finit vers +5 à 7 min (artefact vers +2 à 3 min, plus téléchargement et e2e, estimation), avant `ci` | `ci.yml` : environ 7 à 8 lignes (une étape `upload-artifact`) | Couplage entre deux workflows (attente active, qui garde un runner pendant environ 2 à 3 min) ; stockage d'un artefact de plusieurs centaines de Mo par run (rétention courte à fixer) ; nouveau check à rendre requis ; en brouillon, `ci` ne tourne pas : le job doit sortir vite. |
+| **C** | Comme B, mais `ya-extension` déclenché par `workflow_run` à la fin de `ci` | **+3 à 5 min** (estimation) : l'e2e commence après la fin de `ci` | `ci.yml` : 7 à 8 lignes | Un run `workflow_run` ne s'attache pas comme check de la PR (contexte de la branche par défaut) : difficile à rendre requis. Déconseillé. |
+
+**Pour comparaison** (écarté par la décision de réutiliser le binaire) : un build à part dans `ya-extension` avec le cache cargo partagé coûterait environ 1 min de plus dans `ya-extension` (restauration du cache 16 s et build 49 s, mesurés dans le shard 1), sans fichier upstream touché. Non vérifié : que le cache `test-shards` se restaure depuis un autre workflow.
+
+**Recommandation** : **A** (shard 7). Aucun temps ajouté sur la durée de la CI tant que l'e2e tient dans la marge, pas d'artefact ni de couplage entre workflows, résultat dans un check déjà requis. Seul défaut notable : environ 20 à 25 lignes dans un fichier upstream. Si Yusuf préfère un check à part ou moins de lignes upstream : **B**.
+
+### Étape 6 : e2e contre le vrai binaire, option D (décision de Yusuf, 21/11/2026)
+
+- **Décision** : ni A ni B. Option D : build du binaire dans `ya-extension`, aucune ligne upstream, seulement sur le périmètre de C15 (sortie rapide sinon). Si le build dépasse 5 min avec le cache chaud : arrêt et retour vers Yusuf avec l'option B.
+- **Cache cargo de `ci.yml` depuis `ya-extension`** (vérifié avant d'écrire le job) :
+  - **clé** (Swatinem/rust-cache à `6323deb10`, `src/config.ts:73-131`) : `v0-rust-<shared-key>-<OS>-<arch>-<empreinte d'environnement>-<empreinte des lockfiles>`. Avec `shared-key`, **ni le workflow ni le job n'y entrent**. L'empreinte d'environnement prend la version de `rustc` et les variables qui commencent par `CARGO`, `CC`, `CFLAGS`, `CXX`, `CMAKE`, `RUST`. La toolchain épinglée (`dtolnay/rust-toolchain@ce678459e`) pose elle-même `CARGO_HOME`, `CARGO_INCREMENTAL=0`, `CARGO_TERM_COLOR=always` et le protocole du registre (`action.yml:65-139`), et tous les jobs Linux de `ci.yml` partagent l'empreinte (`fcc63f3e` dans `v0-rust-test-shards-Linux-x64-fcc63f3e-94c07680`, `clippy-test`, `windows-cross`, `gh cache list`) ;
+  - **restauration** : clé exacte, sinon le préfixe jusqu'à l'empreinte d'environnement (`src/restore.ts:41`) ;
+  - **portée** : un run de PR lit les caches de sa branche et de `main`, quel que soit le workflow ; `v0-rust-test-shards-…` est sauvé sur `main` par les pushs (`save-if` des shards) ;
+  - **donc restaurable** si le job a la même toolchain, la même image (`ubuntu-24.04`), aucune variable `CARGO*`/`RUST*`/`CC*` en plus et le même `Cargo.lock`. Vérification sur le premier run : ligne `Restored from cache key`.
+  - **Lecture seule** (`save-if: false`) : le quota de caches est plein (dizaines de clés de 200 à 635 Mo), une écriture de plus pousserait à l'éviction des caches de `ci.yml`.
+- **Job `real-binary`** (`.github/workflows/ya-extension.yml`) : `cargo build --locked --workspace --bins` (comme les shards, pour réutiliser les mêmes dépendances compilées), uv, venv du kernel (`--prime-agent-bootstrap`), `npm ci`, e2e sous `xvfb` (`npm run test:e2e:real`).
+- **e2e** (`test/e2e/run-real.ts`, `suite-real.ts`) : binaire debug, provider factice (`PRIME_AGENT_FAUX_SCRIPT`, aucun modèle), HOME et TMPDIR temporaires (démon isolé). Cas :
+  - cellule avec `bash()`, accord par le bouton de la boîte, carte (`echo lu`, exit 0) ;
+  - `edit()` créant `ok.txt`, Revert (corbeille) ;
+  - refus : fichier absent, « Declined », le tour s'arrête ; `[user-reverted] ok.txt` à la fin du message, lu dans le fichier de session ; la réponse non demandée revient au prompt suivant ;
+  - Stop pendant une cellule de 30 s ;
+  - session en « auto » : bandeau, cellule sans demande ;
+  - fin : agents arrêtés, démon arrêté, **aucun processus restant** exigé.
+  - Le tour lancé par l'agent est au ticket 25.
+- **CI de l'étape 6** (job `real-binary`, durées tirées de l'API GitHub, étapes du job) :
+
+  | Run | Tête | Cache restauré | Restauration | Build | Venv | e2e réel | Job | Résultat |
+  |---|---|---|---|---|---|---|---|---|
+  | 44917998768 | `afd3c566d` | `v0-rust-test-shards-Linux-x64-fcc63f3e-94c07680`, `full match: true` | 19 s | 52 s | 3 s | 113 s | 3,7 min | e2e 2/5 |
+  | 44918462066 | `4263f4613` | idem | 9 s | 68 s | 2 s | 113 s | 3,6 min | e2e 2/5 (diagnostic) |
+  | 44918908271 | `ac7499d24` | idem | 14 s | 57 s | 9 s | 24 s | 2,2 min | **e2e 5/5**, aucun processus restant |
+
+  - **Cache** : le cache des shards de `ci.yml` se restaure tel quel depuis `ya-extension` (clé exacte), comme prévu par la lecture de la clé. Pas de cache propre. Premier et deuxième run restaurent le même cache de `main` (lecture seule) : il n'y a pas d'écart « froid / chaud ». **Build entre 52 et 68 s**, loin du seuil de 5 min.
+  - **Échecs des deux premiers runs** : la cellule `edit()` levait `RuntimeError: Python skill edit is unavailable in this kernel. Import error: No module named 'edit'` (diagnostic ajouté au test). Cause : avec `PRIME_AGENT_KERNEL_PYTHON`, le binaire traite ce Python comme celui de l'appelant et désactive les skills Python absents (`crates/pa-core/src/kernel/bootstrap/mod.rs:184-214`). Correctif : `PRIME_AGENT_KERNEL_VENV` (le dossier du venv préparé dans le job, `venv/layout.rs:20-29`) ; le binaire y installe alors ses skills. Les deux autres échecs en découlaient : le test arrêté laissait une réponse du script, servie au cas suivant. En local, sur le binaire de `main` avec le venv du banc, la même cellule créait bien `ok.txt` (script jetable `edit_probe.py`).
+  - Les 113 s des deux premiers runs comprennent une attente de 90 s arrivée à son délai (cas Stop) ; l'e2e réussi prend 24 s.
+  - **« Stop : tour fini en 26 ms »** mesure le panneau, qui marque le tour annulé dès l'envoi de `session/cancel`. Ce n'est pas l'arrêt du kernel : moins de 1 s mesuré par `crates/pa-cli/tests/ya_acp_cancel_e2e.rs` (PR 1, E12).
+  - **Run 44919167201** (`68871e2a7`) : même cache restauré (`full match: true`), restauration 14 s, build 68 s, venv 3 s, e2e 25 s, job 2,3 min, **e2e 5/5**, aucun processus restant.
+- **Limites du job `real-binary`** (demande de Yusuf) :
+  1. **Cache en lecture seule** : le job lit le cache des shards sauvé sur `main` sans jamais l'écrire. Une PR qui change `Cargo.lock`, la toolchain épinglée ou une variable `CARGO*`/`RUST*` change la clé. Elle restaure au mieux un cache partiel (préfixe jusqu'à l'empreinte d'environnement : un `Cargo.lock` différent garde ce préfixe, une toolchain différente non) ou fait un **build à froid, durée non mesurée**. Le cache de `main` ne se met à jour qu'après le merge (push de `ci.yml`).
+  2. **`PRIME_AGENT_KERNEL_PYTHON` désactive les skills Python absents** du Python désigné (`crates/pa-core/src/kernel/bootstrap/mod.rs:184-214`) : le job passe `PRIME_AGENT_KERNEL_VENV`. Vérification (`git grep -n PRIME_AGENT_KERNEL_PYTHON -- extensions bench scripts .github`) :
+     - **extension** : ne la pose jamais. Mais elle lance le binaire avec tout l'environnement de VS Code (`extensions/vscode/src/agent.ts:129`, `env: this.env`, `process.env` par défaut) : si la variable est exportée dans l'environnement qui a lancé VS Code, le binaire l'hérite et les skills Python manquants de ce Python sont désactivés. Non corrigé (hors demande) ; à trancher : la retirer de l'environnement passé au binaire, ou la laisser comme réglage avancé ;
+     - **banc** : le smoke bench passe `PRIME_AGENT_KERNEL_VENV` (`bench/smoke/run.py:295`) ; le banc de capture (`run.py`, `acp_frames.py`) n'en passe aucune (venv dans le HOME du banc) ; `real-binary-check.mjs` passe `PRIME_AGENT_KERNEL_VENV` (étape 7). Seul `bench/smoke/tools/notice-batch-repro.sh:28` passe `PRIME_AGENT_KERNEL_PYTHON`, volontairement : ce rejeu n'utilise que `bash()`, pas de skill ;
+     - **`ci.yml`** (upstream) la passe aux tests Rust et aux contrôles du cycle de vie (`ci.yml:373-378`). Upstream en connaît l'effet : `scripts/lifecycle_lib.py:69-75` met les sources des skills dans `PYTHONPATH` pour cette raison.
+
+### PR 3, étape 7 : contrôle sur le vrai binaire (règle 13)
+
+- `extensions/vscode/scripts/real-binary-check.mjs` : nouveau cas « PR 3 : cellules, boîte, diffs » (manual, provider factice, kernel réel sur le venv du banc par `PRIME_AGENT_KERNEL_VENV`, sous `sandbox-exec`, démon isolé) :
+  - cellule avec `bash()`, accord, carte (`echo lu`, exit 0, sortie) ;
+  - `edit()` qui crée `ok.txt`, vrai diff, Revert (fichier retiré) ;
+  - refus (Declined, fichier absent), `[user-reverted] ok.txt` à la fin du message dans le fichier de session, réponse suivante non demandée ;
+  - Stop pendant une cellule de 30 s ;
+  - aucun processus restant.
+  - Les deux cas existants (« manual », « auto », message `/login`) sont inchangés.
+- **Lancé par Claude Code** sur le binaire de `main` `1b96bb645` : `cd extensions/vscode && npm run compile-tests && DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short node scripts/real-binary-check.mjs ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent`.
+  - **Premier lancement : NON CONFORME (1)**, `[user-reverted] ok.txt` absent du fichier de session. **Défaut réel** : le diff montrait le chemin absolu `/private/var/folders/…/project/ok.txt`. Le dossier du projet était `/var/folders/…` (macOS : `/var` est un lien vers `/private/var`) et le pont donne le chemin résolu. Le même défaut apparaît dans VS Code pour un dossier ouvert par un lien ; l'e2e Linux ne le voyait pas (`/tmp` n'y est pas un lien). Correctif : le chemin montré est aussi calculé par rapport au dossier résolu (`src/ya/cells.ts`, `shownPath`) ; test unitaire avec un lien symbolique (`ℹ tests 50`, `ℹ pass 50`). Contrôle négatif sans le correctif : `ℹ fail 1`.
+  - **Second lancement : CONFORME**, exit 0. Les trois cas sont à `oui`, dont `diff : ok.txt, créé true`, `[user-reverted] ok.txt à la fin du message`, `Stop : tour annulé (panneau libre en 102 ms)`, `aucun processus restant`.
+
+### PR 3, étape 8 : doc
+
+- `docs/fork-changes.md`, section « Extension VS Code, PR 3 » : tous les fichiers touchés (repris d'Unharnessed, du fork, banc, workflow). Ce ticket : constat, décisions, étapes, mesures. Phrase périmée du ticket 22 : déjà corrigée (PR 2).
+
+### PR 3, étape 9 : `ya-extension` requis (E13, C16)
+
+- Les deux jobs de `ya-extension` tournent sur chaque PR et sortent vite en succès hors de leur périmètre : `extension (tsc, lint, tests, vsix, e2e)` (extension et workflow) et `e2e vrai binaire (build debug, provider factice)` (périmètre de C15). **Demande à Yusuf** : les ajouter aux checks requis de la protection de `main` (Claude Code n'y touche pas).
+
+### CI complète et `.vsix` de la tête `3920923ac` (21/11/2026)
+
+- **`ya-extension`** 44920060932 : `extension (tsc, lint, tests, vsix, e2e)` succès, e2e 9/9, `.vsix` 198 934 octets ; `e2e vrai binaire (build debug, provider factice)` succès, e2e 5/5, aucun processus restant (cache 11 s, build 50 s, venv 2 s, e2e 21 s, job 1,9 min).
+- **PR sortie du brouillon** (`gh pr ready 75`) une fois tous les runs de la tête finis. **`ci`** 44920281632 (`pull_request`, après le passage en prêt) : succès. `gh pr checks 75 --required` : **14 checks requis en succès**, aucun en skipping ; sur l'ensemble, 26 en succès et 5 en skipping (non requis).
+- **`install-vsix.sh`** lancé par Claude Code (règle 13) dans un dossier d'extensions isolé : `extensions/vscode/scripts/install-vsix.sh 44920060932 <scratchpad>/ext-isole` → taille 198 934 octets (limite 5 000 000), sha256 `641163df25e99c48a03e8a55ca617267974c89e00afa4bc2f85e2cd87e251b4f`. Les 9 fichiers attendus : `[Content_Types].xml`, `extension.vsixmanifest`, `extension/LICENSE.txt`, `extension/dist/extension.js`, `extension/dist/webview/main.css`, `extension/dist/webview/main.js`, `extension/media/icon.svg`, `extension/package.json`, `extension/readme.md`. Puis `yusagent.yusagent@0.1.0`, `installé`.
+
+### `PRIME_AGENT_KERNEL_PYTHON` retirée de l'environnement du binaire (décision de Yusuf, 21/11/2026)
+
+- **Unharnessed** (`157dcdc1d`, clone de lecture) :
+  - **binaire** : son équivalent renommé `UNHARNESSED_KERNEL_PYTHON` est traité comme chez nous. Python de l'appelant, skills Python absents désactivés avec un avertissement (`crates/uh-core/src/kernel/bootstrap/mod.rs:192-226`) ;
+  - **extension** : aucun filtrage. `spawn(this.binary, args, { cwd: this.cwd, stdio: "pipe" })` sans option `env` (`vscode/src/agent.ts:96`), donc tout l'environnement de VS Code passe ; aucune mention de `KERNEL_PYTHON` dans `vscode/src` ;
+  - son e2e passe `UNHARNESSED_KERNEL_VENV`, pas le Python (`vscode/test/e2e/run.mjs:1060`), comme notre étape 6.
+- **Donc, comme décidé** : notre extension retire `PRIME_AGENT_KERNEL_PYTHON` de l'environnement passé au binaire, sans réglage avancé (`extensions/vscode/src/ya/env.ts`, `agentEnv` ; accroche dans `src/agent.ts`, `spawn`). `PRIME_AGENT_KERNEL_VENV` et le reste passent ; l'environnement de VS Code n'est pas modifié.
+- **Test** (`agent.test.ts`, « environnement du binaire ») : l'agent factice note les deux variables reçues. `PRIME_AGENT_KERNEL_PYTHON` absente, `PRIME_AGENT_KERNEL_VENV` présente. `ℹ tests 51`, `ℹ pass 51`. **Contrôle négatif** (`spawn` avec `this.env`) : `ℹ fail 1`, « PRIME_AGENT_KERNEL_PYTHON ne passe pas au binaire » ; fichier restauré.
+- Remplace le « non corrigé, à trancher » de la section « Limites du job `real-binary` ».
+
+### Contrôle de Yusuf sur le `.vsix` du run 44922629270 (21/11/2026) et correctifs
+
+- **Conformes** : points 1, 2, 4, 8, 9, 10 ; point 5 d'après Yusuf. **Bloquant** : un clic sur une carte de cellule ne la déplie presque jamais. Trois clics de souris (« Edited essai2.txt », « Worked for… », son chevron) n'ont rien donné ; diff et « Revert » sont donc inatteignables, points 6 et 7 non testables. **Point 3** : « Ran ls exit 1 » pour `ls` puis `false` ; durées « 0·32 ms » (`find`) et « 0·19 ms » (`cat`). Les espaces manquants (« Workedfor », « Ranls ») relèvent de la passe de design.
+- **Ce que faisait l'e2e** : il ne cliquait jamais sur une carte. Le test « cartes » lisait l'en-tête ; le test « diffs » envoyait `yaOpenDiff` et `yaRevert` directement à l'hôte.
+- **Cause des cartes** (vérifiée par le test ci-dessous) : le code repris rend le contenu d'un repli fermé `inert` (`webview/Chat.tsx`, `WorkRun` : `inert={folded && !open}` ; `CallRun` ; carte : `inert={!open}`). Chez Unharnessed, sa feuille masque ce contenu (`styles.css:3912-4047` à `157dcdc1d`, `grid-template-rows: 0fr`). Notre feuille minimale ne le masquait pas : le travail d'un tour fini restait **affiché mais inerte**, et le navigateur en ignore les clics. Le clic sur « Worked for… » ouvrait bien le repli, sans changement visible (contenu déjà affiché) ; le clic sur le chevron (même bouton) le refermait. Ni re-rendu, ni double déclenchement, ni élément recouvert.
+- **Correctif** (`webview/styles.css`) : un repli fermé est masqué (`.call-fold`, `.work-fold` ; ouverts avec `.is-open`), et les en-têtes `is-flat` aussi, sans animation. On ouvre « Worked for… », puis la carte.
+- **En-tête** : il montrait la première commande et l'`exit` du premier `bash()` en erreur. Il montre maintenant la commande sortie en erreur s'il y en a une, sinon la première (`src/ya/cells.ts`, `cellOfRuns`) ; l'`exit N` est le sien.
+- **Durées** : l'unité reçue est correcte. `"durationMs": int(result.duration * 1000)` (`prime-agent-runtime/src/rlm/bash.py:220`), `duration` en secondes (`time.monotonic() - self._started`, `:830`, `:1155`), millisecondes entières (`7` pour `echo lu` dans la capture). « 0·32 ms » se lisait « exit 0 », « · », « 32 ms » : la feuille provisoire n'espace pas les séparateurs. Correctif : séparateurs écrits avec leurs espaces dans la ligne d'un `bash()` (`webview/ya-cells.tsx`, `SEP`), d'où « exit 0 · 32 ms ».
+- **Tests**, avec la preuve qu'ils échouent sans les correctifs (push en trois temps) :
+  - sonde `probeInput.userClick` : bouton amené à l'écran, élément réellement sous le pointeur (`elementFromPoint`), rien s'il est inerte ou recouvert, sinon pointeur et souris enfoncés et relâchés, puis `click`. Les événements restent émis par script (pas un clic du système), mais visent ce que vise le pointeur. Sonde `visibleInert` : nombre de blocs `inert` affichés, il en faut 0 ;
+  - e2e factice et réel : `visibleInert` à 0 après le tour ; clic sur la carte telle qu'on la voit (jamais « inerte ») ; puis par des clics, « Worked », la carte, le nom du fichier (diff ouvert), « Revert » deux fois, et la ligne du `bash()` lue (`exit 0 · 6 ms`, `exit 1 · 3 ms` ; réel : `exit 0 · N ms`) ;
+  - test unitaire : `ls` (0) puis `false` (1) → en-tête `false`.
+  - **Run 44927543897** (`e75b856d2`, tests sans correctif) : test unitaire de l'en-tête en échec (`'ls' !== 'false'`) ; e2e réel 4/5, ligne du `bash()` sans « exit 0 · N ms ». Mais les clics passaient : le premier test cliquait « Worked » d'abord, ce qui lève `inert`, et ne reproduisait pas le geste de Yusuf. D'où `visibleInert` et le clic direct sur la carte.
+  - **Run 44927865325** (`791845b60`, en-tête et séparateurs corrigés, pas le CSS) : « aucun bloc inerte affiché » en échec dans l'e2e factice (8/9) et l'e2e réel (4/5) ; test « cartes » vert (`exit 1 · 3 ms`).
+  - **Run 44928139670** (`46ca827af`, avec le CSS) : e2e réel **5/5** ; e2e factice 6/9, trois défauts de mes tests. Ils lisaient des cartes dans un travail replié, désormais masqué : « Declined » (boîte), « exit 1 » (cartes). Et une course : le second clic « Revert » partait avant que la webview remplace le premier bouton, et le reprenait. Corrigés : « Worked » ouvert par un clic avant de lire, « Reverted » attendu entre les deux clics.
+  - **Run 44928431016** (`a30d12aa5`) : `ya-extension` succès : e2e factice **9/9**, e2e réel **5/5**, aucun processus restant, `.vsix` 199 395 octets. `ci` 44928430902 succès. `gh pr checks 75 --required` : **16 checks requis en succès** (les 14 de `ci`, plus `extension (tsc, lint, tests, vsix, e2e)` et `e2e vrai binaire (build debug, provider factice)`, rendus requis par Yusuf, E13), aucun en skipping. `install-vsix.sh 44928431016` (Claude Code, dossier isolé) : 199 395 octets, sha256 `08c44ba56c89de643731d0d568caebab7ca631e4399d84427e270324539b5e49`, 9 fichiers attendus, `yusagent.yusagent@0.1.0`, `installé`.
+
+### Contrôle de Yusuf sur le run 44928431016 (21/11/2026)
+
+macOS, VS Code, binaire `1b96bb645`, mode manuel. **Points 1 à 10 conformes.**
+- Point 3 : en-tête « Ran false exit 1 » ; lignes `exit` et durée lisibles.
+- Point 6 : « Worked for… » puis carte dépliée, diff ouvert, Revert remet « un », `[user-reverted] essai3.txt` en fin de bulle.
+- Point 7 : « Not reverted: the file changed since this cell (a later edit, or yours). », fichier intact.
+- **Merge** de la PR #75 décidé par Yusuf, après les 16 checks requis verts sur la tête. Pas de build macOS : rien sous `crates/`.

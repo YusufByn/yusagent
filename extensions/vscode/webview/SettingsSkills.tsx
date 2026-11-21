@@ -227,7 +227,7 @@ function Folders({ folders, actions }: { folders: string[]; actions: Actions }) 
     <section className="section">
       <h2 className="section-label">Folders</h2>
       <p className="note section-help">
-        The agent reads ~/.unharnessed/skills, ~/.agents/skills, and the workspace's .unharnessed/skills and
+        The agent reads ~/.yusagent/skills, ~/.agents/skills, and the workspace's .yusagent/skills and
         .agents/skills. It also reads the folders added here.
       </p>
       <ul className="list">

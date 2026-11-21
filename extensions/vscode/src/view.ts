@@ -5,7 +5,7 @@ import type { Conversation, Conversations } from "./conversations";
 import type { Files } from "./files";
 import type { History } from "./history";
 import { connectedModels } from "./instructions";
-import type { HostMessage, Probe, WebviewMessage } from "./protocol";
+import type { HostMessage, Probe, ProbeInput, WebviewMessage } from "./protocol";
 import type { Providers } from "./providers";
 import type { Settings } from "./settings";
 import type { ToolTabs } from "./tabs";
@@ -26,6 +26,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   rendered = false;
   private probes: ((probe: Probe | undefined) => void)[] = [];
   private splashPlayed = false;
+  /** yusAgent (PR 3, C4) : demandes d'accord ouvertes par conversation, pour le badge de la vue. */
+  private readonly asking = new Map<Conversation, number>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -48,6 +50,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         kernel: kernel.current,
         draft,
       });
+      this.post({ type: "yaPermissions", asks: agent.permissions.asks }); // yusAgent (PR 3)
     });
     providers.onChange(() =>
       this.post({ type: "providers", providers: providers.providers, login: providers.signIn }),
@@ -69,6 +72,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     session.onChange(() => shown() && this.post({ type: "session", session: session.current }));
     chat.onPost((message) => shown() && this.post(message));
     kernel.onChange(() => shown() && this.post({ type: "kernel", kernel: kernel.current }));
+    // yusAgent (PR 3) : la boîte suit les demandes de la conversation montrée ; le badge, toutes.
+    agent.permissions.onChange(() => {
+      if (shown()) this.post({ type: "yaPermissions", asks: agent.permissions.asks });
+      this.asking.set(conversation, agent.permissions.waiting);
+      this.badge();
+    });
+  }
+
+  /** yusAgent (PR 3, C4) : badge sur l'icône de la vue tant qu'une demande d'accord attend. */
+  private badge(): void {
+    if (!this.view) return;
+    let waiting = 0;
+    for (const count of this.asking.values()) waiting += count;
+    this.view.badge = waiting > 0 ? { value: waiting, tooltip: "yusAgent is waiting for your permission" } : undefined;
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -80,6 +97,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
     view.webview.html = renderHtml(view.webview, dist);
     this.view = view;
+    this.badge(); // yusAgent (PR 3)
   }
 
   receive(message: WebviewMessage): void {
@@ -106,8 +124,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           history: this.history.current,
           kernel: this.shown.kernel.current,
         });
+        this.post({ type: "yaPermissions", asks: this.shown.agent.permissions.asks }); // yusAgent (PR 3)
         this.splashPlayed = true;
         break;
+      // yusAgent (PR 3, étape 4) : diffs des cellules et « Rejeter ».
+      case "yaOpenDiff":
+        void this.shown.chat.yaOpenDiff(message.toolId, message.path);
+        break;
+      case "yaRevert":
+        void this.shown.chat.yaRevert(message.toolId, message.path);
+        break;
+      // yusAgent (PR 3) : réponse de la boîte ; ignorée si la demande s'est fermée entre-temps.
+      case "permission": {
+        const answered = this.shown.agent.permissions.answer(message.toolCallId, message.optionId);
+        this.log.info(`permission ${message.toolCallId}: ${message.optionId}${answered ? "" : " (no open request)"}`);
+        break;
+      }
       case "screen":
         this.log.info(`panel: ${message.screen}`);
         break;
@@ -368,6 +400,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type: "droppedImages", images, errors });
   }
 
+  /** yusAgent (PR 3, tests e2e) : le nombre du badge de la vue, undefined sans badge. */
+  get badgeValue(): number | undefined {
+    return this.view?.badge?.value;
+  }
+
   /** yusAgent (tests e2e) : la page de la vue. */
   get html(): string {
     return this.view?.webview.html ?? "";
@@ -388,6 +425,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }, 1_000);
       this.probes.push(answer);
       this.post({ type: "probe" });
+    });
+  }
+
+  /** yusAgent (PR 3, tests e2e) : une action dans la webview (`probeInput`), puis ce qu'elle affiche. */
+  probeInput(input: ProbeInput): Promise<Probe | undefined> {
+    if (!this.view) return Promise.resolve(undefined);
+    return new Promise((resolve) => {
+      const answer = (probe: Probe | undefined) => {
+        clearTimeout(timer);
+        resolve(probe);
+      };
+      const timer = setTimeout(() => {
+        const at = this.probes.indexOf(answer);
+        if (at >= 0) this.probes.splice(at, 1);
+        resolve(undefined);
+      }, 1_000);
+      this.probes.push(answer);
+      this.post({ type: "probeInput", input });
     });
   }
 
