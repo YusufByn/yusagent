@@ -1059,3 +1059,15 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - Les trois autres échecs (« cartes », « authentification », « plantage », délais dépassés) en découlent : le test arrêté laissait la demande ouverte et le tour sans fin. Le test de la boîte annule maintenant le tour en cours s'il échoue.
   - `.vsix` 195 886 octets.
 - **Non fait, à trancher** : les boutons sont actifs dès l'ouverture. La fenêtre de calme ne vise que les touches (C3), donc un clic au moment où la boîte apparaît compte.
+
+### Décisions de Yusuf après l'étape 3 (21/11/2026)
+
+1. **Tours lancés par l'agent** : ticket à part, **ticket 25** (`docs/tickets/25-tours-lances-par-agent.md`, constat et plan). Rien dans la PR 3. Le cas e2e « tour lancé par l'agent » **sort de l'étape 6** et passe au ticket 25, avec le signal de début de tour par le pont (qui remplacera la déduction sur `promptTurnId`, `src/ya/meta.ts`). Vérifications demandées, résultats dans le ticket 25 (§1.2 à 1.4) :
+   - les lignes de `crates/pa-daemon/src/acp/daemon.rs:1592-1620` sont **upstream** (`git blame` : #2524, #3264, #3256) ;
+   - **upstream ne l'a pas corrigé** depuis notre base (`c83ac68b3..783acb5d7`) : `ad1613303` (#3866) ajoute seulement `outstandingBackgroundJobs` à la quiescence d'un tour de prompt ;
+   - **Unharnessed** fait de chaque réveil un tour de sa couche ACP : `start_wake_turn` (`crates/uh-daemon/src/acp/prompt.rs:217-245`, identifiant de tour `:231`), `turnStart` `origin: "wake"` (`:332-357`), `responseBoundary` (`:891`) puis l'enveloppe de fin (`:925`) dans `settle_turn` (`:857`) ;
+   - **Stop débloque le panneau** (agent factice, test jetable) : tour de réveil « cancelled », message suivant envoyé. Limites : le tour, fini en réalité, s'affiche « Stopped » ; effet de `session/cancel` hors prompt sur la file du worker (`AbortAndClearQueue`) non mesuré sur le binaire.
+2. **Boutons de la boîte** inactifs et grisés pendant 1 s après son ouverture, sans relance par les frappes. Test demandé.
+3. **Focus** : la boîte le prend d'elle-même seulement si la zone de message est vide ; sinon rien ne change. Test demandé.
+4. **`acp_frames.py` et `compare_frames.py` versés au banc** (règle 13), avec leur commande dans le ticket.
+5. Puis l'étape 4 (diffs), push à sa fin.
