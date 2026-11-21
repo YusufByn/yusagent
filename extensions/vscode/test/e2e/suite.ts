@@ -111,7 +111,10 @@ const tests: [string, () => Promise<void>][] = [
         const s = (await state()).session;
         return s?.kind === "open" && s.config.effort?.current === "xhigh";
       }, "effort changé");
-      assert.equal(count(), 1);
+      // L'état change avant l'envoi (affichage optimiste d'Unharnessed) : attendre la trame.
+      await waitFor(() => count() === 1, "set_config_option reçu");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(count(), 1, "une seule trame pour un changement");
     },
   ],
   [
