@@ -1068,7 +1068,7 @@ Décisions : `docs/tickets/20-ya11-permissions.md`, section « PR 2 ». En manue
 | `bench/tools/ya_permissions_acp_demo.py` | nouveau (outil du fork) | Démo du contrôle : binaire en ACP sur un démon isolé, provider factice, le terminal autorise ou refuse chaque demande ; vérifie fichiers, messages du fichier de session, journal `ya-permission` et journal du worker (code de sortie 1 sinon). Dossier de travail sous son chemin canonique (`docs/tickets/21-bail-chemin-symbolique.md`). | YA-11 |
 | `.changes/ya-20-permissions-acp.md` | nouveau | Fragment de changelog. | YA-11 |
 
-Limites connues : un client qui s'attache sans `yaPermissionAsker` (TUI) voit les événements de demande sans pouvoir y répondre ; après une relance du worker, le client ACP n'est plus enregistré comme répondant tant qu'il ne s'est pas rattaché, et les demandes sont retirées aussitôt (refus).
+Limites connues : un client qui s'attache sans `yaPermissionAsker` (TUI) voit les événements de demande sans pouvoir y répondre ; après une relance du worker, le client ACP n'est plus enregistré comme répondant tant qu'il ne s'est pas rattaché, et les demandes sont retirées aussitôt (refus). Depuis le ticket 24, le pont se redéclare avant chaque prompt (section « Extension VS Code, PR 1 »).
 
 ## Permissions, PR 3 : TUI (YA-11, ticket 20)
 
@@ -1158,6 +1158,35 @@ Le superviseur répond `success` à `worker_idle_passivation` aussi quand il **d
 | `crates/pa-daemon/tests/ya_idle_passivation_defer_e2e.rs` | nouveau | Vrai démon, vrai kernel, provider factice. Une session racine au repos ; un second client y tient `execute_bash_and_wait` (`sleep 3`) pendant la demande. La première demande est différée, une demande après la fin de la commande arrête le worker (au moins 2 demandes). Avec l'ancien enchaînement, le test échoue. | YA-16 (ticket 23) |
 
 **Pour un `git cherry-pick` futur de `c8cbb5ba7`** (upstream #3769, absent de notre historique) : ce commit ajoute à `agent_family_e2e.rs` un second test avec le même enchaînement (`upstream/main:crates/pa-daemon/tests/agent_family_e2e.rs:1895-1909`). Lui appliquer `passivate_until_gone` (décision P3 du ticket 23).
+
+## Extension VS Code, PR 1 : cœur et pont ACP (YA-10, ticket 24)
+
+Constat, décisions et plan : `docs/tickets/24-ya10-extension-minimal.md`. Ce qui part au modèle ne change pas : les ajouts sont des données d'affichage (`details` des résultats de cellule, `_meta` ACP), le journal d'usage local et le pont ACP. Contrôle par capture `main` contre la branche (ticket 24).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-core/src/session_engine/usage_log.rs` | modif. (fichier du fork) | Entrée `invalidation` sur l'appel de la boucle qui suit un changement de modèle (`model_change`, `from`/`to` en `provider/modèle`) ou d'effort (`thinking_level_change`), détecté en comparant l'appel au précédent (dans le processus, ou la dernière ligne `main` du journal après une reprise) : tous les chemins de changement (choix de l'utilisateur, bascule de secours, retour au modèle principal) sans toucher de fichier upstream. Plusieurs causes sur un même appel : un tableau. Tests unitaires. | YA-10 (ticket 24) |
+| `crates/pa-daemon/src/acp/ya_permissions.rs` | modif. (fichier du fork) | `$/cancel_request` au client pour une demande réglée ailleurs (autre client, retrait par le worker) qu'il tient encore (E9) ; `rearm_asker` (action `asker` avant chaque prompt, E10). Tests unitaires. | YA-10 (ticket 24) |
+| `crates/pa-daemon/src/ya_permissions.rs` | modif. (fichier du fork) | Action `asker` de la commande `ya_permissions` : le client routé répond de nouveau (un worker relancé rejoue le `create`, pas les `attach`). Test unitaire. | YA-10 (ticket 24) |
+| `crates/pa-daemon/src/acp/ya_cell_display.rs` | nouveau | Diffs de la cellule en contenu ACP `diff` (`_meta` `_yus/startLine`), résultats des `bash()` sous `_meta` `_yus/bashRuns`. Tests unitaires. | YA-10 (ticket 24) |
+| `crates/pa-daemon/src/acp/mod.rs` | modif. (2 lignes) | Déclaration du module. | YA-10 (ticket 24) |
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, 3 lignes) | Appel de `rearm_asker` avant `PromptAndWait`. | YA-10 (ticket 24) |
+| `crates/pa-daemon/src/acp/wire_events.rs` | modif. (fichier upstream, environ 15 lignes) | `tool_execution_end` : contenu `diff` et `_meta` `_yus/bashRuns` ajoutés par `ya_cell_display`. | YA-10 (ticket 24) |
+| `crates/pa-daemon/src/acp/types.rs` | modif. (fichier upstream, environ 20 lignes) | `ToolCallContent` devient une énumération (`content`, `diff`) ; `ToolCallContent::new` inchangé. | YA-10 (ticket 24) |
+| `prime-agent-runtime/src/rlm/bash.py` | modif. (fichier upstream, environ 40 lignes) | MIME d'affichage `application/vnd.yusagent.bash-run+json` émise quand la cellule lit un résultat de `bash()` (même point que le code de sortie de T05) : commande, code de sortie, sortie plafonnée à 8 000 caractères (tête et queue), durée. | YA-10 (ticket 24) |
+| `prime-agent-runtime/test/test_ya_bash_run.py` | nouveau | Enregistrement émis pour un résultat lu dans une cellule vivante, pas hors cellule ; plafond tête et queue. | YA-10 (ticket 24) |
+| `crates/pa-core/src/kernel/shared.rs` | modif. (fichier upstream, environ 25 lignes) | `YA_BASH_RUN_DISPLAY_MIME`, `KernelBashRun`, `parse_ya_bash_run_display`, champ `bash_runs` d'`ExecuteResult`. | YA-10 (ticket 24) |
+| `crates/pa-core/src/kernel/manager/mod.rs`, `events.rs`, `execution.rs` | modif. (fichiers upstream, 3, 7 et 2 lignes) | Collecte des enregistrements `bash-run` de la cellule. | YA-10 (ticket 24) |
+| `crates/pa-core/src/session_engine/runtime_wiring.rs` | modif. (fichier upstream, 1 ligne) | Transmission de `bash_runs` à l'outil. | YA-10 (ticket 24) |
+| `crates/pa-core/src/tools/ipython.rs` | modif. (fichier upstream, environ 25 lignes) | `details.bashRuns` ; `oldStr`, `newStr` et `startLine` dans chaque entrée de `details.diffs`. Rien dans le texte du résultat. | YA-10 (ticket 24) |
+| `crates/pa-core/src/tools/golden_replay.rs` | modif. (test upstream) | `ipython_details_carry_the_cell_edit_diffs` attend les trois champs ajoutés. | YA-10 (ticket 24) |
+| `crates/pa-cli/tests/ya_permissions_acp_e2e.rs` | modif. (fichier du fork) | Test e : worker tué entre deux tours et relancé, la demande suivante arrive au client ACP. | YA-10 (ticket 24) |
+| `crates/pa-cli/tests/ya_acp_cancel_e2e.rs` | nouveau | `session/cancel` en moins de 1 s pendant une cellule bloquée sur `await bash(...)` (commande tuée en moins de 1 s, la suite de la cellule ne tourne pas, le kernel sert le tour suivant) et pendant une cellule bloquée en Python. | YA-10 (ticket 24) |
+| `bench/tools/capture/run.py` | modif. (outil du fork) | Chauffe en permissions « auto » ; cas `tui` (le TUI sur un pty, démon isolé) ; appel de `prefix_paths_check.py`. | YA-10 (ticket 24) |
+| `bench/tools/capture/prefix_paths_check.py` | nouveau (outil du fork) | Contrôle permanent : `acp` et `tui` contre `-p`, échec si l'écart dépasse les deux lignes du prompt système liées au démon (écart accepté le 21/11/2026, journal du CDC). | YA-10 (ticket 24) |
+| `.changes/ya-24-cellule-acp.md` | nouveau | Fragment de changelog. | YA-10 (ticket 24) |
+
+Limites connues : un `bash()` dont la cellule ne lit pas le résultat (commande détachée) n'a pas d'enregistrement `bash-run` : son résultat arrive par l'avis `[bash-done]`. Un worker relancé au milieu d'un tour n'a pas de répondant jusqu'au prompt suivant (la demande est refusée aussitôt). Un changement d'effort qui ne change pas l'effort envoyé (niveau ramené au même par le modèle) n'est pas journalisé.
 
 ## Code repris d'Unharnessed
 

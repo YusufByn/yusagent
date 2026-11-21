@@ -331,3 +331,44 @@ Le prompt système et les tools viennent du binaire seul.
 - Le journal d'usage écrit le provider, le modèle et l'effort de **chaque** appel (`crates/pa-core/src/session_engine/usage_log.rs:398-401`) : le changement s'y voit en comparant deux lignes.
 - Mais aucun champ `invalidation` n'est écrit pour ce changement : le seul appel de `note_invalidation` est celui du masquage (`crates/pa-core/src/session_engine/masking.rs:177`). Le critère du CDC (`docs/yusAgent-cdc.md:19`, « changement en cours de session journalisé comme invalidation de cache ») **n'est pas tenu**.
 - Pas de correctif sans décision : il toucherait `session_engine/mod.rs` (fichier upstream) ou le chemin de `set_model` du worker.
+
+## Décisions de Yusuf (21/11/2026, suite)
+
+- **Préfixe** : option (a). Écart porté au journal du CDC (`docs/yusAgent-cdc.md:93`) : deux lignes du prompt système liées au démon, chaque chemin stable, effet sous le seuil de détection du smoke bench. Comparaison permanente au banc de capture, qui échoue si l'écart dépasse ces deux lignes ; le TUI y entre s'il le peut sans gros chantier. Question « yusAgent garde-t-il les heartbeats ? » reportée après les testeurs.
+- **Invalidation** : dans la PR 1. Entrée `invalidation` au prochain appel modèle après un `model_change` ou un `thinking_level_change`, avec la cause ; l'événement est journalisé sans présumer qu'un changement d'effort invalide le cache du provider. Rien de cela ne part au modèle : capture `main` contre branche, TOUT IDENTIQUE.
+
+## PR 1 : cœur et pont ACP
+
+Branche `ya-24-extension`. Pas de build ni de test Rust en local (règle 8) : formatage par `rustfmt`, compilation, clippy et tests par la CI. Détail des fichiers : `docs/fork-changes.md`, section « Extension VS Code, PR 1 ».
+
+### Banc de capture : TUI et contrôle permanent du préfixe
+
+- **Le TUI entre dans le banc sans gros chantier** : cas `tui` de `bench/tools/capture/run.py`. Le pilote de pty et l'émulateur d'écran de `bench/tools/ya_permissions_tui_demo.py` sont repris tels quels ; démon isolé, même scénario `basic`, sous `sandbox-exec`.
+- `bench/tools/capture/prefix_paths_check.py`, lancé à la fin de `run.py` : `acp` et `tui` contre `s1-anthropic`, échec si l'écart dépasse les deux lignes.
+- **Lancé par Claude Code sur le binaire de `main`** (règle 13 ; run 44815536790, même binaire que la mesure du préfixe) : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 bench/tools/capture/run.py --binary <dossier>/yusagent --out <scratchpad>/cap-main2`. Sortie : `tui : requêtes=4 erreur=None process restants=[]`, puis `CONFORME` (`acp` : 4 requêtes, 0 écart hors des deux lignes ; `tui` : 4 requêtes, 0 écart ; le TUI a exactement l'écart d'ACP).
+- **Contrôle négatif** : une ligne ajoutée au prompt système d'une requête `acp` copiée (`Une ligne volatile 12:34`) donne `NON CONFORME`, code de sortie 1 (« requête 2 : démon seulement : 'Une ligne volatile 12:34' »).
+
+### Invalidation sur changement de modèle ou d'effort
+
+- Faite dans `crates/pa-core/src/session_engine/usage_log.rs` (fichier du fork), **sans fichier upstream** : chaque appel de la boucle est comparé au précédent (provider, modèle, effort envoyé). Cela couvre tous les chemins de changement : sélecteur ACP, `/model` et `/thinking` du TUI, bascule de secours et retour au modèle principal (`crates/pa-daemon/src/agent_engine/turn/model.rs:222`, `:313-314`, `:568-569`), que l'entrée de session `model_change` ne couvrait pas toujours.
+- Forme : `{"cause": "model_change", "from": "provider/modèle", "to": "provider/modèle"}`, `{"cause": "thinking_level_change", "from": …, "to": …}` ; plusieurs causes (avec le masquage) : un tableau. Documenté dans `docs/usage.md`.
+- Écart à la demande, à valider : la consigne visait un fichier upstream (`session_engine/mod.rs`) ; la détection à l'appel n'en touche aucun. Limite : un niveau d'effort ramené par le modèle au même effort envoyé n'est pas journalisé (rien ne change dans la requête).
+
+### E9 et E10 : permissions
+
+- **E9** : sur `ya_permission_resolved`, le pont envoie `$/cancel_request` (`requestId` = l'id de sa requête) pour une demande que son client tient encore ; la réponse tardive du client est ignorée. Tests unitaires dans `crates/pa-daemon/src/acp/ya_permissions.rs`.
+- **E10** : avant chaque `session/prompt`, le pont envoie `ya_permissions` action `asker` (nouvelle) : le worker réenregistre le client routé comme répondant. Constat : à la relance, le superviseur rejoue la commande `create` durable (`crates/pa-daemon/src/supervisor/supervision.rs`, `relaunch_worker`) mais pas les `attach` des clients. Test e2e e (`a_relaunched_worker_still_asks_the_acp_client`) : worker tué par `SIGKILL` entre deux tours, la demande suivante arrive au client ACP.
+  - Limite : une relance **au milieu** d'un tour n'a pas de répondant jusqu'au prompt suivant.
+
+### E5 et diffs : données d'affichage des cellules
+
+- **`bash()`** : le runtime émet `application/vnd.yusagent.bash-run+json` quand la cellule lit un résultat (même point que le code de sortie de T05, `_note_result_consumed`) : commande, code de sortie, sortie (8 000 caractères au plus, tête et queue avec le nombre omis), durée. L'hôte le range dans `details.bashRuns` ; le pont le passe sous `_meta` `_yus/bashRuns`.
+  - Un `bash()` dont la cellule ne lit pas le résultat n'a pas d'enregistrement (son résultat arrive par l'avis `[bash-done]`).
+- **Diffs** : `details.diffs` porte en plus `oldStr`, `newStr`, `startLine` ; le pont envoie un contenu ACP `diff` par `edit()` (`path` absolu, `oldText` absent pour un fichier créé, fragments et `_meta` `_yus/startLine`).
+- `details` ne part pas au modèle ; les seuls lecteurs de `details.diffs` côté cœur lisent le chemin (`compaction_utils.rs:47-55`, `masking.rs:319-327`). Preuve attendue : capture `main` contre branche.
+- **Tests Python lancés en local** (runtime, léger) : `uv run --python 3.11 python -m unittest discover -s test -p "test_ya_bash_run.py"` → 4 tests OK ; `-p "test_masked.py"` → 6 tests OK ; suite entière (`uv run --python 3.11 python -m unittest discover -s test`, commande du job `runtime suite` de `ci.yml`) → `Ran 819 tests`, `OK`.
+
+### E12 : annulation en moins de 1 s
+
+- Nouveau test `crates/pa-cli/tests/ya_acp_cancel_e2e.rs` : cellule bloquée sur `await bash('…; sleep 30')` (attente complète par défaut en prompt v2), `session/cancel` : réponse `cancelled` en moins de 1 s, commande disparue en moins de 1 s, suite de la cellule jamais exécutée, tour suivant servi par le même kernel ; cellule bloquée en Python (`time.sleep(60)`) : `cancelled` en moins de 1 s. Durée écrite sur stderr du test.
+- Résultat attendu en CI. S'il est rouge : correctif dans ce ticket s'il reste dans le pont ou le worker (E12).
