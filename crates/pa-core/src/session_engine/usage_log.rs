@@ -258,11 +258,65 @@ struct JournalState {
     last_user_timestamp: Option<i64>,
     /// Start (ms since the epoch) of the previous call, per journaled `kind`.
     last_start_ms: HashMap<String, u64>,
+    /// yusAgent (YA-10, ticket 24): provider, model and effort of the previous agent-loop call.
+    last_main_config: Option<CallConfig>,
+}
+
+/// yusAgent (YA-10, ticket 24): what an agent-loop call was sent with, compared from one call to
+/// the next to journal a model or effort change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CallConfig {
+    provider: String,
+    model: String,
+    effort: Option<String>,
+}
+
+impl CallConfig {
+    /// The `invalidation` entries of a change from `previous` to `self`: a `model_change` when
+    /// the provider or the model differs, a `thinking_level_change` when the effort differs.
+    /// Journaled as events: whether the provider's cache survives an effort change is not
+    /// presumed.
+    fn changes_since(&self, previous: &CallConfig) -> Vec<Value> {
+        let mut changes = Vec::new();
+        if (&self.provider, &self.model) != (&previous.provider, &previous.model) {
+            changes.push(json!({
+                "cause": CAUSE_MODEL_CHANGE,
+                "from": format!("{}/{}", previous.provider, previous.model),
+                "to": format!("{}/{}", self.provider, self.model),
+            }));
+        }
+        if self.effort != previous.effort {
+            changes.push(json!({
+                "cause": CAUSE_THINKING_LEVEL_CHANGE,
+                "from": previous.effort,
+                "to": self.effort,
+            }));
+        }
+        changes
+    }
+}
+
+/// yusAgent (YA-10, ticket 24): `invalidation` cause of an agent-loop call sent to another
+/// provider or model than the previous one.
+pub const CAUSE_MODEL_CHANGE: &str = "model_change";
+/// yusAgent (YA-10, ticket 24): `invalidation` cause of an agent-loop call sent with another
+/// reasoning effort than the previous one.
+pub const CAUSE_THINKING_LEVEL_CHANGE: &str = "thinking_level_change";
+
+/// yusAgent (YA-10, ticket 24): one `invalidation` value from the entries of one call: absent
+/// without entry, the entry itself when there is one (the T05 shape), an array otherwise.
+fn merge_invalidations(mut entries: Vec<Value>) -> Option<Value> {
+    match entries.len() {
+        0 => None,
+        1 => entries.pop(),
+        _ => Some(Value::Array(entries)),
+    }
 }
 
 impl JournalState {
-    /// Continues the counters of an existing journal from its last lines.
-    fn restore(path: &Path) -> Self {
+    /// Continues the counters of an existing journal from its last lines; `main_kind` is the
+    /// `kind` of this journal's agent-loop calls (`main`, or `subagent` in a child session).
+    fn restore(path: &Path, main_kind: &str) -> Self {
         let mut state = Self::default();
         for line in read_tail(path, RESTORE_TAIL_BYTES).lines() {
             // The first line of a partial tail does not parse and is skipped.
@@ -276,6 +330,18 @@ impl JournalState {
                 (entry.get("kind").and_then(Value::as_str), field("startMs"))
             {
                 state.last_start_ms.insert(kind.to_string(), start);
+            }
+            // yusAgent (YA-10, ticket 24): a resumed session compares its next call to the last
+            // one journaled before the restart.
+            if entry.get("kind").and_then(Value::as_str) == Some(main_kind) {
+                let text = |name: &str| entry.get(name).and_then(Value::as_str).map(str::to_string);
+                if let (Some(provider), Some(model)) = (text("provider"), text("model")) {
+                    state.last_main_config = Some(CallConfig {
+                        provider,
+                        model,
+                        effort: text("effort"),
+                    });
+                }
             }
         }
         state
@@ -316,7 +382,7 @@ impl UsageJournal {
     /// A journal at `path`, continuing the counters of the lines already there.
     #[must_use]
     pub fn open(path: PathBuf, session_id: String, parent_session_id: Option<String>) -> Self {
-        let state = JournalState::restore(&path);
+        let state = JournalState::restore(&path, CallKind::Main.name(parent_session_id.is_some()));
         Self {
             path,
             session_id,
@@ -336,6 +402,36 @@ impl UsageJournal {
     #[must_use]
     pub fn take_invalidation(&self) -> Option<Value> {
         lock(&self.pending_invalidation).take()
+    }
+
+    /// yusAgent (YA-10, ticket 24): the `invalidation` of the agent-loop call starting now with
+    /// `provider`, `model` and `effort`: the model or effort change since the previous agent-loop
+    /// call (in this process or, after a restart, the last one journaled), then the
+    /// invalidation noted by the context transform ([`Self::note_invalidation`]). The first call
+    /// of a session has no previous call: no change.
+    #[must_use]
+    pub fn take_main_invalidation(
+        &self,
+        provider: &str,
+        model: &str,
+        effort: Option<&str>,
+    ) -> Option<Value> {
+        let current = CallConfig {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            effort: effort.map(str::to_string),
+        };
+        let mut entries = {
+            let mut state = lock(&self.state);
+            let changes = state
+                .last_main_config
+                .as_ref()
+                .map_or_else(Vec::new, |previous| current.changes_since(previous));
+            state.last_main_config = Some(current);
+            changes
+        };
+        entries.extend(self.take_invalidation());
+        merge_invalidations(entries)
     }
 
     #[must_use]
@@ -692,8 +788,10 @@ pub fn instrument_stream_fn(
                     pa_agent::types::Message::User(user) => Some(user.timestamp),
                     _ => None,
                 });
+            let effort = wire_name(&options.reasoning);
+            // yusAgent (YA-10, ticket 24): a model or effort change rides the call as well.
             let invalidation = if kind == CallKind::Main {
-                journal.take_invalidation()
+                journal.take_main_invalidation(&model.provider, &model.id, effort.as_deref())
             } else {
                 None
             };
@@ -705,7 +803,7 @@ pub fn instrument_stream_fn(
                     model.api.as_str(),
                     model.id.as_str(),
                 ),
-                wire_name(&options.reasoning),
+                effort,
                 user_timestamp,
             );
             probe.invalidation = invalidation;

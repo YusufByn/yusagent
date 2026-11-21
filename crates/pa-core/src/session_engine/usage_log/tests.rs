@@ -595,3 +595,113 @@ async fn a_noted_invalidation_rides_the_next_main_call_only() {
     assert_eq!(entries[1]["invalidation"], noted);
     assert!(entries[2].get("invalidation").is_none());
 }
+
+// yusAgent (YA-10, ticket 24): a model or effort change journals an invalidation on the next
+// agent-loop call, with its cause.
+
+/// One agent-loop call (or a side call) through the wrapper, on `model_id` with `effort`.
+async fn ya_call(
+    journal: &Arc<UsageJournal>,
+    kind: CallKind,
+    model_id: &str,
+    effort: pa_agent::types::ThinkingLevel,
+) {
+    let stream_fn = instrument_stream_fn(
+        Some(Arc::clone(journal)),
+        kind,
+        scripted(json!({}), pa_agent::types::Usage::zero()),
+    );
+    let mut model = agent_model();
+    model.id = model_id.to_string();
+    let options = StreamRequestOptions {
+        reasoning: effort,
+        ..StreamRequestOptions::default()
+    };
+    let mut stream = stream_fn(model, LlmContext::default(), options)
+        .await
+        .unwrap();
+    while stream.next_event().await.is_some() {}
+}
+
+#[tokio::test]
+async fn a_model_or_effort_change_rides_the_next_main_call() {
+    use pa_agent::types::ThinkingLevel::{High, Medium};
+    let dir = tempfile::tempdir().unwrap();
+    let journal = Arc::new(journal(dir.path(), None));
+    ya_call(&journal, CallKind::Main, "claude-test", Medium).await;
+    ya_call(&journal, CallKind::Main, "claude-test", Medium).await;
+    // A side call on another model is not an agent-loop change.
+    ya_call(
+        &journal,
+        CallKind::Other("side_question"),
+        "claude-side",
+        Medium,
+    )
+    .await;
+    ya_call(&journal, CallKind::Main, "claude-next", Medium).await;
+    ya_call(&journal, CallKind::Main, "claude-next", High).await;
+    ya_call(&journal, CallKind::Main, "claude-next", High).await;
+    let entries = lines(journal.path());
+    assert_eq!(entries.len(), 6);
+    assert!(
+        entries[0].get("invalidation").is_none(),
+        "first call: no previous call"
+    );
+    assert!(
+        entries[1].get("invalidation").is_none(),
+        "same model and effort"
+    );
+    assert!(entries[2].get("invalidation").is_none(), "side call");
+    assert_eq!(
+        entries[3]["invalidation"],
+        json!({
+            "cause": "model_change",
+            "from": "anthropic/claude-test",
+            "to": "anthropic/claude-next",
+        })
+    );
+    assert_eq!(
+        entries[4]["invalidation"],
+        json!({ "cause": "thinking_level_change", "from": "medium", "to": "high" })
+    );
+    assert!(entries[5].get("invalidation").is_none(), "journaled once");
+}
+
+#[tokio::test]
+async fn simultaneous_causes_are_journaled_together() {
+    use pa_agent::types::ThinkingLevel::{High, Medium};
+    let dir = tempfile::tempdir().unwrap();
+    let journal = Arc::new(journal(dir.path(), None));
+    ya_call(&journal, CallKind::Main, "claude-test", Medium).await;
+    let masking = json!({"cause": "masking", "turn": 3, "frontier": 1, "masked": 1});
+    journal.note_invalidation(masking.clone());
+    ya_call(&journal, CallKind::Main, "claude-next", High).await;
+    let entries = lines(journal.path());
+    assert_eq!(
+        entries[1]["invalidation"],
+        json!([
+            { "cause": "model_change", "from": "anthropic/claude-test", "to": "anthropic/claude-next" },
+            { "cause": "thinking_level_change", "from": "medium", "to": "high" },
+            masking,
+        ])
+    );
+}
+
+#[tokio::test]
+async fn a_resumed_session_compares_with_the_last_journaled_main_call() {
+    use pa_agent::types::ThinkingLevel::Medium;
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let first = Arc::new(journal(dir.path(), None));
+        ya_call(&first, CallKind::Main, "claude-test", Medium).await;
+    }
+    let reopened = Arc::new(journal(dir.path(), None));
+    ya_call(&reopened, CallKind::Main, "claude-test", Medium).await;
+    ya_call(&reopened, CallKind::Main, "claude-next", Medium).await;
+    let entries = lines(reopened.path());
+    assert!(
+        entries[1].get("invalidation").is_none(),
+        "same model across the restart"
+    );
+    assert_eq!(entries[2]["invalidation"]["cause"], json!("model_change"));
+}
