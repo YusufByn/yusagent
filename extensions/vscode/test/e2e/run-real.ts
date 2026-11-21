@@ -1,6 +1,9 @@
 // yusAgent (YA-10, ticket 24, PR 3, étape 6) : lanceur e2e contre le vrai binaire (CI seulement :
 // télécharge VS Code, règle 8). Binaire `YUSAGENT_E2E_BINARY` (debug, construit dans le job),
-// provider factice (`PRIME_AGENT_FAUX_SCRIPT`, aucun modèle, règle 6), kernel `PRIME_AGENT_KERNEL_PYTHON`.
+// provider factice (`PRIME_AGENT_FAUX_SCRIPT`, aucun modèle, règle 6), venv du kernel préparé dans le
+// job (`PRIME_AGENT_KERNEL_VENV` : le binaire y installe ses skills Python, dont `edit` ; avec
+// `PRIME_AGENT_KERNEL_PYTHON`, Python « de l'appelant », il les désactive,
+// `crates/pa-core/src/kernel/bootstrap/mod.rs:184-214`).
 // Isolement : HOME et TMPDIR temporaires pour l'hôte d'extension, donc pour le binaire qu'il lance
 // (dossier `~/.yusagent`, socket du démon sous `$TMPDIR/yusagent-<uid>/`).
 
@@ -16,8 +19,8 @@ const VSCODE_VERSION = process.env.VSCODE_TEST_VERSION ?? "1.146.0";
 
 async function main(): Promise<void> {
   const binary = process.env.YUSAGENT_E2E_BINARY;
-  const kernelPython = process.env.PRIME_AGENT_KERNEL_PYTHON;
-  if (!binary || !kernelPython) throw new Error("YUSAGENT_E2E_BINARY et PRIME_AGENT_KERNEL_PYTHON sont requis");
+  const kernelVenv = process.env.PRIME_AGENT_KERNEL_VENV;
+  if (!binary || !kernelVenv) throw new Error("YUSAGENT_E2E_BINARY et PRIME_AGENT_KERNEL_VENV sont requis");
   const base = realpathSync(mkdtempSync(join(tmpdir(), "yusagent-e2e-real-")));
   const workspace = join(base, "workspace");
   const userData = join(base, "user-data");
@@ -37,7 +40,7 @@ async function main(): Promise<void> {
       HOME: home,
       TMPDIR: temp,
       PRIME_AGENT_FAUX_SCRIPT: join(home, "worker-script.json"),
-      PRIME_AGENT_KERNEL_PYTHON: kernelPython,
+      PRIME_AGENT_KERNEL_VENV: kernelVenv,
       // Un démon orphelin sort vite (comme `crates/pa-cli/tests/acp_mode_e2e.rs`).
       PRIME_AGENT_INTERNAL_WORKER_SUPERVISOR_LOST_EXIT_MS: "15000",
       YUSAGENT_EXTENSION_TEST: "1",

@@ -152,6 +152,8 @@ jobs:
         env:
           YUSAGENT_E2E_BINARY: ${{ github.workspace }}/target/debug/prime-agent
         run: |
-          export PRIME_AGENT_KERNEL_PYTHON="${HOME}/.yusagent/kernel-venv/bin/python"
-          test -x "${PRIME_AGENT_KERNEL_PYTHON}"
+          # Le venv, pas son Python : avec PRIME_AGENT_KERNEL_PYTHON, les skills Python (dont edit)
+          # seraient désactivés (run 44918462066 : « No module named 'edit' »).
+          export PRIME_AGENT_KERNEL_VENV="${HOME}/.yusagent/kernel-venv"
+          test -x "${PRIME_AGENT_KERNEL_VENV}/bin/python"
           xvfb-run -a npm run test:e2e:real
