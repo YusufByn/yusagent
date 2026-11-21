@@ -1,6 +1,6 @@
 // yusAgent (YA-10, ticket 24, PR 3) : la boîte de permission, au-dessus de la saisie (C2).
 // - Elle montre la première demande ouverte de la conversation (`yaPermissions` de l'hôte), le code
-//   de sa cellule (pris dans la carte de l'appel, `pending`), dépliable, caractères invisibles
+//   de sa cellule (pris dans la carte de l'appel, `pending` ; pas de boîte avant elle), dépliable, caractères invisibles
 //   échappés (`visibleCode`), et une action par option du pont (« Allow », « Reject » ; D3).
 // - Touches (C3, `src/ya/permission-keys.ts`) : `y`, `n`, `Esc`, seulement quand la boîte a le
 //   focus, après 1 s de calme ; jamais Entrée. La boîte ne prend pas le focus d'elle-même : un texte
@@ -40,11 +40,14 @@ type Tool = Extract<TurnItem, { kind: "tool" }>;
 export function PermissionBox({ chat }: { chat: ChatState }) {
   const open = useAsks();
   const ask = open[0];
-  if (!ask) return null;
-  return <Box key={ask.toolCallId} ask={ask} count={open.length} tool={findTool(chat, ask.toolCallId)} />;
+  // Pas de boîte sans le code : la demande arrive tout de suite, la carte de son appel avec le lot
+  // suivant du chat (`src/chat.ts`, `FLUSH_MS`). La fenêtre de calme part à l'affichage.
+  const tool = ask && findTool(chat, ask.toolCallId);
+  if (!ask || !tool) return null;
+  return <Box key={ask.toolCallId} ask={ask} count={open.length} tool={tool} />;
 }
 
-function Box({ ask, count, tool }: { ask: PermissionAsk; count: number; tool: Tool | undefined }) {
+function Box({ ask, count, tool }: { ask: PermissionAsk; count: number; tool: Tool }) {
   // Une fenêtre de calme par demande : `key` du composant = l'appel visé.
   const keys = useRef(new QuietKeys(Date.now()));
   const [unfolded, setUnfolded] = useState(false);
@@ -59,13 +62,13 @@ function Box({ ask, count, tool }: { ask: PermissionAsk; count: number; tool: To
     event.stopPropagation();
     answer(result === "allow" ? allow?.optionId : deny?.optionId);
   };
-  const code = visibleCode(tool?.input ?? "");
+  const code = visibleCode(tool.input);
   const lines = code.split("\n");
   const folded = !unfolded && lines.length > FOLDED_LINES;
   return (
     <div className="ya-permission" role="group" aria-label="Permission request" tabIndex={0} onKeyDown={onKeyDown}>
       <div className="ya-permission-head">
-        <strong>Allow this {tool?.title === "Python cell" || !tool ? "Python cell" : tool.title} to run?</strong>
+        <strong>Allow this {tool.title} to run?</strong>
         {count > 1 && <span className="call-meta">1 of {count}</span>}
       </div>
       <pre className="call-code ya-permission-code">{folded ? lines.slice(0, FOLDED_LINES).join("\n") : code}</pre>

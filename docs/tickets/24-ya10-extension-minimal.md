@@ -1054,4 +1054,8 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - message `permission` du bouton → `reject-once`.
   - Le test « Arrêter » vérifie la boîte puis sa fermeture.
 - **CI de l'étape 2** (rappel, run `ya-extension` 44912572991 sur `46919eabc`) : succès, e2e 7/7, `.vsix` 194 460 octets.
+- **CI, premier push de l'étape 3** (`355f9411a`, `ya-extension` 44913960665) : **échec**, e2e 4/8.
+  - Premier échec : la boîte affichée sans le code (`boîte : print('accord')`). Cause : la demande d'accord part tout de suite vers la webview, alors que la carte de son appel arrive avec le lot suivant du chat (`src/chat.ts:1063-1066`, `FLUSH_MS`). La boîte s'affichait donc un instant avec un code vide. **Défaut du produit** : on ne doit pas pouvoir autoriser une cellule sans voir son code. Correction : pas de boîte tant que la carte de l'appel n'est pas arrivée ; la fenêtre de calme part à l'affichage.
+  - Les trois autres échecs (« cartes », « authentification », « plantage », délais dépassés) en découlent : le test arrêté laissait la demande ouverte et le tour sans fin. Le test de la boîte annule maintenant le tour en cours s'il échoue.
+  - `.vsix` 195 886 octets.
 - **Non fait, à trancher** : les boutons sont actifs dès l'ouverture. La fenêtre de calme ne vise que les touches (C3), donc un clic au moment où la boîte apparaît compte.
