@@ -221,7 +221,7 @@ pub enum ToolCallContent {
     /// yusAgent (YA-10, ticket 24): one `edit()` of the cell (ACP `diff`): `path` absolute,
     /// `oldText` absent for a new file. The texts are the edit's replaced and new fragments,
     /// not whole files; `_meta` carries `_yus/startLine`, the 1-based line where the fragment
-    /// starts.
+    /// starts, and `_yus/startColumn` (ticket 26), its 0-based column on that line in code points.
     #[serde(rename = "diff")]
     Diff {
         path: String,
