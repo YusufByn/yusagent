@@ -5,7 +5,8 @@
 //   le message suivant (fichier de session), Stop pendant une cellule ;
 // - session 2 (auto) : bandeau, cellule exécutée sans demande ; tour lancé par l'agent (avis
 //   `[bash-done]`, ticket 25) ouvert par `turnStart` et fermé sur `responseBoundary`, message suivant
-//   envoyé tout de suite ;
+//   envoyé tout de suite ; suppression pure par `edit()` après un emoji, puis « Revert » (ticket 26 :
+//   colonne du pont), fichier revenu octet pour octet ;
 // - fin : démon arrêté, aucun processus restant.
 
 import assert from "node:assert/strict";
@@ -218,6 +219,9 @@ const tests: [string, () => Promise<void>][] = [
         { text: "lancé" },
         { text: "réveil fini" },
         { text: "suivant fini" },
+        // Ticket 26 : une suppression pure en milieu de ligne, après un emoji.
+        cell("call-cut", "print(await edit('emoji.txt', 'un ', ''))"),
+        { text: "coupe fini" },
       ]);
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await waitFor(async () => {
@@ -248,6 +252,28 @@ const tests: [string, () => Promise<void>][] = [
       await shows("suivant fini", "réponse au message suivant", 15_000);
       await idle();
       console.log(`message suivant : réponse en ${Date.now() - started} ms`);
+    },
+  ],
+  [
+    "suppression pure après un emoji (ticket 26) : Revert par un clic, fichier revenu octet pour octet",
+    async () => {
+      // Sans la colonne du pont, cet « avant » serait ambigu (pas de « Revert ») ; une colonne prise
+      // en unités UTF-16 au lieu de points de code remettrait `un ` au mauvais endroit.
+      const file = join(workspace, "emoji.txt");
+      const original = Buffer.from("garder\n😀 un deux\nfin\n", "utf8");
+      writeFileSync(file, original);
+      await post({ type: "send", text: "coupe", images: [] });
+      await idle();
+      await shows("coupe fini", "réponse après la coupe");
+      assert.equal(readFileSync(file, "utf8"), "garder\n😀 deux\nfin\n");
+      await waitFor(async () => (await tool("call-cut"))?.edits?.[0].revert?.state === "ready", "Revert possible", SLOW);
+      const edit = (await tool("call-cut"))!.edits![0];
+      assert.deepEqual([edit.shown, edit.created], ["emoji.txt", false]);
+      // Par des clics d'utilisateur, sur l'élément réellement sous le pointeur : le travail replié,
+      // la carte, puis « Revert ».
+      await userClicks("Worked", "Edited", "Revert");
+      await waitFor(async () => (await tool("call-cut"))?.edits?.[0].revert?.state === "reverted", "Revert fait");
+      assert.ok(readFileSync(file).equals(original), "emoji.txt revenu octet pour octet");
     },
   ],
 ];

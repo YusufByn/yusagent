@@ -1,0 +1,1 @@
+- yusAgent: each ACP `diff` content of an `edit()` now carries `_yus/startColumn` (the 0-based column of the edit on its start line, in code points) next to `_yus/startLine`. The VS Code extension uses it to find each edit's place exactly, so "Revert" also works for a pure deletion, including after an emoji on the line. Nothing changes in what the model sees.

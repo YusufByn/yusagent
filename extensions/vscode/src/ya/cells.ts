@@ -3,7 +3,8 @@
 // - `_meta` `_yus/bashRuns` : chaque `bash()` lu par la cellule (commande, code de sortie, sortie
 //   plafonnée à 8 000 caractères par le kernel, durée) ;
 // - un contenu ACP `diff` par `edit()` : `path` absolu, `oldText` absent pour un fichier créé,
-//   fragments `old_str`/`new_str`, `_meta` `_yus/startLine` ;
+//   fragments `old_str`/`new_str`, `_meta` `_yus/startLine` et `_yus/startColumn` (ticket 26 : colonne
+//   sur cette ligne, à partir de 0, en points de code ; absente d'un binaire ou d'une session plus ancienne) ;
 // - une cellule refusée : `failed` avec le texte fixe de `DENIED_TEXT`
 //   (`crates/pa-core/src/session_engine/ya_permissions.rs:63-64`).
 
@@ -15,11 +16,12 @@ import type { BashRun, Cell, DiffLine, FileEdit } from "../protocol";
 
 export const BASH_RUNS_META = "_yus/bashRuns";
 export const START_LINE_META = "_yus/startLine";
+export const START_COLUMN_META = "_yus/startColumn";
 /** Début du texte fixe d'une cellule refusée (ou annulée pendant sa demande d'accord). */
 export const DENIED_PREFIX = "[permission-denied]";
 
 /** Un fragment d'`edit()`, tel que le pont l'envoie (les étapes suivantes en reconstruisent l'avant). */
-export type Fragment = { path: string; oldText?: string; newText: string; startLine?: number };
+export type Fragment = { path: string; oldText?: string; newText: string; startLine?: number; startColumn?: number };
 
 /** Les `bash()` de la cellule, ou undefined (aucun, ou forme inattendue). */
 export function bashRuns(meta: unknown): BashRun[] | undefined {
@@ -44,12 +46,15 @@ export function fragments(content: unknown): Fragment[] {
   const out: Fragment[] = [];
   for (const block of content as Record<string, unknown>[]) {
     if (block?.type !== "diff" || typeof block.path !== "string" || typeof block.newText !== "string") continue;
-    const line = (block._meta as Record<string, unknown> | undefined)?.[START_LINE_META];
+    const meta = block._meta as Record<string, unknown> | undefined;
+    const line = meta?.[START_LINE_META];
+    const column = meta?.[START_COLUMN_META];
     out.push({
       path: block.path,
       ...(typeof block.oldText === "string" && { oldText: block.oldText }),
       newText: block.newText,
       ...(typeof line === "number" && { startLine: line }),
+      ...(Number.isInteger(column) && (column as number) >= 0 && { startColumn: column as number }),
     });
   }
   return out;

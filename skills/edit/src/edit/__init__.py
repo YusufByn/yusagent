@@ -58,7 +58,7 @@ async def _edit(path: str, old_str: str, new_str: str) -> str:
             raise FileNotFoundError(f"{path} not found; to create it, pass old_str=''")
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(new_str, encoding="utf-8")
-        _emit_diff(str(resolved), "", new_str, 1)
+        _emit_diff(str(resolved), "", new_str, 1, 0)
         return f"Created {resolved}\n{_numbered(new_str, 1, new_str.count(chr(10)) + 1)}"
     if not old_str:
         raise ValueError(
@@ -76,10 +76,12 @@ async def _edit(path: str, old_str: str, new_str: str) -> str:
         )
     match_index = content.index(old_str)
     start_line = content.count("\n", 0, match_index) + 1
+    # yusAgent (YA-10, ticket 26): column of `old_str` on its line, 0-based, in code points.
+    start_column = match_index - (content.rfind("\n", 0, match_index) + 1)
     updated = content.replace(old_str, new_str, 1)
     filepath.write_text(updated, encoding="utf-8")
     resolved_path = str(resolved)
-    _emit_diff(resolved_path, old_str, new_str, start_line)
+    _emit_diff(resolved_path, old_str, new_str, start_line, start_column)
     end_line = start_line + new_str.count("\n")
     return f"Edited {resolved_path}\n{_numbered(updated, start_line, end_line)}"
 
@@ -115,7 +117,7 @@ def _numbered(text: str, first: int, last: int) -> str:
 _DIFF_DISPLAY_MIME = "application/vnd.prime-agent.diff+json"
 
 
-def _emit_diff(path: str, old_str: str, new_str: str, start_line: int) -> None:
+def _emit_diff(path: str, old_str: str, new_str: str, start_line: int, start_column: int) -> None:
     """Stream a diff to the host as a display event; best-effort outside the kernel."""
     try:
         from rlm import emit
@@ -127,6 +129,7 @@ def _emit_diff(path: str, old_str: str, new_str: str, start_line: int) -> None:
                     "old_str": old_str,
                     "new_str": new_str,
                     "start_line": start_line,
+                    "start_column": start_column,
                 },
                 "text/plain": f"Edited {path}",
             }

@@ -1263,6 +1263,24 @@ Constat, décisions (T1 à T4, E1 à E8) et mesure : `docs/tickets/25-tours-lanc
 
 Limites connues (ticket 25, §7) : un tour lancé par un autre client pendant qu'un prompt de l'extension attend son début serait pris pour ce prompt (`chat.ts`, `begin`) ; un avis arrivé après un Stop, file vide au Stop, attend le prompt suivant (E8) ; les genres `heartbeat`, `goal` et `quota` sont lus sur le premier message du tour, non mesurés sur le binaire.
 
+## Colonne de départ dans le contenu `diff` du pont ACP (YA-10, ticket 26)
+
+Constat, décisions (K1 a, K2 a, K3 a) et mesures : `docs/tickets/26-colonne-diff.md`. Données d'affichage seulement : le texte `text/plain` du MIME (`Edited <path>`) et le retour d'`edit()` ne changent pas, `details` ne part pas au provider ; rien de ce qui part au modèle ne change (contrôle par capture `main` contre la branche, `compare.py --all`).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `skills/edit/src/edit/__init__.py` | modif. (skill upstream déjà modifié, 6 lignes) | `start_column` dans le MIME diff : colonne d'`old_str` sur sa ligne, à partir de 0, en points de code (`match_index` moins le début de la ligne) ; création : 0. | YA-10 (ticket 26) |
+| `crates/pa-core/src/kernel/shared.rs` | modif. (fichier upstream, 4 lignes) | Champ `start_column: Option<u64>` de `KernelDiffDisplay`, lu par `parse_diff_display` quand il est là (un kernel plus ancien ne l'envoie pas). | YA-10 (ticket 26) |
+| `crates/pa-core/src/tools/ipython.rs` | modif. (fichier upstream, environ 6 lignes) | `startColumn` dans `details.diffs`, seulement quand le kernel l'a envoyé (pas de valeur par défaut). Les `details` ne sont pas envoyés au modèle. | YA-10 (ticket 26) |
+| `crates/pa-core/src/tools/golden_replay.rs` | modif. (test upstream) | `start_column` dans le `KernelDiffDisplay` du test `ipython_details_carry_the_cell_edit_diffs` et dans son assertion exacte ; test `diff_display_reads_the_start_column_when_present`. | YA-10 (ticket 26) |
+| `crates/pa-daemon/src/acp/types.rs` | modif. (fichier upstream, commentaire) | Doc du contenu `diff` : `_yus/startColumn`. | YA-10 (ticket 26) |
+| `crates/pa-daemon/src/acp/ya_cell_display.rs` | modif. (fichier du fork) | `_meta._yus/startColumn` à côté de `_yus/startLine`, chacun quand il est là ; test avec et sans colonne. | YA-10 (ticket 26) |
+| `prime-agent-runtime/test/test_ya_edit.py` | modif. (test du fork) | Colonne émise : suppression pure après un emoji (colonne 4 en points de code), remplacement, création. | YA-10 (ticket 26) |
+| `extensions/vscode/src/ya/cells.ts`, `src/ya/diffs.ts` | modif. (fichiers du fork) | Lecture de `_yus/startColumn` ; avec la colonne, une seule place essayée, convertie en unités UTF-16 sur la ligne, toujours vérifiée (`new_str` à cette place, `old_str` une seule fois) ; sans colonne, C14 (a). | YA-10 (ticket 26) |
+| `extensions/vscode/test/unit/cells.test.ts`, `test/unit/diffs.test.ts`, `test/fake-agent/fake-agent.mjs`, `test/e2e/suite-real.ts` | modif. | Tests : emoji avant une suppression pure, colonne fausse sur un remplacement refusée, colonne invalide ignorée ; l'agent factice envoie `_yus/startColumn` ; e2e vrai binaire : suppression pure après un emoji, « Revert » par un clic, fichier revenu octet pour octet. | YA-10 (ticket 26) |
+| `bench/tools/capture/compare_frames.py`, `display_check.py`, `README.md` | modif. (outils du fork) | `--against <main>` et `--expect <chemin>` : deux binaires trame par trame, écarts attendus listés, échec si l'un manque ; `display_check.py` vérifie `startColumn`. | YA-10 (ticket 26) |
+| `.changes/ya-26-colonne-diff.md` | nouveau | Fragment de changelog. | YA-10 (ticket 26) |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

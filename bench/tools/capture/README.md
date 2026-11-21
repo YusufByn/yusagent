@@ -124,7 +124,7 @@ Pour chaque cas commun, la première requête : prompt système, chaque paramèt
 
 ## Données d'affichage des cellules (ticket 24)
 
-`python3 -I bench/tools/capture/display_check.py <run>`, sur un run d'un binaire qui porte le ticket 24 (pas lancé par `run.py` : un binaire antérieur n'a pas ces champs). Dans le fichier de session de `display-anthropic` : une seule entrée `details.bashRuns`, celle du `bash()` lu ; deux `details.diffs` avec `oldStr`, `newStr` et `startLine` ; dernière requête = avis `[bash-done]` de la commande non lue. Dernière ligne `CONFORME` ou `NON CONFORME` (code de sortie 1), rapport `display-report.md`.
+`python3 -I bench/tools/capture/display_check.py <run>`, sur un run d'un binaire qui porte le ticket 24 (pas lancé par `run.py` : un binaire antérieur n'a pas ces champs). Dans le fichier de session de `display-anthropic` : une seule entrée `details.bashRuns`, celle du `bash()` lu ; deux `details.diffs` avec `oldStr`, `newStr` et `startLine`, et `startColumn` 0 sur chacun (ticket 26 ; NON CONFORME sur un binaire antérieur) ; dernière requête = avis `[bash-done]` de la commande non lue. Dernière ligne `CONFORME` ou `NON CONFORME` (code de sortie 1), rapport `display-report.md`.
 
 ## Trames ACP pour l'agent factice de l'extension (ticket 24, PR 3)
 
@@ -132,10 +132,15 @@ Pour chaque cas commun, la première requête : prompt système, chaque paramèt
 
 `compare_frames.py <dossier>` lance l'agent factice de l'extension (`extensions/vscode/test/fake-agent/fake-agent.mjs`, ou `--fake`) avec les prompts `carte`, `refus` et `lent`, puis compare ses trames à celles du binaire, champ par champ : chemins de clés et types, valeurs constantes, fin d'un tour de prompt. Dernière ligne `écarts : N` (code de sortie 1 si N > 0).
 
+Ticket 26 : `compare_frames.py <dossier branche> --against <dossier main> [--expect <chemin de clé>]...` compare deux binaires, sans l'agent factice : même suite de trames (sens, méthode, genre de mise à jour), puis, trame par trame, mêmes chemins de clés et types et mêmes valeurs des champs constants. Un `--expect` est un chemin de clé ajouté par la branche, attendu : il n'est pas compté, mais son absence est un écart (la preuve serait vide). Les valeurs trouvées à ce chemin sont affichées. Dernière ligne `écarts : N`.
+
 ```sh
 export DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short
 python3 -I bench/tools/capture/acp_frames.py --binary <yusagent> --out <dossier neuf>
 python3 -I bench/tools/capture/compare_frames.py <dossier neuf>
+# Ticket 26 : seules les trames `diff` changent entre main et la branche.
+python3 -I bench/tools/capture/compare_frames.py <dossier branche> --against <dossier main> \
+  --expect '.params.update.content[]._meta._yus/startColumn'
 ```
 
 ## Tours de réveil et Stop pendant un réveil (ticket 25)
