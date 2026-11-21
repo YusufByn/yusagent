@@ -109,6 +109,19 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
+    "cartes (PR 3, étape 2) : édition réelle, code de sortie, cellule refusée",
+    async () => {
+      await post({ type: "send", text: "carte", images: [] });
+      await idle();
+      // En-tête : type et fichiers d'après les vrais diffs, lignes changées, premier `bash()` en erreur.
+      const shown = await shows("Edited", "carte d'une cellule qui édite");
+      for (const part of ["a.py", "neuf.txt", "+3", "−1", "exit 1"]) assert.ok(shown.includes(part), `en-tête : ${part}`);
+      await post({ type: "send", text: "refus", images: [] });
+      await idle();
+      await shows("Declined", "carte d'une cellule refusée");
+    },
+  ],
+  [
     "sélecteurs : modèle affiché, set_config_option seulement sur un changement",
     async () => {
       await shows("Model A", "modèle affiché");

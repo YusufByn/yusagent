@@ -75,7 +75,8 @@ const update = (body) =>
       sessionId: SESSION_ID,
       update: {
         ...body,
-        _meta: { "ai.primeintellect.prime-agent": { promptTurnId, eventSequence: ++eventSequence, phase: "event" } },
+        // `_yus/*` du corps (PR 3 : `_yus/bashRuns`) gardé à côté de l'espace du pont.
+        _meta: { ...body._meta, "ai.primeintellect.prime-agent": { promptTurnId, eventSequence: ++eventSequence, phase: "event" } },
       },
     },
   });
@@ -141,6 +142,39 @@ async function onPrompt(id, text) {
       chunk("retirée");
       return respond(id, { stopReason: "end_turn" });
     }
+    // PR 3 : une cellule finie avec les données de carte du pont (`ya_cell_display.rs`) : deux
+    // `bash()` lus (le second sorti en 1), un `edit()` d'un fichier existant, un fichier créé.
+    case "carte": {
+      const code = "r = await bash('echo lu')\nawait bash('false')\nawait edit('src/a.py', 'x = 1\\n', 'x = 2\\n')\nawait edit('neuf.txt', '', 'un\\ndeux\\n')";
+      update({ sessionUpdate: "tool_call", toolCallId: "call-c", title: "Python cell", kind: "execute", status: "in_progress", rawInput: { code } });
+      update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-c",
+        status: "completed",
+        content: [
+          { type: "content", content: { type: "text", text: "Edited a.py" } },
+          { type: "diff", path: `${process.cwd()}/src/a.py`, oldText: "x = 1\n", newText: "x = 2\n", _meta: { "_yus/startLine": 3 } },
+          { type: "diff", path: `${process.cwd()}/neuf.txt`, newText: "un\ndeux\n", _meta: { "_yus/startLine": 1 } },
+        ],
+        _meta: {
+          "_yus/bashRuns": [
+            { command: "echo lu", exitCode: 0, output: "lu\n", durationMs: 6 },
+            { command: "false", exitCode: 1, output: "", durationMs: 3 },
+          ],
+        },
+      });
+      return respond(id, { stopReason: "end_turn" });
+    }
+    // PR 3 : une cellule refusée, comme le pont la termine (`failed`, texte fixe), puis fin du tour (D7).
+    case "refus":
+      update({ sessionUpdate: "tool_call", toolCallId: "call-r", title: "Python cell", kind: "execute", status: "pending", rawInput: { code: "await bash('rm -rf build')" } });
+      update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-r",
+        status: "failed",
+        content: [{ type: "content", content: { type: "text", text: "[permission-denied] The user declined this cell; nothing was executed." } }],
+      });
+      return respond(id, { stopReason: "end_turn" });
     case "auth":
       return fail(id, -32603, "Internal error", {
         details: "No API key found for capture",

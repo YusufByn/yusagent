@@ -24,6 +24,7 @@ import type { Session } from "./session";
 import { authText, isAuthFailure } from "./ya/auth";
 import { features } from "./ya/methods";
 import { yaMeta } from "./ya/meta";
+import { bashRuns, cellOfEdits, cellOfRuns, fileEdits, fragments, isDeclined } from "./ya/cells";
 
 /** How long streamed text gathers before the panel gets it. */
 const FLUSH_MS = 40;
@@ -918,7 +919,11 @@ export class Chat {
     if (update.status === "completed") tool.status = "done";
     if (update.status === "failed") tool.status = "failed";
     if (Array.isArray(update.content)) {
-      const text = update.content.map((block) => block.content?.text ?? "").join("\n");
+      // yusAgent (PR 3) : les contenus `diff` (un par `edit()`) ne sont pas de la sortie.
+      const text = update.content
+        .filter((block) => (block as { type?: string }).type !== "diff")
+        .map((block) => block.content?.text ?? "")
+        .join("\n");
       const cut = text.length - OUTPUT_LIMIT;
       tool.output = cut > 0 ? `${text.slice(0, OUTPUT_LIMIT)}\n… ${cut} more characters` : text;
       if (cut > 0) this.wholeOutput.set(tool, text);
@@ -929,9 +934,28 @@ export class Chat {
       tool.error = meta.ipython.errorEname;
       tool.status = "failed";
     }
+    this.yaCellData(tool, update);
     if (tool.cell && !this.loading) this.log.info(`chat: turn ${turn.id} cell ${tool.status}${tool.error ? `: ${tool.error}` : ""}`);
     this.dirtyItem(turn, at);
     this.changed();
+  }
+
+  /**
+   * yusAgent (PR 3, C5 à C7) : `bash()` réels, vrais diffs et refus, lus des données du pont
+   * (`src/ya/cells.ts`) ; la carte les montre à la place de ce que le code laissait deviner.
+   */
+  private yaCellData(tool: Tool, update: Update): void {
+    const runs = bashRuns(update._meta);
+    if (runs) {
+      tool.runs = runs;
+      if (tool.title === "Python cell") tool.cell = cellOfRuns(tool.cell, runs);
+    }
+    const edits = fileEdits(fragments(update.content), this.files.cwd);
+    if (edits.length > 0) {
+      tool.edits = edits;
+      if (tool.title === "Python cell") tool.cell = cellOfEdits(tool.cell, edits);
+    }
+    if (tool.status === "failed" && isDeclined(tool.output)) tool.declined = true;
   }
 
   /** Reasoning opening and closing, a command's answer, a cut answer, a compaction, a goal's change; the end of a turn the agent started or replayed. */

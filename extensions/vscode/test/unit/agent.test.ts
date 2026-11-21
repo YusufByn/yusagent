@@ -124,6 +124,37 @@ test("$/cancel_request du pont : réponse cancelled, le tour continue", async ()
   assert.deepEqual(texts(h, "text"), ["retirée"]);
 });
 
+test("cartes (PR 3, étape 2) : bash() réels, vrais diffs, sortie sans les blocs diff ; refus", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("carte", []);
+  await idle(h);
+  const tool = items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-c")!;
+  assert.equal(tool.status, "done");
+  assert.equal(tool.output, "Edited a.py", "les contenus diff ne s'ajoutent pas à la sortie");
+  assert.deepEqual(tool.runs, [
+    { command: "echo lu", exitCode: 0, output: "lu\n", durationMs: 6 },
+    { command: "false", exitCode: 1, output: "", durationMs: 3 },
+  ]);
+  assert.deepEqual(
+    tool.edits?.map(({ path, shown, created, lines }) => ({ path, shown, created, lines })),
+    [
+      { path: join(h.cwd, "src/a.py"), shown: "src/a.py", created: false, lines: [["-", "x = 1"], ["+", "x = 2"]] },
+      { path: join(h.cwd, "neuf.txt"), shown: "neuf.txt", created: true, lines: [["+", "un"], ["+", "deux"]] },
+    ],
+  );
+  assert.equal(tool.cell?.kind, "edit");
+  assert.deepEqual(tool.cell?.files, ["src/a.py", "neuf.txt"]);
+  assert.deepEqual([tool.cell?.diff?.added, tool.cell?.diff?.removed], [3, 1]);
+  assert.equal(tool.declined, undefined);
+
+  shown(h).chat.send("refus", []);
+  await idle(h);
+  const declined = items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-r")!;
+  assert.equal(declined.status, "failed");
+  assert.equal(declined.declined, true);
+});
+
 test("authentification : message fixe avec le chemin du binaire, deux formes", async () => {
   const h = open();
   await ready(h);

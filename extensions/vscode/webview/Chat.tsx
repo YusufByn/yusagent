@@ -28,6 +28,7 @@ import {
   IconVariables,
 } from "./icons";
 import { ThinkingOrb } from "./ya-orb"; // yusAgent : bouchon du paquet thinking-orbs
+import { BashRuns, exitMeta, FileEdits } from "./ya-cells"; // yusAgent (PR 3)
 import { Markdown } from "./Markdown";
 import { MentionText } from "./mentions";
 import { count } from "./Usage";
@@ -746,7 +747,7 @@ const KINDS: Record<Cell["kind"], { Icon: typeof IconPython; live: string; done:
 };
 
 /** yusAgent (PR 3, défaut 3) : une cellule en attente d'accord, et une qui n'a jamais tourné. */
-const YA_VERBS = { waiting: "Awaiting permission", unrun: "Not run" };
+const YA_VERBS = { waiting: "Awaiting permission", unrun: "Not run", declined: "Declined" };
 
 /**
  * A cell the agent runs, as one line on the page: what it does, the files
@@ -761,15 +762,19 @@ function ToolCall({ tool, live, waiting }: { tool: Tool; live: boolean; waiting:
   const failed = tool.status === "failed";
   // yusAgent (PR 3, défaut 3) : en attente d'accord, sans état en cours ; jamais lancée si le tour
   // a fini sans que son appel sorte de `pending`.
-  const state = waiting ? "waiting" : live ? "live" : tool.status === "pending" ? "unrun" : failed ? "failed" : "done";
+  // yusAgent (PR 3, C5) : refusée, distincte d'une cellule en erreur.
+  const state = waiting ? "waiting" : live ? "live" : tool.status === "pending" ? "unrun" : tool.declined ? "declined" : failed ? "failed" : "done";
   const { Icon, ...kindVerbs } = KINDS[tool.cell?.kind ?? "python"];
   const verbs = { ...kindVerbs, ...YA_VERBS };
   const files = tool.cell?.files ?? [];
-  const diff = failed ? undefined : tool.cell?.diff;
+  // yusAgent (PR 3, C7) : les vrais diffs se montrent même si la cellule a échoué après ses `edit()`.
+  const diff = failed && !tool.edits ? undefined : tool.cell?.diff;
   const meta: ReactNode[] = [];
   if (state === "done" || state === "failed") {
     if (diff) meta.push(<Changed tools={[tool]} />);
     if (failed && tool.error) meta.push(tool.error);
+    const exit = exitMeta(tool.runs); // yusAgent (PR 3, C6)
+    if (exit) meta.push(exit);
     if (tool.images) meta.push(`${tool.images} image${tool.images > 1 ? "s" : ""} loaded`);
   }
   return (
@@ -840,7 +845,10 @@ function CallSheet({ tool, files, diff, failed }: { tool: Tool; files: string[];
           <pre className="call-code">{highlight(tool.input)}</pre>
           <OpenTab id={tool.id} part="input" />
         </div>
-        {diff && (
+        {/* yusAgent (PR 3, C6, C7) : `bash()` réels, puis vrais diffs par fichier à la place du diff deviné. */}
+        {tool.runs && <BashRuns runs={tool.runs} />}
+        {tool.edits && <FileEdits edits={tool.edits} />}
+        {diff && !tool.edits && (
           <div className="is-sunk">
             <div className="call-diff-head">
               {files.map((path) => (
@@ -920,6 +928,8 @@ function Changed({ tools }: { tools: Tool[] }) {
 
 /** Whether a cell shows the lines it changed: it did not fail, and its code says which. */
 function changes(tool: Tool): boolean {
+  // yusAgent (PR 3, C7) : une modification faite (vrai diff) compte, même si la cellule a échoué ensuite.
+  if (tool.edits?.length) return true;
   return tool.status !== "failed" && tool.cell?.diff !== undefined;
 }
 

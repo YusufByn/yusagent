@@ -259,6 +259,15 @@ export type Cell = {
   diff?: { lines: DiffLine[]; added: number; removed: number };
 };
 
+/** yusAgent (PR 3, C6) : un `bash()` lu par la cellule (`_meta` `_yus/bashRuns` du pont). */
+export type BashRun = { command: string; exitCode: number | null; output: string; durationMs?: number };
+
+/**
+ * yusAgent (PR 3, C7) : les `edit()` d'une cellule sur un fichier (contenus ACP `diff` du pont) :
+ * chemin absolu, chemin montré, fichier créé, lignes des fragments et leur compte.
+ */
+export type FileEdit = { path: string; shown: string; created: boolean; lines: DiffLine[]; added: number; removed: number };
+
 /** A line of a diff: kept, removed or added; `…` stands for lines left out. */
 export type DiffLine = [" " | "-" | "+" | "…", string];
 
@@ -289,6 +298,12 @@ export type TurnItem =
       images?: number;
       /** The exception a failed cell raised: `AssertionError`. */
       error?: string;
+      /** yusAgent (PR 3, C6) : les `bash()` lus par la cellule. */
+      runs?: BashRun[];
+      /** yusAgent (PR 3, C7) : ses vrais diffs, un par fichier. */
+      edits?: FileEdit[];
+      /** yusAgent (PR 3, C5) : refusée (texte fixe `[permission-denied]`), pas en erreur. */
+      declined?: boolean;
     }
   /**
    * The conversation compacted into a summary: on its own (`auto`), or by
