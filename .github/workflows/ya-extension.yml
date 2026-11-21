@@ -4,18 +4,14 @@
 # Check non requis par la protection de main pendant la PR 2 (E13) ; tant qu'il ne l'est pas,
 # le merge d'une PR qui touche extensions/vscode/ exige ce workflow vert sur la tête, vérifié
 # à la main (ticket 24).
+# Déclenché par les PR (pas par les push : chaque push d'une PR lançait deux runs) ; sur une tête
+# qui ne touche pas extensions/vscode/, le lancer à la main : gh workflow run ya-extension.yml --ref <branche>.
 # Aucun secret, aucun modèle (règle 6) : seul github.token (lecture) est utilisé.
 name: ya-extension
 
 on:
   workflow_dispatch: {}
   pull_request:
-    paths:
-      - ".github/workflows/ya-extension.yml"
-      - "extensions/vscode/**"
-  push:
-    branches:
-      - "ya-*"
     paths:
       - ".github/workflows/ya-extension.yml"
       - "extensions/vscode/**"
