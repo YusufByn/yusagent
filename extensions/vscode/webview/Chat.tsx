@@ -27,7 +27,7 @@ import {
   IconTerminal,
   IconVariables,
 } from "./icons";
-import { ThinkingOrb } from "thinking-orbs";
+import { ThinkingOrb } from "./ya-orb"; // yusAgent : bouchon du paquet thinking-orbs
 import { Markdown } from "./Markdown";
 import { MentionText } from "./mentions";
 import { count } from "./Usage";

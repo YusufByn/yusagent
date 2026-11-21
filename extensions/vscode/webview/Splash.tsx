@@ -1,36 +1,12 @@
-import { useEffect, useState } from "react";
+// yusAgent (YA-10, ticket 24, PR I) : bouchon visuel. Le fichier d'Unharnessed du même nom
+// (157dcdc1d, vscode/webview/) dessine ce composant ; le visuel de yusAgent viendra plus tard.
+// Mêmes exports, rien de dessiné.
+// Pas d'écran d'accueil : le panneau passe tout de suite à l'écran principal.
+
+import { useEffect } from "react";
 import type { AgentState } from "../src/protocol";
-import { AsciiField } from "./AsciiField";
-import { reducedMotion } from "./motion";
-import { Wordmark } from "./Wordmark";
 
-const MIN_MS = 1800;
-const MIN_MS_REDUCED = 600;
-/** Matches the `.splash.is-leaving` transition. */
-const LEAVE_MS = 450;
-
-/** Opening screen: stays at least MIN_MS, and until the agent has answered. */
-export function Splash({ agent, onDone }: { agent: AgentState; onDone: () => void }) {
-  const [minElapsed, setMinElapsed] = useState(false);
-  const leaving = minElapsed && agent.kind !== "starting";
-
-  useEffect(() => {
-    const timer = setTimeout(() => setMinElapsed(true), reducedMotion() ? MIN_MS_REDUCED : MIN_MS);
-    return () => clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!leaving) return;
-    const timer = setTimeout(onDone, LEAVE_MS);
-    return () => clearTimeout(timer);
-  }, [leaving, onDone]);
-
-  return (
-    <div className={leaving ? "splash is-leaving" : "splash"}>
-      <AsciiField />
-      <div className="splash-center">
-        <Wordmark animated />
-      </div>
-    </div>
-  );
+export function Splash({ onDone }: { agent: AgentState; onDone: () => void }) {
+  useEffect(() => onDone(), [onDone]);
+  return null;
 }
