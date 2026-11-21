@@ -207,6 +207,19 @@ const tests: [string, () => Promise<void>][] = [
   ],
 ];
 
+/** Après un échec : chaque cellule de la conversation (statut, sortie, fichiers), et le workspace. */
+async function diagnose(): Promise<void> {
+  for (const entry of (await state()).chat.entries) {
+    if (entry.kind !== "turn") continue;
+    for (const item of entry.items) {
+      if (item.kind !== "tool") continue;
+      const edits = item.edits?.map((edit) => ({ path: edit.path, revert: edit.revert }));
+      console.log(`  cellule ${item.id} ${item.status} : ${JSON.stringify({ output: item.output?.slice(0, 600), edits })}`);
+    }
+  }
+  console.log(`  workspace : ${JSON.stringify(readdirSync(workspace))} ; cwd du binaire : ${process.env.YUSAGENT_E2E_WORKSPACE}`);
+}
+
 export async function run(): Promise<void> {
   const failures: string[] = [];
   for (const [name, body] of tests) {
@@ -217,6 +230,7 @@ export async function run(): Promise<void> {
     } catch (error) {
       failures.push(name);
       console.log(`not ok - ${name}\n${error instanceof Error ? error.stack : String(error)}`);
+      await diagnose();
       if ((await state()).chat.busy) {
         await post({ type: "cancel" });
         await idle(15_000).catch(() => undefined);
