@@ -798,3 +798,7 @@ Branche `ya-24-extension-import`, depuis `main` à `8830b763d`. Extension seule 
 - Fin des tours lancés par l'agent (avis `[bash-done]`) déduite de `responseBoundary` : non exercée contre le vrai binaire (e2e du vrai binaire en PR 3).
 - Commandes `/…` du panneau : seule `/new` (du panneau) ; notre pont n'envoie pas `available_commands_update`.
 
+### CI de la PR I (PR #74)
+
+- **Premier push** (`2e6c6c6d0`) : `ya-extension` 44905938956 : étape « changements » `run=true` ; tsc, lint, tests unitaires et `.vsix` verts (**192 430 octets**, limite 5 000 000 hors binaire) ; e2e **5 sur 6** : vue et CSP (`default-src 'none'; style-src 'self' https://*.vscode-cdn.net; …; script-src 'nonce-…'`), trames du fixture, Stop et ligne d'attente, `/login`, plantage et « Restart », bandeau D4. Seul échec, dans le test : « sélecteurs », `0 !== 1`. Leur `setOption` affiche la nouvelle valeur avant d'envoyer la requête, et le test lisait le journal de l'agent factice avant qu'il ait reçu la trame. Le test attend maintenant la trame, puis vérifie qu'il n'y en a qu'une.
+
