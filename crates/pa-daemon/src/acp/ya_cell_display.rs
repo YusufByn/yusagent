@@ -3,7 +3,8 @@
 //! - each `edit()` of the cell as an ACP `diff` content (`details.diffs`, with the raw `oldStr`,
 //!   `newStr` and `startLine` the host adds for this purpose; `crates/pa-core/src/tools/ipython.rs`):
 //!   `path` absolute (the `edit` skill resolves it), `oldText` absent for a created file, the texts
-//!   being the edit's fragments and `_meta` `_yus/startLine` their first line;
+//!   being the edit's fragments and `_meta` `_yus/startLine` their first line, `_yus/startColumn`
+//!   their 0-based column on it in code points (ticket 26; absent when the kernel did not send it);
 //! - the `bash()` results the cell read (`details.bashRuns`: command, exit code, output capped at
 //!   8 000 characters by the kernel, duration) under the update's `_meta`, key [`BASH_RUNS_META`].
 //!
@@ -18,6 +19,8 @@ use super::types::ToolCallContent;
 pub const BASH_RUNS_META: &str = "_yus/bashRuns";
 /// The `_meta` key of a diff content's first line.
 pub const START_LINE_META: &str = "_yus/startLine";
+/// The `_meta` key of a diff content's 0-based column on its first line, in code points (ticket 26).
+pub const START_COLUMN_META: &str = "_yus/startColumn";
 
 fn details(result: Option<&Value>) -> Option<&Value> {
     result?.get("details")
@@ -43,13 +46,24 @@ pub fn diff_contents(result: Option<&Value>) -> Vec<ToolCallContent> {
                 path: path.to_string(),
                 old_text: (!old.is_empty()).then(|| old.to_string()),
                 new_text: new.to_string(),
-                meta: diff
-                    .get("startLine")
-                    .and_then(Value::as_u64)
-                    .map(|line| json!({ START_LINE_META: line })),
+                meta: position_meta(diff),
             })
         })
         .collect()
+}
+
+/// The `_meta` of a diff content: its first line and column, each when present.
+fn position_meta(diff: &Value) -> Option<Value> {
+    let mut meta = serde_json::Map::new();
+    for (key, meta_key) in [
+        ("startLine", START_LINE_META),
+        ("startColumn", START_COLUMN_META),
+    ] {
+        if let Some(value) = diff.get(key).and_then(Value::as_u64) {
+            meta.insert(meta_key.to_string(), json!(value));
+        }
+    }
+    (!meta.is_empty()).then_some(Value::Object(meta))
 }
 
 /// The `bash()` results of the cell, for the update's `_meta`.
@@ -85,8 +99,12 @@ mod tests {
     #[test]
     fn edits_become_acp_diffs() {
         let cell = result(&json!({ "diffs": [
-            { "path": "/w/a.py", "diff": "-3 x\n+3 y", "oldStr": "x", "newStr": "y", "startLine": 3 },
-            { "path": "/w/new.py", "diff": "+1 z", "oldStr": "", "newStr": "z", "startLine": 1 },
+            { "path": "/w/a.py", "diff": "-3 x\n+3 y", "oldStr": "x", "newStr": "y", "startLine": 3,
+              "startColumn": 4 },
+            { "path": "/w/new.py", "diff": "+1 z", "oldStr": "", "newStr": "z", "startLine": 1,
+              "startColumn": 0 },
+            // A session written before ticket 26: no column.
+            { "path": "/w/b.py", "diff": "-2 c\n+2", "oldStr": "c", "newStr": "", "startLine": 2 },
             { "path": "/w/old.py", "diff": "-1 a\n+1 b" },
         ] }));
         let contents = diff_contents(Some(&cell));
@@ -94,9 +112,11 @@ mod tests {
             serde_json::to_value(&contents).unwrap(),
             json!([
                 { "type": "diff", "path": "/w/a.py", "oldText": "x", "newText": "y",
-                  "_meta": { "_yus/startLine": 3 } },
+                  "_meta": { "_yus/startLine": 3, "_yus/startColumn": 4 } },
                 { "type": "diff", "path": "/w/new.py", "newText": "z",
-                  "_meta": { "_yus/startLine": 1 } },
+                  "_meta": { "_yus/startLine": 1, "_yus/startColumn": 0 } },
+                { "type": "diff", "path": "/w/b.py", "oldText": "c", "newText": "",
+                  "_meta": { "_yus/startLine": 2 } },
             ])
         );
         assert!(diff_contents(Some(&json!({ "content": [] }))).is_empty());

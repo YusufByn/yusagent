@@ -58,13 +58,19 @@ test("fragments et fileEdits : un bloc par fichier, chemin relatif au dossier, f
   const content = [
     { type: "content", content: { type: "text", text: "out" } },
     { type: "diff", path: "/w/src/a.py", oldText: "x\n", newText: "y\n", _meta: { "_yus/startLine": 3 } },
-    { type: "diff", path: "/w/neuf.txt", newText: "z\n", _meta: { "_yus/startLine": 1 } },
-    { type: "diff", path: "/w/src/a.py", oldText: "p\n", newText: "q\n", _meta: { "_yus/startLine": 9 } },
+    { type: "diff", path: "/w/neuf.txt", newText: "z\n", _meta: { "_yus/startLine": 1, "_yus/startColumn": 0 } },
+    { type: "diff", path: "/w/src/a.py", oldText: "p\n", newText: "q\n", _meta: { "_yus/startLine": 9, "_yus/startColumn": 4 } },
     { type: "diff", path: "/ailleurs/b.py", oldText: "1", newText: "2" },
   ];
   const all = fragments(content);
   assert.equal(all.length, 4);
-  assert.deepEqual(all[1], { path: "/w/neuf.txt", newText: "z\n", startLine: 1 });
+  assert.deepEqual(all[1], { path: "/w/neuf.txt", newText: "z\n", startLine: 1, startColumn: 0 });
+  // Ticket 26 : la colonne quand le pont l'envoie, rien sinon (binaire ou session plus ancienne).
+  assert.equal(all[2].startColumn, 4);
+  assert.equal("startColumn" in all[0], false);
+  assert.equal("startColumn" in all[3], false);
+  const odd = fragments([{ type: "diff", path: "/w/a", newText: "", _meta: { "_yus/startLine": 1, "_yus/startColumn": -1 } }]);
+  assert.equal("startColumn" in odd[0], false, "colonne invalide ignorée");
   const edits = fileEdits(all, "/w");
   assert.deepEqual(
     edits.map(({ shown, created, added, removed }) => ({ shown, created, added, removed })),
