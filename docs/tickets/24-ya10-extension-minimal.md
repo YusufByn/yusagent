@@ -467,7 +467,7 @@ Branche `ya-24-extension-pr2`, depuis `main` à `1b96bb645`. Périmètre : secti
 12. Sans dossier ouvert : pas de lancement, « Ouvrez un dossier » ; plusieurs dossiers : le premier, nom dans l'en-tête.
 
 - **Cas `acp-extension` de la capture (preuve 2)** : dans cette PR 2 (annoncé avant le code).
-- **Merge et check non requis** : `ya-extension.yml` n'est pas requis par la protection de `main` pendant la PR 2 (E13). **Le merge d'une PR qui touche `extensions/vscode/` exige ce workflow vert sur la tête, vérifié à la main** (`gh run list --workflow ya-extension.yml --branch <branche>` : run `success` dont le `headSha` est le dernier commit poussé ; si ce commit ne touche pas `extensions/vscode/`, le workflow ne part pas seul : `gh workflow run ya-extension.yml --ref <branche>`), jusqu'à ce qu'il devienne requis (PR 3).
+- **Merge et check non requis** : `ya-extension.yml` n'est pas requis par la protection de `main` pendant la PR 2 (E13). **Le merge d'une PR qui touche `extensions/vscode/` exige ce workflow vert sur la tête, vérifié à la main** (`gh run list --workflow ya-extension.yml --branch <branche>` : run `success` dont le `headSha` est le dernier commit poussé ; le filtre de chemins porte sur tout le diff de la PR, donc chaque push d'une PR qui touche `extensions/vscode/` le relance), jusqu'à ce qu'il devienne requis (PR 3).
 
 ### Ce qui est fait
 
@@ -515,4 +515,33 @@ Branche `ya-24-extension-pr2`, depuis `main` à `1b96bb645`. Périmètre : secti
   2. « Webview is disposed » : à la fermeture, le dernier état (`closed`) était envoyé à la webview fermée ; plus rien n'est envoyé après la fermeture ;
   3. sonde sans délai : un message posté avant le chargement de la webview est perdu, le test « binaire absent » attendait sans fin ; la sonde rend `undefined` au bout de 1 s, et le test attend la webview montée.
 - Déclencheur `push` retiré de `ya-extension.yml` (deux runs par push d'une PR).
+- **Deuxième push** (`f9d4ba83d`) : `ya-extension` 44900324582, e2e **8 sur 9** ; « Webview is disposed » disparu du journal (0 occurrence). Seul échec : le test de la CSP, encore. Dans VS Code 1.146, `webview.cspSource` vaut deux sources, `'self'` et `https://*.vscode-cdn.net`, et le test n'en attendait qu'une. Il accepte maintenant exactement ces deux sources, les mêmes pour styles, polices et images.
+
+### Procédure de contrôle (Yusuf)
+
+Le `.vsix` vient de l'artefact du dernier run `ya-extension` vert de la branche. `install-vsix.sh` est d'abord lancé par Claude Code sur cet artefact, dans un dossier d'extensions isolé (règle 13) ; sa sortie est dans le compte rendu de la PR.
+
+```sh
+git fetch origin && git checkout ya-24-extension-pr2 && git pull --ff-only
+RUN=$(gh run list --repo YusufByn/yusagent --workflow ya-extension.yml --branch ya-24-extension-pr2 --status success --limit 1 --json databaseId --jq '.[0].databaseId'); echo "$RUN"
+extensions/vscode/scripts/install-vsix.sh "$RUN"
+# Facultatif : client de l'extension contre le vrai binaire, sans modèle joignable.
+(cd extensions/vscode && npm ci --ignore-scripts --no-audit --no-fund && npm run compile-tests && node scripts/real-binary-check.mjs ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent)
+```
+
+Attendu :
+- `install-vsix.sh` : taille < 5 000 000 octets, 8 fichiers (`[Content_Types].xml`, `extension.vsixmanifest`, `extension/package.json`, `extension/readme.md`, `extension/LICENSE.txt`, `extension/dist/extension.js`, `webview.js`, `webview.css`), puis `yusagent.yusagent@0.1.0` et `installé` ;
+- `real-binary-check.mjs` : `CONFORME`, `exit 0`.
+
+Dans VS Code, puis « Developer: Reload Window » :
+
+1. **Réglage** : `yusagent.binaryPath` = chemin absolu de ton `yusagent` (réglages utilisateur ; le défaut `yusagent` le cherche dans le `PATH` de VS Code).
+2. **Ouvrir un dossier jetable** (l'agent y travaille), puis « yusAgent: Nouveau chat » (palette de commandes). Attendu : onglet « yusAgent » à côté de l'éditeur ; en-tête avec le nom du dossier et « prêt » ; sous la saisie, les sélecteurs modèle et effort ; pas de bandeau en manuel.
+3. **Prompt texte** (appel réel à ton modèle, fait par toi) : « Réponds seulement : bonjour ». Attendu : le message de l'utilisateur, puis la réponse qui s'écrit au fil de l'eau ; « Envoyer » devient « Arrêter » pendant le tour, puis revient. Sans identifiants : « Authentification requise : lancez `<chemin du binaire>` dans un terminal, puis /login. »
+4. **Arrêter** : « Écris un texte de 1 000 mots sur les phares », puis « Arrêter » pendant l'écriture. Attendu : l'écriture s'arrête, « Arrêté. », le bouton redevient « Envoyer ». Avec un outil en mode manuel, la ligne « Demande d'autorisation en attente (boîte en PR 3) : Arrêter pour annuler » apparaît, et « Arrêter » la retire (appel « annulé »).
+5. **Sélecteurs** : changer l'effort, puis le modèle. Attendu : la valeur reste affichée (réponse de l'agent) ; sélecteurs grisés pendant un tour ; rien n'est envoyé à l'ouverture.
+6. **Bandeau en auto** : `"permissions": "auto"` dans `~/.yusagent/settings.json` (réglage global), puis un nouveau chat. Attendu : bandeau en haut, « ⚠ Mode auto sans sandbox : les cellules s'exécutent sans demander, avec vos droits. », impossible à fermer. Ne rien envoyer dans ce chat (les cellules tourneraient sans demander), puis remettre `"manual"`.
+7. **Binaire absent** : `yusagent.binaryPath` = `/nulle-part/yusagent`, nouveau chat. Attendu : « Binaire yusAgent introuvable : /nulle-part/yusagent… » avec « Ouvrir le réglage yusagent.binaryPath » et « Réessayer ». Remettre le bon chemin.
+
+Désinstaller : `code --uninstall-extension yusagent.yusagent`.
 
