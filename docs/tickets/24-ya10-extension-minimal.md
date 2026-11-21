@@ -1264,3 +1264,12 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - **Run 44927543897** (`e75b856d2`, tests sans correctif) : test unitaire de l'en-tête en échec (`'ls' !== 'false'`) ; e2e réel 4/5, ligne du `bash()` sans « exit 0 · N ms ». Mais les clics passaient : le premier test cliquait « Worked » d'abord, ce qui lève `inert`, et ne reproduisait pas le geste de Yusuf. D'où `visibleInert` et le clic direct sur la carte.
   - **Run 44927865325** (`791845b60`, en-tête et séparateurs corrigés, pas le CSS) : « aucun bloc inerte affiché » en échec dans l'e2e factice (8/9) et l'e2e réel (4/5) ; test « cartes » vert (`exit 1 · 3 ms`).
   - **Run 44928139670** (`46ca827af`, avec le CSS) : e2e réel **5/5** ; e2e factice 6/9, trois défauts de mes tests. Ils lisaient des cartes dans un travail replié, désormais masqué : « Declined » (boîte), « exit 1 » (cartes). Et une course : le second clic « Revert » partait avant que la webview remplace le premier bouton, et le reprenait. Corrigés : « Worked » ouvert par un clic avant de lire, « Reverted » attendu entre les deux clics.
+  - **Run 44928431016** (`a30d12aa5`) : `ya-extension` succès : e2e factice **9/9**, e2e réel **5/5**, aucun processus restant, `.vsix` 199 395 octets. `ci` 44928430902 succès. `gh pr checks 75 --required` : **16 checks requis en succès** (les 14 de `ci`, plus `extension (tsc, lint, tests, vsix, e2e)` et `e2e vrai binaire (build debug, provider factice)`, rendus requis par Yusuf, E13), aucun en skipping. `install-vsix.sh 44928431016` (Claude Code, dossier isolé) : 199 395 octets, sha256 `08c44ba56c89de643731d0d568caebab7ca631e4399d84427e270324539b5e49`, 9 fichiers attendus, `yusagent.yusagent@0.1.0`, `installé`.
+
+### Contrôle de Yusuf sur le run 44928431016 (21/11/2026)
+
+macOS, VS Code, binaire `1b96bb645`, mode manuel. **Points 1 à 10 conformes.**
+- Point 3 : en-tête « Ran false exit 1 » ; lignes `exit` et durée lisibles.
+- Point 6 : « Worked for… » puis carte dépliée, diff ouvert, Revert remet « un », `[user-reverted] essai3.txt` en fin de bulle.
+- Point 7 : « Not reverted: the file changed since this cell (a later edit, or yours). », fichier intact.
+- **Merge** de la PR #75 décidé par Yusuf, après les 16 checks requis verts sur la tête. Pas de build macOS : rien sous `crates/`.
