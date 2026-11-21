@@ -13,6 +13,8 @@ mod wire_events;
 mod ya_cell_display;
 // yusAgent (YA-11, ticket 20): `session/request_permission` and the `permissions` selector.
 mod ya_permissions;
+// yusAgent (YA-10, ticket 25): the start and the end of the turns the bridge did not start.
+mod ya_turns;
 
 use std::path::{Path, PathBuf};
 

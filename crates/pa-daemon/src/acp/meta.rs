@@ -90,6 +90,9 @@ pub struct PrimeAgentSessionMeta {
     pub subagents: Option<Vec<PrimeAgentSubagentMeta>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autonomous: Option<PrimeAgentAutonomousMeta>,
+    /// yusAgent (YA-10, ticket 25): what started the turn, first in it (Unharnessed's names).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_start: Option<super::ya_turns::TurnStartMeta>,
 }
 
 /// A goal's live state, surfaced after `/goal` commands and driver turns.
