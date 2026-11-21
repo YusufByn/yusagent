@@ -160,8 +160,8 @@ function editCell(id, after) {
     status: "completed",
     content: [
       { type: "content", content: { type: "text", text: `Edited ${cwd}/a.txt` } },
-      { type: "diff", path: `${cwd}/a.txt`, oldText: "deux", newText: "DEUX", _meta: { "_yus/startLine": 2 } },
-      { type: "diff", path: `${cwd}/neuf.txt`, newText: "nouveau\n", _meta: { "_yus/startLine": 1 } },
+      { type: "diff", path: `${cwd}/a.txt`, oldText: "deux", newText: "DEUX", _meta: { "_yus/startLine": 2, "_yus/startColumn": 0 } },
+      { type: "diff", path: `${cwd}/neuf.txt`, newText: "nouveau\n", _meta: { "_yus/startLine": 1, "_yus/startColumn": 0 } },
     ],
     prime: { ipython: { diffCount: 2 } },
   });
@@ -216,8 +216,8 @@ async function onPrompt(id, text) {
         status: "completed",
         content: [
           { type: "content", content: { type: "text", text: "Edited a.py" } },
-          { type: "diff", path: `${process.cwd()}/src/a.py`, oldText: "x = 1\n", newText: "x = 2\n", _meta: { "_yus/startLine": 3 } },
-          { type: "diff", path: `${process.cwd()}/neuf.txt`, newText: "un\ndeux\n", _meta: { "_yus/startLine": 1 } },
+          { type: "diff", path: `${process.cwd()}/src/a.py`, oldText: "x = 1\n", newText: "x = 2\n", _meta: { "_yus/startLine": 3, "_yus/startColumn": 0 } },
+          { type: "diff", path: `${process.cwd()}/neuf.txt`, newText: "un\ndeux\n", _meta: { "_yus/startLine": 1, "_yus/startColumn": 0 } },
         ],
         _meta: {
           "_yus/bashRuns": [

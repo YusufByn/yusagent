@@ -10,12 +10,26 @@ import type { DiffFiles } from "../../src/ya/diff-files";
 import { undo } from "../../src/ya/diffs";
 import { Reverts } from "../../src/ya/reverts";
 
-/** Ce que fait `edit()` (`skills/edit/src/edit/__init__.py`) : le fragment et le texte d'après. */
+/**
+ * Ce que fait `edit()` (`skills/edit/src/edit/__init__.py`) : le fragment et le texte d'après. La
+ * colonne (ticket 26) est comptée comme Python la compte : en points de code (`[...texte]`).
+ */
 function edit(content: string, oldStr: string, newStr: string): { after: string; fragment: Fragment } {
   const at = content.indexOf(oldStr);
   assert.ok(at >= 0 && content.indexOf(oldStr, at + 1) < 0, "old_str une seule fois");
-  const startLine = content.slice(0, at).split("\n").length;
-  return { after: content.replace(oldStr, newStr), fragment: { path: "/w/a.py", oldText: oldStr, newText: newStr, startLine } };
+  const before = content.slice(0, at);
+  const startLine = before.split("\n").length;
+  const startColumn = [...before.slice(before.lastIndexOf("\n") + 1)].length;
+  return {
+    after: content.replace(oldStr, newStr),
+    fragment: { path: "/w/a.py", oldText: oldStr, newText: newStr, startLine, startColumn },
+  };
+}
+
+/** Le même fragment sans colonne : un binaire ou une session d'avant le ticket 26. */
+function withoutColumn({ after, fragment }: { after: string; fragment: Fragment }): { after: string; fragment: Fragment } {
+  const { startColumn: _, ...rest } = fragment;
+  return { after, fragment: rest };
 }
 
 test("undo : un fragment, plusieurs fragments du même fichier, défaits du dernier au premier", () => {
@@ -56,29 +70,59 @@ test("undo : edit() puis bash(\"sed -i …\") sur le même fichier (demande de Y
   assert.deepEqual(undo("x\ny\n", [short.fragment]), { ok: false, reason: "the edit's new text is no longer at line 3" });
 });
 
-test("undo : position sur la ligne, suppression pure, ambiguïté (C14 a), ligne absente", () => {
+test("undo sans colonne (C14 a) : position sur la ligne, suppression pure, ambiguïté, ligne absente", () => {
   // `new_str` trois fois sur sa ligne (`ab ab ab`) : trois « avant » possibles, ambigu.
-  const twice = edit("ab ab xy\n", "xy", "ab");
+  const twice = withoutColumn(edit("ab ab xy\n", "xy", "ab"));
   assert.deepEqual(undo(twice.after, [twice.fragment]), { ok: false, reason: "the edit's place on line 1 is ambiguous" });
   // `new_str` présent ailleurs, mais une seule fois sur la ligne annoncée : un seul « avant ».
-  const elsewhere = edit("ab\nxy cd\n", "xy", "ab");
+  const elsewhere = withoutColumn(edit("ab\nxy cd\n", "xy", "ab"));
   assert.deepEqual(undo(elsewhere.after, [elsewhere.fragment]), { ok: true, before: "ab\nxy cd\n" });
   // Suppression pure, même de lignes entières : la colonne n'est pas connue (`garder\nf` + `retirer\n`
-  // + `in` est aussi un « avant » valide) ; ambigu (C14 a ; l'option b, colonne envoyée par le pont,
-  // le lèverait).
-  const removed = edit("garder\nretirer\nfin\n", "retirer\n", "");
+  // + `in` est aussi un « avant » valide) ; ambigu (C14 a ; la colonne du ticket 26 le lève).
+  const removed = withoutColumn(edit("garder\nretirer\nfin\n", "retirer\n", ""));
   assert.deepEqual(undo(removed.after, [removed.fragment]), { ok: false, reason: "the edit's place on line 2 is ambiguous" });
   // Sauf si la ligne d'arrivée est vide : une seule place.
-  const emptyLine = edit("a\nretirer\n", "retirer\n", "");
+  const emptyLine = withoutColumn(edit("a\nretirer\n", "retirer\n", ""));
   assert.deepEqual(undo(emptyLine.after, [emptyLine.fragment]), { ok: true, before: "a\nretirer\n" });
   // Suppression pure en milieu de ligne, plusieurs places possibles : ambigu, pas de « Rejeter ».
-  const middle = edit("f(a, b, c)\n", ", b", "");
+  const middle = withoutColumn(edit("f(a, b, c)\n", ", b", ""));
   assert.deepEqual(undo(middle.after, [middle.fragment]), { ok: false, reason: "the edit's place on line 1 is ambiguous" });
   assert.deepEqual(undo("x\n", [{ path: "/w/a", oldText: "y", newText: "x", startLine: 5 }]), {
     ok: false,
     reason: "the file has no line 5 any more",
   });
   assert.deepEqual(undo("x\n", [{ path: "/w/a", oldText: "y", newText: "x" }]), { ok: false, reason: "the edit has no start line" });
+});
+
+test("undo avec la colonne (ticket 26) : emoji avant une suppression pure, lignes entières, milieu de ligne", () => {
+  // Un emoji avant le texte supprimé : colonne 4 en points de code, 5 en unités UTF-16. Prise telle
+  // quelle comme indice JavaScript, elle donnerait en silence l'« avant » `x 😀retirer  fin`.
+  const before = "garder\nx 😀 retirer fin\n";
+  const emoji = edit(before, "retirer ", "");
+  assert.equal(emoji.fragment.startColumn, 4);
+  assert.deepEqual(undo(emoji.after, [emoji.fragment]), { ok: true, before });
+  // Sans la colonne, la même suppression est ambiguë (C14 a).
+  const blind = withoutColumn(emoji);
+  assert.deepEqual(undo(blind.after, [blind.fragment]), { ok: false, reason: "the edit's place on line 2 is ambiguous" });
+  // Lignes entières, milieu de ligne : une seule place, « Rejeter » possible.
+  const lines = edit("garder\nretirer\nfin\n", "retirer\n", "");
+  assert.deepEqual(undo(lines.after, [lines.fragment]), { ok: true, before: "garder\nretirer\nfin\n" });
+  const middle = edit("f(a, b, c)\n", ", b", "");
+  assert.deepEqual(undo(middle.after, [middle.fragment]), { ok: true, before: "f(a, b, c)\n" });
+  // Plusieurs fragments sur la même ligne, après des emojis, défaits du dernier au premier.
+  const one = edit("😀😀 a b c d\n", "b ", "");
+  const two = edit(one.after, "d", "🎉");
+  const three = edit(two.after, "a ", "");
+  assert.deepEqual(undo(three.after, [one.fragment, two.fragment, three.fragment]), { ok: true, before: "😀😀 a b c d\n" });
+});
+
+test("undo avec la colonne (ticket 26) : colonne fausse sur un remplacement, refus avec la raison", () => {
+  const replaced = edit("a😀 = 1; b = 1\n", "b = 1", "b = 2");
+  assert.deepEqual(undo(replaced.after, [replaced.fragment]), { ok: true, before: "a😀 = 1; b = 1\n" });
+  const shifted = { ...replaced.fragment, startColumn: (replaced.fragment.startColumn as number) + 1 };
+  assert.deepEqual(undo(replaced.after, [shifted]), { ok: false, reason: "the edit's new text is no longer at line 1" });
+  const beyond = { ...replaced.fragment, startColumn: 40 };
+  assert.deepEqual(undo(replaced.after, [beyond]), { ok: false, reason: "line 1 is shorter than the edit's column" });
 });
 
 /** Des fichiers en mémoire, et ce qui leur arrive. */
