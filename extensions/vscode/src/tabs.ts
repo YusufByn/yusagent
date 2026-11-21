@@ -3,7 +3,7 @@
 import * as vscode from "vscode";
 
 export class ToolTabs implements vscode.TextDocumentContentProvider, vscode.Disposable {
-  static readonly scheme = "unharnessed-tool";
+  static readonly scheme = "yusagent-tool"; // yusAgent (PR 3, défaut 1)
   private texts = new Map<string, string>();
   private changes = new vscode.EventEmitter<vscode.Uri>();
   readonly onDidChange = this.changes.event;

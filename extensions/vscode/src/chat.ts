@@ -741,7 +741,8 @@ export class Chat {
           kind: "tool",
           id: update.toolCallId ?? "",
           title: update.title ?? "Tool",
-          status: "running",
+          // yusAgent (PR 3, défaut 3) : en manuel, le pont l'annonce `pending` jusqu'à l'accord.
+          status: update.status === "pending" ? "pending" : "running",
           input: toolInput(update.rawInput),
         };
         if (tool.title === "Python cell") {
@@ -912,6 +913,8 @@ export class Chat {
     const at = turn.items.findIndex((item) => item.kind === "tool" && item.id === update.toolCallId);
     if (at < 0) return;
     const tool = turn.items[at] as Tool;
+    // yusAgent (PR 3, défaut 3) : l'accord donné, la cellule tourne.
+    if (update.status === "in_progress" && tool.status === "pending") tool.status = "running";
     if (update.status === "completed") tool.status = "done";
     if (update.status === "failed") tool.status = "failed";
     if (Array.isArray(update.content)) {

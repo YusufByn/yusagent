@@ -12,6 +12,7 @@ function probe(): Probe {
       disabled: select.disabled,
       options: Array.from(select.options).map((option) => option.text),
     })),
+    input: document.querySelector("textarea.composer-input")?.getAttribute("aria-label") ?? null,
   };
 }
 

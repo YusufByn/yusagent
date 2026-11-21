@@ -135,6 +135,8 @@ async function onPrompt(id, text) {
       send({ method: "$/cancel_request", params: { requestId: request.id } });
       await request.answer;
       update({ sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "in_progress" });
+      // La cellule tourne un moment : l'état `running` de la carte se voit (PR 3, défaut 3).
+      await later(150);
       update({ sessionUpdate: "tool_call_update", toolCallId: "call-3", status: "completed" });
       chunk("retirée");
       return respond(id, { stopReason: "end_turn" });

@@ -57,6 +57,8 @@ const items = (h: Harness): TurnItem[] =>
   shown(h).chat.current.entries.flatMap((entry) => (entry.kind === "turn" ? entry.items : []));
 const texts = (h: Harness, kind: string) =>
   items(h).filter((item) => item.kind === kind).map((item) => ("text" in item ? item.text : ""));
+const toolStatus = (h: Harness, id: string) =>
+  items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === id)?.status;
 const lastTurn = (h: Harness) => shown(h).chat.current.entries.filter((entry) => entry.kind === "turn").at(-1);
 
 test("ouverture puis prompt : exactement les trames du fixture (preuve 1), rien d'autre à l'ouverture", async () => {
@@ -91,8 +93,10 @@ test("Arrêter : session/cancel, puis cancelled à la demande ouverte ; ligne d'
   shown(h).chat.send("lent", []);
   await waitFor(() => shown(h).agent.permissions.waiting === 1, "demande ouverte");
   await waitFor(() => texts(h, "notice").some((text) => text.startsWith("Demande d'autorisation en attente")), "ligne d'attente");
+  assert.equal(toolStatus(h, "call-2"), "pending", "carte en attente d'accord, pas en cours (défaut 3)");
   shown(h).chat.cancel();
   await idle(h);
+  assert.equal(toolStatus(h, "call-2"), "pending", "jamais lancée : la carte n'est pas passée en cours");
   const frames = received(h.dir, lastPid(h));
   const cancel = frames.findIndex((frame) => frame.method === "session/cancel");
   const answer = frames.findIndex((frame) => frame.id === "ya-perm-1");
@@ -106,7 +110,11 @@ test("$/cancel_request du pont : réponse cancelled, le tour continue", async ()
   const h = open();
   await ready(h);
   shown(h).chat.send("retire", []);
+  // Défaut 3 : `pending` à l'annonce, `running` seulement à `in_progress`.
+  await waitFor(() => toolStatus(h, "call-3") === "pending", "carte en attente d'accord");
+  await waitFor(() => toolStatus(h, "call-3") === "running", "carte en cours après in_progress");
   await idle(h);
+  assert.equal(toolStatus(h, "call-3"), "done");
   assert.deepEqual(received(h.dir, lastPid(h)).find((frame) => frame.id === "ya-perm-1"), {
     jsonrpc: "2.0",
     id: "ya-perm-1",

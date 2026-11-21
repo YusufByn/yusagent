@@ -243,6 +243,8 @@ const TurnView = memo(function TurnView({
     writing ||
     (last?.kind === "thought" && last.ms === undefined) ||
     (last?.kind === "tool" && last.status === "running") ||
+    // yusAgent (PR 3, défaut 3) : une cellule en attente d'accord attend l'utilisateur, pas l'agent.
+    (last?.kind === "tool" && last.status === "pending") ||
     (last?.kind === "compaction" && last.state === "running");
   const working = running && !busy;
   // What it did before its answer, then the answer, out of the fold.
@@ -349,7 +351,7 @@ const Item = memo(function Item({ item, running, streaming }: { item: TurnItem; 
     case "thought":
       return <Thought thought={item} live={running && item.ms === undefined} />;
     case "tool":
-      return <ToolCall tool={item} live={running && item.status === "running"} />;
+      return <ToolCall tool={item} live={running && item.status === "running"} waiting={running && item.status === "pending"} />;
     case "compaction":
       return <CompactionMark compaction={item} />;
     case "notice":
@@ -743,23 +745,29 @@ const KINDS: Record<Cell["kind"], { Icon: typeof IconPython; live: string; done:
   python: { Icon: IconPython, live: "Running", done: "Ran", failed: "Failed" },
 };
 
+/** yusAgent (PR 3, défaut 3) : une cellule en attente d'accord, et une qui n'a jamais tourné. */
+const YA_VERBS = { waiting: "Awaiting permission", unrun: "Not run" };
+
 /**
  * A cell the agent runs, as one line on the page: what it does, the files
  * it touches or the command it runs (else its telling line of code), and
  * once it ran, the lines an edit changed or the exception it raised. A
  * click opens its code and what came out of it.
  */
-function ToolCall({ tool, live }: { tool: Tool; live: boolean }) {
+function ToolCall({ tool, live, waiting }: { tool: Tool; live: boolean; waiting: boolean }) {
   const [open, setOpen] = useState(false);
   // Its insides are drawn on the first open, then kept for the fold to close over.
   const [drawn, setDrawn] = useState(false);
   const failed = tool.status === "failed";
-  const state = live ? "live" : failed ? "failed" : "done";
-  const { Icon, ...verbs } = KINDS[tool.cell?.kind ?? "python"];
+  // yusAgent (PR 3, défaut 3) : en attente d'accord, sans état en cours ; jamais lancée si le tour
+  // a fini sans que son appel sorte de `pending`.
+  const state = waiting ? "waiting" : live ? "live" : tool.status === "pending" ? "unrun" : failed ? "failed" : "done";
+  const { Icon, ...kindVerbs } = KINDS[tool.cell?.kind ?? "python"];
+  const verbs = { ...kindVerbs, ...YA_VERBS };
   const files = tool.cell?.files ?? [];
   const diff = failed ? undefined : tool.cell?.diff;
   const meta: ReactNode[] = [];
-  if (!live) {
+  if (state === "done" || state === "failed") {
     if (diff) meta.push(<Changed tools={[tool]} />);
     if (failed && tool.error) meta.push(tool.error);
     if (tool.images) meta.push(`${tool.images} image${tool.images > 1 ? "s" : ""} loaded`);

@@ -182,7 +182,7 @@ export function useSettled(key: string, { drafts, errors }: Actions, done: () =>
 }
 
 /**
- * The agent's global settings (`~/.unharnessed/settings.json`), its MCP
+ * The agent's global settings (`~/.yusagent/settings.json`), its MCP
  * servers, its skills and its instructions per model, a tab each. A change
  * is written at once; the ones the agent reads when it starts wait for a
  * restart, which the screen offers.

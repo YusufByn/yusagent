@@ -83,6 +83,10 @@ const tests: [string, () => Promise<void>][] = [
       const shown = await shows("Bonjour", "texte streamé affiché");
       assert.ok(shown.includes("bonjour"), "message de l'utilisateur affiché");
       assert.ok(!shown.includes("Mode auto sans sandbox"), "pas de bandeau en manuel");
+      // PR 3, défauts 1 et 2 : aucun « Unharnessed » visible ; panneau du kernel masqué (non servi).
+      assert.doesNotMatch(shown, /unharnessed/i);
+      assert.ok(!shown.includes("Running servers") && !shown.includes("REPL variables"), "panneau du kernel masqué");
+      assert.equal((await probe())?.input, "Ask yusAgent");
     },
   ],
   [
@@ -90,6 +94,9 @@ const tests: [string, () => Promise<void>][] = [
     async () => {
       await post({ type: "send", text: "lent", images: [] });
       await shows("Demande d'autorisation en attente", "ligne d'attente");
+      // PR 3, défaut 3 : la carte attend l'accord, elle ne tourne pas.
+      const waiting = await shows("Awaiting permission", "carte en attente d'accord");
+      assert.ok(!waiting.includes("Running"), "pas de « Running » avant l'accord");
       await post({ type: "cancel" });
       await idle();
       const frames = received(control, lastPid());
@@ -98,6 +105,7 @@ const tests: [string, () => Promise<void>][] = [
       assert.ok(cancel >= 0 && answer > cancel, "session/cancel puis la réponse");
       assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-perm-1", result: { outcome: { outcome: "cancelled" } } });
       await shows("Demande d'autorisation fermée.", "ligne fermée");
+      await shows("Not run", "carte jamais lancée après Arrêter");
     },
   ],
   [

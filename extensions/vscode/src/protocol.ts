@@ -142,7 +142,7 @@ export type ConfigChange =
 
 /** The global settings, as `_unharnessed/settings/get` gives them. Keys are the file's dotted paths. */
 export type SettingsView = {
-  /** Each key's value in `~/.unharnessed/settings.json`; `null` when unset. */
+  /** Each key's value in `~/.yusagent/settings.json`; `null` when unset. */
   values: Record<string, unknown>;
   /** What the agent uses for an unset key; `null`: nothing. */
   defaults: Record<string, unknown>;
@@ -275,7 +275,11 @@ export type TurnItem =
       id: string;
       /** `Python cell`, or the tool's name. */
       title: string;
-      status: "running" | "done" | "failed";
+      /**
+       * yusAgent (PR 3, défaut 3) : `pending`, annoncé en attente d'accord (mode manuel,
+       * `crates/pa-daemon/src/acp/ya_permissions.rs`) ; `running` à l'accord (`in_progress`).
+       */
+      status: "pending" | "running" | "done" | "failed";
       /** The cell's code, or the tool's input as JSON. */
       input: string;
       output?: string;
@@ -551,6 +555,8 @@ export type HostMessage =
 export type Probe = {
   text: string;
   selects: { label: string | null; value: string; disabled: boolean; options: string[] }[];
+  /** Le nom de la zone de saisie (`aria-label`), son texte d'invite (PR 3, défaut 1). */
+  input: string | null;
 };
 
 export type WebviewMessage =

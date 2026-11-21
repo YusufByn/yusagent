@@ -53,7 +53,7 @@ import { Popover } from "./Popover";
 import { UsageRing } from "./Usage";
 import { onHostMessage, post } from "./vscode";
 
-const PLACEHOLDER = "Ask Unharnessed";
+const PLACEHOLDER = "Ask yusAgent"; // yusAgent (PR 3, défaut 1)
 
 /** The keys that send a message into the running turn. */
 const NOW_KEYS = /Mac/.test(navigator.userAgent) ? "⌘⏎" : "Ctrl+Enter";
@@ -380,7 +380,8 @@ export function Composer({
   return (
     // The dock: the box, the waiting messages on its top, the kernel's pills over it (laid over the conversation's end).
     <div className="dock">
-      <KernelTray kernel={kernel} />
+      {/* yusAgent (PR 3, défaut 2) : panneau du kernel masqué tant que le pont ne le sert pas. */}
+      {features.kernel && <KernelTray kernel={kernel} />}
       <div
         ref={shell}
         className={dragging ? "composer-shell is-dragging" : "composer-shell"}
@@ -763,7 +764,7 @@ function Attachments({ images, onRemove }: { images: Attachment[]; onRemove: (at
 }
 
 /** What a waiting message's drag carries: its id. */
-const QUEUED = "application/x-unharnessed-queued";
+const QUEUED = "application/x-yusagent-queued"; // yusAgent (PR 3, défaut 1)
 
 /**
  * The messages waiting for the running turn, on top of the box, in the

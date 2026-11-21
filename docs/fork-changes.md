@@ -1218,6 +1218,16 @@ Décisions et résultats : `docs/tickets/24-ya10-extension-minimal.md`, sections
 | `extensions/vscode/scripts/real-binary-check.mjs`, `install-vsix.sh` | modif. | Contrôle sur le vrai binaire avec le code importé ; liste des fichiers du `.vsix`. | YA-10 (ticket 24) |
 | `.github/workflows/ya-extension.yml` | modif. (fichier du fork) | Tourne sur chaque PR ; l'étape « changements » sort vite en succès quand l'extension n'a pas changé (décision de Yusuf du 21/11/2026). | YA-10 (ticket 24) |
 
+## Extension VS Code, PR 3 : cartes, boîte, diffs (YA-10, ticket 24)
+
+Décisions et résultats : `docs/tickets/24-ya10-extension-minimal.md`, sections « PR 3 : constat et plan » et « Décisions de Yusuf sur la PR 3 ». Extension seule : **aucun fichier sous `crates/` ni upstream** ; fixture des trames inchangé (preuve 1).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `extensions/vscode/webview/Composer.tsx`, `src/tabs.ts`, `webview/SettingsSkills.tsx`, `webview/Settings.tsx`, `src/protocol.ts` (commentaire) | modif. (repris d'Unharnessed) | Étape 1, défaut 1 : plus de « Unharnessed » visible (invite « Ask yusAgent », schéma des onglets `yusagent-tool`, type MIME du glisser `application/x-yusagent-queued`, dossiers de skills et de réglages `~/.yusagent`, `.yusagent`). Défaut 2 : `KernelTray` affiché seulement si `features.kernel`. | YA-10 (ticket 24) |
+| `extensions/vscode/src/chat.ts`, `src/protocol.ts`, `webview/Chat.tsx` | modif. (repris d'Unharnessed) | Étape 1, défaut 3 : statut `pending` d'un `tool_call` (« Awaiting permission », pas de « Working »), `running` au `tool_call_update` `in_progress`, « Not run » si le tour finit sans que l'appel sorte de `pending`. | YA-10 (ticket 24) |
+| `extensions/vscode/webview/ya-probe.ts`, `test/` | modif. | Sonde : nom de la zone de saisie ; tests unitaires (`pending` puis `running`, carte jamais lancée après Arrêter) et e2e (aucun « Unharnessed », panneau du kernel masqué, « Awaiting permission », « Not run ») ; l'agent factice laisse la cellule tourner 150 ms après `in_progress`. | YA-10 (ticket 24) |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :
