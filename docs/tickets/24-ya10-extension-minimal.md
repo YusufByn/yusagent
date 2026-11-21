@@ -980,3 +980,13 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
 | C14 | Position ambiguë (pas de colonne) | — | (a) dans la PR 3 : pas de rejet pour ces cas, message. (b) PR Rust à part : `startOffset` dans `edit()`, `details.diffs` et `_meta` (binaire changé, captures `main` contre branche) |
 | C15 | Quand tourne l'e2e vrai binaire | e2e vrai binaire, un VS Code par scénario | sur les changements de `extensions/vscode/`, `crates/pa-daemon/src/acp/`, `prime-agent-runtime/src/rlm/bash.py`, `skills/edit/`. Ou extension seule |
 | C16 | Checks requis (E13) | — | les deux jobs (`extension`, vrai binaire), chacun avec sortie rapide en succès hors de son périmètre |
+
+### Décisions de Yusuf sur la PR 3 (21/11/2026)
+
+- **Comme recommandé** : C1, C2, C4 à C11, C13, C15, C16. **C14 : option (a)** (pas de rejet sur une position ambiguë, avec un message).
+- **C3, clavier** : mêmes touches que le TUI, `y` (autoriser), `n` (refuser), `Esc` (refuser) ; **fenêtre de calme de 1 s** après l'ouverture de la boîte, pendant laquelle les touches ne font rien ; touches actives **seulement quand la boîte a le focus** ; **jamais Entrée**.
+- **C12** : fichier créé rejeté = **mis à la corbeille** (`workspace.fs.delete(uri, { useTrash: true })`).
+- **Diffs, contrôle de chaque fragment** : avant de défaire un fragment, vérifier que `new_str` est présent à la ligne annoncée (`startLine`) ; sinon pas de « Rejeter » pour ce fichier, avec un message (même traitement que C14 a). **Test** : une cellule qui fait `edit()` puis `bash("sed -i …")` sur le même fichier.
+- **Job e2e vrai binaire** : réutiliser le binaire construit par `ci.yml` plutôt qu'un build à part ; sa durée mesurée est donnée avant la demande de rendre les checks requis.
+  - Constat pour l'étape 6 : `ci.yml` construit les binaires debug dans chaque shard (`cargo build --locked --workspace --bins`, `.github/workflows/ci.yml:337-339`) mais ne les publie pas en artefact (ses deux `upload-artifact`, `:396`, `:407`, publient les manifestes et les reçus des contrôles). Le réutiliser demande soit un ajout à `ci.yml` (fichier upstream : publication du binaire du shard 1, et job e2e dans `ci.yml` ou attente croisée depuis `ya-extension`), soit un autre montage. Options et coût exposés à Yusuf au début de l'étape 6, avant tout changement de `ci.yml`.
+- **Ordre** : étape 1 du plan d'abord (défauts).
