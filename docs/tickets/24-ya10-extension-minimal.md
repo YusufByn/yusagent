@@ -759,3 +759,42 @@ Constat pour appliquer la règle :
 - Reprise après un changement de skills ou de MCP : un miss, à journaliser comme invalidation (étape 3).
 - Script de mesure `eof_turn.py` et `lifecycle.py` : jetables, à verser au banc si Yusuf le veut.
 
+## PR I : import de l'extension d'Unharnessed (21/11/2026)
+
+Branche `ya-24-extension-import`, depuis `main` à `8830b763d`. Extension seule : **aucun fichier sous `crates/` ni upstream, préfixe inchangé** (mêmes trames d'ouverture et de prompt, fixture inchangé). Détail des fichiers : `docs/fork-changes.md`, section « Extension VS Code, PR I ».
+
+### Ce qui est fait
+
+- **Import tel quel** (premier commit) : `vscode/src` et `vscode/webview` d'Unharnessed à `157dcdc1d`, sans `styles.css`, médias, polices, `seti.json`, scripts de paquet ni e2e ; notice MIT (`extensions/vscode/LICENSE`, avec les copyrights d'Unharnessed).
+- **Adaptations** (commits suivants), marquées « yusAgent » dans les fichiers repris, le reste dans des modules à part (`src/ya/`, `webview/ya-*`) :
+  - **notre client ACP** derrière l'interface de son `agent.ts` (`request`, `notify`, `onNotification`) ; `initialize` sans `clientInfo`, borné à 30 s ; rien écrit avant le lancement du processus ;
+  - **méthodes non servies par le pont** (`_unharnessed/*`, `session/load`, `session/list`) : rejetées sur place, sans trame ; les entrées correspondantes du panneau sont masquées (fournisseurs, réglages, historique, mentions, images, « Send now » pendant un tour ; le retour en arrière reste inaccessible, notre pont n'envoyant pas `rewindTo`) ;
+  - **`_meta` de notre pont** (`ai.primeintellect.prime-agent`) lu dans la forme d'Unharnessed : début de tour déduit du premier événement de contenu d'un `promptTurnId` inconnu ; fin d'un tour lancé par l'agent sur `responseBoundary`. **Défaut trouvé par le contrôle sur le vrai binaire** : le `config_option_update` d'un changement d'effort porte un `promptTurnId` ; la première version y voyait un tour de l'agent, le chat restait occupé et le prompt attendait en file. Corrigé (seuls les événements de contenu ouvrent un tour), avec un test ;
+  - **gardé de la PR 2** : `yusagent.binaryPath` (portée `machine`), refus sans dossier ouvert, ligne d'attente d'une demande d'accord (« Arrêter » répond `cancelled` après `session/cancel` ; `$/cancel_request` ; sortie de `pending`), bandeau D4 sur `permissions` annoncé par l'agent, message `/login` avec le chemin du binaire (deux formes : `kind: "authentication"` et texte d'identifiant absent), CSP stricte (sans `'unsafe-inline'` ni `data:`) ;
+  - **points 2 à 4** : plantage sans relance automatique (son état « Agent stopped », fin du stderr, « Restart ») ; arrêt du point 1 (fin de stdin, 10 s au plus, SIGKILL ; plus de `session/close` ni de SIGTERM) ; vue dans la barre latérale secondaire (`yusagent.chat`), bouton dans la barre de titre de l'éditeur ;
+  - **Markdown** avec l'import (`react-markdown` 10.1.0, `remark-gfm` 4.0.1) ;
+  - **visuel** : bouchons pour ses fichiers visuels (logos, icônes de fichiers, logo, écran d'accueil, animations, `thinking-orbs`), feuille minimale à nous (structure et couleurs du thème VS Code).
+- **Workflow `ya-extension`** : tourne sur chaque PR ; l'étape « changements » sort vite en succès quand ni `extensions/vscode/` ni le workflow n'ont changé. Il reste non requis jusqu'à la PR 3 (E13) ; la protection de `main` est à changer par Yusuf à ce moment-là.
+
+### Tests et contrôles (Claude Code, en local)
+
+- `cd extensions/vscode && npm run typecheck && npm run lint && npm run test:unit` : types et lint sans erreur ; **25 tests, 25 réussis** : client ACP (8), binaire (5), code repris contre l'agent factice (12) :
+  - trames du fixture à l'ouverture et pour un prompt, avec fournisseurs, réglages et historique branchés comme dans `activate` (aucune trame en plus) ;
+  - méthodes non servies sans trame ; Arrêter et ligne d'attente ; `$/cancel_request` ; `/login` (deux formes) ;
+  - plantage sans relance automatique, puis « Restart » ; arrêt par fin de stdin ;
+  - binaire absent, aucun dossier, version ACP inattendue ; bandeau D4 ; `set_config_option` sur un changement seulement ; lecture du `_meta`.
+- **Contrôle négatif du fixture** : `clientInfo` ajouté à `initialize` → le test des trames échoue (exit 1), aucun processus restant.
+- **Contrôle sur le vrai binaire** (règle 13) : `npm run compile-tests && node scripts/real-binary-check.mjs ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent` (code de l'extension hors VS Code, binaire `main` `1b96bb645` sous `sandbox-exec`, HOME vide, aucun modèle joignable). Pour « manual » et « auto » :
+  - session ouverte ; `permissions` annoncé ; bandeau absent puis affiché ; effort `medium → low` ;
+  - tour en échec avec « Authentification requise : lancez <chemin> dans un terminal, puis /login. » ;
+  - arrêt par fin de stdin en 4 ms et 1 ms ; aucun processus restant.
+
+  **CONFORME**, exit 0. Premier lancement : NON CONFORME, « délai dépassé : fin du tour » (le défaut du `_meta` ci-dessus).
+- **e2e** (`test/e2e/suite.ts`, CI seulement) : 6 tests dans VS Code contre l'agent factice : vue ouverte, CSP, trames du fixture et rien d'autre à l'ouverture, texte streamé affiché ; Stop et ligne d'attente ; modèle affiché et `set_config_option` ; `/login` ; plantage et « Restart » ; bandeau D4 (nouvelle conversation en auto, puis `config_option_update`).
+
+### Points ouverts de la PR I
+
+- Rendu provisoire : la feuille minimale couvre la structure ; menus, info-bulles et pastilles d'Unharnessed restent sans style jusqu'au visuel.
+- Fin des tours lancés par l'agent (avis `[bash-done]`) déduite de `responseBoundary` : non exercée contre le vrai binaire (e2e du vrai binaire en PR 3).
+- Commandes `/…` du panneau : seule `/new` (du panneau) ; notre pont n'envoie pas `available_commands_update`.
+
