@@ -384,4 +384,15 @@ Branche `ya-24-extension`. Pas de build ni de test Rust en local (règle 8) : fo
   - contrôle des chemins sur la branche : `prefix-paths-report.md` **CONFORME** ;
   - journaux d'usage de la capture : 3 entrées `invalidation` (`masking`, cas `mask-on-anthropic`) des deux côtés, aucune autre : pas de fausse invalidation. Aucun cas de la capture ne change de modèle : le cas positif n'est couvert que par les tests unitaires.
 - **Second run** `ci` 44884821338 sur `eaecae39c` : seul `test shard 3/8` en échec (job 136787783737), **défaut réel de E9** attrapé par un test existant du fork : `a_closed_request_drops_the_late_response_and_an_allowed_call_runs`, panique « nothing to ask » (`crates/pa-daemon/src/acp/ya_permissions.rs:531`). Une demande encore **retenue** par le pont (son `tool_call` pas encore publié) est déjà inscrite parmi les envoyées ; retirée avant d'être livrée, elle recevait quand même un `$/cancel_request`, pour une requête que le client n'a jamais vue. Correctif : la demande retenue retirée n'est pas annulée chez le client. Les autres jobs requis de ce run sont verts.
-- **Préfixe** : inchangé sur `932f95b68` (ci-dessus). Le correctif ne touche que les trames du pont vers le client ; capture à refaire sur le binaire final.
+- **Troisième run** `ci` 44885855759 sur `3ffc2359c` (dernier commit poussé) : **14 checks requis verts** (`gh pr checks 72 --required`), aucun en skipping.
+- **Build macOS** de `3ffc2359c` : run 44885851682, succès, `SHA256SUMS` vérifié.
+- **Captures sur le binaire final** `3ffc2359c` contre `main` (`5c17d0dc5`), mêmes commandes que ci-dessus : smoke bench `py-example-001` `resolved`, `compare_capture_prompts.py` **TOUT IDENTIQUE** ; banc de capture, `compare.py --all` : 13 cas, toutes les requêtes identiques ; `acp` et `tui` : **TOUT IDENTIQUE** ; contrôle des chemins **CONFORME** ; `find ~/.yusagent ~/.prime/agent -newer <marque>` vide.
+- **Préfixe inchangé.**
+
+### Points ouverts de la PR 1
+
+- Invalidation : faite dans le journal d'usage (fichier du fork), pas dans `session_engine/mod.rs` (upstream) comme le supposait la consigne ; à valider par Yusuf.
+- Relance du worker au milieu d'un tour : pas de répondant jusqu'au prompt suivant.
+- `bash()` dont la cellule ne lit pas le résultat : pas d'enregistrement `bash-run` (résultat par l'avis `[bash-done]`).
+- Sortie partielle d'une cellule en cours (E15) et `session/load` (E14) : reportés.
+- Phrase périmée du ticket 22 (`:79`) : à corriger avec la PR 2.
