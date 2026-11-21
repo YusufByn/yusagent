@@ -828,3 +828,67 @@ Ce contrôle remplace celui de la PR #73 (même parcours).
 2. **« Running servers » et « Agent's REPL variables » affichés** alors que le panneau du kernel n'est pas servi : `KernelTray` est rendu sans condition (`Composer.tsx:383`, titres `webview/Kernel.tsx:231`, `:247`). À masquer selon `features.kernel`.
 3. **Carte d'une cellule en attente d'accord** : elle affiche « Running pwd; ls… », même défaut que le ticket 22 côté TUI. Cause : le chat repris met tout `tool_call` en `running` (`extensions/vscode/src/chat.ts`, cas `tool_call`) et ignore le statut `pending` que le pont envoie en manuel (`crates/pa-daemon/src/acp/ya_permissions.rs:281-296`) ; le verbe vient de `webview/Chat.tsx:742-743`. Attendu : « Awaiting permission », sans état en cours, et la carte démarre à l'accord (`tool_call_update` `in_progress`).
 
+## Reprise : état au 21/11/2026 et périmètre de la PR 3
+
+Section de reprise pour une nouvelle session. Ce qui est décidé plus haut fait foi ; ceci rassemble les repères.
+
+### État de `main` et des branches
+
+- **`main`** : `52ca68d3d` (merge de la PR #74). Les trois PR du ticket sont mergées : PR #72 (`ya-24-extension`, tête `1b06cc054`, cœur et pont ACP), PR #73 (`ya-24-extension-pr2`, tête `a8941b37f`, squelette de l'extension, remplacé par l'import), PR #74 (`ya-24-extension-import`, tête `ecdc840f8`, extension sur la base d'Unharnessed).
+- **Branche de la PR 3** : `ya-24-extension-pr3`, depuis `main` à `52ca68d3d` ; contient seulement des commits de doc de ce ticket, non poussés. Pas encore de PR ouverte.
+- **Binaire de référence** : `main` n'a rien changé sous `crates/` depuis la PR #72 ; binaire du build `ya-build-macos-arm64` 44893185253 (`0.10.2-continuous.1b96bb645…`), extrait sous `~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent` (`SHA256SUMS` vérifié).
+- **Protection de `main`** : `ya-extension` n'est pas requis. E13 le rend requis à partir de la PR 3. Il tourne désormais sur chaque PR, avec une sortie rapide en succès sans changement de l'extension (décision du 21/11). **La protection est à changer par Yusuf**, Claude Code ne la touche pas.
+
+### Périmètre de la PR 3 (section 5.1, point 3 ; découpage, étape 1)
+
+1. **Cartes de cellule** : code de la cellule (`rawInput.code`), et pour chaque `bash()` lu par la cellule, la commande, le code de sortie et la sortie repliable. Données : `_meta` `_yus/bashRuns` du `tool_call_update` final (PR 1 ; sortie plafonnée à 8 000 caractères, E5). Le code repris a déjà ses cartes (`extensions/vscode/src/cell.ts`, `webview/Chat.tsx`, `KINDS` vers `:735`) : les brancher sur nos données plutôt que les réécrire.
+2. **Boîte de permission**, à la place de la ligne d'attente : « Autoriser » (`allow-once`) et « Refuser » (`reject-once`), pas de « toujours » (D3).
+   - Elle se ferme sur `$/cancel_request` (E9) ou quand l'appel sort de `pending`.
+   - Stop répond `cancelled` (déjà fait, `extensions/vscode/src/ya/permissions.ts`).
+   - Après un refus, le tour s'arrête (D7, côté pont).
+3. **Diffs** : contenu ACP `diff` des `tool_call_update` (`path` absolu, `oldText` absent pour un fichier créé, fragments, `_meta` `_yus/startLine`, PR 1). Affichage `vscode.diff` et « Rejeter » (E6 a) :
+   - restauration par `workspace.applyEdit` ;
+   - texte fixe `[user-reverted] <chemin>` à la **fin** du message suivant, jamais au préfixe (§5.4) ;
+   - « Rejeter » seulement sans tour en cours ;
+   - restauration refusée, avec un message, si le fichier n'est plus celui laissé par cette modification.
+4. **Les trois défauts** de la section précédente (« Unharnessed » visible, `KernelTray` non masqué, carte « Running » pendant une demande d'accord).
+5. **e2e contre le vrai binaire** (en plus de l'agent factice) :
+   - provider factice (`PRIME_AGENT_FAUX_SCRIPT`, comme `crates/pa-cli/tests/acp_mode_e2e.rs:216-235`), `--daemon-socket` isolé ;
+   - cas : cellule avec `bash()`, accord puis refus (fichier créé, fichier absent), « auto » et bandeau, Stop ;
+   - E13 : binaire Linux construit dans le job avec le cache cargo ; aucun modèle réel (règle 6).
+6. **`ya-extension` requis** (E13) une fois la PR 3 verte : demande à Yusuf (protection de `main`).
+
+### Repères dans le code importé
+
+- **Adaptations à notre pont** : `extensions/vscode/src/ya/` :
+  - `methods.ts` : méthodes servies et `features()` ;
+  - `meta.ts` : `_meta` de notre pont et début/fin de tour déduits ;
+  - `auth.ts` : message `/login` ;
+  - `permissions.ts` : demandes d'accord.
+- **Webview** : `webview/ya-features.tsx` (contexte `useFeatures()`), `webview/ya-probe.ts` (sonde e2e).
+- **Dans les fichiers repris**, les adaptations sont marquées « yusAgent ».
+- **Fichiers visuels** : bouchons ; feuille `webview/styles.css` minimale et provisoire.
+- **Méthode non servie** : rejetée sur place, sans trame (`Agent.request`). Ajouter une méthode au pont = l'ajouter dans `methods.ts`, ce qui démasque l'entrée correspondante.
+- **Tests** :
+  - `cd extensions/vscode && npm ci --ignore-scripts && npm run typecheck && npm run lint && npm run test:unit` ; 25 tests, dont 12 contre l'agent factice (`test/fake-agent/fake-agent.mjs`, comportement selon le texte du prompt : `bonjour`, `pense`, `outil`, `lent`, `retire`, `auth`, `sanscle`, `crash`, `auto`) ;
+  - l'agent factice porte le `_meta` de notre pont ;
+  - e2e en CI seulement.
+- **Preuves du préfixe** :
+  - fixture `test/fixtures/acp-frames.json` (preuve 1) ;
+  - cas `acp-extension` du banc de capture et `bench/tools/capture/extension_frames_check.py` (preuve 2).
+  - Une trame nouvelle à l'ouverture ou dans un prompt (par exemple un bloc de plus) change le fixture : capture à refaire et à signaler.
+- **Contrôles remis à Yusuf** (règle 13) : `extensions/vscode/scripts/install-vsix.sh <run>`, `extensions/vscode/scripts/real-binary-check.mjs <binaire>` (après `npm run compile-tests`).
+
+### Limites et points ouverts (rassemblés)
+
+- **Fin des tours lancés par l'agent** (avis `[bash-done]`) : déduite de `responseBoundary`, jamais exercée contre le vrai binaire ; à couvrir par l'e2e du vrai binaire.
+- **Supprimer une conversation** devrait arrêter sa session dans le démon ; sinon worker et kernel restent jusqu'à la veille, 90 min (écart 7).
+- **Relance du worker au milieu d'un tour** : pas de répondant jusqu'au prompt suivant (PR 1).
+- **`bash()` non lu par la cellule** : pas d'enregistrement `bash-run`, son résultat arrive par l'avis `[bash-done]` (PR 1).
+- **Identifiants absents** : le pont les classe `kind: "other"` ; l'extension reconnaît le texte « No API key found for ». Correction du classement côté pont : ticket à part, proposé, non tranché.
+- **Reprise après un changement de skills ou de MCP** : un miss, à journaliser comme invalidation (étape 3 du découpage).
+- **Clés figées pour la session** (`yaRequest`, `editTool`, `shellTool`) : hors de l'écran des réglages par défaut ; Yusuf tranche sur la liste (étape 3).
+- **Rendu provisoire** : menus, info-bulles et pastilles d'Unharnessed sans style jusqu'au visuel. Commandes `/…` du panneau : seulement `/new`, notre pont n'envoie pas `available_commands_update`.
+- **Scripts de mesure jetables, non versionnés** : `lifecycle.py` (arrêt, reprise `--continue` et `--resume`) et `eof_turn.py` (fin de stdin pendant un tour) étaient dans le scratchpad de la session du 21/11. Leurs commandes et résultats sont dans ce ticket ; les verser au banc si Yusuf le veut (à réécrire, le scratchpad ne survit pas à la session).
+- **Ensuite** (découpage) : (2) reprise et historique ; (3) skills, MCP, réglages ; (4) message pendant un tour ; (5) login dans l'extension ; (6) retour en arrière et panneau du kernel. Sandbox et `.vsix` par plateforme restent liés à d'autres utilisateurs.
+
