@@ -14,6 +14,12 @@ import { post } from "./vscode";
 /** Un tour tourne (le chat est occupé) : « Revert » attend (garde-fou 1). Fourni par `Status.tsx`. */
 export const YaBusyContext = createContext(false);
 
+/**
+ * Séparateur avec ses espaces, écrits ici : sans eux (feuille provisoire), `exit 0` puis `32 ms`
+ * se lisaient « exit 0·32 ms » (contrôle de Yusuf).
+ */
+const SEP = " · ";
+
 /** Pour l'en-tête : `exit 1` du premier `bash()` sorti en erreur, sinon undefined. */
 export function exitMeta(runs: BashRun[] | undefined): string | undefined {
   const failed = runs?.find((run) => run.exitCode !== null && run.exitCode !== 0);
@@ -41,13 +47,13 @@ function BashRunLine({ run }: { run: BashRun }) {
         <span className={failed ? "ya-run-exit is-error" : "ya-run-exit"}>exit {run.exitCode ?? "?"}</span>
         {run.durationMs !== undefined && (
           <>
-            <span className="sep">·</span>
+            <span className="sep">{SEP}</span>
             {duration(run.durationMs)}
           </>
         )}
         {!output && (
           <>
-            <span className="sep">·</span>
+            <span className="sep">{SEP}</span>
             no output
           </>
         )}
@@ -97,7 +103,7 @@ export function FileEdits({ toolId, edits }: { toolId: string; edits: FileEdit[]
             <span className="call-meta">
               {edit.created && (
                 <>
-                  created<span className="sep">·</span>
+                  created<span className="sep">{SEP}</span>
                 </>
               )}
               <span className="add">+{edit.added}</span>

@@ -96,9 +96,14 @@ export function cellOfEdits(cell: Cell | undefined, edits: FileEdit[]): Cell {
   };
 }
 
-/** La carte d'après les `bash()` réels (C6) : commande réelle dans l'en-tête, une fois finie. */
+/**
+ * La carte d'après les `bash()` réels (C6) : commande réelle dans l'en-tête, une fois finie. La
+ * première sortie en erreur s'il y en a une (son `exit N` est celui de l'en-tête, `exitMeta`),
+ * sinon la première (contrôle de Yusuf : « Ran ls exit 1 » quand c'était `false` qui sortait en 1).
+ */
 export function cellOfRuns(cell: Cell | undefined, runs: BashRun[]): Cell {
-  const command = runs[0].command.trim().split("\n", 1)[0];
+  const shown = runs.find((run) => run.exitCode !== null && run.exitCode !== 0) ?? runs[0];
+  const command = shown.command.trim().split("\n", 1)[0];
   const base: Cell = cell ?? { kind: "shell", files: [] };
   if (base.kind === "edit" || base.kind === "write" || base.kind === "view" || base.kind === "read") return base;
   return { ...base, kind: base.kind === "python" ? "shell" : base.kind, command };
