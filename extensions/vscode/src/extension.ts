@@ -9,7 +9,7 @@ import { Providers } from "./providers";
 import { Settings } from "./settings";
 import { ShownAgent } from "./shown";
 import { ToolTabs } from "./tabs";
-import type { WebviewMessage } from "./protocol";
+import type { ProbeInput, WebviewMessage } from "./protocol";
 import { ChatViewProvider } from "./view";
 
 let conversations: Conversations | undefined;
@@ -57,8 +57,8 @@ export function activate(context: vscode.ExtensionContext): void {
         };
       }),
       vscode.commands.registerCommand("yusagent._test.probe", () => view.probe()),
-      // yusAgent (PR 3) : touches vers la boîte de permission.
-      vscode.commands.registerCommand("yusagent._test.probeKeys", (keys: string[], focus: boolean) => view.probeKeys(keys, focus)),
+      // yusAgent (PR 3) : saisie, focus, touches et clic dans la webview.
+      vscode.commands.registerCommand("yusagent._test.probeInput", (input: ProbeInput) => view.probeInput(input)),
     );
   }
   conversations.start();

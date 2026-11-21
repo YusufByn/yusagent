@@ -5,7 +5,7 @@ import type { Conversation, Conversations } from "./conversations";
 import type { Files } from "./files";
 import type { History } from "./history";
 import { connectedModels } from "./instructions";
-import type { HostMessage, Probe, WebviewMessage } from "./protocol";
+import type { HostMessage, Probe, ProbeInput, WebviewMessage } from "./protocol";
 import type { Providers } from "./providers";
 import type { Settings } from "./settings";
 import type { ToolTabs } from "./tabs";
@@ -421,8 +421,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  /** yusAgent (PR 3, tests e2e) : touches envoyées à la boîte de permission, puis ce qu'affiche la webview. */
-  probeKeys(keys: string[], focus: boolean): Promise<Probe | undefined> {
+  /** yusAgent (PR 3, tests e2e) : une action dans la webview (`probeInput`), puis ce qu'elle affiche. */
+  probeInput(input: ProbeInput): Promise<Probe | undefined> {
     if (!this.view) return Promise.resolve(undefined);
     return new Promise((resolve) => {
       const answer = (probe: Probe | undefined) => {
@@ -435,7 +435,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         resolve(undefined);
       }, 1_000);
       this.probes.push(answer);
-      this.post({ type: "probeKeys", keys, focus });
+      this.post({ type: "probeInput", input });
     });
   }
 

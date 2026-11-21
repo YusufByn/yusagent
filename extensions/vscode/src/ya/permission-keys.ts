@@ -6,8 +6,25 @@
 // une touche ne compte qu'après 1 s sans frappe depuis l'ouverture de la boîte (ou l'arrivée de la
 // demande suivante) ; chaque frappe pendant ce temps, ou toute autre touche ensuite, la relance.
 // **Jamais Entrée.** Le composant n'appelle `key` que si la boîte a le focus (décision de Yusuf).
+//
+// Décisions de Yusuf (21/11/2026, PR 3) : les boutons de la boîte restent inactifs (grisés)
+// pendant 1 s après son ouverture, sans relance par les frappes (`buttonsReady`) ; la boîte prend
+// le focus d'elle-même seulement si la zone de message est vide (`takesFocus`).
 
 export const QUIET_MS = 1000;
+
+/** Délai avant que les boutons de la boîte comptent, depuis son ouverture ; aucune frappe ne le relance. */
+export const BUTTONS_DELAY_MS = 1000;
+
+/** Si les boutons comptent à `now`, la boîte ouverte à `openedAt`. */
+export function buttonsReady(openedAt: number, now: number): boolean {
+  return now - openedAt >= BUTTONS_DELAY_MS;
+}
+
+/** Si la boîte prend le focus à son ouverture : seulement quand la zone de message est vide. */
+export function takesFocus(composerText: string): boolean {
+  return composerText === "";
+}
 
 export type KeyResult = "allow" | "deny" | "ignored";
 

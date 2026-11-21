@@ -316,3 +316,9 @@ button.ya-run-head {
 .ya-permission-keys {
   opacity: 0.7;
 }
+
+/* yusAgent (PR 3) : boutons de la boîte grisés pendant leur délai d'1 s. */
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

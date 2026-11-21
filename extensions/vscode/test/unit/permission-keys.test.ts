@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { QUIET_MS, QuietKeys, visibleCode } from "../../src/ya/permission-keys";
+import { BUTTONS_DELAY_MS, buttonsReady, QUIET_MS, QuietKeys, takesFocus, visibleCode } from "../../src/ya/permission-keys";
 
 test("fenêtre de calme : rien avant 1 s, puis y autorise, n et Esc refusent", () => {
   assert.equal(QUIET_MS, 1000);
@@ -48,4 +48,21 @@ test("visibleCode : contrôles et caractères invisibles échappés, retours et 
   assert.equal(visibleCode("\u001b[2J\r"), "\\u{001b}[2J\\u{000d}");
   assert.equal(visibleCode("\ufeffprint(1)"), "\\u{feff}print(1)");
   assert.equal(visibleCode("é ü 漢"), "é ü 漢");
+});
+
+test("boutons : inactifs pendant 1 s depuis l'ouverture, sans relance par les frappes", () => {
+  assert.equal(BUTTONS_DELAY_MS, 1000);
+  assert.equal(buttonsReady(0, 999), false);
+  assert.equal(buttonsReady(0, 1000), true);
+  // Une frappe relance la fenêtre des touches, pas le délai des boutons (qui ne dépend que de l'ouverture).
+  const keys = new QuietKeys(0);
+  assert.equal(keys.key({ key: "a" }, 900), "ignored");
+  assert.equal(keys.armed(1100), false, "touches : fenêtre relancée à 900");
+  assert.equal(buttonsReady(0, 1100), true, "boutons : prêts à 1 s, frappe ou non");
+});
+
+test("focus : la boîte le prend seulement si la zone de message est vide", () => {
+  assert.equal(takesFocus(""), true);
+  assert.equal(takesFocus(" "), false);
+  assert.equal(takesFocus("un message en cours"), false);
 });

@@ -546,8 +546,12 @@ export type HostMessage =
   | { type: "chatPatch"; patch: ChatPatch }
   /** yusAgent (PR 3) : les demandes d'accord ouvertes de la conversation montrée, dans l'ordre. */
   | { type: "yaPermissions"; asks: PermissionAsk[] }
-  /** yusAgent (PR 3, tests e2e) : touches envoyées à la boîte (après lui avoir donné le focus, ou non). */
-  | { type: "probeKeys"; keys: string[]; focus: boolean }
+  /**
+   * yusAgent (PR 3, tests e2e) : une action comme celle d'un utilisateur, puis `probeResult` :
+   * texte tapé dans la zone de message, focus donné à la boîte ou retiré, touches, clic sur un
+   * bouton de la boîte (par son nom).
+   */
+  | { type: "probeInput"; input: ProbeInput }
   /**
    * A sent prompt, back in the message box to be changed and sent again in
    * place of turn `id`'s; or waiting message `id`, to be changed in its place.
@@ -582,7 +586,14 @@ export type Probe = {
   selects: { label: string | null; value: string; disabled: boolean; options: string[] }[];
   /** Le nom de la zone de saisie (`aria-label`), son texte d'invite (PR 3, défaut 1). */
   input: string | null;
+  /** PR 3 : l'élément qui a le focus (`box` : la boîte de permission, `composer` : la zone de message). */
+  focused: "box" | "composer" | "other";
+  /** PR 3 : les boutons de la boîte de permission, avec leur état. */
+  boxButtons: { name: string; disabled: boolean }[];
 };
+
+/** yusAgent (PR 3, tests e2e) : voir `probeInput`. */
+export type ProbeInput = { type?: string; focus?: "box" | "none"; keys?: string[]; click?: string };
 
 export type WebviewMessage =
   | { type: "ready" }

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 
-import type { AgentState, ChatState, Probe, SessionState, WebviewMessage } from "../../src/protocol";
+import type { AgentState, ChatState, Probe, ProbeInput, SessionState, WebviewMessage } from "../../src/protocol";
 import { authText } from "../../src/ya/auth";
 import { fakeAgentPath, fixtureFrames, normalize, received, setScenario, starts, waitFor } from "../helpers";
 
@@ -23,8 +23,7 @@ const workspace = process.env.YUSAGENT_E2E_WORKSPACE as string;
 const state = async () => (await vscode.commands.executeCommand<State>("yusagent._test.state"))!;
 const post = (message: WebviewMessage) => vscode.commands.executeCommand("yusagent._test.post", message);
 const probe = () => vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probe");
-const probeKeys = (keys: string[], focus: boolean) =>
-  vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probeKeys", keys, focus);
+const probeInput = (input: ProbeInput) => vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probeInput", input);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const BOX = "Allow this Python cell to run?";
 const lastPid = () => starts(control).at(-1)!.pid;
@@ -56,18 +55,39 @@ async function permissionsIs(value: string): Promise<void> {
 
 /** PR 3, étape 3 : la boîte de permission de bout en bout (agent factice, scénario `accord`). */
 async function permissionBox(): Promise<void> {
+  const answered = (id: string) => received(control, lastPid()).filter((frame) => frame.id === id).length;
+  // 1. Zone de message vide : la boîte prend le focus ; boutons grisés 1 s, sans relance par les frappes.
   await post({ type: "send", text: "accord", images: [] });
   const box = await shows(BOX, "boîte de permission");
+  const opened = Date.now();
   for (const part of ["print('accord')", "Allow", "Reject"]) assert.ok(box.includes(part), `boîte : ${part}`);
   assert.equal((await state()).badge, 1, "badge sur l'icône de la vue");
-  // Fenêtre de calme : `y` tout de suite ne fait rien (et la relance).
-  assert.ok((await probeKeys(["y"], true))?.text.includes(BOX), "y pendant la fenêtre de calme : rien");
+  let seen = (await probe())!;
+  assert.equal(seen.focused, "box", "zone de message vide : la boîte a le focus");
+  assert.deepEqual(seen.boxButtons, [
+    { name: "Allow", disabled: true },
+    { name: "Reject", disabled: true },
+  ]);
+  await probeInput({ click: "Allow" });
+  assert.equal(answered("ya-permission-2"), 0, "clic sur un bouton grisé : rien");
+  // `y` tout de suite : fenêtre de calme des touches, rien (et la fenêtre repart).
+  assert.ok((await probeInput({ keys: ["y"] }))?.text.includes(BOX), "y pendant la fenêtre de calme : rien");
+  await sleep(Math.max(0, opened + 800 - Date.now()));
+  await probeInput({ keys: ["a"] }); // relance la fenêtre des touches vers 0,8 s
+  await sleep(Math.max(0, opened + 1_150 - Date.now()));
+  seen = (await probeInput({ keys: ["y"] }))!;
+  assert.ok(seen.text.includes(BOX), "y moins d'1 s après la dernière frappe : rien");
+  assert.deepEqual(
+    seen.boxButtons.map((button) => button.disabled),
+    [false, false],
+    "boutons actifs 1 s après l'ouverture, malgré les frappes",
+  );
   await sleep(1_100);
-  assert.ok((await probeKeys(["Enter"], true))?.text.includes(BOX), "Entrée : jamais une réponse");
+  assert.ok((await probeInput({ keys: ["Enter"] }))?.text.includes(BOX), "Entrée : jamais une réponse");
   await sleep(1_100);
-  assert.ok((await probeKeys(["y"], false))?.text.includes(BOX), "y sans le focus : rien");
-  assert.equal(received(control, lastPid()).filter((frame) => frame.id === "ya-permission-2").length, 0, "aucune réponse partie");
-  await probeKeys(["y"], true);
+  assert.ok((await probeInput({ focus: "none", keys: ["y"] }))?.text.includes(BOX), "y sans le focus : rien");
+  assert.equal(answered("ya-permission-2"), 0, "aucune réponse partie");
+  await probeInput({ focus: "box", keys: ["y"] });
   await idle();
   assert.deepEqual(received(control, lastPid()).find((frame) => frame.id === "ya-permission-2"), {
     jsonrpc: "2.0",
@@ -77,24 +97,28 @@ async function permissionBox(): Promise<void> {
   const done = await shows("autorisée", "la cellule a tourné");
   assert.ok(!done.includes(BOX), "boîte fermée après la réponse");
   assert.equal((await state()).badge, undefined, "badge retiré");
-  // Esc refuse ; la carte dit « Declined » (le tour s'arrête, D7).
+  // 2. Esc refuse ; la carte dit « Declined » (le tour s'arrête, D7).
   await post({ type: "send", text: "accord", images: [] });
   await shows(BOX, "deuxième demande");
   await sleep(1_100);
-  await probeKeys(["Escape"], true);
+  await probeInput({ focus: "box", keys: ["Escape"] });
   await idle();
   assert.deepEqual(received(control, lastPid()).find((frame) => frame.id === "ya-permission-3")?.result, {
     outcome: { outcome: "selected", optionId: "reject-once" },
   });
   await shows("Declined", "carte refusée");
-  // Le bouton « Reject » envoie le même message que la boîte.
+  // 3. Zone de message non vide : le focus y reste ; le bouton « Reject », actif après 1 s, refuse.
+  assert.equal((await probeInput({ type: "brouillon en cours" }))?.focused, "composer");
   await post({ type: "send", text: "accord", images: [] });
   await shows(BOX, "troisième demande");
-  await post({ type: "permission", toolCallId: "call-a", optionId: "reject-once" });
+  assert.equal((await probe())?.focused, "composer", "zone de message non vide : le focus ne bouge pas");
+  await sleep(1_100);
+  await probeInput({ click: "Reject" });
   await idle();
   assert.deepEqual(received(control, lastPid()).find((frame) => frame.id === "ya-permission-4")?.result, {
     outcome: { outcome: "selected", optionId: "reject-once" },
   });
+  await probeInput({ type: "" });
 }
 
 const tests: [string, () => Promise<void>][] = [

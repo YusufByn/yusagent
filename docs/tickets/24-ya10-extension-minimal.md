@@ -1071,3 +1071,18 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
 3. **Focus** : la boîte le prend d'elle-même seulement si la zone de message est vide ; sinon rien ne change. Test demandé.
 4. **`acp_frames.py` et `compare_frames.py` versés au banc** (règle 13), avec leur commande dans le ticket.
 5. Puis l'étape 4 (diffs), push à sa fin.
+
+### PR 3, étape 3 (suite) : boutons et focus de la boîte
+
+- **Boutons** : inactifs et grisés pendant 1 s après l'ouverture de la boîte (`BUTTONS_DELAY_MS`, `buttonsReady` dans `src/ya/permission-keys.ts`). Le délai part de l'ouverture et **aucune frappe ne le relance** (contrairement à la fenêtre des touches). Le minuteur repart s'il se déclenche avant l'échéance mesurée.
+- **Focus** : à l'ouverture, la boîte prend le focus **seulement si la zone de message est vide** (`takesFocus`, texte strictement vide) ; sinon le focus ne bouge pas.
+- **Sonde e2e** : `probeKeys` remplacé par `probeInput` (texte tapé dans la zone de message, focus donné à la boîte ou retiré, touches, clic sur un bouton de la boîte par son nom ; un clic sur un bouton désactivé ne fait rien, comme dans le navigateur). La sonde rend aussi l'élément qui a le focus et l'état des boutons de la boîte.
+- **Tests** (Claude Code, en local) : `npm run typecheck && npm run lint && npm run build && npm run test:unit` → `ℹ tests 40`, `ℹ pass 40`, `ℹ fail 0`. Deux nouveaux tests unitaires :
+  - délai des boutons : 999 ms non, 1 000 ms oui ; une frappe à 900 ms relance les touches, pas les boutons ;
+  - `takesFocus` : `""` oui, `" "` et un texte non.
+  - **Contrôles négatifs** : `takesFocus` toujours vrai → `ℹ fail 1` ; `buttonsReady` toujours vrai → `ℹ fail 1` ; fichier restauré, 40/40.
+- **e2e** (CI), test « boîte » réécrit :
+  - zone de message vide : la boîte a le focus, boutons grisés, un clic sur « Allow » grisé n'envoie rien ;
+  - une frappe vers 0,8 s relance les touches mais pas les boutons : boutons actifs vers 1,15 s, `y` encore sans effet ;
+  - puis Entrée, `y` sans focus, et `y` avec focus comme avant ; `Esc` refuse ;
+  - zone de message non vide (« brouillon en cours ») : le focus y reste quand la boîte s'ouvre ; le bouton « Reject », actif après 1 s, refuse.
