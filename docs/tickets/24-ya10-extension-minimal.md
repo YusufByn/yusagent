@@ -467,7 +467,7 @@ Branche `ya-24-extension-pr2`, depuis `main` à `1b96bb645`. Périmètre : secti
 12. Sans dossier ouvert : pas de lancement, « Ouvrez un dossier » ; plusieurs dossiers : le premier, nom dans l'en-tête.
 
 - **Cas `acp-extension` de la capture (preuve 2)** : dans cette PR 2 (annoncé avant le code).
-- **Merge et check non requis** : `ya-extension.yml` n'est pas requis par la protection de `main` pendant la PR 2 (E13). **Le merge d'une PR qui touche `extensions/vscode/` exige ce workflow vert sur la tête, vérifié à la main** (`gh run list --workflow ya-extension.yml --branch <branche>` : run `success` dont le `headSha` est le dernier commit poussé), jusqu'à ce qu'il devienne requis (PR 3).
+- **Merge et check non requis** : `ya-extension.yml` n'est pas requis par la protection de `main` pendant la PR 2 (E13). **Le merge d'une PR qui touche `extensions/vscode/` exige ce workflow vert sur la tête, vérifié à la main** (`gh run list --workflow ya-extension.yml --branch <branche>` : run `success` dont le `headSha` est le dernier commit poussé ; si ce commit ne touche pas `extensions/vscode/`, le workflow ne part pas seul : `gh workflow run ya-extension.yml --ref <branche>`), jusqu'à ce qu'il devienne requis (PR 3).
 
 ### Ce qui est fait
 
@@ -507,4 +507,12 @@ Branche `ya-24-extension-pr2`, depuis `main` à `1b96bb645`. Périmètre : secti
 
 - Lancé par Claude Code sur le binaire de `main` : `cd extensions/vscode && npm run compile-tests && node scripts/real-binary-check.mjs ~/.cache/yusagent-bin/1b96bb6457e51d010ad32a2293714f911fea2162/yusagent` → pour chaque mode : session ouverte, options `model`, `thought_level` (`medium`, 3 valeurs), `permissions` = le mode ; bandeau absent en manuel, affiché en auto ; effort `medium → low` par `set_config_option` ; dernier message « Authentification requise : lancez <chemin> dans un terminal, puis /login. » ; aucun processus restant. Verdict **CONFORME**, exit 0.
 - Premier lancement, avant `isAuthFailure` : **NON CONFORME** (2), le message `/login` absent : c'est ce lancement qui a révélé le constat ci-dessus.
+
+### CI de la PR 2 (PR #73)
+
+- **Premier push** (`95572b5ed`) : `ci` 44899188163, tous les jobs verts. `ya-extension` 44899188141 : `npm ci`, tsc, lint, tests unitaires, `.vsix` et artefact verts ; `.vsix` de **59 338 octets** (8 fichiers : `extension.js` 17 926 octets, `webview.js` 147 007, `webview.css` 2 457, `package.json`, `readme.md`, `LICENSE.txt`, manifeste). L'e2e (VS Code 1.146.0 téléchargé, xvfb) : 7 tests sur 9 verts (Arrêter, sélecteurs, `/login`, plantage, fermeture, bandeau ×2 : rendu vérifié par la sonde), puis **blocage** ; run annulé par Claude Code après 12 min sur l'étape e2e (et le run `push` 44899166566 en double, annulé aussi). Trois défauts, tous dans l'e2e ou à la fermeture :
+  1. test de la CSP faux : `webview.cspSource` est une source `https://*.vscode-cdn.net`, que le test refusait (« https? ») ; il vérifie maintenant que styles, polices et images n'ont que cette source, scripts par nonce seulement, ni `unsafe-`, ni `data:`, ni `*` ;
+  2. « Webview is disposed » : à la fermeture, le dernier état (`closed`) était envoyé à la webview fermée ; plus rien n'est envoyé après la fermeture ;
+  3. sonde sans délai : un message posté avant le chargement de la webview est perdu, le test « binaire absent » attendait sans fin ; la sonde rend `undefined` au bout de 1 s, et le test attend la webview montée.
+- Déclencheur `push` retiré de `ya-extension.yml` (deux runs par push d'une PR).
 
