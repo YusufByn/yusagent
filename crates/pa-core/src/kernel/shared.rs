@@ -128,6 +128,9 @@ pub struct KernelDiffDisplay {
     pub new_str: String,
     /// 1-based line where `old_str` begins in the file, for absolute line numbers.
     pub start_line: Option<u64>,
+    /// yusAgent (YA-10, ticket 26): 0-based column (code points) where `old_str` begins on
+    /// `start_line`; absent from an older kernel.
+    pub start_column: Option<u64>,
 }
 
 /// One media attachment, captured from an [`ATTACHMENT_DISPLAY_MIME`] display payload.
@@ -417,6 +420,7 @@ pub fn parse_diff_display(payload: &Value) -> Option<KernelDiffDisplay> {
         old_str: old_str.to_string(),
         new_str: new_str.to_string(),
         start_line,
+        start_column: obj.get("start_column").and_then(Value::as_u64),
     })
 }
 

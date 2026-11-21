@@ -512,13 +512,18 @@ pub async fn execute_ipython(
                     .unwrap_or(1);
                 // yusAgent (YA-10, ticket 24): the raw edit rides along for the editor's diff
                 // view (`oldStr`, `newStr`, `startLine`); display only.
-                json!({
+                let mut entry = json!({
                     "path": diff.path,
                     "diff": generate_diff_string(&diff.old_str, &diff.new_str, 4, start_line),
                     "oldStr": diff.old_str,
                     "newStr": diff.new_str,
                     "startLine": start_line,
-                })
+                });
+                // Ticket 26: the column only when the kernel sent it, never a default.
+                if let Some(column) = diff.start_column {
+                    entry["startColumn"] = json!(column);
+                }
+                entry
             })
             .collect::<Vec<_>>());
     }

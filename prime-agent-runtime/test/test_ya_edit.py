@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SKILL_SRC = Path(__file__).resolve().parents[2] / "skills" / "edit" / "src"
 sys.path.insert(0, str(_SKILL_SRC))
@@ -112,6 +113,28 @@ class EditTest(unittest.TestCase):
             self.assertFalse((Path(other) / "n.txt").exists())
         with self.assertRaises(PermissionError):
             run("../escape.txt", "", "x")
+
+    def emitted(self, *args: str) -> dict:
+        """The diff display one `edit()` sends to the host."""
+        with mock.patch("rlm.emit") as emit:
+            run(*args)
+        emit.assert_called_once()
+        return emit.call_args.args[0][edit_skill._DIFF_DISPLAY_MIME]
+
+    def test_the_diff_display_carries_the_start_column(self):
+        # YA-10 (ticket 26): the column of `old_str` on its line, 0-based, in code points (an
+        # emoji counts one, two UTF-16 units in JavaScript), so the editor can place a pure deletion.
+        self.write("e.txt", "garder\nx 😀 retirer fin\n")
+        removed = self.emitted("e.txt", "retirer ", "")
+        self.assertEqual(
+            {key: removed[key] for key in ("old_str", "new_str", "start_line", "start_column")},
+            {"old_str": "retirer ", "new_str": "", "start_line": 2, "start_column": 4},
+        )
+        self.assertEqual((self.root / "e.txt").read_text(), "garder\nx 😀 fin\n")
+        middle = self.emitted("e.txt", "fin", "FIN")
+        self.assertEqual((middle["start_line"], middle["start_column"]), (2, 4))
+        created = self.emitted("n.txt", "", "un\n")
+        self.assertEqual((created["start_line"], created["start_column"]), (1, 0))
 
 
 if __name__ == "__main__":

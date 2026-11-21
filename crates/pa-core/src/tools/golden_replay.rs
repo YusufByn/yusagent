@@ -276,14 +276,15 @@ async fn golden_ipython_group_matches_ts() {
 /// Cell edits reach the result details as the edit tool's numbered diff text.
 #[tokio::test]
 async fn ipython_details_carry_the_cell_edit_diffs() {
-    let diff = |start_line| crate::kernel::shared::KernelDiffDisplay {
+    let diff = |start_line, start_column| crate::kernel::shared::KernelDiffDisplay {
         path: "src/app.py".to_string(),
         old_str: "x = 1".to_string(),
         new_str: "x = 2".to_string(),
         start_line,
+        start_column,
     };
     let result = ExecuteResult {
-        diffs: vec![diff(Some(10)), diff(None)],
+        diffs: vec![diff(Some(10), Some(4)), diff(None, None)],
         ..ExecuteResult::default()
     };
     let options = IpythonToolOptions {
@@ -304,11 +305,12 @@ async fn ipython_details_carry_the_cell_edit_diffs() {
         .expect("cell executes");
     assert_eq!(
         result.details.expect("details")["diffs"],
-        // yusAgent (YA-10, ticket 24): `oldStr`, `newStr` and `startLine` added for the editor.
+        // yusAgent (YA-10, ticket 24): `oldStr`, `newStr` and `startLine` added for the editor;
+        // ticket 26: `startColumn` when the kernel sent it, absent otherwise.
         serde_json::json!([
             {
                 "path": "src/app.py", "diff": "-10 x = 1\n+10 x = 2",
-                "oldStr": "x = 1", "newStr": "x = 2", "startLine": 10,
+                "oldStr": "x = 1", "newStr": "x = 2", "startLine": 10, "startColumn": 4,
             },
             {
                 "path": "src/app.py", "diff": "-1 x = 1\n+1 x = 2",
@@ -316,6 +318,30 @@ async fn ipython_details_carry_the_cell_edit_diffs() {
             },
         ])
     );
+}
+
+/// yusAgent (YA-10, ticket 26): the diff display's `start_column`, read when the kernel sends it.
+#[test]
+fn diff_display_reads_the_start_column_when_present() {
+    use crate::kernel::shared::parse_diff_display;
+    let payload = |extra: serde_json::Value| {
+        let mut payload = serde_json::json!({
+            "path": "/w/a.py", "old_str": "x", "new_str": "", "start_line": 2,
+        });
+        payload
+            .as_object_mut()
+            .expect("object")
+            .extend(extra.as_object().expect("object").clone());
+        payload
+    };
+    let with =
+        parse_diff_display(&payload(serde_json::json!({ "start_column": 4 }))).expect("parsed");
+    assert_eq!((with.start_line, with.start_column), (Some(2), Some(4)));
+    let without = parse_diff_display(&payload(serde_json::json!({}))).expect("parsed");
+    assert_eq!((without.start_line, without.start_column), (Some(2), None));
+    let wrong =
+        parse_diff_display(&payload(serde_json::json!({ "start_column": "4" }))).expect("parsed");
+    assert_eq!(wrong.start_column, None);
 }
 
 #[test]
