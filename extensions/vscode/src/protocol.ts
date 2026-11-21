@@ -266,7 +266,26 @@ export type BashRun = { command: string; exitCode: number | null; output: string
  * yusAgent (PR 3, C7) : les `edit()` d'une cellule sur un fichier (contenus ACP `diff` du pont) :
  * chemin absolu, chemin montré, fichier créé, lignes des fragments et leur compte.
  */
-export type FileEdit = { path: string; shown: string; created: boolean; lines: DiffLine[]; added: number; removed: number };
+export type FileEdit = {
+  path: string;
+  shown: string;
+  created: boolean;
+  lines: DiffLine[];
+  added: number;
+  removed: number;
+  /** yusAgent (PR 3, étape 4) : où en est « Rejeter » pour ce fichier ; absent tant que la cellule n'a pas fini. */
+  revert?: RevertStatus;
+};
+
+/**
+ * yusAgent (PR 3, étape 4, E6 a) : `checking` (lecture de l'après), `ready` (« Rejeter » possible ;
+ * `refused` : pourquoi le dernier essai a été refusé), `blocked` (impossible, `reason`), `reverted`.
+ */
+export type RevertStatus =
+  | { state: "checking" }
+  | { state: "ready"; refused?: string }
+  | { state: "blocked"; reason: string }
+  | { state: "reverted" };
 
 /** yusAgent (PR 3) : une option d'une demande d'accord du pont (`allow-once` « Allow », `reject-once` « Reject »). */
 export type PermissionOption = { optionId: string; name: string; kind: string };
@@ -601,6 +620,10 @@ export type WebviewMessage =
   | { type: "probeResult"; probe: Probe }
   /** yusAgent (PR 3) : la réponse de la boîte à la demande d'accord de `toolCallId`. */
   | { type: "permission"; toolCallId: string; optionId: string }
+  /** yusAgent (PR 3, étape 4) : l'avant et l'après d'un fichier modifié par une cellule, dans `vscode.diff`. */
+  | { type: "yaOpenDiff"; toolId: string; path: string }
+  /** yusAgent (PR 3, étape 4) : « Rejeter » la modification d'un fichier par une cellule. */
+  | { type: "yaRevert"; toolId: string; path: string }
   /** The screen now on display, for the log. */
   | { type: "screen"; screen: Screen }
   /** The panel crashed: what threw, and where. */

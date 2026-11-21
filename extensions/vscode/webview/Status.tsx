@@ -1,5 +1,6 @@
 import { useFeatures } from "./ya-features"; // yusAgent
 import { PermissionBox } from "./ya-permission"; // yusAgent (PR 3)
+import { YaBusyContext } from "./ya-cells"; // yusAgent (PR 3, étape 4)
 import { useEffect, useState } from "react";
 import type { AgentState, ChatState, HistoryState, KernelState, Provider, SessionState } from "../src/protocol";
 import { Transcript } from "./Chat";
@@ -129,6 +130,8 @@ export function Status({
           ⚠ Mode auto sans sandbox : les cellules s'exécutent sans demander, avec vos droits.
         </div>
       )}
+      {/* yusAgent (PR 3, étape 4) : « Revert » grisé pendant un tour. */}
+      <YaBusyContext.Provider value={chat.busy}>
       <Transcript chat={chat} editing={editing}>
         {kind && (
           <div className={`agent-line is-${kind}`}>
@@ -138,6 +141,7 @@ export function Status({
         )}
         {agent.kind === "failed" && <Failure agent={agent} />}
       </Transcript>
+      </YaBusyContext.Provider>
       {/* yusAgent (PR 3, C2) : la boîte de permission, au-dessus de la saisie. */}
       {agent.kind === "ready" && <PermissionBox chat={chat} />}
       {agent.kind === "ready" && (

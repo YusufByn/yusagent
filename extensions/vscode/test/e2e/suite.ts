@@ -2,6 +2,8 @@
 // Exécuteur minimal, sans dépendance : chaque test en série, échec = rejet de `run()`.
 
 import assert from "node:assert/strict";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import * as vscode from "vscode";
 
 import type { AgentState, ChatState, Probe, ProbeInput, SessionState, WebviewMessage } from "../../src/protocol";
@@ -193,6 +195,49 @@ const tests: [string, () => Promise<void>][] = [
           await idle();
         }
       }
+    },
+  ],
+  [
+    "diffs (PR 3, étape 4) : vscode.diff, Revert par applyEdit, fichier créé à la corbeille, texte au message suivant",
+    async () => {
+      const a = join(workspace, "a.txt");
+      const created = join(workspace, "neuf.txt");
+      writeFileSync(a, "un\ndeux\ntrois\n");
+      await post({ type: "send", text: "diff", images: [] });
+      await idle();
+      const edits = async () => {
+        for (const entry of (await state()).chat.entries) {
+          if (entry.kind !== "turn") continue;
+          const tool = entry.items.find((item) => item.kind === "tool" && item.id === "call-d");
+          if (tool?.kind === "tool") return tool.edits;
+        }
+        return undefined;
+      };
+      await waitFor(async () => (await edits())?.every((edit) => edit.revert?.state === "ready"), "avant retrouvé, Revert possible");
+      // C9, C10 : l'avant et l'après de la cellule, en lecture seule.
+      await post({ type: "yaOpenDiff", toolId: "call-d", path: a });
+      const diff = await waitFor(() => {
+        for (const tab of vscode.window.tabGroups.all.flatMap((group) => group.tabs)) {
+          if (tab.input instanceof vscode.TabInputTextDiff && tab.input.original.scheme === "yusagent-diff") return tab.input;
+        }
+        return undefined;
+      }, "vscode.diff ouvert");
+      assert.equal((await vscode.workspace.openTextDocument(diff.original)).getText(), "un\ndeux\ntrois\n", "avant");
+      assert.equal((await vscode.workspace.openTextDocument(diff.modified)).getText(), "un\nDEUX\ntrois\n", "après");
+      // Revert : applyEdit puis enregistrement ; le fichier créé va à la corbeille (C12).
+      await post({ type: "yaRevert", toolId: "call-d", path: a });
+      await post({ type: "yaRevert", toolId: "call-d", path: created });
+      await waitFor(async () => (await edits())?.every((edit) => edit.revert?.state !== "ready" || edit.revert.refused), "Revert traité");
+      assert.deepEqual((await edits())?.map((edit) => edit.revert), [{ state: "reverted" }, { state: "reverted" }]);
+      assert.equal(readFileSync(a, "utf8"), "un\ndeux\ntrois\n", "a.txt restauré et enregistré");
+      assert.equal(existsSync(created), false, "neuf.txt retiré");
+      await post({ type: "send", text: "bonjour", images: [] });
+      await idle();
+      const prompt = received(control, lastPid())
+        .filter((frame) => frame.method === "session/prompt")
+        .at(-1) as { params: { prompt: { text: string }[] } };
+      assert.equal(prompt.params.prompt[0].text, "bonjour\n\n[user-reverted] a.txt\n[user-reverted] neuf.txt");
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     },
   ],
   [

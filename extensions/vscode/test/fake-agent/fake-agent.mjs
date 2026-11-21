@@ -9,7 +9,7 @@
 // - `<dir>/starts.log` : une ligne par lancement (pid, cwd, arguments).
 // Le comportement d'un prompt dépend de son texte (voir `onPrompt`).
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -124,6 +124,27 @@ function askPermission(toolCallId) {
   return { id, answer: new Promise((resolve) => waiting.set(id, resolve)) };
 }
 
+/** Une cellule `edit()` : `a.txt` laissé à `after`, `neuf.txt` créé, diffs à la forme du pont. */
+function editCell(id, after) {
+  const cwd = process.cwd();
+  writeFileSync(join(cwd, "a.txt"), after);
+  writeFileSync(join(cwd, "neuf.txt"), "nouveau\n");
+  const code = "await edit('a.txt', 'deux', 'DEUX')\nawait edit('neuf.txt', '', 'nouveau\\n')";
+  update({ sessionUpdate: "tool_call", toolCallId: "call-d", title: "Python cell", kind: "execute", status: "in_progress", rawInput: { code } });
+  update({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "call-d",
+    status: "completed",
+    content: [
+      { type: "content", content: { type: "text", text: `Edited ${cwd}/a.txt` } },
+      { type: "diff", path: `${cwd}/a.txt`, oldText: "deux", newText: "DEUX", _meta: { "_yus/startLine": 2 } },
+      { type: "diff", path: `${cwd}/neuf.txt`, newText: "nouveau\n", _meta: { "_yus/startLine": 1 } },
+    ],
+    prime: { ipython: { diffCount: 2 } },
+  });
+  return finish(id);
+}
+
 async function onPrompt(id, text) {
   switch (text) {
     case "bonjour":
@@ -217,6 +238,14 @@ async function onPrompt(id, text) {
       }
       return finish(id);
     }
+    // PR 3, étape 4 : une cellule qui modifie `a.txt` (`deux` → `DEUX`, ligne 2) et crée `neuf.txt`,
+    // fichiers écrits dans le dossier de travail comme le ferait le kernel, puis les diffs du pont.
+    case "diff":
+      return editCell(id, "un\nDEUX\ntrois\n");
+    // PR 3, étape 4 (demande de Yusuf) : `edit()` puis `bash("sed -i 's/DEUX/Deux/' a.txt")` sur le
+    // même fichier : le texte de l'edit n'est plus à sa ligne, « Rejeter » est impossible.
+    case "diffsed":
+      return editCell(id, "un\nDeux\ntrois\n");
     case "auth":
       return fail(id, -32603, "Internal error", {
         details: "No API key found for capture",

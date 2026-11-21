@@ -24,7 +24,9 @@ import type { Session } from "./session";
 import { authText, isAuthFailure } from "./ya/auth";
 import { features } from "./ya/methods";
 import { yaMeta } from "./ya/meta";
-import { bashRuns, cellOfEdits, cellOfRuns, fileEdits, fragments, isDeclined } from "./ya/cells";
+import { bashRuns, cellOfEdits, cellOfRuns, fileEdits, fragments, isDeclined, type Fragment } from "./ya/cells";
+import { diffFiles } from "./ya/diff-files";
+import { Reverts } from "./ya/reverts";
 
 /** How long streamed text gathers before the panel gets it. */
 const FLUSH_MS = 40;
@@ -146,6 +148,8 @@ export class Chat {
   private dirtyHeads = new Set<number>();
   private dirtyItems = new Map<number, Set<number>>();
   private commandsChanged = false;
+  /** yusAgent (PR 3, étape 4) : « Rejeter » les modifications des cellules (`src/ya/reverts.ts`). */
+  private readonly yaReverts = new Reverts(diffFiles);
   private timer: NodeJS.Timeout | undefined;
   private readonly listeners = new Set<(message: ChatMessage) => void>();
 
@@ -203,6 +207,8 @@ export class Chat {
     session.onChange(() => {
       const state = session.current;
       if (this.loading && (state?.kind === "open" || state?.kind === "failed")) this.loaded();
+      // yusAgent (PR 3, C13) : une autre session, les cellules d'avant ne se rejettent plus.
+      if (this.yaReverts.expire(this.session.sessionId)) this.yaRefreshAllTools();
       // Messages sent before the session opened go once it is.
       this.next();
     });
@@ -548,6 +554,13 @@ export class Chat {
   private async start({ id, text, images, edit, quiet }: Queued): Promise<void> {
     const sessionId = this.session.sessionId;
     if (!sessionId) return;
+    // yusAgent (PR 3, C11) : `[user-reverted] <chemin>` à la fin du message suivant un « Rejeter »,
+    // après une ligne vide, dans le même bloc texte (jamais au préfixe) ; pas sur une commande `/…`.
+    const reverted = quiet || text.trimStart().startsWith("/") ? [] : this.yaReverts.takeNotices();
+    if (reverted.length > 0) {
+      text = `${text}\n\n${reverted.join("\n")}`;
+      this.log.info(`chat: turn ${id} tells the agent: ${reverted.join(", ")}`);
+    }
     const run = this.run;
     const turn: Turn = {
       kind: "turn",
@@ -926,12 +939,69 @@ export class Chat {
       tool.runs = runs;
       if (tool.title === "Python cell") tool.cell = cellOfRuns(tool.cell, runs);
     }
-    const edits = fileEdits(fragments(update.content), this.files.cwd);
+    const all = fragments(update.content);
+    const edits = fileEdits(all, this.files.cwd);
     if (edits.length > 0) {
       tool.edits = edits;
       if (tool.title === "Python cell") tool.cell = cellOfEdits(tool.cell, edits);
+      if (!this.loading) void this.yaRecordReverts(tool, all);
     }
     if (tool.status === "failed" && isDeclined(tool.output)) tool.declined = true;
+  }
+
+  /** yusAgent (PR 3, étape 4) : l'après et l'avant de chaque fichier de la cellule, pour « Rejeter ». */
+  private async yaRecordReverts(tool: Tool, all: Fragment[]): Promise<void> {
+    const edits = tool.edits ?? [];
+    for (const edit of edits) edit.revert = { state: "checking" };
+    await this.yaReverts.record(tool.id, this.session.sessionId, edits, all);
+    for (const edit of edits) {
+      const status = this.yaReverts.status(tool.id, edit.path);
+      if (status?.state === "blocked") this.log.info(`chat: revert of ${edit.shown} unavailable: ${status.reason}`);
+    }
+    this.yaRefreshTool(tool);
+  }
+
+  /** yusAgent (PR 3, étape 4) : « Rejeter » la modification de `path` par la cellule `toolId`. */
+  async yaRevert(toolId: string, path: string): Promise<void> {
+    const status = await this.yaReverts.revert(toolId, path, { busy: this.busy, session: this.session.sessionId });
+    const why = status?.state === "ready" ? status.refused : status?.state === "blocked" ? status.reason : undefined;
+    this.log.info(`chat: revert ${path} (${toolId}): ${status?.state ?? "unknown"}${why ? `: ${why}` : ""}`);
+    const tool = this.yaFindTool(toolId);
+    if (tool) this.yaRefreshTool(tool);
+  }
+
+  /** yusAgent (PR 3, étape 4) : l'avant et l'après de la cellule dans `vscode.diff` (C9, C10). */
+  async yaOpenDiff(toolId: string, path: string): Promise<void> {
+    if (!(await this.yaReverts.openDiff(toolId, path))) this.log.info(`chat: no diff to open for ${path} (${toolId})`);
+  }
+
+  private yaFindTool(toolId: string): Tool | undefined {
+    for (const entry of this.entries) {
+      if (entry.kind !== "turn") continue;
+      const tool = entry.items.find((item): item is Tool => item.kind === "tool" && item.id === toolId && item.edits !== undefined);
+      if (tool) return tool;
+    }
+    return undefined;
+  }
+
+  /** Le statut de « Rejeter » de chaque fichier de la cellule, vers le panneau. */
+  private yaRefreshTool(tool: Tool): void {
+    for (const edit of tool.edits ?? []) edit.revert = this.yaReverts.status(tool.id, edit.path) ?? edit.revert;
+    for (const entry of this.entries) {
+      if (entry.kind !== "turn") continue;
+      const at = entry.items.indexOf(tool);
+      if (at < 0) continue;
+      this.dirtyItem(entry as Turn, at);
+      this.changed();
+      return;
+    }
+  }
+
+  private yaRefreshAllTools(): void {
+    for (const entry of this.entries) {
+      if (entry.kind !== "turn") continue;
+      for (const item of entry.items) if (item.kind === "tool" && item.edits) this.yaRefreshTool(item);
+    }
   }
 
   /** Reasoning opening and closing, a command's answer, a cut answer, a compaction, a goal's change; the end of a turn the agent started or replayed. */

@@ -847,7 +847,7 @@ function CallSheet({ tool, files, diff, failed }: { tool: Tool; files: string[];
         </div>
         {/* yusAgent (PR 3, C6, C7) : `bash()` réels, puis vrais diffs par fichier à la place du diff deviné. */}
         {tool.runs && <BashRuns runs={tool.runs} />}
-        {tool.edits && <FileEdits edits={tool.edits} />}
+        {tool.edits && <FileEdits toolId={tool.id} edits={tool.edits} />}
         {diff && !tool.edits && (
           <div className="is-sunk">
             <div className="call-diff-head">

@@ -127,6 +127,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.post({ type: "yaPermissions", asks: this.shown.agent.permissions.asks }); // yusAgent (PR 3)
         this.splashPlayed = true;
         break;
+      // yusAgent (PR 3, étape 4) : diffs des cellules et « Rejeter ».
+      case "yaOpenDiff":
+        void this.shown.chat.yaOpenDiff(message.toolId, message.path);
+        break;
+      case "yaRevert":
+        void this.shown.chat.yaRevert(message.toolId, message.path);
+        break;
       // yusAgent (PR 3) : réponse de la boîte ; ignorée si la demande s'est fermée entre-temps.
       case "permission": {
         const answered = this.shown.agent.permissions.answer(message.toolCallId, message.optionId);

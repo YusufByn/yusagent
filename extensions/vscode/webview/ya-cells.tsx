@@ -1,11 +1,18 @@
 // yusAgent (YA-10, ticket 24, PR 3) : ce que la carte d'une cellule montre en plus de celle
 // d'Unharnessed, d'après les données de notre pont (`src/ya/cells.ts`) :
 // - C6 : une ligne par `bash()` lu (commande, code de sortie, durée), sortie repliée ;
-// - C7 : les vrais diffs, un bloc par fichier, à la place du diff deviné du code.
+// - C7 : les vrais diffs, un bloc par fichier, à la place du diff deviné du code ;
+// - étape 4 (E6 a) : le nom du fichier ouvre l'avant et l'après de la cellule dans `vscode.diff`
+//   (C10) ; « Revert » restaure le fichier, grisé pendant un tour (garde-fou 1), avec la raison
+//   d'un refus ou d'une impossibilité.
 // Visuel provisoire (passe de design plus tard).
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 
-import type { BashRun, FileEdit } from "../src/protocol";
+import type { BashRun, FileEdit, RevertStatus } from "../src/protocol";
+import { post } from "./vscode";
+
+/** Un tour tourne (le chat est occupé) : « Revert » attend (garde-fou 1). Fourni par `Status.tsx`. */
+export const YaBusyContext = createContext(false);
 
 /** Pour l'en-tête : `exit 1` du premier `bash()` sorti en erreur, sinon undefined. */
 export function exitMeta(runs: BashRun[] | undefined): string | undefined {
@@ -69,13 +76,24 @@ function BashRunLine({ run }: { run: BashRun }) {
   );
 }
 
-export function FileEdits({ edits }: { edits: FileEdit[] }) {
+export function FileEdits({ toolId, edits }: { toolId: string; edits: FileEdit[] }) {
   return (
     <>
       {edits.map((edit) => (
         <div key={edit.path} className="is-sunk ya-edit">
           <div className="call-diff-head">
-            <span title={edit.path}>{edit.shown}</span>
+            {opensDiff(edit.revert) ? (
+              <button
+                className="ya-edit-file"
+                type="button"
+                title={`${edit.path}: open before and after the cell`}
+                onClick={() => post({ type: "yaOpenDiff", toolId, path: edit.path })}
+              >
+                {edit.shown}
+              </button>
+            ) : (
+              <span title={edit.path}>{edit.shown}</span>
+            )}
             <span className="call-meta">
               {edit.created && (
                 <>
@@ -90,7 +108,9 @@ export function FileEdits({ edits }: { edits: FileEdit[] }) {
                 </>
               )}
             </span>
+            <Revert toolId={toolId} edit={edit} />
           </div>
+          <RevertNote status={edit.revert} />
           <div className="call-lines">
             {edit.lines.map(([sign, text], at) => (
               <div key={at} className={sign === "+" ? "call-line is-add" : sign === "-" ? "call-line is-del" : "call-line"}>
@@ -103,6 +123,37 @@ export function FileEdits({ edits }: { edits: FileEdit[] }) {
       ))}
     </>
   );
+}
+
+/** « Revert », ou ce qu'il en est (rien tant que l'après de la cellule n'est pas lu). */
+function Revert({ toolId, edit }: { toolId: string; edit: FileEdit }) {
+  const busy = useContext(YaBusyContext);
+  const status = edit.revert;
+  if (status?.state === "reverted") return <span className="call-meta ya-reverted">Reverted</span>;
+  if (status?.state !== "ready") return null;
+  return (
+    <button
+      className="button is-secondary ya-revert"
+      type="button"
+      disabled={busy}
+      title={busy ? "Available once no turn is running" : "Restore the file as it was before this cell"}
+      onClick={() => post({ type: "yaRevert", toolId, path: edit.path })}
+    >
+      Revert
+    </button>
+  );
+}
+
+function RevertNote({ status }: { status: RevertStatus | undefined }) {
+  if (status?.state === "blocked") return <p className="note ya-revert-note">Revert unavailable: {status.reason}.</p>;
+  if (status?.state === "ready" && status.refused) return <p className="note ya-revert-note is-warning">{status.refused}</p>;
+  if (status?.state === "reverted") return <p className="note ya-revert-note">The agent learns it with your next message.</p>;
+  return null;
+}
+
+/** L'avant de la cellule a été retrouvé : le diff s'ouvre. */
+function opensDiff(status: RevertStatus | undefined): boolean {
+  return status?.state === "ready" || status?.state === "reverted";
 }
 
 /** `12 ms`, `1.4 s`. */

@@ -322,3 +322,27 @@ button.ya-run-head {
   opacity: 0.5;
   cursor: default;
 }
+
+/* yusAgent (PR 3, étape 4) : diffs des cellules, provisoire. */
+.ya-edit .call-diff-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ya-edit-file {
+  border: none;
+  padding: 0;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+}
+
+.ya-revert {
+  padding: 1px 8px;
+}
+
+.ya-revert-note.is-warning {
+  color: var(--vscode-editorWarning-foreground);
+}

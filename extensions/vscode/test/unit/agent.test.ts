@@ -2,7 +2,7 @@
 // historique), contre l'agent factice : vrai processus, vraies trames sur stdio, sans VS Code.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -198,6 +198,59 @@ test("boîte (PR 3, étape 3) : Allow → selected allow-once, la cellule tourne
   assert.equal(declined.status, "failed");
   assert.equal(declined.declined, true);
   assert.equal(permissions.waiting, 0);
+});
+
+test("diffs (PR 3, étape 4) : « Rejeter » restaure, retire le fichier créé, texte fixe au message suivant", async () => {
+  const h = open();
+  await ready(h);
+  const a = join(h.cwd, "a.txt");
+  const created = join(h.cwd, "neuf.txt");
+  writeFileSync(a, "un\ndeux\ntrois\n");
+  const tool = () => items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-d");
+  const states = () => tool()?.edits?.map((edit) => edit.revert);
+  // Garde-fou 1 : pas pendant un tour (une demande d'accord tient le tour ouvert).
+  shown(h).chat.send("diff", []);
+  await idle(h);
+  await waitFor(() => states()?.every((status) => status?.state === "ready"), "après lu, avant retrouvé");
+  assert.equal(readFileSync(a, "utf8"), "un\nDEUX\ntrois\n");
+  shown(h).chat.send("lent", []);
+  await waitFor(() => shown(h).agent.permissions.waiting === 1, "un tour en cours");
+  await shown(h).chat.yaRevert("call-d", a);
+  assert.deepEqual(states()?.[0], { state: "ready", refused: "Not while a turn runs." });
+  assert.equal(readFileSync(a, "utf8"), "un\nDEUX\ntrois\n", "rien d'écrit pendant le tour");
+  shown(h).chat.cancel();
+  await idle(h);
+  // Hors tour : restauré ; le fichier créé est retiré.
+  await shown(h).chat.yaRevert("call-d", a);
+  await shown(h).chat.yaRevert("call-d", created);
+  assert.deepEqual(states(), [{ state: "reverted" }, { state: "reverted" }]);
+  assert.equal(readFileSync(a, "utf8"), "un\ndeux\ntrois\n");
+  assert.equal(existsSync(created), false);
+  // Une commande `/…` ne porte pas le texte fixe ; le message suivant, si.
+  shown(h).chat.send("/rien", []);
+  await idle(h);
+  shown(h).chat.send("bonjour", []);
+  await idle(h);
+  const prompts = received(h.dir, lastPid(h))
+    .filter((frame) => frame.method === "session/prompt")
+    .map((frame) => (frame.params as { prompt: { text: string }[] }).prompt);
+  assert.deepEqual(prompts.at(-2), [{ type: "text", text: "/rien" }]);
+  assert.deepEqual(prompts.at(-1), [{ type: "text", text: "bonjour\n\n[user-reverted] a.txt\n[user-reverted] neuf.txt" }]);
+  const last = lastTurn(h) as { prompt?: { text: string } };
+  assert.equal(last.prompt?.text, "bonjour\n\n[user-reverted] a.txt\n[user-reverted] neuf.txt", "visible dans la bulle");
+});
+
+test("diffs (PR 3, étape 4) : edit() puis sed -i sur le même texte, « Rejeter » impossible avec la raison", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("diffsed", []);
+  await idle(h);
+  const tool = () => items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-d");
+  await waitFor(() => tool()?.edits?.[0].revert?.state === "blocked", "rejet impossible");
+  assert.deepEqual(tool()?.edits?.[0].revert, { state: "blocked", reason: "the edit's new text is no longer at line 2" });
+  assert.deepEqual(tool()?.edits?.[1].revert, { state: "ready" }, "l'autre fichier de la cellule reste rejetable");
+  await shown(h).chat.yaRevert("call-d", join(h.cwd, "a.txt"));
+  assert.equal(readFileSync(join(h.cwd, "a.txt"), "utf8"), "un\nDeux\ntrois\n", "rien d'écrit");
 });
 
 test("authentification : message fixe avec le chemin du binaire, deux formes", async () => {

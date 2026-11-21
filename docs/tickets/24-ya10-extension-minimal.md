@@ -1103,3 +1103,28 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
   - `acp_frames.py` : `A-display-auto : prompt={'stopReason': 'end_turn'} trames=21 processus restants=[]`, `B-basic-manual-reject : prompt={'stopReason': 'end_turn'} trames=13 processus restants=[]`, `CONFORME`, exit 0 ;
   - `compare_frames.py` : 8 comparaisons `IDENTIQUE` (dont `_yus/bashRuns`, les deux contenus `diff`, la demande d'accord, le refus, la fin de tour, `agent_message_chunk`), `écarts : 0`, exit 0.
   - **Contrôle négatif** : `--fake` sur l'agent factice d'avant l'alignement (`git show 46919eabc:extensions/vscode/test/fake-agent/fake-agent.mjs`) → 5 paires `DIFFÉRENT`, `écarts : 6`, exit 1.
+
+### PR 3, étape 4 : diffs et « Rejeter » (21/11/2026)
+
+- **Avant retrouvé** (`extensions/vscode/src/ya/diffs.ts`, logique pure) : à la fin de la cellule, l'« après » de chaque fichier est lu **sur disque** (pas dans un éditeur ouvert, qui ne recharge qu'un peu après l'écriture du kernel). Les fragments sont défaits du dernier au premier. Avant chaque fragment, `new_str` doit commencer à la ligne annoncée (décision de Yusuf) ; les « avant » candidats où `old_str` n'est pas unique sont écartés, comme `edit()` le refuserait. Fichier créé : l'« après » doit être `new_str` en entier, l'« avant » est « absent ». Sinon, pas de « Rejeter », avec la raison (`the edit's new text is no longer at line N`, `the edit's place on line N is ambiguous`…).
+- **Correction du constat de la PR 3** : une **suppression pure** (`new_str` vide) est ambiguë **même de lignes entières**, pas seulement en milieu de ligne. `garder\nfin\n` après la suppression de `retirer\n` admet aussi l'« avant » `garder\nfretirer\nin\n`, et rien dans les données du pont ne donne la colonne. Seule exception : la ligne d'arrivée est vide. **Avec C14 (a), une suppression pure ne se rejette donc presque jamais** ; l'option (b) (colonne envoyée par le pont, PR Rust à part) le lèverait. Point à trancher par Yusuf.
+- **« Rejeter »** (`src/ya/reverts.ts`) : par fichier et par cellule (C8) ;
+  - refusé pendant un tour (garde-fou 1, bouton grisé, refus aussi côté hôte) ;
+  - refusé si le texte actuel n'est plus l'« après » de la cellule (garde-fou 2 : texte de l'éditeur s'il est ouvert, modifications non enregistrées comprises, sinon disque), avec un message ;
+  - impossible pour une cellule d'une session précédente (C13 : identifiant de session de la cellule) ;
+  - restauration par `workspace.applyEdit` puis enregistrement ; fichier créé à la corbeille (`useTrash`, C12) ;
+  - sur un fichier modifié par deux cellules, seule la dernière se rejette ; une fois rejetée, la précédente se rejette à son tour (test).
+- **Texte au modèle** (C11) : `[user-reverted] <chemin relatif>`, une ligne par fichier, une seule fois, ajouté au bloc texte du message suivant après une ligne vide, visible dans la bulle. Une commande `/…` ne le porte pas ; il attend le message suivant.
+- **Diff** (C9, C10) : le nom du fichier dans la carte ouvre `vscode.diff` entre l'avant et l'après de la cellule, deux documents en lecture seule (schéma `yusagent-diff`). Le diff en ligne de la carte reste. Bouton **« Revert »** (C1 : anglais ; « Reject » est déjà le refus de la boîte de permission), puis « Reverted » et « The agent learns it with your next message. ».
+- **Accès aux fichiers** derrière une interface (`src/ya/diff-files.ts`) : Node par défaut (tests unitaires), VS Code branché à l'activation (`src/ya/diff-files-vscode.ts`).
+- **Préfixe** : ouverture et prompt sans rejet inchangés (fixture des trames inchangé). Après un rejet, seul le texte du message suivant change, à sa fin ; trame exacte vérifiée par les tests unitaires et e2e (`bonjour\n\n[user-reverted] a.txt\n[user-reverted] neuf.txt`).
+- **Tests** (Claude Code, en local) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run build && npm run test:unit` → `ℹ tests 49`, `ℹ pass 49`, `ℹ fail 0`.
+  - `test/unit/diffs.test.ts` (7) :
+    - fragments multiples ; création, et création puis modification (fragments de la capture `display`) ;
+    - **`edit()` puis `sed -i`** (demande de Yusuf) : texte de l'edit changé → refusé (`no longer at line 2`) ; ligne insérée avant → refusé ; autre ligne changée → fragment défait, le changement de `sed` reste ; fin du fichier retirée → refusé ;
+    - position sur la ligne, suppressions, ligne absente ;
+    - `Reverts` : restauration, fichier créé, texte fixe unique, garde-fous (tour, fichier changé, tampon non enregistré, autre session), deux cellules sur un fichier.
+  - `agent.test.ts` (2), contre l'agent factice qui écrit de vrais fichiers (scénarios `diff` et `diffsed`) : refus pendant un tour, restauration, fichier créé retiré, `/rien` sans le texte fixe puis `bonjour` avec ; `edit()` puis `sed -i 's/DEUX/Deux/'` → impossible avec la raison, l'autre fichier de la cellule reste rejetable.
+  - **Premiers lancements** : 3 échecs, tous dans mes données de test : un cas « `ab ab ab` », vraiment ambigu ; la suppression de lignes entières (constat corrigé ci-dessus) ; un `edit()` invalide (`old_str` non unique) ; et un premier `sed` (`DEUX` → `DEUX!`) qui laissait `new_str` à sa ligne, rejet donc possible d'après la règle. Code inchangé.
+  - **Contrôles négatifs** : garde-fou 1 retiré → `ℹ fail 2` ; garde-fou 2 retiré → `ℹ fail 2` ; texte fixe non ajouté → `ℹ fail 1` ; fichiers restaurés, 49/49.
+- **e2e** (CI) : `vscode.diff` ouvert (avant `un\ndeux\ntrois\n`, après `un\nDEUX\ntrois\n`), Revert de `a.txt` par `applyEdit` (fichier restauré et enregistré), `neuf.txt` à la corbeille, texte fixe dans le `session/prompt` suivant.
