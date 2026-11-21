@@ -87,12 +87,20 @@ test("méthode non servie : rejet sur place, aucune trame", async () => {
   assert.equal(received(h.dir, lastPid(h)).length, before);
 });
 
-test("Arrêter : session/cancel, puis cancelled à la demande ouverte ; ligne d'attente puis fermée", async () => {
+test("Arrêter : session/cancel, puis cancelled à la demande ouverte, demande retirée de la boîte", async () => {
   const h = open();
   await ready(h);
   shown(h).chat.send("lent", []);
   await waitFor(() => shown(h).agent.permissions.waiting === 1, "demande ouverte");
-  await waitFor(() => texts(h, "notice").some((text) => text.startsWith("Demande d'autorisation en attente")), "ligne d'attente");
+  assert.deepEqual(shown(h).agent.permissions.asks, [
+    {
+      toolCallId: "call-2",
+      options: [
+        { optionId: "allow-once", name: "Allow", kind: "allow_once" },
+        { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+      ],
+    },
+  ]);
   assert.equal(toolStatus(h, "call-2"), "pending", "carte en attente d'accord, pas en cours (défaut 3)");
   shown(h).chat.cancel();
   await idle(h);
@@ -102,7 +110,8 @@ test("Arrêter : session/cancel, puis cancelled à la demande ouverte ; ligne d'
   const answer = frames.findIndex((frame) => frame.id === "ya-permission-1");
   assert.ok(cancel >= 0 && answer > cancel, "session/cancel puis la réponse");
   assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-permission-1", result: { outcome: { outcome: "cancelled" } } });
-  assert.ok(texts(h, "notice").includes("Demande d'autorisation fermée."));
+  assert.deepEqual(shown(h).agent.permissions.asks, [], "demande retirée de la boîte");
+  assert.ok(!texts(h, "notice").some((text) => text.includes("Demande d'autorisation")), "plus de ligne d'attente");
   assert.equal((lastTurn(h) as { state?: string }).state, "cancelled");
 });
 
@@ -153,6 +162,42 @@ test("cartes (PR 3, étape 2) : bash() réels, vrais diffs, sortie sans les bloc
   const declined = items(h).find((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-r")!;
   assert.equal(declined.status, "failed");
   assert.equal(declined.declined, true);
+});
+
+test("boîte (PR 3, étape 3) : Allow → selected allow-once, la cellule tourne ; Reject → reject-once, Declined", async () => {
+  const h = open();
+  await ready(h);
+  const permissions = shown(h).agent.permissions;
+  shown(h).chat.send("accord", []);
+  await waitFor(() => permissions.waiting === 1, "demande ouverte");
+  assert.equal(permissions.answer("call-a", "autre-option"), false, "option inconnue : ignorée");
+  assert.equal(permissions.answer("call-x", "allow-once"), false, "appel inconnu : ignoré");
+  assert.equal(permissions.waiting, 1, "toujours ouverte");
+  assert.equal(permissions.answer("call-a", "allow-once"), true);
+  await idle(h);
+  const frames = received(h.dir, lastPid(h));
+  assert.deepEqual(frames.find((frame) => frame.id === "ya-permission-1"), {
+    jsonrpc: "2.0",
+    id: "ya-permission-1",
+    result: { outcome: { outcome: "selected", optionId: "allow-once" } },
+  });
+  assert.equal(toolStatus(h, "call-a"), "done");
+  assert.equal(permissions.answer("call-a", "allow-once"), false, "déjà réglée : rien ne part");
+  assert.equal(received(h.dir, lastPid(h)).filter((frame) => frame.id === "ya-permission-1").length, 1, "une seule réponse");
+
+  shown(h).chat.send("accord", []);
+  await waitFor(() => permissions.waiting === 1, "deuxième demande");
+  assert.equal(permissions.answer("call-a", "reject-once"), true);
+  await idle(h);
+  assert.deepEqual(received(h.dir, lastPid(h)).find((frame) => frame.id === "ya-permission-2"), {
+    jsonrpc: "2.0",
+    id: "ya-permission-2",
+    result: { outcome: { outcome: "selected", optionId: "reject-once" } },
+  });
+  const declined = items(h).filter((item): item is Extract<TurnItem, { kind: "tool" }> => item.kind === "tool" && item.id === "call-a").at(-1)!;
+  assert.equal(declined.status, "failed");
+  assert.equal(declined.declined, true);
+  assert.equal(permissions.waiting, 0);
 });
 
 test("authentification : message fixe avec le chemin du binaire, deux formes", async () => {

@@ -18,4 +18,14 @@ function probe(): Probe {
 
 onHostMessage((message) => {
   if (message.type === "probe") post({ type: "probeResult", probe: probe() });
+  // PR 3 : touches vers la boîte de permission, avec ou sans le focus, comme un clavier.
+  if (message.type === "probeKeys") {
+    const box = document.querySelector<HTMLElement>(".ya-permission");
+    if (message.focus) box?.focus();
+    else (document.activeElement as HTMLElement | null)?.blur();
+    const target = (document.activeElement as HTMLElement | null) ?? document.body;
+    for (const key of message.keys) target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    // Laisse React traiter les touches avant de lire la page.
+    setTimeout(() => post({ type: "probeResult", probe: probe() }), 50);
+  }
 });

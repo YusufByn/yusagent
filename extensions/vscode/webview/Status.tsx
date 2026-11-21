@@ -1,4 +1,5 @@
 import { useFeatures } from "./ya-features"; // yusAgent
+import { PermissionBox } from "./ya-permission"; // yusAgent (PR 3)
 import { useEffect, useState } from "react";
 import type { AgentState, ChatState, HistoryState, KernelState, Provider, SessionState } from "../src/protocol";
 import { Transcript } from "./Chat";
@@ -137,6 +138,8 @@ export function Status({
         )}
         {agent.kind === "failed" && <Failure agent={agent} />}
       </Transcript>
+      {/* yusAgent (PR 3, C2) : la boîte de permission, au-dessus de la saisie. */}
+      {agent.kind === "ready" && <PermissionBox chat={chat} />}
       {agent.kind === "ready" && (
         <Composer
           session={session}

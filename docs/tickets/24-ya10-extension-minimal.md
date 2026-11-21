@@ -1034,3 +1034,24 @@ Unharnessed n'a ni boîte ni vrais diffs : pour ces points, la recommandation es
 - **Effet dans l'extension, reproduit** : l'hypothèse de la PR I (fin d'un tour de l'agent sur `responseBoundary`, `extensions/vscode/src/ya/meta.ts`) ne tient pas. Avec ces trames rejouées par l'agent factice (test exploratoire jetable, retiré) : `busy 2 s après le réveil : true`, puis un message envoyé reste en file (`session/prompt reçus par l'agent : 1 ; en file : 1`). Le panneau reste occupé après tout `bash()` non lu, jusqu'à une action de l'utilisateur. Non vérifié : si « Stop » le débloque.
 - **Deux tours de réveil** partageraient aussi l'identifiant `0`.
 - **Correction** : l'extension ne peut pas déduire la fin d'un tour sans signal. Il faut que le pont publie le début et la fin des tours lancés par le worker (identifiant propre, `responseBoundary`). C'est du Rust dans `crates/pa-daemon/src/acp/`, hors du périmètre de la PR 3 (extension seule) : **arrêt sur ce point, décision de Yusuf**. L'étape 3 n'en dépend pas.
+
+### PR 3, étape 3 : boîte de permission (21/11/2026)
+
+- **C2** : la boîte s'affiche au-dessus de la saisie (`webview/ya-permission.tsx`, rendue dans `webview/Status.tsx`) pour la première demande ouverte de la conversation montrée : « Allow this Python cell to run? », « 1 of N » s'il y en a plusieurs, le code de la cellule pris dans sa carte (`pending`), replié au-delà de 8 lignes (« Show all N lines »), caractères de contrôle et invisibles écrits `\u{…}` comme le TUI (T2 du ticket 20). Une action par option du pont, avec son nom (« Allow », « Reject » ; D3). La ligne d'attente de la PR I est retirée.
+- **Fermeture** : la boîte suit les demandes ouvertes de l'hôte (`Permissions.asks`). Une demande se ferme sur une réponse, sur « Stop » (`cancelled`), sur `$/cancel_request` (E9) ou quand son appel sort de `pending`.
+- **Réponse** : message `permission` de la webview → `Permissions.answer` : `selected` avec l'option, seulement si c'est une option de la demande et si elle est encore ouverte (sinon ignorée, journalisée), une seule fois.
+- **C3** : `y` autorise, `n` ou `Esc` refuse, **seulement quand la boîte a le focus** ; **fenêtre de calme de 1 s** depuis l'ouverture de la boîte (ou l'arrivée de la demande suivante), **relancée par chaque frappe** pendant ce temps et par toute autre touche ensuite, comme le TUI (`crates/pa-tui/src/ya_permission_panel.rs:7-13`, `:29`) ; touches avec Ctrl, Cmd ou Alt ignorées ; **jamais Entrée** (`src/ya/permission-keys.ts`). La boîte ne prend pas le focus d'elle-même : un texte en cours de saisie dans la zone de message ne peut pas devenir une réponse. Il faut cliquer dans la boîte (ou y aller par Tab).
+- **C4** : badge sur l'icône de la vue tant qu'une demande attend, toutes conversations comprises (`src/view.ts`, `badge`) ; pas de notification.
+- **Préfixe** : inchangé. Ni l'ouverture ni le prompt ne changent (fixture des trames inchangé) ; la réponse à la demande est celle que le TUI donne déjà.
+- **Tests** (Claude Code, en local) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run build && npm run test:unit` → `ℹ tests 38`, `ℹ pass 38`, `ℹ fail 0`. Nouveaux : `test/unit/permission-keys.test.ts` (4 : fenêtre de calme, Entrée, modificateurs, `reset`, `visibleCode`) ; `agent.test.ts` « boîte » contre le scénario `accord` de l'agent factice (option ou appel inconnus ignorés, `selected allow-once` puis carte `done`, réponse unique, `reject-once` puis « Declined ») ; test « Arrêter » réécrit (demande retirée de la boîte, plus de ligne).
+  - **Premier lancement** : 2 échecs dans mes propres tests de la fenêtre de calme. Mon calcul oubliait qu'une frappe trop tôt relance la fenêtre ; tests corrigés, code inchangé.
+  - **Contrôles négatifs** : Entrée accepté comme accord → `ℹ fail 1` ; fenêtre de calme supprimée → `ℹ fail 3` ; `answer` sans contrôle de l'option → `ℹ fail 1`. Fichiers restaurés, 38/38.
+- **e2e** (CI) : test « boîte de permission » :
+  - code et actions affichés, badge à 1 ;
+  - `y` pendant la fenêtre de calme sans effet, `Entrée` sans effet, `y` sans le focus sans effet, aucune réponse partie ;
+  - puis `y` avec le focus → `selected allow-once`, cellule tournée, boîte fermée, badge retiré ;
+  - `Esc` → `reject-once`, « Declined » ;
+  - message `permission` du bouton → `reject-once`.
+  - Le test « Arrêter » vérifie la boîte puis sa fermeture.
+- **CI de l'étape 2** (rappel, run `ya-extension` 44912572991 sur `46919eabc`) : succès, e2e 7/7, `.vsix` 194 460 octets.
+- **Non fait, à trancher** : les boutons sont actifs dès l'ouverture. La fenêtre de calme ne vise que les touches (C3), donc un clic au moment où la boîte apparaît compte.

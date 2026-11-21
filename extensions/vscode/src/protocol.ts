@@ -268,6 +268,12 @@ export type BashRun = { command: string; exitCode: number | null; output: string
  */
 export type FileEdit = { path: string; shown: string; created: boolean; lines: DiffLine[]; added: number; removed: number };
 
+/** yusAgent (PR 3) : une option d'une demande d'accord du pont (`allow-once` « Allow », `reject-once` « Reject »). */
+export type PermissionOption = { optionId: string; name: string; kind: string };
+
+/** yusAgent (PR 3) : une demande d'accord ouverte, pour la boîte (le code vient de la carte de l'appel). */
+export type PermissionAsk = { toolCallId: string; options: PermissionOption[] };
+
 /** A line of a diff: kept, removed or added; `…` stands for lines left out. */
 export type DiffLine = [" " | "-" | "+" | "…", string];
 
@@ -538,6 +544,10 @@ export type HostMessage =
   | { type: "kernelPreview"; name: string; preview: VariablePreview }
   | { type: "history"; history: HistoryState }
   | { type: "chatPatch"; patch: ChatPatch }
+  /** yusAgent (PR 3) : les demandes d'accord ouvertes de la conversation montrée, dans l'ordre. */
+  | { type: "yaPermissions"; asks: PermissionAsk[] }
+  /** yusAgent (PR 3, tests e2e) : touches envoyées à la boîte (après lui avoir donné le focus, ou non). */
+  | { type: "probeKeys"; keys: string[]; focus: boolean }
   /**
    * A sent prompt, back in the message box to be changed and sent again in
    * place of turn `id`'s; or waiting message `id`, to be changed in its place.
@@ -578,6 +588,8 @@ export type WebviewMessage =
   | { type: "ready" }
   /** yusAgent : réponse de la webview à `probe` (tests e2e). */
   | { type: "probeResult"; probe: Probe }
+  /** yusAgent (PR 3) : la réponse de la boîte à la demande d'accord de `toolCallId`. */
+  | { type: "permission"; toolCallId: string; optionId: string }
   /** The screen now on display, for the log. */
   | { type: "screen"; screen: Screen }
   /** The panel crashed: what threw, and where. */

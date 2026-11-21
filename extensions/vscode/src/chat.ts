@@ -36,9 +36,6 @@ const RESTORED = "_unharnessed/kernel/restored";
 const STEER = "_unharnessed/session/steer";
 
 /** The panel's own commands, beside the agent's. */
-/** yusAgent : textes de la ligne d'une demande d'accord (boîte en PR 3). */
-const WAITING_PERMISSION = "Demande d'autorisation en attente (boîte en PR 3) : Arrêter pour annuler.";
-const CLOSED_PERMISSION = "Demande d'autorisation fermée.";
 
 const PANEL_COMMANDS: ChatCommand[] = [{ name: "new", description: "Start a new conversation", kind: "panel" }];
 
@@ -148,8 +145,6 @@ export class Chat {
   private restored: boolean | undefined;
   private dirtyHeads = new Set<number>();
   private dirtyItems = new Map<number, Set<number>>();
-  /** yusAgent : la ligne de chaque demande d'accord ouverte, par appel. */
-  private readonly permissionLines = new Map<string, { turn: Turn; at: number }>();
   private commandsChanged = false;
   private timer: NodeJS.Timeout | undefined;
   private readonly listeners = new Set<(message: ChatMessage) => void>();
@@ -163,13 +158,11 @@ export class Chat {
     private readonly onNew: () => void,
   ) {
     agent.onNotification("session/update", (params) => this.onUpdate(params));
-    // yusAgent : une demande d'accord sans boîte (PR 3) se voit par une ligne dans le tour.
-    agent.permissions.onChange((toolCallId, waiting) => this.permissionLine(toolCallId, waiting));
+    // yusAgent (PR 3) : les demandes d'accord vont à la boîte (`webview/ya-permission.tsx`), plus de ligne.
     agent.onNotification(RESTORED, (params) => this.onRestored(params));
     agent.onChange((state) => {
       this.run++;
       this.turns.clear();
-      this.permissionLines.clear();
       this.streaming = undefined;
       this.goal = undefined;
       this.showGoal(null);
@@ -600,23 +593,6 @@ export class Chat {
       // yusAgent : échec d'authentification, message fixe avec le chemin du binaire.
       this.end(this.sent ?? turn, "failed", isAuthFailure(error) ? authText(this.agent.binaryPath) : errorText(error));
     }
-  }
-
-  /** yusAgent : la ligne d'une demande d'accord ouverte, réécrite à sa fermeture (les éléments ne s'enlèvent pas). */
-  private permissionLine(toolCallId: string, waiting: boolean): void {
-    const turn = this.live ?? this.sent;
-    if (waiting) {
-      if (!turn) return;
-      this.push(turn, { kind: "notice", tone: "warning", text: WAITING_PERMISSION });
-      this.permissionLines.set(toolCallId, { turn, at: turn.items.length - 1 });
-      return;
-    }
-    const line = this.permissionLines.get(toolCallId);
-    if (!line) return;
-    this.permissionLines.delete(toolCallId);
-    line.turn.items[line.at] = { kind: "notice", tone: "info", text: CLOSED_PERMISSION };
-    this.dirtyItem(line.turn, line.at);
-    this.changed();
   }
 
   /** What goes to the agent: the text (a skill by the agent's name), its `@` links, its images. */

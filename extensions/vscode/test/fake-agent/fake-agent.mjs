@@ -195,6 +195,28 @@ async function onPrompt(id, text) {
         content: [{ type: "content", content: { type: "text", text: "[permission-denied] The user declined this cell; nothing was executed." } }],
       });
       return finish(id);
+    // PR 3 : une demande d'accord à laquelle la boîte répond ; la suite comme le pont
+    // (`crates/pa-cli/tests/ya_permissions_acp_e2e.rs:400-434`, trames capturées le 21/11/2026) :
+    // accord → `in_progress` puis `completed` ; refus ou `cancelled` → `failed` avec le texte fixe,
+    // et le tour s'arrête (D7).
+    case "accord": {
+      update({ sessionUpdate: "tool_call", toolCallId: "call-a", title: "Python cell", kind: "execute", status: "pending", rawInput: { code: "print('accord')" } });
+      const request = askPermission("call-a");
+      const result = await request.answer;
+      if (result?.outcome?.outcome === "selected" && result.outcome.optionId === "allow-once") {
+        update({ sessionUpdate: "tool_call_update", toolCallId: "call-a", status: "in_progress" });
+        update({ sessionUpdate: "tool_call_update", toolCallId: "call-a", status: "completed", content: [{ type: "content", content: { type: "text", text: "accord\n" } }] });
+        chunk("autorisée");
+      } else {
+        update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call-a",
+          status: "failed",
+          content: [{ type: "content", content: { type: "text", text: "[permission-denied] The user declined this cell; nothing was executed." } }],
+        });
+      }
+      return finish(id);
+    }
     case "auth":
       return fail(id, -32603, "Internal error", {
         details: "No API key found for capture",

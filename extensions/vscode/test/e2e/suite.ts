@@ -14,6 +14,7 @@ interface State {
   chat: ChatState;
   html: string;
   rendered: boolean;
+  badge?: number;
 }
 
 const control = process.env.FAKE_ACP_DIR as string;
@@ -22,6 +23,10 @@ const workspace = process.env.YUSAGENT_E2E_WORKSPACE as string;
 const state = async () => (await vscode.commands.executeCommand<State>("yusagent._test.state"))!;
 const post = (message: WebviewMessage) => vscode.commands.executeCommand("yusagent._test.post", message);
 const probe = () => vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probe");
+const probeKeys = (keys: string[], focus: boolean) =>
+  vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probeKeys", keys, focus);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const BOX = "Allow this Python cell to run?";
 const lastPid = () => starts(control).at(-1)!.pid;
 
 async function ready(): Promise<State> {
@@ -90,10 +95,10 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
-    "Arrêter : ligne d'attente, session/cancel puis cancelled, ligne fermée",
+    "Arrêter : boîte ouverte, session/cancel puis cancelled, boîte fermée",
     async () => {
       await post({ type: "send", text: "lent", images: [] });
-      await shows("Demande d'autorisation en attente", "ligne d'attente");
+      await shows(BOX, "boîte de permission");
       // PR 3, défaut 3 : la carte attend l'accord, elle ne tourne pas.
       const waiting = await shows("Awaiting permission", "carte en attente d'accord");
       assert.ok(!waiting.includes("Running"), "pas de « Running » avant l'accord");
@@ -104,8 +109,53 @@ const tests: [string, () => Promise<void>][] = [
       const answer = frames.findIndex((frame) => frame.id === "ya-permission-1");
       assert.ok(cancel >= 0 && answer > cancel, "session/cancel puis la réponse");
       assert.deepEqual(frames[answer], { jsonrpc: "2.0", id: "ya-permission-1", result: { outcome: { outcome: "cancelled" } } });
-      await shows("Demande d'autorisation fermée.", "ligne fermée");
-      await shows("Not run", "carte jamais lancée après Arrêter");
+      const after = await shows("Not run", "carte jamais lancée après Arrêter");
+      assert.ok(!after.includes(BOX), "boîte fermée");
+      assert.ok(!after.includes("Demande d'autorisation"), "plus de ligne d'attente");
+    },
+  ],
+  [
+    "boîte de permission (PR 3, étape 3) : code, badge, touches (calme de 1 s, focus, jamais Entrée), refus",
+    async () => {
+      await post({ type: "send", text: "accord", images: [] });
+      const box = await shows(BOX, "boîte de permission");
+      for (const part of ["print('accord')", "Allow", "Reject"]) assert.ok(box.includes(part), `boîte : ${part}`);
+      assert.equal((await state()).badge, 1, "badge sur l'icône de la vue");
+      // Fenêtre de calme : `y` tout de suite ne fait rien (et la relance).
+      assert.ok((await probeKeys(["y"], true))?.text.includes(BOX), "y pendant la fenêtre de calme : rien");
+      await sleep(1_100);
+      assert.ok((await probeKeys(["Enter"], true))?.text.includes(BOX), "Entrée : jamais une réponse");
+      await sleep(1_100);
+      assert.ok((await probeKeys(["y"], false))?.text.includes(BOX), "y sans le focus : rien");
+      assert.equal(received(control, lastPid()).filter((frame) => frame.id === "ya-permission-2").length, 0, "aucune réponse partie");
+      await probeKeys(["y"], true);
+      await idle();
+      assert.deepEqual(received(control, lastPid()).find((frame) => frame.id === "ya-permission-2"), {
+        jsonrpc: "2.0",
+        id: "ya-permission-2",
+        result: { outcome: { outcome: "selected", optionId: "allow-once" } },
+      });
+      const done = await shows("autorisée", "la cellule a tourné");
+      assert.ok(!done.includes(BOX), "boîte fermée après la réponse");
+      assert.equal((await state()).badge, undefined, "badge retiré");
+      // Esc refuse ; la carte dit « Declined » (le tour s'arrête, D7).
+      await post({ type: "send", text: "accord", images: [] });
+      await shows(BOX, "deuxième demande");
+      await sleep(1_100);
+      await probeKeys(["Escape"], true);
+      await idle();
+      assert.deepEqual(received(control, lastPid()).find((frame) => frame.id === "ya-permission-3")?.result, {
+        outcome: { outcome: "selected", optionId: "reject-once" },
+      });
+      await shows("Declined", "carte refusée");
+      // Le bouton « Reject » envoie le même message que la boîte.
+      await post({ type: "send", text: "accord", images: [] });
+      await shows(BOX, "troisième demande");
+      await post({ type: "permission", toolCallId: "call-a", optionId: "reject-once" });
+      await idle();
+      assert.deepEqual(received(control, lastPid()).find((frame) => frame.id === "ya-permission-4")?.result, {
+        outcome: { outcome: "selected", optionId: "reject-once" },
+      });
     },
   ],
   [

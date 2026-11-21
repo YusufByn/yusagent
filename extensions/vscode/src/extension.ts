@@ -47,9 +47,18 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.registerCommand("yusagent._test.post", (message: WebviewMessage) => view.receive(message)),
       vscode.commands.registerCommand("yusagent._test.state", () => {
         const { agent, session, chat } = all.shown;
-        return { agent: agent.current, session: session.current, chat: chat.current, html: view.html, rendered: view.rendered };
+        return {
+          agent: agent.current,
+          session: session.current,
+          chat: chat.current,
+          html: view.html,
+          rendered: view.rendered,
+          badge: view.badgeValue, // yusAgent (PR 3)
+        };
       }),
       vscode.commands.registerCommand("yusagent._test.probe", () => view.probe()),
+      // yusAgent (PR 3) : touches vers la boîte de permission.
+      vscode.commands.registerCommand("yusagent._test.probeKeys", (keys: string[], focus: boolean) => view.probeKeys(keys, focus)),
     );
   }
   conversations.start();
