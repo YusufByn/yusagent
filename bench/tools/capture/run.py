@@ -244,6 +244,8 @@ def prepare(binary: Path, cache: Path, version: str) -> None:
     server = CaptureServer(warm / "cap", "basic", [])
     try:
         write_models_json(warm / "agent", "anthropic-messages", server.port)
+        # YA-10 (ticket 24) : la chauffe aussi en permissions « auto » (manuel refusé en -p).
+        write_settings(warm / "agent")
         env = base_env(cache / "home", warm / "agent", warm / "tmp")
         result = run_binary(agent_cmd(binary), env, warm / "project", warm, sandboxed=False)
     finally:
