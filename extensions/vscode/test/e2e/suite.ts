@@ -119,6 +119,8 @@ async function permissionBox(): Promise<void> {
   assert.deepEqual(received(control, lastPid()).find((frame) => frame.id === "ya-permission-3")?.result, {
     outcome: { outcome: "selected", optionId: "reject-once" },
   });
+  // Le travail d'un tour fini est replié : on l'ouvre comme un utilisateur.
+  await userClicks("Worked");
   await shows("Declined", "carte refusée");
   // 3. Zone de message non vide : le focus y reste ; le bouton « Reject », actif après 1 s, refuse.
   assert.equal((await probeInput({ type: "brouillon en cours" }))?.focused, "composer");
@@ -248,6 +250,8 @@ const tests: [string, () => Promise<void>][] = [
       await vscode.commands.executeCommand("yusagent.open");
       await userClicks("Revert");
       await waitFor(async () => (await edits())?.some((edit) => edit.revert?.state === "reverted"), "premier Revert");
+      // Le panneau a remplacé ce bouton par « Reverted » avant le second clic.
+      await shows("Reverted", "premier Revert affiché");
       await userClicks("Revert");
       await waitFor(async () => (await edits())?.every((edit) => edit.revert?.state !== "ready" || edit.revert.refused), "Revert traité");
       assert.deepEqual((await edits())?.map((edit) => edit.revert), [{ state: "reverted" }, { state: "reverted" }]);
@@ -271,15 +275,17 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "send", text: "carte", images: [] });
       await idle();
       // En-tête : type et fichiers d'après les vrais diffs, lignes changées, premier `bash()` en erreur.
-      // `exit 1` n'est que sur cette carte (une carte plus ancienne dit aussi « Edited »).
+      // Le travail du tour est replié : « Worked » l'ouvre ; `exit 1` n'est que sur cette carte.
+      await userClicks("Worked");
       const shown = await shows("exit 1", "carte d'une cellule qui édite");
       for (const part of ["Edited", "a.py", "neuf.txt", "+3", "−1"]) assert.ok(shown.includes(part), `en-tête : ${part}`);
-      // Dépliée par des clics : une ligne par bash(), séparateurs lisibles (contrôle de Yusuf : « exit 0·32 ms »).
-      await userClicks("Worked", "Edited");
+      // Dépliée par un clic : une ligne par bash(), séparateurs lisibles (contrôle de Yusuf : « exit 0·32 ms »).
+      await userClicks("Edited");
       const sheet = await shows("$ false", "carte dépliée");
       assert.ok(sheet.includes("exit 0 · 6 ms") && sheet.includes("exit 1 · 3 ms"), "exit puis durée, séparés");
       await post({ type: "send", text: "refus", images: [] });
       await idle();
+      await userClicks("Worked");
       await shows("Declined", "carte d'une cellule refusée");
     },
   ],
