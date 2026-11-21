@@ -407,3 +407,35 @@ Branche `ya-24-extension`. Pas de build ni de test Rust en local (règle 8) : fo
 - **`compare.py --all`** compare aussi `acp` et `tui` et finit par `TOUT IDENTIQUE` ou `DIFFÉRENCES`. Contrôle négatif : `max_tokens` + 1 dans une requête `acp` copiée → `| acp | 4 | 4 | 3 | 1 |`, `DIFFÉRENCES`.
 - **Séquence complète relancée** (Claude Code, binaires `5c17d0dc5` et `3ffc2359c`, préparation forcée par `rm -f ~/.cache/yusagent-capture/prepared-<…>` avant chaque run) : `compare.py --all` : 16 lignes (13 cas, `display-anthropic`, `acp`, `tui`), **TOUT IDENTIQUE** ; `prefix_paths_check.py` **CONFORME** ; `display_check.py` **CONFORME** ; `grep -l "kernel startup failed"` : **0**.
 - **Rien sous `crates/`** dans ces commits (outils du banc et doc) : pas de nouveau build, le binaire de contrôle reste `3ffc2359c` (run 44885851682).
+
+### Contrôle de Yusuf sur `3ffc2359c` (branche à `96e767628`) et correctif du banc
+
+- **Résultat de Yusuf** : smoke `py-example-001` `resolved` deux fois, `find` vide, `TOUT IDENTIQUE` (9 requêtes) ; banc : les deux `run.py` `CONFORME`, `compare.py --all` `TOUT IDENTIQUE` (16 lignes), `prefix_paths_check.py` `CONFORME`, `grep` 0 ; **`display_check.py` NON CONFORME** sur `ya24-branche`.
+- **Cause** (constat de Claude Code, rien modifié avant) : les dossiers `--out` `ya24-main` et `ya24-branche` avaient déjà servi au run de Claude Code ; `run.py` réécrit les fichiers mais copie la session de `display-anthropic` sans vider le dossier (`copytree(..., dirs_exist_ok=True)`), et `display_check.py` lisait toutes les sessions : deux sessions (09:25 et 09:44 UTC), donc deux entrées `bashRuns` et quatre diffs, d'où les NON. La session du run de Yusuf, seule, est conforme (1 entrée `bashRuns`, 2 diffs avec `oldStr`, `newStr`, `startLine`). Les commandes remises ne contenaient pas le `rm -rf` des dossiers de run.
+- **Hypothèse du venv périmé écartée** : `bash.py` de `main` `faf539ffb6db566f…`, de la branche `d0523d0d6badf640…` (sha256) ; empreinte du runtime (`runtime_source.rs:63`) `75da30aea5ba906d…` et `bd4201dcc134c59e…` ; le venv partagé porte celui de la branche (`.bootstrap-version` `sha256:bd4201dcc134c59e…`). Le run de branche a émis `bashRuns` (seul le `bash.py` de la branche le fait) ; le run de `main` n'a eu aucun échec du kernel, or un écart d'empreinte force une reconstruction (`crates/pa-core/src/kernel/bootstrap/mod.rs:237-279`) qui échoue sans réseau : il a donc tourné avec le runtime de `main` (déduction, rien ne journalise le runtime par run).
+- **Comparaisons valables** : dans les deux runs de Yusuf, les 130 corps de requête sont tous postérieurs au début du run ; les runs du smoke sont dans des dossiers datés neufs (9 corps, 0 échec du kernel).
+- **Binaire** : pas de runtime périmé pour un utilisateur ; l'empreinte est recalculée à chaque démarrage du kernel et le venv unique (`~/.yusagent/kernel-venv`, `venv/layout.rs:28`) est reconstruit quand elle change (environ 30 s, réseau nécessaire ; hors ligne, erreur explicite).
+- **Correctif du banc** (décision de Yusuf) :
+  - `run.py` refuse un `--out` existant et non vide, avec la commande `rm -rf` à lancer ; il ne supprime rien ;
+  - `display_check.py` refuse un dossier qui contient plus d'une session (code de sortie 1, pas de rapport) ;
+  - **contrôles négatifs lancés par Claude Code** sur `bench/tools/capture/runs/ya24-branche` (dossier de Yusuf, rempli, deux sessions) : `run.py` → « --out … existe déjà et n'est pas vide : le supprimer (rm -rf …) ou choisir un autre dossier », code 1, 384 fichiers avant et après ; `display_check.py` → « NON CONFORME : 2 sessions dans … une seule attendue (dossier de run réutilisé ?) : supprimer le run et le relancer », code 1, `display-report.md` inchangé.
+
+### Commandes de contrôle (banc de capture)
+
+```sh
+git fetch origin && git checkout ya-24-extension && git pull --ff-only && git status --short --branch
+export DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short
+M=5c17d0dc543e746b71577a2ccc025cf1b7ef4b14; B=3ffc2359c516afa36d33fd2038ef86d37a595df5
+rm -rf bench/tools/capture/runs/ya24-main bench/tools/capture/runs/ya24-branche
+rm -f ~/.cache/yusagent-capture/prepared-36d9e7323c0ed353
+python3 bench/tools/capture/run.py --binary ~/.cache/yusagent-bin/$M/yusagent --out bench/tools/capture/runs/ya24-main
+rm -f ~/.cache/yusagent-capture/prepared-178b7fbdb65acf20
+python3 bench/tools/capture/run.py --binary ~/.cache/yusagent-bin/$B/yusagent --out bench/tools/capture/runs/ya24-branche
+python3 -I bench/tools/capture/compare.py bench/tools/capture/runs/ya24-main bench/tools/capture/runs/ya24-branche --all --out bench/tools/capture/runs/ya24-compare.md
+sed -n '/Toutes les requêtes/,$p' bench/tools/capture/runs/ya24-compare.md
+python3 -I bench/tools/capture/prefix_paths_check.py bench/tools/capture/runs/ya24-branche; echo "exit=$?"
+python3 -I bench/tools/capture/display_check.py bench/tools/capture/runs/ya24-branche; echo "exit=$?"
+grep -l "kernel startup failed" bench/tools/capture/runs/ya24-*/cases/*/cap/*.body.json bench/tools/capture/runs/ya24-*/acp/cap/*.body.json bench/tools/capture/runs/ya24-*/tui/cap/*.body.json | wc -l
+```
+
+Attendu : chaque `run.py` affiche `préparation (réseau autorisé)`, `display-anthropic: exit=[0]`, `acp : prompt={'stopReason': 'end_turn'} process restants=[]`, `tui : requêtes=4 erreur=None process restants=[]` et `CONFORME` ; `compare.py` : 16 lignes à 0 différence, `TOUT IDENTIQUE` ; `prefix_paths_check.py` `CONFORME`, `exit=0` ; `display_check.py` sept `oui`, `CONFORME`, `exit=0` ; `grep` `0`.
