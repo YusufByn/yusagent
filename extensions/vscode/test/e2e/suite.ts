@@ -225,9 +225,14 @@ const tests: [string, () => Promise<void>][] = [
         return undefined;
       };
       await waitFor(async () => (await edits())?.every((edit) => edit.revert?.state === "ready"), "avant retrouvé, Revert possible");
-      // Contrôle de Yusuf : tout par des clics d'utilisateur. Le travail du tour est replié dans
-      // « Worked » ; la carte se déplie, puis le nom du fichier ouvre le diff.
+      // Contrôle de Yusuf : rien d'affiché n'ignore les clics (repli fermé affiché mais `inert`).
+      assert.equal((await probe())?.visibleInert, 0, "aucun bloc inerte affiché");
+      // Le geste de Yusuf : un clic sur la carte telle qu'on la voit. Repliée dans « Worked », elle
+      // n'est pas affichée (« covered ») ; affichée, elle doit répondre, pas être inerte.
+      assert.notEqual((await probeInput({ userClick: "Edited" }))?.clicked, "inert", "carte affichée mais inerte");
+      // Puis tout par des clics d'utilisateur : le travail replié, la carte, le nom du fichier (diff).
       await userClicks("Worked", "Edited", "a.txt");
+      assert.equal((await probe())?.visibleInert, 0, "aucun bloc inerte affiché, replis ouverts");
       const sheet = await shows("Revert", "carte dépliée avec Revert");
       for (const part of ["DEUX", "nouveau", "a.txt", "neuf.txt"]) assert.ok(sheet.includes(part), `carte dépliée : ${part}`);
       const diff = await waitFor(() => {

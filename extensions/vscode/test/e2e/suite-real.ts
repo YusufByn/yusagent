@@ -147,6 +147,9 @@ const tests: [string, () => Promise<void>][] = [
       assert.equal(done?.cell?.kind, "shell");
       assert.equal(done?.cell?.command, "echo lu");
       await shows("bash fini", "réponse du modèle");
+      // Contrôle de Yusuf : rien d'affiché n'ignore les clics, et la carte telle qu'on la voit n'est pas inerte.
+      assert.equal((await probe())?.visibleInert, 0, "aucun bloc inerte affiché");
+      assert.notEqual((await probeInput({ userClick: "Ran" }))?.clicked, "inert", "carte affichée mais inerte");
       // Dépliée par des clics : la ligne du bash(), exit puis durée séparés.
       await userClicks("Worked", "Ran");
       assert.match(await shows("$ echo lu", "carte dépliée"), /exit 0 · \d+ ms/);

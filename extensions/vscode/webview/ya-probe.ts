@@ -14,6 +14,10 @@ function probe(): Probe {
   const active = document.activeElement;
   return {
     clicked,
+    visibleInert: Array.from(document.querySelectorAll<HTMLElement>("[inert]")).filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }).length,
     text: document.body.innerText,
     selects: Array.from(document.querySelectorAll("select")).map((select) => ({
       label: select.getAttribute("aria-label"),

@@ -611,6 +611,11 @@ export type Probe = {
   boxButtons: { name: string; disabled: boolean }[];
   /** PR 3 : l'issue du dernier `userClick`. */
   clicked?: "clicked" | "inert" | "covered" | "missing";
+  /**
+   * Contrôle de Yusuf : les blocs `inert` affichés (taille non nulle). Ce qu'ils contiennent se voit
+   * mais ignore les clics ; il en faut 0.
+   */
+  visibleInert: number;
 };
 
 /** yusAgent (PR 3, tests e2e) : voir `probeInput`. */
