@@ -136,8 +136,11 @@ pub(crate) async fn load_refusal(
     // the check looks again until `RELEASE_WAIT` has passed.
     let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
     loop {
-        if other_askers(link, daemon_session_id).await == 0 {
-            return None;
+        match other_askers(link, daemon_session_id).await {
+            Ok(0) => return None,
+            Ok(_) => {}
+            // Unknown is refused: a load that cannot be checked could open the session twice.
+            Err(refusal) => return Some(refusal),
         }
         if tokio::time::Instant::now() >= deadline {
             return Some("This conversation is open in another window.".to_string());
@@ -146,9 +149,15 @@ pub(crate) async fn load_refusal(
     }
 }
 
-/// The session's attached clients that answer, other than this bridge; `0` when unknown.
-async fn other_askers(link: &DaemonLink, daemon_session_id: &str) -> u64 {
-    let Ok(response) = link
+/// The refusal when the daemon cannot count the other windows: its worker does not serve the
+/// action `others` (C12), so the daemon was started by an older binary and kept running after the
+/// binary changed; the bridge does not detect a daemon of another build (ticket 29).
+pub(crate) const OLDER_DAEMON: &str = "The yusAgent daemon is older than this yusagent: it cannot tell whether this conversation is open in another window. Run `yusagent shutdown`, then Restart.";
+
+/// The session's attached clients that answer, other than this bridge; `Err` is the refusal when
+/// the daemon cannot tell (defect 1 of the X1 check: it was read as `0`, and the load went on).
+async fn other_askers(link: &DaemonLink, daemon_session_id: &str) -> Result<u64, String> {
+    let response = link
         .request(DaemonCommand::YaPermissions {
             id: None,
             active_session_id: daemon_session_id.to_string(),
@@ -156,18 +165,18 @@ async fn other_askers(link: &DaemonLink, daemon_session_id: &str) -> u64 {
             rest: crate::ya_permissions::asker_fields(),
         })
         .await
-    else {
-        return 0;
-    };
+        .map_err(|error| {
+            format!("Could not check whether this conversation is open in another window: {error}")
+        })?;
     if !response.success {
-        return 0;
+        return Err(OLDER_DAEMON.to_string());
     }
-    response
+    Ok(response
         .data
         .as_ref()
         .and_then(|data| data.get("others"))
         .and_then(Value::as_u64)
-        .unwrap_or(0)
+        .unwrap_or(0))
 }
 
 /// The `sessionId` a `session/load` asks for.
@@ -820,6 +829,64 @@ async fn released_session(
         }
         tokio::time::sleep(STOP_POLL).await;
     }
+}
+
+// The bridge's end
+
+/// yusAgent (YA-10, ticket 28, defect 2 of the X1 check): at the end of stdin, a conversation this
+/// bridge opened new where nothing was asked goes with it: its session stops in the daemon, then
+/// its file and artifacts are deleted, as the history's delete does (C4). VS Code closed or
+/// reloaded with a new conversation in the panel left one behind: invisible in the history (no
+/// message), a worker and a kernel until the daemon's idle eviction (90 min), then a file for
+/// good. It stays when its transcript has a message, when another client is attached (another
+/// window), and when the daemon cannot tell. A bridge killed by a signal leaves it: the
+/// extension's « Restart » resumes that file. Best-effort: a failure leaves the session as it is.
+pub(crate) async fn drop_if_empty(link: &DaemonLink, daemon_session_id: &str, file: &SessionFile) {
+    let (Some(id), Some(path)) = (file.id.as_deref(), file.path.as_deref()) else {
+        return;
+    };
+    if !transcript(link, daemon_session_id)
+        .await
+        .is_ok_and(|messages| messages.is_empty())
+    {
+        return;
+    }
+    if other_askers(link, daemon_session_id).await != Ok(0) {
+        return;
+    }
+    // This bridge is still attached (until its link drops): one client, itself.
+    let Ok(Some(live)) = live_session(link, id, path).await else {
+        return;
+    };
+    if live.attached_clients > 1 {
+        return;
+    }
+    let stopped = link
+        .request(DaemonCommand::Kill {
+            id: None,
+            active_session_id: live.active_session_id,
+            rest: Map::default(),
+        })
+        .await
+        .is_ok_and(|response| response.success);
+    if !stopped {
+        return;
+    }
+    let deadline = tokio::time::Instant::now() + STOP_WAIT;
+    while matches!(live_session(link, id, path).await, Ok(Some(_))) {
+        if tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(STOP_POLL).await;
+    }
+    let _ = link
+        .request(DaemonCommand::DeleteSavedSession {
+            id: None,
+            active_session_id: None,
+            session_path: path.to_string(),
+            rest: Map::default(),
+        })
+        .await;
 }
 
 struct LiveSession {
