@@ -1,6 +1,7 @@
 import type * as vscode from "vscode";
 import { errorText, type Agent, type SavedSession } from "./agent";
 import type { ConfigChange, ModelChoice, SessionConfig, SessionState } from "./protocol";
+import { yaResultMeta } from "./ya/meta"; // yusAgent (ticket 28)
 
 /** An ACP session config option, as the agent sends it (the parts we read). */
 type ConfigOption = {
@@ -115,7 +116,7 @@ export class Session {
       let result: {
         sessionId?: string;
         configOptions?: ConfigOption[];
-        _meta?: { unharnessed?: { saved?: { sessionId: string; path?: string } } };
+        _meta?: unknown;
       };
       if (saved) {
         // Its updates (the conversation) come before the answer.
@@ -126,7 +127,8 @@ export class Session {
       }
       if (run !== this.run) return;
       this.id = saved?.id ?? result.sessionId;
-      const file = result._meta?.unharnessed?.saved;
+      // yusAgent (ticket 28, C2) : `saved` dans le `_meta` du pont (`src/ya/meta.ts`).
+      const file = yaResultMeta(result).saved;
       this.file = file?.path ? { id: file.sessionId, path: file.path } : saved;
       const config = readConfig(result.configOptions ?? []);
       this.log.info(`session: ${saved ? `loaded ${saved.id}` : "opened"}, ${describe(config)}`);
@@ -136,6 +138,8 @@ export class Session {
       this.id = undefined;
       this.log.warn(`session: not ${saved ? "loaded" : "opened"}: ${errorText(error)}`);
       this.set({ kind: "failed", error: errorText(error) });
+      // yusAgent (ticket 28, D3) : agent arrêté, la raison affichée avec « Restart ».
+      void this.agent.abandon(errorText(error));
     }
   }
 

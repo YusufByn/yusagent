@@ -179,6 +179,18 @@ export class Agent {
   }
 
   /**
+   * yusAgent (ticket 28, D3) : la session ne s'est pas ouverte (`session/new` ou `session/load`
+   * refusé, par exemple une conversation ouverte dans une autre fenêtre). Le processus s'arrête, pour
+   * ne pas rester attaché à la session du démon, et le panneau dit pourquoi ; « Restart » réessaie.
+   */
+  abandon(error: string): Promise<void> {
+    if (this.state.kind !== "ready") return Promise.resolve();
+    this.log.warn(`agent stopped: the session did not open: ${error}`);
+    this.set({ kind: "failed", error, stderr: [], session: true });
+    return this.stop();
+  }
+
+  /**
    * Closes stdin: our bridge cancels the running turn and exits. SIGKILL if
    * it has not after `EXIT_WAIT_MS`.
    */

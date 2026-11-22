@@ -18,3 +18,22 @@ export function yaMeta<M>(update: { sessionUpdate?: string; _meta?: unknown }): 
   const ours = meta[PRIME_AGENT_META];
   return (ours && typeof ours === "object" ? { ...ours } : {}) as M;
 }
+
+/**
+ * Ticket 28 (C2) : les champs du pont dans le `_meta` d'une réponse ou d'une ligne de `session/list`
+ * (`saved` de `session/new` et `session/load`, `path` et `current` d'une ligne), sous les noms
+ * d'Unharnessed (`_meta.unharnessed`, lu tel quel s'il est là). `ya_history.rs` : `add_saved`,
+ * `list_rows`.
+ */
+export type YaResultMeta = {
+  saved?: { sessionId: string; path?: string };
+  path?: string;
+  current?: boolean;
+};
+
+export function yaResultMeta(result: unknown): YaResultMeta {
+  const meta = (result as { _meta?: unknown } | undefined)?._meta as Record<string, unknown> | undefined;
+  if (!meta || typeof meta !== "object") return {};
+  const found = meta.unharnessed ?? meta[PRIME_AGENT_META];
+  return found && typeof found === "object" ? (found as YaResultMeta) : {};
+}

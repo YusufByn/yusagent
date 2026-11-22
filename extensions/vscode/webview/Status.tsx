@@ -64,7 +64,13 @@ export function Status({
   }, [agent.kind]);
   // A saved conversation coming back: the agent restarts on it, then replays it.
   const kind = agent.kind === "failed" ? "failed" : chat.loading || agent.kind === "starting" ? "starting" : null;
-  const label = kind === "starting" && chat.loading ? "Opening the conversation" : kind && LABELS[kind];
+  // yusAgent (ticket 28, D3) : la session refusée, la raison du pont dessous.
+  const label =
+    kind === "starting" && chat.loading
+      ? "Opening the conversation"
+      : agent.kind === "failed" && agent.session
+        ? "Conversation not opened"
+        : kind && LABELS[kind];
   return (
     <div className="screen">
       <header className="topbar">

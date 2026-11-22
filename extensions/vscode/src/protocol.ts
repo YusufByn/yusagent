@@ -8,7 +8,8 @@
 export type AgentState =
   | { kind: "starting" }
   | { kind: "ready" }
-  | { kind: "failed"; error: string; stderr: string[] };
+  /** yusAgent (ticket 28, D3) : `session`, la session n'a pas pu s'ouvrir (`error` : la raison du pont). */
+  | { kind: "failed"; error: string; stderr: string[]; session?: true };
 
 /** One provider row, as the agent's `_unharnessed/providers/list` gives it. */
 export type Provider = {

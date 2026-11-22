@@ -238,6 +238,11 @@ export class Chat {
     return this.busy;
   }
 
+  /** yusAgent (ticket 28, D1) : au moins un tour, rejoué ou d'ici. */
+  get hasTurns(): boolean {
+    return this.entries.some((entry) => entry.kind === "turn");
+  }
+
   /** Messages wait for the session to open, the running turn to end, or play. */
   get waiting(): boolean {
     return this.queue.length > 0 || this.steering.length > 0;
@@ -523,6 +528,14 @@ export class Chat {
       const stops = stopped > 0 ? `; ${stopped} stopped` : "";
       this.log.info(`chat: loaded ${count(turns.length, "turn")}; ${summary(turns.flatMap((turn) => turn.items))}${stops}`);
       if (this.restored !== undefined) this.kernelLine(this.restored);
+      // yusAgent (ticket 28, D4) : un tour que l'agent faisait encore au chargement (C9, gardé ouvert
+      // par le pont) reste en cours : il occupe le chat (messages en attente, « Stop ») jusqu'à sa
+      // frontière, sans durée affichée (son début n'est pas connu ici).
+      const running = [...this.turns.values()].find((turn) => turn.state === "running");
+      if (running) {
+        this.live = running;
+        this.log.info(`chat: turn ${running.id} still running in the agent`);
+      }
     }
     this.restored = undefined;
     this.post({ type: "chat", chat: this.current });

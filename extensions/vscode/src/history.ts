@@ -4,6 +4,7 @@ import type { Conversations } from "./conversations";
 import { titleWithoutLinks } from "./files";
 import type { HistoryState, SavedChat } from "./protocol";
 import type { ShownAgent } from "./shown";
+import { yaResultMeta } from "./ya/meta"; // yusAgent (ticket 28)
 
 // Deletes a saved conversation (crates/uh-daemon/src/acp/history.rs).
 const DELETE = "_unharnessed/sessions/delete";
@@ -13,7 +14,7 @@ type Listed = {
   sessionId: string;
   title?: string;
   updatedAt?: string;
-  _meta?: { unharnessed?: { path?: string } };
+  _meta?: unknown;
 };
 
 /**
@@ -26,6 +27,8 @@ export class History {
   private chats: Omit<SavedChat, "current" | "mark">[] | null = null;
   private files = new Map<string, string>();
   private error: string | undefined;
+  /** yusAgent (ticket 28) : la ligne `current` du pont, tant que la conversation du panneau n'a pas d'id. */
+  private listedCurrent: string | undefined;
   private readonly listeners = new Set<() => void>();
 
   constructor(
@@ -35,11 +38,14 @@ export class History {
     private readonly log: vscode.LogOutputChannel,
   ) {
     conversations.onMarks(() => this.changed());
-    conversations.onShow(() => this.changed());
+    conversations.onShow(() => {
+      this.listedCurrent = undefined;
+      this.changed();
+    });
   }
 
   get current(): HistoryState {
-    const shown = this.conversations.shown.id;
+    const shown = this.conversations.shown.id ?? this.listedCurrent;
     const chats = this.chats?.map((chat) => {
       const mark = this.conversations.mark(chat.id);
       return { ...chat, current: chat.id === shown, ...(mark ? { mark } : {}) };
@@ -56,13 +62,15 @@ export class History {
   saved(id: string): SavedSession | undefined {
     const path = this.files.get(id);
     const chat = this.chats?.find((chat) => chat.id === id);
-    return path && chat && id !== this.conversations.shown.id ? { id, path } : undefined;
+    return path && chat && id !== (this.conversations.shown.id ?? this.listedCurrent) ? { id, path } : undefined;
   }
 
   async list(): Promise<void> {
     try {
       const { sessions } = await this.agent.request<{ sessions: Listed[] }>("session/list", { cwd: this.cwd });
-      this.files = new Map(sessions.map((row) => [row.sessionId, row._meta?.unharnessed?.path ?? ""]));
+      // yusAgent (ticket 28, C2) : `path` et `current` dans le `_meta` du pont (`src/ya/meta.ts`).
+      this.files = new Map(sessions.map((row) => [row.sessionId, yaResultMeta(row).path ?? ""]));
+      this.listedCurrent = sessions.find((row) => yaResultMeta(row).current)?.sessionId;
       this.chats = sessions.map((row) => ({
         id: row.sessionId,
         title: row.title && titleWithoutLinks(row.title),

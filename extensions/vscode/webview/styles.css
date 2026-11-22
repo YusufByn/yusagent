@@ -368,3 +368,55 @@ button.ya-run-head {
 .work-group.is-flat > .work-head-wrap {
   display: none;
 }
+
+/* yusAgent (ticket 28) : historique, une ligne par conversation, la corbeille à droite. */
+.menu-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.menu-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-row:hover,
+.history-delete:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.menu-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-delete {
+  padding: 2px 6px;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+}
+
+.history-delete.is-confirm,
+.menu-empty.is-error {
+  color: var(--vscode-errorForeground);
+}
