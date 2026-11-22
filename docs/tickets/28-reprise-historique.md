@@ -326,3 +326,32 @@ Contre-épreuve, **worker vivant** (fin de stdin sans arrêter le démon, puis `
 - **90 min** après la fermeture pour une conversation dont le pont est fermé autrement : fermeture de VS Code, conversation quittée vide, suppression exceptée (C4 arrête le worker).
 
 Pas de contradiction avec le plan : point ouvert inchangé (veille en double), à traiter avec l'étape 6 ou un ticket à part si Yusuf le veut.
+
+## 13. Réalisation de R1 (branche `ya-28-reprise`)
+
+Aucune mesure ne contredit le plan (§12). Code selon les décisions du §11.
+
+- **Pont** (`crates/pa-daemon/src/acp/ya_history.rs`, nouveau ; ajouts minimaux dans `daemon.rs`, `types.rs`, `meta.rs`, `mod.rs`) :
+  - `saved { sessionId, path }` dans les réponses de `session/new` et `session/load`, lus dans le résumé du `create` ;
+  - `session/load` : autre identifiant refusé (« This process holds session … »), conversation tenue par un autre client qui répond aux permissions refusée (« This conversation is open in another window. », après 3 s d'attente pour un client qui vient de fermer, cas « Relancer ») ;
+  - rejeu tour par tour depuis `get_session_messages`, par le mappeur du direct, avant la réponse, sous l'identifiant du fichier ; tour du worker en cours gardé ouvert (`AgentTurns::adopt`) ;
+  - `session/list` et `_unharnessed/sessions/delete` (`kill` de la session vivante, attente de sa sortie, puis `delete_saved_session`) ;
+  - capacités `loadSession: true` et `sessionCapabilities.list`.
+- **Journal d'usage** (`usage_log.rs`) : champ `prefix` ; une seule `invalidation` `resume_prefix_change` au premier appel après une reprise dont le préfixe a changé.
+- **Démon** (`ya_permissions.rs`) : action `others`.
+- **Tests** :
+  - unitaires : rejeu, liste, `saved`, publication, journal ;
+  - e2e : `crates/pa-cli/tests/ya_acp_resume_e2e.rs` ;
+  - test upstream `acp_initialize_matches_the_ts_golden` mis à jour (capacités).
+- **Banc** : cas `acp-resume` (`bench/tools/capture/acp_resume.py`, lancé par `run.py`). Sur le binaire de `main` `d2f54743e` : `SANS OBJET` (E seulement, pas de `loadSession`), commande et sortie ci-dessous.
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/acp_resume.py \
+  --binary ~/.cache/yusagent-bin/d2f54743e1b4ac98f40a6a72f3e098c94bf5fe39/yusagent --out <neuf>
+…
+- le binaire n'annonce pas loadSession
+
+SANS OBJET
+```
+
+**Préfixe envoyé au modèle** : inchangé pour une session neuve et pour une reprise sans changement (à prouver par la capture du binaire de la branche). Un seul ajout, en fin d'historique, déjà présent sur `main` : `[python-state-restored]` après une reprise avec un worker neuf (§12, M2).
