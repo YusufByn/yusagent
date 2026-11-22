@@ -164,15 +164,18 @@ const tests: [string, () => Promise<void>][] = [
       await shows("bash fini", "réponse du modèle");
       // Ticket 28 : la webview reçoit la fin du tour après l'hôte. Un clic sur « Ran » avant le repli
       // ouvrait la carte (travail encore à plat), le clic final la refermait : on attend le repli.
-      const toggle = async (verb: string) => (await probe())?.toggles.find((button) => button.text.startsWith(verb));
+      // La carte par sa commande : l'en-tête de groupe « Ran 1 Python cell », masqué pour une cellule
+      // seule, la précède dans la page.
+      const toggle = async (verb: string, target = "") =>
+        (await probe())?.toggles.find((button) => button.text.startsWith(verb) && button.text.includes(target));
       await waitFor(async () => {
         const worked = await toggle("Worked");
         return worked?.visible && !worked.inert && !worked.expanded;
       }, "tour replié, « Worked » affiché", SLOW);
-      assert.equal((await toggle("Ran"))?.expanded, false, "carte fermée au repli");
+      assert.equal((await toggle("Ran", "echo lu"))?.expanded, false, "carte fermée au repli");
       await userClicks("Worked");
       // Contrôle de Yusuf : rien d'affiché n'ignore les clics, et la carte telle qu'on la voit n'est pas inerte.
-      const card = await toggle("Ran");
+      const card = await toggle("Ran", "echo lu");
       assert.deepEqual([card?.visible, card?.inert, card?.expanded], [true, false, false], "carte affichée, fermée, pas inerte");
       assert.equal((await probe())?.visibleInert, 0, "aucun bloc inerte affiché");
       // Dépliée par un seul clic : la ligne du bash(), exit puis durée séparés.
