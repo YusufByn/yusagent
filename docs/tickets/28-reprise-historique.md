@@ -390,3 +390,32 @@ Premier run de la PR #78, sur le commit `cca4e7ea9` : `ci` 45020777967 ; build m
 - Le check requis `deny (cargo-deny advisories + licenses)` échoue sur un nouvel avis : **RUSTSEC-2026-0592**, `url` 2.5.8 (`Cargo.lock:272`, « Stack overflow in `Url::origin()` on nested `blob:` URLs »).
 - `Cargo.lock` n'est pas touché par cette PR. L'échec vaut pour toute PR tant que `url` n'est pas monté.
 - Correctif hors du périmètre du ticket 28 (montée de version d'une dépendance) : à trancher, PR à part ou dans celle-ci.
+
+## 15. Décisions de Yusuf sur le §14 (22/11/2026) et réalisation de J1
+
+- **`deny`** : PR à part, d'abord.
+  - Branche `ya-deps-url`, PR #79 : `url` 2.5.8 → 2.5.9, version corrigée selon l'avis (`patched = [">= 2.5.9"]`, `RUSTSEC-2026-0592.md` de `rustsec/advisory-db`) ; `form_urlencoded` 1.2.2 → 1.2.3, dépendance de `url` 2.5.9.
+  - Upstream n'avait pas monté `url` (`git show upstream/main:Cargo.lock` : 2.5.8), donc pas de cherry-pick. Aucune exception dans `deny.toml`.
+  - Après le merge : build macOS de `main`, puis rebase de `ya-28-reprise` sur `main`.
+- **J1 (a)**, dans la PR #78. Le journal d'usage est un ajout de yusAgent (T04, `docs/fork-changes.md:56-58`) : chemin oublié par notre fonction. Unharnessed n'a pas de journal d'usage : pas de décision à reprendre.
+  - **Réalisé** : `UsageJournal::for_session` reçoit le `conversation_log_path` du moteur, que seul le démon pose (le fichier durable du worker, `crates/pa-daemon/src/agent_engine/lifecycle.rs:1184`) et que le moteur utilise déjà en repli pour le journal de conversation et le dossier d'artefacts (`crates/pa-core/src/session_engine/engine.rs:225-236`, `:494-503`). Le parent d'une session enfant est lu dans l'en-tête du fichier durable. **Aucun fichier du démon touché.**
+  - **Tests** :
+    - e2e `an_acp_session_journals_its_calls_and_an_effort_change` (`ya_acp_resume_e2e.rs`) : journal présent à côté du fichier, `prefix` posé, changement d'effort journalisé ;
+    - cas `acp-resume` : journal de chaque session ACP (une ligne `main` par requête de la boucle) et sous-cas G (changement de modèle, `model_change`, seule invalidation).
+  - **Vu en échec sans le correctif** : le contrôle du journal du cas `acp-resume` sur le binaire de `main` `d2f54743e` (sortie ci-dessous). Le test e2e Rust n'a pas été lancé sans le correctif : pas de build Rust local (règle 8), et un seul push demandé pour la PR #78.
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/acp_resume.py \
+  --binary ~/.cache/yusagent-bin/d2f54743e1b4ac98f40a6a72f3e098c94bf5fe39/yusagent --out <neuf>
+# Cas `acp-resume` (ticket 28)
+
+- le binaire n'annonce pas loadSession
+- journal d'usage de la session ACP E : False
+
+SANS OBJET
+```
+
+## Notes pour X1
+
+- **M1** (§12) : le démon écrit le fichier de session dès `session/new`. L'extension juge une conversation « vide », et la ferme quand on la quitte, si son fichier n'existe pas (`extensions/vscode/src/conversations.ts:49-53`, `:60-63`, `:220`). **X1 doit juger autrement qu'une conversation est vide** : aucun tour dans le chat, par exemple.
+- Méthode de suppression : `_unharnessed/sessions/delete` (C3), nom déjà appelé par `src/history.ts:9`. Champs à lire dans notre `_meta` (`ai.primeintellect.prime-agent`) : `saved`, et `path` et `current` des lignes de `session/list` (C2).

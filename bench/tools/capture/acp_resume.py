@@ -9,7 +9,8 @@ avec le même projet ; fonctions de `run.py` et de `resume_probe.py`, sans les m
   C  reprise, worker vivant : prompt 1, fin de stdin, `--resume <fichier>`, `session/load`,
      prompt 2 ;
   D  reprise, worker neuf : comme C, démon arrêté avant la reprise ;
-  F  comme D, avec un skill ajouté dans le dossier agent avant la reprise.
+  F  comme D, avec un skill ajouté dans le dossier agent avant la reprise ;
+  G  sans reprise : prompt 1, changement de modèle (`session/set_config_option`), prompt 2.
 
 Contrôles (verdict `CONFORME` ou `NON CONFORME`) :
   - C : chaque requête identique à celle de E, corps entier (UUID normalisés) ;
@@ -20,12 +21,16 @@ Contrôles (verdict `CONFORME` ou `NON CONFORME`) :
     différent seulement par les lignes du skill, messages identiques hors avis ; dans le journal
     d'usage, **une seule** entrée `invalidation` de cause `resume_prefix_change` (`parts:
     ["system"]`), sur le premier appel après la reprise ; aucune dans E, C et D ;
+  - journal d'usage (J1 du ticket 28) : chaque session ACP écrit son `<id>.usage.ndjson` (E, C, D,
+    F, G), une ligne `main` par requête de la boucle ; dans G, le premier appel après le
+    changement de modèle porte l'`invalidation` `model_change` (décision du 21/11, ticket 24) ;
   - trames : `session/load` répond avec `saved` (identifiant et chemin du fichier) ; son rejeu
     arrive avant sa réponse, sous l'identifiant du fichier, entre `turnStart` (`prompt`) et
     `turnEnd` (`done`), avec le prompt ; ses mises à jour (texte, cellules et leurs résultats)
     sont celles du prompt 1 en direct (C et D).
 
-Un binaire sans `loadSession` (avant le ticket 28) : E seulement, verdict `SANS OBJET`.
+Un binaire sans `loadSession` (avant le ticket 28) : E seulement, verdict `SANS OBJET` ; le rapport
+dit quand même si E a écrit son journal d'usage (contrôle vu en échec sur le binaire de `main`).
 
 Usage seul (dossier neuf) :
     DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short \\
@@ -71,6 +76,30 @@ CORRELATION = ("promptTurnId", "eventSequence", "phase", "outcome")
 CONTENT = ("agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update")
 
 
+SECOND_MODEL = "capture-model-2"
+
+
+def write_two_models(agent: Path, port: int) -> None:
+    """G : deux modèles de capture sur le même serveur, pour un changement de modèle."""
+    run.write_models_json(agent, "anthropic-messages", port)
+    path = agent / "models.json"
+    config = json.loads(path.read_text())
+    models = config["providers"]["capture"]["models"]
+    models.append({**models[0], "id": SECOND_MODEL, "name": "Capture 2"})
+    path.write_text(json.dumps(config, indent=2) + "\n")
+
+
+def model_value(new: dict | None) -> tuple[str | None, str | None]:
+    """La valeur courante du sélecteur `model` et une autre, celle du second modèle."""
+    options = (((new or {}).get("result") or {}).get("configOptions")) or []
+    model = next((o for o in options if o.get("id") == "model"), {})
+    values = []
+    for entry in model.get("options") or []:
+        values += [v.get("value") for v in entry.get("options", [entry])]
+    other = next((v for v in values if v != model.get("currentValue") and SECOND_MODEL in str(v)), None)
+    return model.get("currentValue"), other
+
+
 def write_skill(agent: Path) -> None:
     skill = agent / "skills" / SKILL
     skill.mkdir(parents=True, exist_ok=True)
@@ -88,6 +117,8 @@ def sub_case(binary: Path, cache: Path, work: Path, project: Path, root: Path, n
     case.mkdir(parents=True)
     agent, env = probe.setup_in(work, cache, f"resume-{name}")
     server = probe.serve(case, agent)
+    if name == "G":
+        write_two_models(agent, server.port)
     socket = work / f"resume-{name}.sock"
     before = run.journal_sizes(agent)
     info: dict = {}
@@ -101,6 +132,14 @@ def sub_case(binary: Path, cache: Path, work: Path, project: Path, root: Path, n
         info["saved"] = saved_of(new)
         info["prompt1"] = b1.prompt(sid, run.PROMPT)
         info["prompt1_frames"] = [len(b1.transcript)]
+        if name == "G":
+            info["modele"], other = model_value(new)
+            switched = b1.request("session/set_config_option",
+                                  {"sessionId": sid, "configId": "model", "value": other})
+            info["changement_de_modele"] = [other, (switched or {}).get("result") is not None]
+            info["prompt2"] = b1.prompt(sid, run.PROMPT_2)
+            b1.close()
+            return info
         if name == "E" or not info["loadSession"]:
             if name == "E":
                 info["prompt2"] = b1.prompt(sid, run.PROMPT_2)
@@ -271,8 +310,16 @@ def check_frames(case: Path, info: dict) -> dict:
     return result
 
 
+def journal_matches_requests(root: Path, name: str) -> bool:
+    """Le journal du cas existe et compte une ligne `main` par requête de la boucle."""
+    entries = journal(root / name)
+    loops = [b for b in bodies(root / name) if b.get("tools")]
+    return bool(entries) and len([e for e in entries if e.get("kind") == "main"]) == len(loops)
+
+
 def check(root: Path, infos: dict) -> dict:
     report: dict = {"cas": infos}
+    report["journal_acp_E"] = journal_matches_requests(root, "E")
     if not infos["E"].get("loadSession"):
         report["verdict"] = "SANS OBJET"
         report["raison"] = "le binaire n'annonce pas loadSession"
@@ -337,12 +384,29 @@ def check(root: Path, infos: dict) -> dict:
                   and causes["F"][0][1].get("parts") == ["system"]
                   and causes["F"][0][0] == resumed_index)
     checks["journal"]["ok"] = journal_ok
+    # J1 : chaque session ACP a son journal ; G, changement de modèle journalisé.
+    present = {name: journal_matches_requests(root, name) for name in ("E", "C", "D", "F", "G")}
+    g_journal = [e for e in journal(root / "G") if e.get("kind") == "main"]
+    g_bodies = bodies(root / "G")
+    g_switch = probe.first_prompt2_index(g_bodies)
+    g_entry = g_journal[g_switch] if g_switch is not None and len(g_journal) > g_switch else {}
+    g_causes = [i for i, e in enumerate(g_journal) if e.get("invalidation")]
+    g_inv = g_entry.get("invalidation")
+    g_inv = g_inv if isinstance(g_inv, dict) else {}
+    model_ok = (infos["G"].get("changement_de_modele", [None, False])[1]
+                and g_inv.get("cause") == "model_change"
+                and str(g_inv.get("to", "")).endswith(SECOND_MODEL)
+                and g_causes == [g_switch])
+    checks["journal_acp"] = {"present": present, "G_invalidation": g_entry.get("invalidation"),
+                             "G_lignes_avec_invalidation": g_causes, "G_attendue": g_switch,
+                             "ok": all(present.values()) and bool(model_ok)}
     # Trames du rejeu (C et D).
     checks["trames"] = {name: check_frames(root / name, infos[name]) for name in ("C", "D")}
     ends = all(infos[name].get("prompt2") == {"stopReason": "end_turn"} for name in infos)
     ok = (ends and all(checks[name]["load"] for name in ("C", "D", "F"))
           and checks["C"]["identiques"] and checks["D"]["identiques_hors_avis"]
-          and f_ok and journal_ok and all(t["ok"] for t in checks["trames"].values()))
+          and f_ok and journal_ok and checks["journal_acp"]["ok"]
+          and all(t["ok"] for t in checks["trames"].values()))
     report["controles"] = checks
     report["verdict"] = "CONFORME" if ok else "NON CONFORME"
     return report
@@ -351,7 +415,9 @@ def check(root: Path, infos: dict) -> dict:
 def render(report: dict) -> str:
     lines = ["# Cas `acp-resume` (ticket 28)", ""]
     if report["verdict"] == "SANS OBJET":
-        return "\n".join(lines + [f"- {report['raison']}", "", "SANS OBJET"]) + "\n"
+        return "\n".join(lines + [f"- {report['raison']}",
+                                  f"- journal d'usage de la session ACP E : {report['journal_acp_E']}",
+                                  "", "SANS OBJET"]) + "\n"
     checks = report["controles"]
     lines += [
         "| Contrôle | Résultat |", "|---|---|",
@@ -363,6 +429,10 @@ def render(report: dict) -> str:
         f"{checks['F']['identiques_hors_skill_et_avis']} |",
         f"| Journal : une seule `resume_prefix_change`, dans F, au 1er appel repris | "
         f"{checks['journal']['ok']} ({checks['journal']['invalidations_reprise']}) |",
+        f"| Journal d'usage de chaque session ACP (E, C, D, F, G) | "
+        f"{checks['journal_acp']['present']} |",
+        f"| G : `model_change` au 1er appel après le changement, seul | "
+        f"{checks['journal_acp']['ok']} ({checks['journal_acp']['G_invalidation']}) |",
     ]
     for name, frames in checks["trames"].items():
         lines.append(f"| Trames {name} : rejeu avant la réponse, = direct ({frames['mises_a_jour_rejeu']}"
@@ -377,7 +447,7 @@ def resume_cases(binary: Path, cache: Path, work: Path, project: Path, out: Path
     root = out / "acp-resume"
     root.mkdir(parents=True)
     infos = {"E": sub_case(binary, cache, work, project, root, "E")}
-    for name in ("C", "D", "F"):
+    for name in ("C", "D", "F", "G"):
         if infos["E"].get("loadSession"):
             infos[name] = sub_case(binary, cache, work, project, root, name)
     report = check(root, infos)

@@ -15,6 +15,7 @@
 //!    stops the session in the daemon, then deletes its file and artifacts, its usage journal
 //!    kept.
 //! d. `session/load` of a conversation another client holds is refused (C12).
+//! e. An ACP session writes its usage journal, and an effort change is journaled (J1).
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -470,5 +471,68 @@ fn a_conversation_open_in_another_client_is_not_loaded() {
             .as_str()
             .is_some_and(|details| details.contains("another window")),
         "{refused}"
+    );
+}
+
+/// The `<id>.usage.ndjson` lines next to a session file.
+fn journal_lines(session_file: &Path) -> Vec<Value> {
+    let stem = session_file.file_stem().unwrap().to_str().unwrap();
+    let journal = session_file.with_file_name(format!("{stem}.usage.ndjson"));
+    std::fs::read_to_string(&journal)
+        .unwrap_or_else(|error| panic!("{}: {error}", journal.display()))
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// e. An ACP session (on the daemon) writes its usage journal next to its file, and an effort
+/// change rides the next agent-loop call as an invalidation (decision of 21/11/2026, ticket 24;
+/// J1 of ticket 28: the daemon path had no journal).
+#[test]
+fn an_acp_session_journals_its_calls_and_an_effort_change() {
+    let home = Home::new(&json!({ "engine": "faux", "reasoning": true, "responses": [
+        { "text": "first" },
+        { "text": "second" },
+    ] }));
+    let mut client = Client::spawn(&home, &[]);
+    let opened = client.open();
+    let acp_id = opened["sessionId"].as_str().unwrap().to_string();
+    let (_, path) = saved(&opened);
+    let effort = opened["configOptions"]
+        .as_array()
+        .and_then(|options| {
+            options
+                .iter()
+                .find(|option| option["id"] == "thought_level")
+        })
+        .unwrap_or_else(|| panic!("an effort picker: {opened}"))
+        .clone();
+    let current = effort["currentValue"].as_str().unwrap().to_string();
+    let other = effort["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|choice| choice["value"].as_str())
+        .find(|value| *value != current && *value != "off")
+        .unwrap_or_else(|| panic!("another effort: {effort}"))
+        .to_string();
+    let answered = client.prompt(&acp_id, "one");
+    assert_eq!(answered["result"]["stopReason"], "end_turn", "{answered}");
+    let set = client.call(
+        "session/set_config_option",
+        &json!({ "sessionId": acp_id, "configId": "thought_level", "value": other }),
+    );
+    assert!(set.get("result").is_some(), "{set}");
+    let answered = client.prompt(&acp_id, "two");
+    assert_eq!(answered["result"]["stopReason"], "end_turn", "{answered}");
+    let lines = journal_lines(&path);
+    let mains: Vec<&Value> = lines.iter().filter(|line| line["kind"] == "main").collect();
+    assert_eq!(mains.len(), 2, "{lines:?}");
+    assert!(mains[0].get("invalidation").is_none(), "{lines:?}");
+    assert!(mains[0]["prefix"]["system"].is_string(), "{lines:?}");
+    assert_eq!(
+        mains[1]["invalidation"],
+        json!({ "cause": "thinking_level_change", "from": current, "to": other }),
+        "{lines:?}"
     );
 }
