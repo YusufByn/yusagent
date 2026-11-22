@@ -547,3 +547,38 @@ python3 -I bench/tools/capture/compare_frames.py bench/tools/capture/runs/ya28-x
 ### Troisième push : le test corrigé lisait le mauvais bouton
 
 `ya-extension` run 45035376564 (commit `0837cc924`), job `e2e vrai binaire` 137247838915 : `13/14 réussis`, même cas en échec, cette fois à l'assertion `carte affichée, fermée, pas inerte` : `[false, true, false]` au lieu de `[true, false, false]`. Le bouton lu n'était pas la carte : `CallRun` (`webview/Chat.tsx`) rend toujours un en-tête de groupe « Ran 1 Python cell » (`aria-expanded`), masqué et inerte pour une cellule seule, avant la carte. La recherche `startsWith("Ran")` prenait cet en-tête. Correctif du test : la carte est cherchée par sa commande (`echo lu`).
+
+## 18. Contrôle manuel de X1 : deux défauts (22/11/2026)
+
+Contrôle de Yusuf sur le binaire `9937e4ff8` : points 1 à 6 et 8 conformes ; 9 (menu plus large que le chat) gardé pour la passe de design ; 10 couvert par l'e2e. **Deux défauts**, corrigés dans la PR #80 sur décision de Yusuf (périmètre élargi au pont, commits Rust séparés de ceux de l'extension).
+
+### Défaut 1 : double ouverture acceptée (point 7)
+
+- **Cause, prouvée par `ps` et reproduction.** Le démon de Yusuf (pid 64617, lancé à 16:43:32) et tous ses workers tournaient sur `d2f54743e`. Ce démon a été démarré par le premier pont de window1, puis gardé quand `yusagent.binaryPath` est passé à `9937e4ff8`.
+- **Mécanisme.** Le worker `d2f54743e` ne sert pas l'action `others` (`d2f54743e:crates/pa-daemon/src/ya_permissions.rs:389`). Le pont lisait cet échec comme « aucun autre client » (`9937e4ff8:crates/pa-daemon/src/acp/ya_history.rs:162-163`).
+- **Pourquoi l'e2e ne l'attrapait pas.** La CI démarre toujours un démon neuf du binaire testé.
+- **Reproduction** : `bench/tools/capture/c12_repro.py`, 4 cas (A charge ou crée, avec ou sans prompt). Démon `9937e4ff8` : B refusé partout. Démon `d2f54743e` avec ponts `9937e4ff8` : B accepté partout.
+- **Décision** :
+  - (b) dans cette PR : C12 échoue fermé, avec le refus `OLDER_DAEMON` (« Run `yusagent shutdown`, then Restart ») ;
+  - (a), la détection d'un démon d'un autre build : ticket 29 (`docs/tickets/29-demon-autre-build.md`, constat seulement).
+
+### Défaut 2 : sessions vides laissées dans le démon
+
+- **Cause, prouvée par le code et les logs.** La suppression D2 ne part que quand on change de conversation dans le panneau (`extensions/vscode/src/conversations.ts:228`). À la fermeture ou au rechargement de VS Code, `deactivate` → `stopAll` ferme seulement stdin de chaque pont (`src/extension.ts:81-82`, `src/conversations.ts:183-187`). La session résidente reste, avec son fichier (M1). Elle est invisible dans l'historique (`ya_history.rs:634`).
+- **Les cinq sessions vides** correspondent une à une aux lignes « new » de window1, jamais suivies de « closes » : 16:43:32, 16:56:09, 16:56:27, 16:57:16 et 17:14:42.
+- **Les « [3] new » avant chaque rechargement** : une conversation neuve ne naît que de `start()` (activation, toujours `[1]`), du bouton « New conversation » (`webview/Status.tsx:127`) ou d'un `/new` (`src/chat.ts:263-265`). C'est donc une action de l'utilisateur, et rien à corriger dans l'extension (explication acceptée par Yusuf).
+- **Décision : O1.** À la fin de stdin, le pont supprime une conversation qu'il a créée neuve et où rien n'a été demandé (`drop_if_empty`). Elle reste si un autre client est attaché, si le démon ne sait pas le dire, ou si le transcript a un message. Un pont tué par un signal la laisse, car « Restart » reprend ce fichier. D2 reste dans l'extension, comme filet.
+
+### Tests, vus en échec sans les correctifs
+
+Premier push (tests seuls, `8320ebc70`), rouge attendu, commentaire `issuecomment-7083257683` de la PR :
+
+| Test | Job | Échec |
+|---|---|---|
+| e2e vrai binaire : fermeture de VS Code avec une conversation neuve vide | ya-extension 45052494007, job 137300505495 | `délai dépassé : fichier de la conversation vide retiré` ; `14/15 réussis`, aucun processus restant |
+| `ya_acp_resume_e2e` : `an_empty_new_conversation_goes_with_its_bridge` | ci 45052494021, shard 2/8, job 137300592780 | `ya_acp_resume_e2e.rs:587` (fichier toujours là) |
+| `ya_history_tests` : `a_daemon_that_cannot_count_the_other_windows_refuses_the_load` | ci 45052494021, shard 3/8, job 137300592847 | `ya_history_tests.rs:444` (chargement non refusé) |
+
+Les gardes restent vertes avant et après le correctif : `an_empty_conversation_held_elsewhere_or_asked_in_stays`, la conversation tenue ailleurs dans l'e2e, `no_other_window_lets_the_load_go_on`.
+
+Échec hors périmètre dans le même run : `the_tui_answers_switches_to_auto_and_back` (shard 8/8, job 137300592813). Inscrit en « Instabilité probable » dans `docs/fork-changes.md`, sur décision de Yusuf.

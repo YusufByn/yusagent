@@ -648,6 +648,21 @@ Symptôme : « no storm body may land: every storm producer dropped at the reser
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
+## Instabilité probable : `ya_permissions_tui_pty_e2e` (YA-11, ticket 22)
+
+`crates/pa-cli/tests/ya_permissions_tui_pty_e2e.rs`, test `the_tui_answers_switches_to_auto_and_back` (`:391`), contrôle `assert_waiting` (`:61-63`, appelé `:423` et `:425`), shard 8/8 de `ci.yml`. Test du fork (commits `c98b8e612`, `fce42c20e`, `d957ebe7e`, ticket 22).
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 45037783868 | `2a418f405` (`ya-28-x1`, PR #80) | 1 | test réussi |
+| 45052494021 | `8320ebc70` (`ya-28-x1`, PR #80, push de tests seuls), 22/11/2026 | 1 (job 137300592813) | échec du shard 8/8 |
+
+Symptôme : « the loader awaits the permission » à `:63`. L'écran montre la demande (carte `◇ python · open("allowed.txt", 'w').write('x')`) et le chargeur `⠴ Waiting · 0s` au lieu de « Awaiting permission ». Ce push ne changeait aucun code du binaire : tests, script du banc, et dans `crates/pa-daemon/src/acp/daemon.rs` le seul `scripted_link` sous `#[cfg(test)]` (`git diff --stat 2a418f405 8320ebc70`). Le TUI ne passe pas par le pont ACP.
+
+Lien avec le point ouvert du ticket 22 (`docs/tickets/22-carte-cellule-permission.md:12-13`, `:36`) : l'ordre entre `tool_execution_start` et la demande de permission n'est pas garanti. La demande part directement par le hook, `tool_execution_start` par la file du tour, et elle peut le doubler. Le TUI garde la carte « non lancée » quand une demande ouverte porte son `toolCallId` (`apply.rs`), et la carte peut paraître lancée un court instant. Hypothèse, non vérifiée : l'écran est lu entre ces deux événements, avant que le chargeur passe à « Awaiting permission ».
+
+Si ce test retombe avec le même symptôme : relancer son job une fois, seul et sans push, et noter le run ici et dans la PR.
+
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
 Le shard 1 de `ci.yml` téléchargeait la release `v0.9.8` depuis `${GITHUB_REPOSITORY}`. Le fork n'a pas de release, l'étape échouait et faisait échouer tout le shard.
@@ -1334,7 +1349,19 @@ Décisions D1 à D4 du 22/11/2026 : `docs/tickets/28-reprise-historique.md`, §1
 | `bench/tools/capture/compare_frames.py`, `empty_delete_probe.py` | modif., nouveau (outils du fork) | Comparaison de l'ouverture (capacités d'`initialize`, `_meta` de `session/new`) ; contrôle de la suppression d'une session sans message. | YA-10 (ticket 28) |
 | `.changes/ya-28-x1.md` | nouveau | Fragment de changelog. | YA-10 (ticket 28) |
 
-Limites connues : une conversation vide laissée à la fermeture de VS Code n'est pas supprimée (son worker suit la veille du démon) ; le rejeu ne donne pas la durée d'un tour, ni d'un tour encore en cours au chargement.
+Contrôle manuel de X1 (22/11/2026, deux défauts ; `docs/tickets/28-reprise-historique.md`, §18), corrigés dans la même PR sur décision de Yusuf :
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/ya_history.rs`, `ya_history_tests.rs` | modif. (fichiers du fork) | Défaut 1 : C12 échoue fermé ; un démon qui ne sert pas l'action `others` (démon d'un binaire plus ancien, gardé après un changement de binaire, ticket 29) fait refuser `session/load` avec `OLDER_DAEMON` (« Run `yusagent shutdown`, then Restart »). Défaut 2 : `drop_if_empty`, à la fin de stdin, arrête la session d'une conversation ouverte neuve où rien n'a été demandé, puis supprime son fichier et ses artefacts ; gardée si son transcript a un message, si un autre client est attaché ou si le démon ne sait pas le dire. Tests unitaires contre un démon simulé. | YA-10 (ticket 28) |
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, environ 40 lignes) | Appel de `drop_if_empty` après `teardown`, pour une session créée neuve par ce pont (ni `--resume`, ni `--no-session`) ; `scripted_link` (`#[cfg(test)]`), lien au démon simulé pour les tests hors du module. | YA-10 (ticket 28) |
+| `crates/pa-cli/tests/ya_acp_resume_e2e.rs` | modif. (test du fork) | f : conversation neuve vide partie avec son pont (session et fichier) ; g : une vide tenue par un autre client, ou une où quelque chose a été demandé, reste. | YA-10 (ticket 28) |
+| `extensions/vscode/src/ya/empty.ts` | modif. (fichier du fork) | La suppression D2 trouve la conversation déjà partie avec son pont : notée comme telle dans le journal, plus en avertissement. | YA-10 (ticket 28) |
+| `extensions/vscode/test/e2e/suite-real.ts` | modif. | Fermeture de VS Code (chemin de `deactivate`) avec une conversation neuve vide : session et fichier retirés ; une vide tenue par une autre fenêtre reste. | YA-10 (ticket 28) |
+| `bench/tools/capture/c12_repro.py` | nouveau (outil du fork) | Contrôle C12 en quatre cas, avec un démon du même binaire ou d'un autre (`--daemon-binary`). | YA-10 (ticket 28) |
+| `docs/tickets/29-demon-autre-build.md` | nouveau | Constat : le pont garde un démon lancé par un autre binaire de même schéma. | YA-10 (ticket 29) |
+
+Limites connues : une conversation vide dont le pont est tué par un signal garde sa session et son fichier (« Restart » en a besoin), jusqu'à la veille du démon pour le worker ; une conversation reprise par `--resume` puis laissée vide n'est pas supprimée à la fin de son pont ; le rejeu ne donne pas la durée d'un tour, ni d'un tour encore en cours au chargement.
 
 ## Code repris d'Unharnessed
 
