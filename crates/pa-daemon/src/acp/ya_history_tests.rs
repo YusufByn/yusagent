@@ -405,3 +405,59 @@ async fn the_replay_publishes_each_turn_between_its_start_and_end() {
         ]
     );
 }
+
+/// A daemon answer: `data` on success, `error` otherwise.
+fn answer(
+    command: &str,
+    data: Option<Value>,
+    error: Option<&str>,
+) -> pa_types::daemon::DaemonResponse {
+    pa_types::daemon::DaemonResponse {
+        id: None,
+        command: command.to_string(),
+        success: error.is_none(),
+        data,
+        error: error.map(str::to_string),
+        error_info: None,
+    }
+}
+
+/// C12 on a daemon older than the binary (defect 1 of the X1 check): its worker does not serve the
+/// action `others`, so the bridge cannot tell whether another window holds the session. The load
+/// is refused, and the refusal says what to do.
+#[tokio::test]
+async fn a_daemon_that_cannot_count_the_other_windows_refuses_the_load() {
+    let link = super::super::daemon::scripted_link(|command| match command {
+        DaemonCommand::YaPermissions { action, .. } if action == "others" => answer(
+            "ya_permissions",
+            None,
+            Some("the action must be \"respond\", \"set_mode\", \"get\" or \"asker\""),
+        ),
+        other => panic!("unexpected command: {other:?}"),
+    });
+    let file = SessionFile {
+        id: Some("019a".to_string()),
+        path: None,
+    };
+    let refusal = load_refusal(&link, "daemon-1", &file, "019a")
+        .await
+        .expect("the load is refused");
+    assert!(refusal.contains("older than this yusagent"), "{refusal}");
+    assert!(refusal.contains("yusagent shutdown"), "{refusal}");
+}
+
+/// The same daemon question answered: no other window, the load goes on.
+#[tokio::test]
+async fn no_other_window_lets_the_load_go_on() {
+    let link = super::super::daemon::scripted_link(|command| match command {
+        DaemonCommand::YaPermissions { action, .. } if action == "others" => {
+            answer("ya_permissions", Some(json!({ "others": 0 })), None)
+        }
+        other => panic!("unexpected command: {other:?}"),
+    });
+    let file = SessionFile {
+        id: Some("019a".to_string()),
+        path: None,
+    };
+    assert_eq!(load_refusal(&link, "daemon-1", &file, "019a").await, None);
+}

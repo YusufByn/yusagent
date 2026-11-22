@@ -2114,6 +2114,37 @@ async fn teardown(
     }
 }
 
+/// yusAgent (YA-10, ticket 28): a link whose commands `answer` answers, for the bridge's tests
+/// outside this module (`ya_history_tests.rs`).
+#[cfg(test)]
+pub(crate) fn scripted_link(
+    answer: impl Fn(&DaemonCommand) -> DaemonResponse + Send + 'static,
+) -> Arc<DaemonLink> {
+    let (writer, mut commands) = mpsc::unbounded_channel::<String>();
+    let (_frames, frames) = mpsc::unbounded_channel();
+    let pending: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<DaemonResponse>>>> =
+        Arc::default();
+    let link = Arc::new(DaemonLink {
+        writer,
+        pending: Arc::clone(&pending),
+        closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        frames: Mutex::new(frames),
+        protocol_version: DAEMON_PROTOCOL_VERSION,
+        next_request_id: std::sync::atomic::AtomicU64::new(0),
+    });
+    tokio::spawn(async move {
+        while let Some(line) = commands.recv().await {
+            let envelope: DaemonCommandEnvelope = serde_json::from_str(&line).unwrap();
+            let mut response = answer(&envelope.command);
+            response.id = Some(envelope.id.clone());
+            if let Some(reply) = pending.lock().unwrap().remove(&envelope.id) {
+                let _ = reply.send(response);
+            }
+        }
+    });
+    link
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
