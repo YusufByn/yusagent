@@ -401,6 +401,10 @@ const resumeTests: [string, () => Promise<void>][] = [
         cell("call-long", "import time\ntime.sleep(15)\nprint('long fini')"),
         { text: "réveil long fini" },
         { text: "en attente fini" },
+        cell("call-r3", "h = bash('sleep 2; echo trois')\nprint('lancé 3')"),
+        { text: "lancé 3" },
+        cell("call-stop", "import time\ntime.sleep(8)\nprint('jamais')"),
+        { text: "jamais : arrêté" },
       ]);
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await ready();
@@ -470,6 +474,30 @@ const resumeTests: [string, () => Promise<void>][] = [
     },
   ],
   [
+    "tour de l'agent en cours au chargement (D4) : Stop par un clic, le tour s'arrête dans l'agent",
+    async () => {
+      await post({ type: "send", text: "trois", images: [] });
+      await idle();
+      await shows("lancé 3", "réponse avant le plantage");
+      const saved = (await state()).saved!;
+      await crashBridge();
+      await waitFor(() => readFileSync(saved.path, "utf8").includes("call-stop"), "cellule du réveil en cours", SLOW);
+      await userClicks("Restart");
+      await loaded();
+      assert.equal((await turns()).at(-1)?.state, "running", "réveil en cours après le chargement");
+      const started = Date.now();
+      await userClicks("Stop");
+      await idle(10_000);
+      assert.equal((await turns()).at(-1)?.state, "cancelled");
+      // Arrêté dans l'agent : sans arrêt, la cellule (8 s) finirait et la réponse suivante viendrait.
+      await sleep(12_000);
+      const text = readFileSync(saved.path, "utf8");
+      assert.ok(!text.includes("jamais : arrêté"), "le tour ne continue pas après Stop");
+      console.log(`Stop après chargement : tour fini en ${Date.now() - started} ms`);
+      relaunched = { pid: (await state()).pid, saved };
+    },
+  ],
+  [
     "historique : une deuxième conversation, puis retour à la première, telle quelle",
     async () => {
       writeScript([{ text: "autre fini" }]);
@@ -486,7 +514,7 @@ const resumeTests: [string, () => Promise<void>][] = [
       assert.equal(s.pid, relaunched.pid, "même agent : affichée telle quelle");
       assert.equal(s.chat.loading, false);
       assert.equal((await turns())[0]?.prompt?.text, "relance");
-      await shows("en attente fini", "conversation affichée");
+      await shows("lancé 3", "conversation affichée");
       assert.ok(alive(background.pid), "la deuxième reste ouverte en fond");
     },
   ],
