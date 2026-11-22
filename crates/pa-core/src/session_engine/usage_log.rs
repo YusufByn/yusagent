@@ -449,20 +449,17 @@ impl UsageJournal {
     /// the daemon, had no journal.
     #[must_use]
     pub fn for_session(manager: &SessionManager, durable_file: Option<&Path>) -> Option<Arc<Self>> {
-        let (session_file, parent) = match manager.get_session_file() {
-            Some(file) => (
+        let (session_file, parent) = if let Some(file) = manager.get_session_file() {
+            let parent = manager
+                .get_header()
+                .and_then(|header| header.parent_session.clone());
+            (file, parent)
+        } else {
+            let file = durable_file?;
+            (
                 file,
-                manager
-                    .get_header()
-                    .and_then(|header| header.parent_session.clone()),
-            ),
-            None => {
-                let file = durable_file?;
-                (
-                    file,
-                    read_session_header(file).and_then(|header| header.parent_session),
-                )
-            }
+                read_session_header(file).and_then(|header| header.parent_session),
+            )
         };
         let parent_session_id = parent
             .as_deref()
