@@ -12,7 +12,9 @@ fn custom(kind: &str, text: &str) -> Value {
 }
 
 fn assistant(blocks: Value, stop: &str) -> Value {
-    json!({ "role": "assistant", "content": blocks, "stopReason": stop, "timestamp": 1 })
+    let mut message = json!({ "role": "assistant", "stopReason": stop, "timestamp": 1 });
+    message["content"] = blocks;
+    message
 }
 
 fn cell(id: &str, code: &str) -> Value {
@@ -20,11 +22,13 @@ fn cell(id: &str, code: &str) -> Value {
 }
 
 fn result(id: &str, text: &str, details: Value) -> Value {
-    json!({
+    let mut message = json!({
         "role": "toolResult", "toolCallId": id, "toolName": "python_repl",
-        "content": [{ "type": "text", "text": text }], "details": details,
+        "content": [{ "type": "text", "text": text }],
         "isError": false, "timestamp": 1,
-    })
+    });
+    message["details"] = details;
+    message
 }
 
 /// Each update as its `sessionUpdate` tag (and the text of a chunk).

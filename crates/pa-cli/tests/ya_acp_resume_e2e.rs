@@ -298,7 +298,7 @@ fn a_resumed_session_replays_its_turns_then_takes_a_prompt() {
         &json!({ "sessionId": file_id, "mcpServers": [] }),
     );
     assert_eq!(loaded["result"]["sessionId"], json!(file_id), "{loaded}");
-    assert_eq!(saved(&loaded["result"]), (file_id.clone(), path.clone()));
+    assert_eq!(saved(&loaded["result"]), (file_id.clone(), path));
     let answer_at = second
         .seen
         .iter()
