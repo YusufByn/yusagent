@@ -7,15 +7,24 @@
 //   `[bash-done]`, ticket 25) ouvert par `turnStart` et fermé sur `responseBoundary`, message suivant
 //   envoyé tout de suite ; suppression pure par `edit()` après un emoji, puis « Revert » (ticket 26 :
 //   colonne du pont), fichier revenu octet pour octet ;
+// - ticket 28 (reprise, historique, suppression ; clics sur l'élément réellement sous le pointeur) :
+//   conversation neuve quittée vide, supprimée (session arrêtée dans le démon, fichier retiré) ;
+//   « Restart » après un plantage du pont (SIGKILL) : la conversation revient par `session/load`,
+//   avec le tour lancé par l'agent pendant que le chat était fermé ; tour de l'agent en cours au
+//   chargement : affiché en cours, message tapé mis en attente jusqu'à sa fin ; historique : retour
+//   à une conversation de fond, telle quelle ; double ouverture (un second client ACP tient la
+//   conversation) : refus affiché, agent arrêté, puis « Restart » la reprend une fois libérée ;
+//   suppression d'une conversation de fond : son agent, sa session du démon, son fichier ;
 // - fin : démon arrêté, aucun processus restant.
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import * as vscode from "vscode";
 
-import type { AgentState, ChatState, Probe, ProbeInput, SessionState, TurnItem, WebviewMessage } from "../../src/protocol";
+import type { AgentState, ChatState, HistoryState, Probe, ProbeInput, SessionState, TurnItem, WebviewMessage } from "../../src/protocol";
 import { waitFor } from "../helpers";
 
 interface State {
@@ -24,9 +33,13 @@ interface State {
   chat: ChatState;
   rendered: boolean;
   badge?: number;
+  pid?: number;
+  saved?: { id: string; path: string };
+  history: HistoryState;
 }
 
 type Tool = Extract<TurnItem, { kind: "tool" }>;
+type Turn = Extract<ChatState["entries"][number], { kind: "turn" }>;
 
 const workspace = process.env.YUSAGENT_E2E_WORKSPACE as string;
 const home = process.env.YUSAGENT_E2E_HOME as string;
@@ -277,6 +290,258 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
 ];
+
+// Ticket 28.
+
+const turns = async (): Promise<Turn[]> => (await state()).chat.entries.filter((entry): entry is Turn => entry.kind === "turn");
+const textOf = (turn: Turn) => turn.items.map((item) => (item.kind === "text" ? item.text : "")).join("");
+
+function alive(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Les sessions vivantes du démon de test (`list --json`) : identifiant du fichier, worker. */
+function daemonSessions(): { sessionId: string; workerPid?: number }[] {
+  const out = execFileSync(binary, ["list", "--json"], { cwd: workspace, env: process.env, encoding: "utf8", timeout: 30_000 });
+  return (JSON.parse(out) as { sessions?: { sessionId: string; workerPid?: number }[] }).sessions ?? [];
+}
+
+/** Plantage du pont de la conversation du panneau : SIGKILL, puis « Agent stopped ». */
+async function crashBridge(): Promise<void> {
+  const pid = (await state()).pid;
+  assert.ok(pid, "pid de l'agent");
+  process.kill(pid, "SIGKILL");
+  await waitFor(async () => (await state()).agent.kind === "failed", "agent arrêté", SLOW);
+  await shows("Agent stopped", "état arrêté");
+}
+
+/** La conversation revenue (rejeu fini, session ouverte). */
+async function loaded(): Promise<void> {
+  await waitFor(async () => {
+    const s = await state();
+    return s.session?.kind === "open" && !s.chat.loading && s.rendered;
+  }, "conversation rechargée", SLOW);
+}
+
+/** Le menu de l'historique ouvert par un clic, la ligne `title` listée. */
+async function historyShows(title: string): Promise<void> {
+  await userClicks("History");
+  await waitFor(async () => (await state()).history.chats?.some((chat) => chat.title === title), `« ${title} » dans l'historique`, SLOW);
+  await shows(title, `ligne « ${title} » affichée`);
+}
+
+/** Un second client ACP (une autre fenêtre) : le vrai binaire, mêmes HOME, TMPDIR et dossier. */
+class OtherWindow {
+  private readonly proc: ChildProcessWithoutNullStreams;
+  private readonly pending = new Map<number, (message: Record<string, unknown>) => void>();
+  private nextId = 1;
+
+  constructor(args: string[] = []) {
+    const env = { ...process.env };
+    delete env.PRIME_AGENT_KERNEL_PYTHON;
+    this.proc = spawn(binary, ["--mode", "acp", ...args], { cwd: workspace, env, stdio: "pipe" });
+    this.proc.stderr.resume();
+    createInterface({ input: this.proc.stdout }).on("line", (line) => {
+      let message: Record<string, unknown>;
+      try {
+        message = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        return;
+      }
+      if (message.method === undefined && typeof message.id === "number") {
+        this.pending.get(message.id)?.(message);
+        this.pending.delete(message.id);
+      }
+    });
+  }
+
+  call(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${method} : pas de réponse`)), SLOW);
+      this.pending.set(id, (message) => {
+        clearTimeout(timer);
+        resolve(message);
+      });
+      this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+    });
+  }
+
+  /** Fin de stdin, comme une fenêtre fermée. */
+  async close(): Promise<void> {
+    if (this.proc.exitCode !== null) return;
+    const exited = new Promise((resolve) => this.proc.once("exit", resolve));
+    this.proc.stdin.end();
+    await Promise.race([exited, sleep(15_000)]);
+    if (this.proc.exitCode === null) this.proc.kill("SIGKILL");
+  }
+}
+
+let relaunched: { pid?: number; saved?: { id: string; path: string } } = {};
+let background: { pid?: number; saved?: { id: string; path: string } } = {};
+
+const resumeTests: [string, () => Promise<void>][] = [
+  [
+    "conversation neuve quittée vide (D1, D2) : fermée, supprimée, sa session arrêtée dans le démon",
+    async () => {
+      // Le script des conversations qui suivent : lu par chaque worker à sa création.
+      writeScript([
+        cell("call-r1", "h = bash('sleep 3; echo fini')\nprint('lancé')"),
+        { text: "relance lancé" },
+        { text: "réveil pendant la fermeture" },
+        { text: "après relance" },
+        cell("call-r2", "h = bash('sleep 2; echo deux')\nprint('lancé 2')"),
+        { text: "lancé 2" },
+        cell("call-long", "import time\ntime.sleep(15)\nprint('long fini')"),
+        { text: "réveil long fini" },
+        { text: "en attente fini" },
+      ]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      const empty = (await state()).saved;
+      assert.ok(empty, "fichier de la conversation vide");
+      const worker = daemonSessions().find((row) => row.sessionId === empty.id)?.workerPid;
+      assert.ok(alive(worker), "worker de la conversation vide");
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await waitFor(() => !daemonSessions().some((row) => row.sessionId === empty.id), "session vide arrêtée dans le démon", SLOW);
+      await waitFor(() => !alive(worker), "worker arrêté", 15_000);
+      await waitFor(() => !existsSync(empty.path), "fichier vide retiré", 15_000);
+    },
+  ],
+  [
+    "Restart après un plantage du pont : la conversation revient, avec le tour lancé par l'agent pendant que le chat était fermé",
+    async () => {
+      await post({ type: "send", text: "relance", images: [] });
+      await idle();
+      await shows("relance lancé", "réponse avant le plantage");
+      const saved = (await state()).saved;
+      assert.ok(saved, "fichier de la conversation");
+      await crashBridge();
+      // Le worker vit sans client : le réveil de son bash() fait un tour, écrit dans le fichier.
+      await waitFor(() => readFileSync(saved.path, "utf8").includes("réveil pendant la fermeture"), "tour de réveil fait pendant la fermeture", SLOW);
+      await userClicks("Restart");
+      await loaded();
+      const back = await turns();
+      assert.equal(back[0]?.prompt?.text, "relance");
+      assert.equal(back[0]?.state, "done");
+      const wake = back.find((turn) => turn.wake === "bash");
+      assert.ok(wake, `tour de réveil rejoué : ${JSON.stringify(back.map((turn) => [turn.prompt?.text, turn.wake, turn.state]))}`);
+      assert.equal(wake.state, "done");
+      assert.equal(wake.prompt, undefined);
+      assert.match(textOf(wake), /réveil pendant la fermeture/);
+      await shows("réveil pendant la fermeture", "réveil affiché");
+      await post({ type: "send", text: "suite", images: [] });
+      await shows("après relance", "message suivant accepté");
+      await idle();
+      relaunched = { pid: (await state()).pid, saved: (await state()).saved };
+    },
+  ],
+  [
+    "tour de l'agent en cours au chargement (D4) : affiché en cours, message tapé mis en attente jusqu'à sa fin",
+    async () => {
+      await post({ type: "send", text: "deux", images: [] });
+      await idle();
+      await shows("lancé 2", "réponse avant le plantage");
+      const saved = (await state()).saved!;
+      await crashBridge();
+      await waitFor(() => readFileSync(saved.path, "utf8").includes("call-long"), "cellule longue du réveil en cours", SLOW);
+      await userClicks("Restart");
+      await loaded();
+      const last = (await turns()).at(-1);
+      assert.equal(last?.wake, "bash", "dernier tour : le réveil");
+      assert.equal(last?.state, "running", "réveil en cours après le chargement");
+      assert.equal((await state()).chat.busy, true, "le chat est occupé (Stop affiché)");
+      await post({ type: "send", text: "attente", images: [] });
+      await waitFor(async () => (await state()).chat.queue.length === 1, "message en attente", 5_000);
+      await waitFor(async () => (await turns()).find((turn) => turn.wake === "bash" && turn.state !== "running" && textOf(turn).includes("réveil long fini")), "réveil fini", SLOW);
+      const woke = (await turns()).filter((turn) => turn.wake === "bash").at(-1)!;
+      assert.equal(woke.state, "done");
+      assert.equal(woke.ms, undefined, "sans durée");
+      await shows("en attente fini", "message envoyé après la fin du tour");
+      await idle();
+      relaunched = { pid: (await state()).pid, saved };
+    },
+  ],
+  [
+    "historique : une deuxième conversation, puis retour à la première, telle quelle",
+    async () => {
+      writeScript([{ text: "autre fini" }]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await post({ type: "send", text: "autre", images: [] });
+      await idle();
+      await shows("autre fini", "réponse de la deuxième conversation");
+      background = { pid: (await state()).pid, saved: (await state()).saved };
+      await historyShows("relance");
+      await userClicks("relance");
+      await waitFor(async () => (await state()).saved?.id === relaunched.saved?.id, "première conversation dans le panneau", SLOW);
+      const s = await state();
+      assert.equal(s.pid, relaunched.pid, "même agent : affichée telle quelle");
+      assert.equal(s.chat.loading, false);
+      assert.equal((await turns())[0]?.prompt?.text, "relance");
+      await shows("en attente fini", "conversation affichée");
+      assert.ok(alive(background.pid), "la deuxième reste ouverte en fond");
+    },
+  ],
+  [
+    "double ouverture (C12) : refus affiché, agent arrêté ; libérée, Restart la reprend depuis son fichier",
+    async () => {
+      writeScript([{ text: "tenue ailleurs fini" }]);
+      const holder = new OtherWindow();
+      try {
+        await holder.call("initialize", { protocolVersion: 1, clientCapabilities: {} });
+        const opened = (await holder.call("session/new", { cwd: workspace, mcpServers: [] })).result as { sessionId: string };
+        const answer = await holder.call("session/prompt", { sessionId: opened.sessionId, prompt: [{ type: "text", text: "tenue ailleurs" }] });
+        assert.equal((answer.result as { stopReason?: string })?.stopReason, "end_turn", JSON.stringify(answer));
+        await historyShows("tenue ailleurs");
+        await userClicks("tenue ailleurs");
+        await waitFor(async () => {
+          const s = await state();
+          // `session` : la session ne s'est pas ouverte (D3) ; lu sans le type, pour tourner aussi sans le correctif.
+          return s.agent.kind === "failed" && (s.agent as { session?: boolean }).session === true ? s : undefined;
+        }, "session refusée", SLOW);
+        const shown = await shows("This conversation is open in another window.", "raison du refus affichée");
+        assert.match(shown, /Conversation not opened/);
+        assert.equal((await state()).pid, undefined, "agent arrêté");
+      } finally {
+        await holder.close();
+      }
+      await userClicks("Restart");
+      await loaded();
+      const back = await turns();
+      assert.equal(back[0]?.prompt?.text, "tenue ailleurs");
+      await shows("tenue ailleurs fini", "conversation reprise");
+    },
+  ],
+  [
+    "suppression d'une conversation de fond : son agent arrêté, sa session arrêtée dans le démon, son fichier retiré",
+    async () => {
+      const { pid, saved } = background;
+      assert.ok(saved && pid, "conversation de fond");
+      const worker = daemonSessions().find((row) => row.sessionId === saved.id)?.workerPid;
+      assert.ok(alive(worker), "worker de la conversation de fond");
+      await historyShows("autre");
+      await userClicks("Delete autre", "Delete");
+      await waitFor(async () => {
+        const chats = (await state()).history.chats;
+        return chats !== null && !chats.some((chat) => chat.id === saved.id);
+      }, "ligne retirée de l'historique", SLOW);
+      assert.equal((await state()).history.error, undefined);
+      assert.equal(existsSync(saved.path), false, "fichier retiré");
+      assert.equal(existsSync(join(saved.path, "..", "..", "session-artifacts", saved.id)), false, "instantané retiré");
+      assert.ok(!daemonSessions().some((row) => row.sessionId === saved.id), "session absente du démon");
+      await waitFor(() => !alive(worker) && !alive(pid), "agent et worker arrêtés", 15_000);
+    },
+  ],
+];
+tests.push(...resumeTests);
 
 /** Après un échec : chaque cellule de la conversation (statut, sortie, fichiers), et le workspace. */
 async function diagnose(): Promise<void> {

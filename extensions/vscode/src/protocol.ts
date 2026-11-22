@@ -626,7 +626,7 @@ export type ProbeInput = {
   click?: string;
   /**
    * Contrôle de Yusuf : un clic comme celui d'un utilisateur sur le dernier bouton dont le texte est
-   * ce texte (sinon le contient). Bouton amené à l'écran, élément réellement sous le pointeur
+   * ce texte (sinon le contient ; ticket 28 : un bouton d'icône, sans texte, par son `aria-label` exact). Bouton amené à l'écran, élément réellement sous le pointeur
    * (`elementFromPoint`) ; rien si cet élément est inerte, ou si ce n'est pas le bouton (recouvert,
    * masqué) ; sinon pointeur et souris enfoncés, relâchés, puis `click` sur cet élément.
    */

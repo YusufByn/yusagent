@@ -70,6 +70,11 @@ export class Agent {
     return this.saved;
   }
 
+  /** yusAgent (ticket 28, tests e2e) : le processus en cours. */
+  get pid(): number | undefined {
+    return this.proc?.pid;
+  }
+
   /** yusAgent: the binary as launched (the `/login` message names it). */
   get binaryPath(): string {
     return this.resolved ?? this.binary ?? "yusagent";
