@@ -581,6 +581,34 @@ const resumeTests: [string, () => Promise<void>][] = [
       await waitFor(() => !alive(worker) && !alive(pid), "agent et worker arrêtés", 15_000);
     },
   ],
+  [
+    "fermeture de VS Code avec une conversation neuve vide : sa session et son fichier retirés ; une vide tenue par une autre fenêtre reste",
+    async () => {
+      // X : neuve, vide, tenue par un autre client ; quittée pour Y (D2), elle doit rester.
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      const held = (await state()).saved;
+      assert.ok(held, "fichier de la conversation tenue ailleurs");
+      const holder = new OtherWindow(["--resume", held.path]);
+      try {
+        await holder.call("initialize", { protocolVersion: 1, clientCapabilities: {} });
+        // Y : neuve, vide, dans le panneau à la fermeture.
+        await post({ type: "newChat", draft: { text: "", images: [] } });
+        await ready();
+        const empty = (await state()).saved;
+        assert.ok(empty && empty.id !== held.id, "fichier de la conversation vide du panneau");
+        assert.ok(daemonSessions().some((row) => row.sessionId === empty.id), "session vide dans le démon");
+        // Le chemin de `deactivate` (fermeture ou « Reload Window ») : chaque agent s'arrête.
+        await vscode.commands.executeCommand("yusagent._test.stopAll");
+        await waitFor(() => !existsSync(empty.path), "fichier de la conversation vide retiré", SLOW);
+        await waitFor(() => !daemonSessions().some((row) => row.sessionId === empty.id), "session vide arrêtée dans le démon", SLOW);
+        assert.ok(existsSync(held.path), "la conversation tenue ailleurs garde son fichier");
+        assert.ok(daemonSessions().some((row) => row.sessionId === held.id), "la conversation tenue ailleurs garde sa session");
+      } finally {
+        await holder.close();
+      }
+    },
+  ],
 ];
 tests.push(...resumeTests);
 
