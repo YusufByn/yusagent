@@ -249,6 +249,70 @@ pub struct CallRecord {
     /// reported through the usage hook (`providerUsage` without `attribution`, see
     /// `split_attribution`); `None` writes nothing.
     pub provider_usage: Option<Value>,
+    /// yusAgent (YA-10, ticket 28): fingerprints of the system prompt and the tool definitions
+    /// the call was sent with (`prefix` field, agent-loop calls only); `None` writes nothing.
+    pub prefix: Option<PrefixPrint>,
+}
+
+/// yusAgent (YA-10, ticket 28, C8): what an agent-loop call sends before its messages, as two
+/// fingerprints (the first 16 hex digits of a SHA-256): the system prompt and the tool
+/// definitions. Compared across a resume to journal a changed prefix once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefixPrint {
+    pub system: String,
+    pub tools: String,
+}
+
+impl PrefixPrint {
+    /// The fingerprints of an LLM context's system prompt and tools.
+    #[must_use]
+    pub fn of_context(context: &pa_agent::stream::LlmContext) -> Self {
+        let tools = serde_json::to_vec(&context.tools).unwrap_or_default();
+        Self {
+            system: fingerprint(
+                context
+                    .system_prompt
+                    .as_deref()
+                    .unwrap_or_default()
+                    .as_bytes(),
+            ),
+            tools: fingerprint(&tools),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({ "system": self.system, "tools": self.tools })
+    }
+
+    fn from_json(value: &Value) -> Option<Self> {
+        Some(Self {
+            system: value.get("system")?.as_str()?.to_string(),
+            tools: value.get("tools")?.as_str()?.to_string(),
+        })
+    }
+
+    /// The parts that differ from `previous`: `system`, `tools`.
+    fn changed_since(&self, previous: &PrefixPrint) -> Vec<&'static str> {
+        let mut parts = Vec::new();
+        if self.system != previous.system {
+            parts.push("system");
+        }
+        if self.tools != previous.tools {
+            parts.push("tools");
+        }
+        parts
+    }
+}
+
+fn fingerprint(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(16);
+    for byte in &digest[..8] {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
 }
 
 #[derive(Debug, Default)]
@@ -260,6 +324,12 @@ struct JournalState {
     last_start_ms: HashMap<String, u64>,
     /// yusAgent (YA-10, ticket 24): provider, model and effort of the previous agent-loop call.
     last_main_config: Option<CallConfig>,
+    /// yusAgent (YA-10, ticket 28): the prefix of the previous agent-loop call.
+    last_main_prefix: Option<PrefixPrint>,
+    /// yusAgent (YA-10, ticket 28): the journal was continued after a restart and its first
+    /// agent-loop call is still to come: that call compares its prefix with the last one
+    /// journaled before.
+    resume_pending: bool,
 }
 
 /// yusAgent (YA-10, ticket 24): what an agent-loop call was sent with, compared from one call to
@@ -303,6 +373,12 @@ pub const CAUSE_MODEL_CHANGE: &str = "model_change";
 /// reasoning effort than the previous one.
 pub const CAUSE_THINKING_LEVEL_CHANGE: &str = "thinking_level_change";
 
+/// yusAgent (YA-10, ticket 28, C8): `invalidation` cause of the first agent-loop call after a
+/// resume whose system prompt or tools differ from the last call journaled before (a skill, an
+/// MCP server or an AGENTS file changed in between): `{"cause": "resume_prefix_change", "parts":
+/// ["system", "tools"]}`.
+pub const CAUSE_RESUME_PREFIX_CHANGE: &str = "resume_prefix_change";
+
 /// yusAgent (YA-10, ticket 24): one `invalidation` value from the entries of one call: absent
 /// without entry, the entry itself when there is one (the T05 shape), an array otherwise.
 fn merge_invalidations(mut entries: Vec<Value>) -> Option<Value> {
@@ -342,6 +418,9 @@ impl JournalState {
                         effort: text("effort"),
                     });
                 }
+                // yusAgent (YA-10, ticket 28): and its prefix, when the line has one.
+                state.last_main_prefix = entry.get("prefix").and_then(PrefixPrint::from_json);
+                state.resume_pending = true;
             }
         }
         state
@@ -409,12 +488,16 @@ impl UsageJournal {
     /// call (in this process or, after a restart, the last one journaled), then the
     /// invalidation noted by the context transform ([`Self::note_invalidation`]). The first call
     /// of a session has no previous call: no change.
+    /// yusAgent (YA-10, ticket 28): `prefix`, the call's [`PrefixPrint`]: the first call after a
+    /// restart journals [`CAUSE_RESUME_PREFIX_CHANGE`] when it differs from the last one
+    /// journaled before; once per restart.
     #[must_use]
     pub fn take_main_invalidation(
         &self,
         provider: &str,
         model: &str,
         effort: Option<&str>,
+        prefix: Option<&PrefixPrint>,
     ) -> Option<Value> {
         let current = CallConfig {
             provider: provider.to_string(),
@@ -423,11 +506,26 @@ impl UsageJournal {
         };
         let mut entries = {
             let mut state = lock(&self.state);
-            let changes = state
+            let mut changes = state
                 .last_main_config
                 .as_ref()
                 .map_or_else(Vec::new, |previous| current.changes_since(previous));
             state.last_main_config = Some(current);
+            if let Some(prefix) = prefix {
+                if std::mem::take(&mut state.resume_pending) {
+                    let parts = state
+                        .last_main_prefix
+                        .as_ref()
+                        .map_or_else(Vec::new, |previous| prefix.changed_since(previous));
+                    if !parts.is_empty() {
+                        changes.push(json!({
+                            "cause": CAUSE_RESUME_PREFIX_CHANGE,
+                            "parts": parts,
+                        }));
+                    }
+                }
+                state.last_main_prefix = Some(prefix.clone());
+            }
             changes
         };
         entries.extend(self.take_invalidation());
@@ -536,6 +634,9 @@ impl UsageJournal {
         put("sincePrevMs", json!(since_prev_ms));
         if let Some(history) = record.history_reasoning {
             put("historyReasoning", history.to_json());
+        }
+        if let Some(prefix) = &record.prefix {
+            put("prefix", prefix.to_json());
         }
         if let Some(invalidation) = &record.invalidation {
             put("invalidation", invalidation.clone());
@@ -676,6 +777,8 @@ struct Probe {
     user_timestamp: Option<i64>,
     /// yusAgent (T05, YA-05): the invalidation this call carries.
     invalidation: Option<Value>,
+    /// yusAgent (YA-10, ticket 28): the call's prefix fingerprints (agent-loop calls).
+    prefix: Option<PrefixPrint>,
     started_at: SystemTime,
     started: Instant,
     state: Mutex<ProbeState>,
@@ -707,6 +810,7 @@ impl Probe {
             effort,
             user_timestamp,
             invalidation: None,
+            prefix: None,
             started_at: SystemTime::now(),
             started: Instant::now(),
             state: Mutex::new(ProbeState::default()),
@@ -759,6 +863,7 @@ impl Probe {
             user_timestamp: self.user_timestamp,
             invalidation: self.invalidation.clone(),
             provider_usage,
+            prefix: self.prefix.clone(),
         });
     }
 }
@@ -789,9 +894,16 @@ pub fn instrument_stream_fn(
                     _ => None,
                 });
             let effort = wire_name(&options.reasoning);
-            // yusAgent (YA-10, ticket 24): a model or effort change rides the call as well.
+            // yusAgent (YA-10, ticket 24): a model or effort change rides the call as well;
+            // (ticket 28) and a prefix changed across a resume.
+            let prefix = (kind == CallKind::Main).then(|| PrefixPrint::of_context(&context));
             let invalidation = if kind == CallKind::Main {
-                journal.take_main_invalidation(&model.provider, &model.id, effort.as_deref())
+                journal.take_main_invalidation(
+                    &model.provider,
+                    &model.id,
+                    effort.as_deref(),
+                    prefix.as_ref(),
+                )
             } else {
                 None
             };
@@ -807,6 +919,7 @@ pub fn instrument_stream_fn(
                 user_timestamp,
             );
             probe.invalidation = invalidation;
+            probe.prefix = prefix;
             let probe = Arc::new(probe);
             let mut options = options;
             let inner_payload = options.on_payload.take();

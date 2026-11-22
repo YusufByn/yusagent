@@ -38,6 +38,7 @@ fn record(kind: CallKind, started_at: SystemTime, user_timestamp: Option<i64>) -
         user_timestamp,
         invalidation: None,
         provider_usage: None,
+        prefix: None,
     }
 }
 
@@ -704,4 +705,100 @@ async fn a_resumed_session_compares_with_the_last_journaled_main_call() {
         "same model across the restart"
     );
     assert_eq!(entries[2]["invalidation"]["cause"], json!("model_change"));
+}
+
+// yusAgent (YA-10, ticket 28, C8): the first agent-loop call after a resume journals a changed
+// system prompt or tool list once.
+
+/// One agent-loop call with `system` as its system prompt and `tools` tool names.
+async fn ya_prefix_call(journal: &Arc<UsageJournal>, system: &str, tools: &[&str]) {
+    let stream_fn = instrument_stream_fn(
+        Some(Arc::clone(journal)),
+        CallKind::Main,
+        scripted(json!({}), pa_agent::types::Usage::zero()),
+    );
+    let context = LlmContext {
+        system_prompt: Some(system.to_string()),
+        messages: Vec::new(),
+        tools: tools
+            .iter()
+            .map(|name| pa_agent::stream::ToolDefinition {
+                name: (*name).to_string(),
+                description: String::new(),
+                parameters: json!({}),
+            })
+            .collect(),
+    };
+    let mut stream = stream_fn(agent_model(), context, StreamRequestOptions::default())
+        .await
+        .unwrap();
+    while stream.next_event().await.is_some() {}
+}
+
+#[tokio::test]
+async fn a_resume_with_another_system_prompt_journals_one_invalidation() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let first = Arc::new(journal(dir.path(), None));
+        ya_prefix_call(&first, "skills: a", &["python_repl"]).await;
+        ya_prefix_call(&first, "skills: a", &["python_repl"]).await;
+    }
+    let reopened = Arc::new(journal(dir.path(), None));
+    ya_prefix_call(&reopened, "skills: a, b", &["python_repl"]).await;
+    ya_prefix_call(&reopened, "skills: a, b", &["python_repl"]).await;
+    let entries = lines(reopened.path());
+    assert_eq!(entries.len(), 4);
+    let system = entries[0]["prefix"]["system"].as_str().unwrap();
+    assert_eq!(system.len(), 16, "16 hex digits: {system}");
+    assert!(entries[0].get("invalidation").is_none());
+    assert!(entries[1].get("invalidation").is_none());
+    assert_eq!(
+        entries[2]["invalidation"],
+        json!({ "cause": "resume_prefix_change", "parts": ["system"] })
+    );
+    assert!(entries[3].get("invalidation").is_none(), "journaled once");
+    assert_ne!(
+        entries[2]["prefix"]["system"],
+        entries[1]["prefix"]["system"]
+    );
+    assert_eq!(entries[2]["prefix"]["tools"], entries[1]["prefix"]["tools"]);
+}
+
+#[tokio::test]
+async fn a_resume_with_the_same_prefix_journals_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let first = Arc::new(journal(dir.path(), None));
+        ya_prefix_call(&first, "skills: a", &["python_repl"]).await;
+    }
+    let reopened = Arc::new(journal(dir.path(), None));
+    ya_prefix_call(&reopened, "skills: a", &["python_repl"]).await;
+    let entries = lines(reopened.path());
+    assert!(entries[1].get("invalidation").is_none());
+}
+
+#[tokio::test]
+async fn a_resume_with_other_tools_names_the_tools() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let first = Arc::new(journal(dir.path(), None));
+        ya_prefix_call(&first, "p", &["python_repl"]).await;
+    }
+    let reopened = Arc::new(journal(dir.path(), None));
+    ya_prefix_call(&reopened, "q", &["python_repl", "apply_patch"]).await;
+    let entries = lines(reopened.path());
+    assert_eq!(
+        entries[1]["invalidation"],
+        json!({ "cause": "resume_prefix_change", "parts": ["system", "tools"] })
+    );
+}
+
+#[tokio::test]
+async fn a_prefix_change_without_a_resume_is_not_this_cause() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = Arc::new(journal(dir.path(), None));
+    ya_prefix_call(&journal, "p", &["python_repl"]).await;
+    ya_prefix_call(&journal, "q", &["python_repl"]).await;
+    let entries = lines(journal.path());
+    assert!(entries[1].get("invalidation").is_none());
 }
