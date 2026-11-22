@@ -33,6 +33,8 @@ if (dir) {
 }
 
 const SESSION_ID = "fake-session-1";
+// Ticket 28 : identifiant du fichier de session, un par lancement (comme le démon).
+const FILE_ID = `fake-file-${process.pid}`;
 const config = [
   {
     id: "model",
@@ -334,11 +336,30 @@ function onMessage(message) {
     case "initialize":
       return respond(id, {
         protocolVersion: scenario.protocolVersion ?? 1,
-        agentCapabilities: { loadSession: false },
+        // Ticket 28 : capacités du pont de `main` 9937e4ff8 (reprise, liste), comparées par
+        // `bench/tools/capture/compare_frames.py`.
+        agentCapabilities: {
+          loadSession: true,
+          promptCapabilities: { image: true, embeddedContext: true },
+          mcpCapabilities: { http: true },
+          sessionCapabilities: { close: {}, list: {} },
+        },
         agentInfo: { name: "fake-agent", version: "0" },
       });
     case "session/new":
-      return respond(id, { sessionId: SESSION_ID, configOptions: config });
+      // Ticket 28 : `saved` dans notre `_meta`, comme le pont. Le fichier n'est jamais écrit : une
+      // relance repart sur une conversation neuve (pas de `session/load` ici).
+      return respond(id, {
+        sessionId: SESSION_ID,
+        configOptions: config,
+        _meta: { "ai.primeintellect.prime-agent": { saved: { sessionId: FILE_ID, path: join(dir ?? process.cwd(), `${FILE_ID}.jsonl`) } } },
+      });
+    case "session/load":
+      return fail(id, -32602, "Invalid params", { details: "The fake agent loads no conversation." });
+    case "session/list":
+      return respond(id, { sessions: [] });
+    case "_unharnessed/sessions/delete":
+      return respond(id, {});
     case "session/prompt": {
       promptTurnId += 1;
       eventSequence = 0;
