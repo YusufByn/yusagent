@@ -659,6 +659,14 @@ def main() -> None:
     print(f"tui : requêtes={run_info['tui']['requests']} erreur={run_info['tui']['error']} "
           f"process restants={run_info['tui']['leftover_processes']}")
 
+    # YA-10 (ticket 28) : reprise ACP (`acp_resume.py`, dossier `acp-resume/`) ; le run échoue
+    # à la fin si le verdict est NON CONFORME (SANS OBJET pour un binaire sans `loadSession`).
+    sys.modules.setdefault("ya_capture_run", sys.modules[__name__])
+    acp_resume = _load_sibling("ya_acp_resume", "acp_resume.py")
+    resume_report = acp_resume.resume_cases(binary, cache, work, project, out)
+    run_info["acp-resume"] = {"verdict": resume_report["verdict"]}
+    print(f"acp-resume : {resume_report['verdict']} ({out / 'acp-resume' / 'resume-report.md'})")
+
     (out / "run.json").write_text(json.dumps(run_info, indent=2, ensure_ascii=False) + "\n")
     analysis_env = {"PATH": "/usr/bin:/bin", "HOME": str(cache / "home"),
                     "TIKTOKEN_CACHE_DIR": str(cache / "tiktoken")}
@@ -686,6 +694,20 @@ def main() -> None:
     subprocess.run([sys.executable, "-I", str(HERE / "extension_frames_check.py"), str(out)],
                    check=True)
     print(f"extension : {out / 'extension-frames-report.md'}")
+    if resume_report["verdict"] == "NON CONFORME":
+        sys.exit(f"acp-resume NON CONFORME : {out / 'acp-resume' / 'resume-report.md'}")
+
+
+def _load_sibling(name: str, file: str):
+    """YA-10 (ticket 28) : un script voisin chargé comme module (bibliothèque standard)."""
+    import importlib.util
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, HERE / file)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 if __name__ == "__main__":

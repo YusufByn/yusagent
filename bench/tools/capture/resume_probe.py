@@ -42,6 +42,8 @@ HERE = Path(__file__).resolve().parent
 
 
 def _load(name: str, file: str):
+    if name in sys.modules:
+        return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, HERE / file)
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
@@ -177,11 +179,16 @@ def stop_daemon(socket: Path, timeout: float = 30) -> bool:
 
 
 def setup(cache: Path, name: str, settings: dict | None = None):
-    agent = WORK / f"agent-{name}"
+    return setup_in(WORK, cache, name, settings)
+
+
+def setup_in(work: Path, cache: Path, name: str, settings: dict | None = None):
+    """Dossier agent `<work>/agent-<name>` (permissions « auto », modèle de capture) et son env."""
+    agent = work / f"agent-{name}"
     run.write_models_json(agent, "anthropic-messages", 0)  # port fixé par `serve`
     run.write_settings(agent, {"defaultProvider": "capture", "defaultModel": "capture-model",
                                **(settings or {})})
-    env = run.base_env(cache / "home", agent, WORK / "tmp")
+    env = run.base_env(cache / "home", agent, work / "tmp")
     return agent, env
 
 
