@@ -634,6 +634,20 @@ Symptôme : « the compaction never ran behind the stalled reader: the flush wed
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
+## Instabilité probable : `request_timing::payload` (YA-10, ticket 28)
+
+`crates/pa-core/src/session_engine/request_timing/payload/tests.rs`, test `concurrent_producers_drop_at_the_reserve_when_the_queue_is_full` (`:563`, assertion `:626`), shard 2/8 de `ci.yml`. Code upstream (commit `883b5a1f6`, ancêtre de `upstream/main`) ; aucun commit du fork ne touche ce module (`git log -- crates/pa-core/src/session_engine/request_timing/payload/tests.rs` : commits upstream seulement).
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 45023618061 | `b1e350ab4` (`ya-28-reprise`, PR #78) | 1 | test réussi (le run a échoué sur d'autres jobs) |
+| 45026623245 | `00f9653cc` (`ya-28-reprise`, PR #78), 22/11/2026 | 1 (job 137221049774) | échec du shard 2/8 |
+| 45026623245 | `00f9653cc` (`ya-28-reprise`, PR #78) | 2 (job 137228921531, relance du job seul, sans push, décidée par Yusuf) | réussi, aucun changement de code ; relance notée dans un commentaire de la PR #78 |
+
+Symptôme : « no storm body may land: every storm producer dropped at the reserve » à `tests.rs:626`. Le test sature la file du rédacteur de corps de requêtes (`fill_until_saturated`), lance `4 * REQUEST_PAYLOAD_CAPTURE_KEEP` producteurs en même temps, puis exige qu'aucun de leurs corps ne soit écrit. Hypothèse : sur un runner chargé, le corps « stall » finit de s'écrire pendant la rafale, une place se libère et un producteur passe. La PR #78 ne touche pas ce module.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
 Le shard 1 de `ci.yml` téléchargeait la release `v0.9.8` depuis `${GITHUB_REPOSITORY}`. Le fork n'a pas de release, l'étape échouait et faisait échouer tout le shard.
@@ -1303,6 +1317,24 @@ Constat, décisions (C1 à C13, 22/11/2026) et mesures : `docs/tickets/28-repris
 | `.changes/ya-28-reprise.md` | nouveau | Fragment de changelog. | YA-10 (ticket 28) |
 
 Limites connues : le rejeu ne montre ni la durée du raisonnement ni les avis (`[bash-done]`, `[python-state-restored]`), comme Unharnessed ; un tour coupé puis suivi d'un prompt est montré `done` (comme un message envoyé pendant le tour) ; l'extension ne sert ces méthodes qu'avec la PR X1.
+
+## Reprise et historique dans l'extension, PR X1 (YA-10, ticket 28)
+
+Décisions D1 à D4 du 22/11/2026 : `docs/tickets/28-reprise-historique.md`, §17. Extension seule : rien de ce qui part au modèle ne change.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `extensions/vscode/src/ya/methods.ts`, `src/ya/meta.ts` | modif. (fichiers du fork) | `session/load`, `session/list` et `_unharnessed/sessions/delete` servies (l'historique apparaît) ; `yaResultMeta` : `saved`, `path` et `current` lus dans le `_meta` du pont (C2). | YA-10 (ticket 28) |
+| `extensions/vscode/src/ya/empty.ts` | nouveau | D2 : une conversation ouverte neuve et quittée vide est supprimée par l'agent de celle qui la remplace, une fois sa session ouverte (session du démon arrêtée, fichier retiré). | YA-10 (ticket 28) |
+| `extensions/vscode/src/session.ts`, `src/history.ts` | modif. (repris d'Unharnessed) | `saved`, `path` et `current` par `yaResultMeta` ; une session refusée arrête l'agent (D3). | YA-10 (ticket 28) |
+| `extensions/vscode/src/conversations.ts`, `src/chat.ts` | modif. (repris d'Unharnessed) | D1 : vide = aucun tour, rien en attente, rien en cours (le démon écrit le fichier dès `session/new`, M1) ; `fresh` et suppression de la conversation vide quittée (D2) ; D4 : un tour de l'agent encore en cours au chargement reste en cours (`live`), sans durée. | YA-10 (ticket 28) |
+| `extensions/vscode/src/agent.ts`, `src/protocol.ts`, `webview/Status.tsx` | modif. (repris d'Unharnessed) | D3 : `abandon` (agent arrêté, état `failed` avec `session`), ligne « Conversation not opened », raison du pont et « Restart » ; `pid` pour les tests e2e. | YA-10 (ticket 28) |
+| `extensions/vscode/webview/styles.css`, `webview/ya-probe.ts`, `src/extension.ts` | modif. | Règles provisoires du menu de l'historique ; sonde `userClick` sur un bouton d'icône (`aria-label`) ; état de test : `pid`, `saved`, `history`. | YA-10 (ticket 28) |
+| `extensions/vscode/test/` | modif. | Agent factice aligné sur 9937e4ff8 (capacités, `saved`, réponses de liste et de suppression) ; `test/unit/meta.test.ts` ; e2e vrai binaire : conversation vide quittée, « Restart » après un plantage du pont avec le réveil fait pendant la fermeture, tour en cours au chargement, historique, double ouverture, suppression d'une conversation de fond. | YA-10 (ticket 28) |
+| `bench/tools/capture/compare_frames.py`, `empty_delete_probe.py` | modif., nouveau (outils du fork) | Comparaison de l'ouverture (capacités d'`initialize`, `_meta` de `session/new`) ; contrôle de la suppression d'une session sans message. | YA-10 (ticket 28) |
+| `.changes/ya-28-x1.md` | nouveau | Fragment de changelog. | YA-10 (ticket 28) |
+
+Limites connues : une conversation vide laissée à la fermeture de VS Code n'est pas supprimée (son worker suit la veille du démon) ; le rejeu ne donne pas la durée d'un tour, ni d'un tour encore en cours au chargement.
 
 ## Code repris d'Unharnessed
 

@@ -470,3 +470,68 @@ python3 -I bench/tools/capture/compare_frames.py frames-branch --against frames-
 - `compare_frames.py` retouché (`values_at`) : un écart attendu peut être un objet (`list: {}`, `_meta`, `saved`) ; avant, seule une valeur simple comptait comme présente.
 
 **Préfixe envoyé au modèle** : inchangé pour une session neuve (`acp`, `acp-extension`, `tui`, tous les cas `-p` : TOUT IDENTIQUE) et pour une reprise sans changement (C = E ; D = E hors l'avis déjà présent sur `main`).
+
+## 17. Réalisation de X1 (branche `ya-28-x1`, PR #80)
+
+Point de départ : `main` à `9937e4ff8` (merge de la PR #78, R1). Binaire de référence : `~/.cache/yusagent-bin/9937e4ff81689db8918a910816d1c12692fb93be/yusagent`.
+
+### Décisions de Yusuf (22/11/2026)
+
+- **D1** : vide = aucun tour dans le chat, aucun message en attente, rien en cours. Une conversation vide se ferme quand on la quitte, comme chez Unharnessed.
+- **D2 (b)** : `_unharnessed/sessions/delete` sur la conversation vide quittée, une fois la session de la nouvelle conversation ouverte. Vérifié d'abord que la suppression accepte une session sans message (ci-dessous).
+- **D3 (a)** : ligne claire avec le message du pont et un bouton « Restart » qui réessaie, agent arrêté ; même affichage pour tout échec de `session/new` ou `session/load`.
+- **D4** : tour affiché en cours et arrêtable, message tapé pendant ce temps mis en attente jusqu'à la fin du tour, sans durée affichée.
+
+### Contrôle avant D2 : suppression d'une session sans message
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/empty_delete_probe.py \
+  --binary ~/.cache/yusagent-bin/9937e4ff81689db8918a910816d1c12692fb93be/yusagent \
+  --out bench/tools/capture/runs/ya28-x1-empty-delete-9937e4ff8
+…
+A_fichier_avant : true
+liste_ids : []
+arbre_avant : {"daemon": [56125], "worker": [56126, 56129], "kernel": [56142, 56148]}
+suppression : {"result": {}}
+suppression_ms : 124
+A_fichier_apres : false
+A_artifacts_apres : false
+arbre_apres : {"daemon": [56125], "worker": [56129], "kernel": [56148]}
+CONFORME
+```
+
+La session vide (pont A, `session/new` sans prompt, puis fin de stdin) est absente de `session/list`, la suppression demandée par le pont B répond `{}`, son fichier est retiré et son worker et son kernel sont arrêtés. Chaque session neuve a son kernel dès `session/new` (deux kernels pour deux sessions vides, `crates/pa-daemon/src/agent_engine/lifecycle.rs:1201`).
+
+### Code
+
+- **Méthodes et `_meta`** : `session/load`, `session/list` et `_unharnessed/sessions/delete` servies (`extensions/vscode/src/ya/methods.ts`), l'historique apparaît ; `yaResultMeta` lit `saved`, `path` et `current` dans le `_meta` du pont (`src/ya/meta.ts`), utilisé par `src/session.ts` et `src/history.ts` (`current` sert tant que la conversation du panneau n'a pas d'identifiant).
+- **D1** : `Conversation.empty` = rien en cours ni en attente et aucun tour (`src/conversations.ts`, `Chat.hasTurns` dans `src/chat.ts`).
+- **D2** : `Conversation.fresh` (ouverte neuve) ; quittée vide, elle se ferme, puis `dropEmpty` (`src/ya/empty.ts`) demande la suppression à l'agent de la conversation qui la remplace, une fois sa session ouverte. Une conversation ouverte depuis un fichier (historique, refus) n'est jamais supprimée ainsi.
+- **D3** : un échec de `session/new` ou `session/load` appelle `Agent.abandon` (`src/agent.ts`) : état `failed` avec `session`, processus arrêté (il ne reste pas attaché au worker). Le panneau affiche « Conversation not opened », la raison du pont et « Restart » (`webview/Status.tsx`) ; « Restart » relance sur le fichier (`--resume`, `session/load`).
+- **D4** : à la fin du chargement, un tour rejoué encore ouvert (C9) devient le tour en cours (`live`) : « Stop » affiché, messages en attente jusqu'à sa frontière, sans durée (`src/chat.ts`, `loaded`).
+- **Menu de l'historique** : règles CSS provisoires (lignes, corbeille), la feuille minimale n'en avait pas.
+
+### Tests
+
+- **Unitaires** (`test/unit/meta.test.ts`) : `saved`, `path`, `current` lus dans notre `_meta` ou dans `_meta.unharnessed` ; méthodes du ticket servies, historique affiché. `test/unit/agent.test.ts` : le cas « méthode non servie » prend `_unharnessed/session/rewind`, `session/list` étant servie. `npm run test:unit` : `ℹ tests 59`, `ℹ pass 59`.
+- **e2e vrai binaire** (`test/e2e/suite-real.ts`, clics sur l'élément réellement sous le pointeur) :
+  1. conversation neuve quittée vide : sa session absente de `list --json` du démon, son worker arrêté, son fichier retiré (D1, D2) ;
+  2. « Restart » après un SIGKILL du pont : la conversation revient par `session/load`, avec le tour `wake: bash` fait par le worker pendant que le chat était fermé, puis prompt suivant accepté ;
+  3. tour de l'agent en cours au chargement : affiché `running`, chat occupé, message tapé en attente jusqu'à la frontière du tour, tour fini `done` sans durée (D4) ;
+  4. même chose, puis « Stop » par un clic : tour `cancelled`, la suite du tour ne vient pas (cellule de 8 s, rien 12 s après) ;
+  5. historique : deuxième conversation, puis retour à la première par sa ligne, telle quelle (même processus) ;
+  6. double ouverture : un second client ACP (le binaire lancé par le test) tient la conversation ; ouverte par l'historique, « Conversation not opened » et « This conversation is open in another window. », agent arrêté ; le client fermé, « Restart » la reprend depuis son fichier (C12, D3) ;
+  7. suppression d'une conversation de fond par la corbeille puis « Delete » : ligne retirée, fichier et `session-artifacts/<id>` retirés, session absente du démon, worker et agent arrêtés.
+- **Vus en échec sans le correctif** : premier push de la PR #80, tests seuls (commit `5e326d730`, extension de `main`). `ya-extension` run 45033767797, job `e2e vrai binaire` 137242853737 : `e2e vrai binaire : 7/13 réussis`, les 6 cas du ticket en échec, `processus restants : aucun`. Les échecs tombent au premier manque : `saved` non lu (`fichier de la conversation vide`, `fichier de la conversation`), bouton de l'historique masqué (`clic sur « History »`), réponses du script décalées par les cas précédents (`réponse avant le plantage`). Le job `extension` (agent factice réaligné, sans le correctif) : vert. Le cas 4 (Stop après chargement) a été ajouté après ce push : sans le correctif, le chat n'est pas occupé après le chargement (constat du cas 3), donc pas de bouton « Stop » ; il n'a pas été vu en échec en CI.
+
+### Agent factice réaligné
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/acp_frames.py \
+  --binary ~/.cache/yusagent-bin/9937e4ff81689db8918a910816d1c12692fb93be/yusagent \
+  --out bench/tools/capture/runs/ya28-x1-frames-9937e4ff8
+python3 -I bench/tools/capture/compare_frames.py bench/tools/capture/runs/ya28-x1-frames-9937e4ff8
+```
+
+- `compare_frames.py` compare maintenant aussi l'ouverture : capacités d'`initialize` (et la valeur de `loadSession`), `_meta` de la réponse de `session/new`.
+- Agent factice de `main` : `écarts : 13` (`loadSession` faux, `sessionCapabilities`, `promptCapabilities`, `mcpCapabilities` et `saved` absents). Agent factice réaligné : `écarts : 0`.
