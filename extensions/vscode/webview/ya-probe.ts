@@ -19,6 +19,15 @@ function probe(): Probe {
       return rect.width > 0 && rect.height > 0;
     }).length,
     text: document.body.innerText,
+    toggles: Array.from(document.querySelectorAll<HTMLElement>("button[aria-expanded]")).map((button) => {
+      const rect = button.getBoundingClientRect();
+      return {
+        text: button.textContent?.trim() ?? "",
+        expanded: button.getAttribute("aria-expanded") === "true",
+        inert: button.closest("[inert]") !== null,
+        visible: rect.width > 0 && rect.height > 0,
+      };
+    }),
     selects: Array.from(document.querySelectorAll("select")).map((select) => ({
       label: select.getAttribute("aria-label"),
       value: select.value,

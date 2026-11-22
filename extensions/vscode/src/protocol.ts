@@ -617,6 +617,11 @@ export type Probe = {
    * mais ignore les clics ; il en faut 0.
    */
   visibleInert: number;
+  /**
+   * Ticket 28 : les boutons qui ouvrent un repli (`aria-expanded`) : texte, ouvert ou non, dans un
+   * bloc inerte ou non, affiché (taille non nulle) ou non.
+   */
+  toggles: { text: string; expanded: boolean; inert: boolean; visible: boolean }[];
 };
 
 /** yusAgent (PR 3, tests e2e) : voir `probeInput`. */

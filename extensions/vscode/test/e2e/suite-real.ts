@@ -162,11 +162,21 @@ const tests: [string, () => Promise<void>][] = [
       assert.equal(done?.cell?.kind, "shell");
       assert.equal(done?.cell?.command, "echo lu");
       await shows("bash fini", "réponse du modèle");
+      // Ticket 28 : la webview reçoit la fin du tour après l'hôte. Un clic sur « Ran » avant le repli
+      // ouvrait la carte (travail encore à plat), le clic final la refermait : on attend le repli.
+      const toggle = async (verb: string) => (await probe())?.toggles.find((button) => button.text.startsWith(verb));
+      await waitFor(async () => {
+        const worked = await toggle("Worked");
+        return worked?.visible && !worked.inert && !worked.expanded;
+      }, "tour replié, « Worked » affiché", SLOW);
+      assert.equal((await toggle("Ran"))?.expanded, false, "carte fermée au repli");
+      await userClicks("Worked");
       // Contrôle de Yusuf : rien d'affiché n'ignore les clics, et la carte telle qu'on la voit n'est pas inerte.
+      const card = await toggle("Ran");
+      assert.deepEqual([card?.visible, card?.inert, card?.expanded], [true, false, false], "carte affichée, fermée, pas inerte");
       assert.equal((await probe())?.visibleInert, 0, "aucun bloc inerte affiché");
-      assert.notEqual((await probeInput({ userClick: "Ran" }))?.clicked, "inert", "carte affichée mais inerte");
-      // Dépliée par des clics : la ligne du bash(), exit puis durée séparés.
-      await userClicks("Worked", "Ran");
+      // Dépliée par un seul clic : la ligne du bash(), exit puis durée séparés.
+      await userClicks("Ran");
       assert.match(await shows("$ echo lu", "carte dépliée"), /exit 0 · \d+ ms/);
     },
   ],

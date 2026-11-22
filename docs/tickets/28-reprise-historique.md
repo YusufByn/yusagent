@@ -535,3 +535,11 @@ python3 -I bench/tools/capture/compare_frames.py bench/tools/capture/runs/ya28-x
 
 - `compare_frames.py` compare maintenant aussi l'ouverture : capacités d'`initialize` (et la valeur de `loadSession`), `_meta` de la réponse de `session/new`.
 - Agent factice de `main` : `écarts : 13` (`loadSession` faux, `sessionCapabilities`, `promptCapabilities`, `mcpCapabilities` et `saved` absents). Agent factice réaligné : `écarts : 0`.
+
+### Second push : un cas du ticket 24 en échec, course du test
+
+`ya-extension` run 45034241467 (commit `3cb0abf02`), job `e2e vrai binaire` 137244320350 : `e2e vrai binaire : 13/14 réussis`, tous les cas du ticket 28 réussis, `processus restants : aucun`. En échec : « cellule avec bash() … carte avec la commande » (ticket 24), `délai dépassé : carte dépliée` ; réussi au premier push (run 45033767797).
+
+- **Pas de régression de X1** (vérifié dans le diff `9937e4ff8..3cb0abf02`, décision de Yusuf du 22/11) : dans `src/chat.ts`, seuls `hasTurns` (lecture) et la fin de `loaded()` (chargement d'une conversation, jamais appelé pour une conversation neuve) changent ; l'état des tours, `answerAt` et le repli (`WorkRun`), la carte (`ToolCall`, `aria-expanded`) ne sont pas touchés (`webview/Chat.tsx` inchangé). Les règles CSS ajoutées (`.menu-row`, `.menu-list`) servent au menu de l'historique et au sélecteur de modèle, pas aux cartes ; la sonde `userClick` n'ajoute que les boutons sans texte par `aria-label` exact, et aucun bouton ne porte `aria-label` « Ran » ou « Worked ».
+- **Course** : le test cliquait « Ran » pour vérifier la carte avant que la webview ait reçu la fin du tour. Travail encore à plat, la carte s'ouvrait ; le clic final sur « Ran » la refermait (`open` est gardé par la carte).
+- **Correctif du test** (`suite-real.ts`) : attendre « Worked » affiché (tour replié), carte fermée à ce moment ; ouvrir « Worked » ; carte affichée, fermée, pas inerte, aucun bloc inerte affiché ; un seul clic sur « Ran », puis la ligne `$ echo lu`. Clics sur l'élément réellement sous le pointeur. Sonde : `toggles` (boutons à `aria-expanded` : texte, ouvert, inerte, affiché).
