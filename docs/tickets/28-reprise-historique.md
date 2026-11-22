@@ -355,3 +355,38 @@ SANS OBJET
 ```
 
 **Préfixe envoyé au modèle** : inchangé pour une session neuve et pour une reprise sans changement (à prouver par la capture du binaire de la branche). Un seul ajout, en fin d'historique, déjà présent sur `main` : `[python-state-restored]` après une reprise avec un worker neuf (§12, M2).
+
+## 14. Arrêt : un constat contredit C8 (22/11/2026)
+
+Premier run de la PR #78, sur le commit `cca4e7ea9` : `ci` 45020777967 ; build macOS 45020773876 vert. Sur les échecs, deux corrigés en local, commités et pas encore poussés (`YA-10: ticket 28 : tests internes du pont…`) :
+- **compilation des tests internes de `daemon.rs`** : littéral `DaemonBinding` sans `file`, deux appels de `handle_session_new` sans `load`. Jobs `check + clippy`, `windows cross-check + clippy` et `test shard 3/8` ;
+- **`session/list` vide** dans `ya_acp_resume_e2e` (`test shard 2/8`, job 137203052876). Les lignes de `list_saved_sessions` s'appellent `id`, `path` et `name`, pas `sessionId`, `sessionFile` et `sessionName` (`crates/pa-daemon/src/supervisor/sessions.rs:843-857`, `saved_session_row`). Vérifié sur le démon de `d2f54743e` par un script jetable (scratchpad) : liste, puis `kill` de la session vivante, puis `delete_saved_session` (`{"ok": true, "method": "trash"}`, fichier et `session-artifacts/<id>` retirés). Les deux autres tests e2e (reprise, C12) passent.
+
+### Le constat : aucun journal d'usage sur le chemin du démon
+
+- Le moteur d'une session du démon (ACP, TUI) tourne sur un gestionnaire de session **en mémoire** : « The engine session stays non-persisted (the worker owns the durable file) » (`crates/pa-daemon/src/agent_engine/lifecycle.rs:1056-1071`).
+- Le journal d'usage ne s'ouvre que pour une session qui a un fichier (`UsageJournal::for_session`, `crates/pa-core/src/session_engine/usage_log.rs:446-447`, appelé par `engine.rs:439-442`) ; `docs/usage.md` le dit : « Une session en mémoire, sans fichier, n'a pas de journal ».
+- **Mesuré** :
+  - aucun `*.usage.ndjson` sous les dossiers agent des sessions ACP de `resume_probe.py` (`find /private/tmp/ya-resume-probe -name '*.usage.ndjson'` : rien ; `agent-m2-d/sessions/` ne contient que `<id>.jsonl`, `.info-cache.json`, `.window-cache.json`) ;
+  - ni sous celui du script jetable ci-dessus ;
+  - les journaux du banc viennent tous des cas `-p`.
+
+**Effets** :
+- **C8 ne tient pas sur le chemin de l'extension** : l'empreinte et `resume_prefix_change` sont codées dans le journal, mais une session ACP n'en écrit pas. Le contrôle F du cas `acp-resume` (« une seule entrée `resume_prefix_change` ») échouerait sur le binaire de la branche.
+- **Même trou pour la décision du 21/11 (ticket 24)** : « un changement de modèle ou d'effort en cours de session est journalisé comme `invalidation` ». Ce n'est vrai qu'en `-p`. Lecture du code et mesure ci-dessus ; pas de cas de capture qui l'ait vérifié en ACP.
+
+### Choix à trancher
+
+| # | Option | Effet | Fichiers |
+|---|---|---|---|
+| J1 (a) | **Le moteur du démon ouvre le journal sur le fichier durable** : `<id>.usage.ndjson` à côté de `<id>.jsonl`, même format, même identifiant (l'en-tête du fichier, déjà repris par le gestionnaire en mémoire, `lifecycle.rs:1072-1080`) | C8 tient, et les causes du ticket 24 sont journalisées pour l'extension et le TUI ; les sessions ACP et TUI ont leur usage par appel comme `-p` | une option de configuration du moteur (chemin du journal) dans `pa-core` et son passage dans `pa-daemon/src/agent_engine/lifecycle.rs` (fichier upstream) ; **estimation** : 20 à 40 lignes, plus un test |
+| J1 (b) | Garder C8 dans le journal, sans journal côté démon | rien de journalisé pour l'extension : la règle du 21/11 n'est pas tenue | aucun |
+| J1 (c) | Journaliser le miss de reprise ailleurs, par exemple une entrée `custom` du fichier de session, jamais envoyée au modèle | règle tenue pour la reprise seulement ; pas d'usage par appel en ACP | worker du démon |
+
+**Recommandation : (a)**, dans cette PR R1 : elle est déjà ouverte, et c'est le seul moyen de tenir C8 pour l'extension. Sinon, dans une PR à part avant X1, et F retiré du cas `acp-resume` d'ici là.
+
+### Autre blocage, indépendant de cette PR
+
+- Le check requis `deny (cargo-deny advisories + licenses)` échoue sur un nouvel avis : **RUSTSEC-2026-0592**, `url` 2.5.8 (`Cargo.lock:272`, « Stack overflow in `Url::origin()` on nested `blob:` URLs »).
+- `Cargo.lock` n'est pas touché par cette PR. L'échec vaut pour toute PR tant que `url` n'est pas monté.
+- Correctif hors du périmètre du ticket 28 (montée de version d'une dépendance) : à trancher, PR à part ou dans celle-ci.
