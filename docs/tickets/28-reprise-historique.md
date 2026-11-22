@@ -419,3 +419,54 @@ SANS OBJET
 
 - **M1** (§12) : le démon écrit le fichier de session dès `session/new`. L'extension juge une conversation « vide », et la ferme quand on la quitte, si son fichier n'existe pas (`extensions/vscode/src/conversations.ts:49-53`, `:60-63`, `:220`). **X1 doit juger autrement qu'une conversation est vide** : aucun tour dans le chat, par exemple.
 - Méthode de suppression : `_unharnessed/sessions/delete` (C3), nom déjà appelé par `src/history.ts:9`. Champs à lire dans notre `_meta` (`ai.primeintellect.prime-agent`) : `saved`, et `path` et `current` des lignes de `session/list` (C2).
+
+## 16. Contrôles du binaire de la branche (22/11/2026)
+
+- **Merge et builds** :
+  - PR #79 (`url` 2.5.9) mergée sur ton « merge » : `main` à `10b16ae91`. CI avant le merge : 16 checks requis verts sur `e7bbad09b`, `deny` compris.
+  - Build macOS de `main` lancé à la main (le workflow ne se déclenche pas sur `main`) : run 45023602727, vert.
+  - `ya-28-reprise` rebasée sur `main` sans conflit, poussée une fois (tête `b1e350ab4`) ; build macOS de la branche : run 45023614487, vert.
+- **Binaires** : SHA256 vérifiés (`shasum -a 256 -c SHA256SUMS`), extraits dans `~/.cache/yusagent-bin/<sha>/`.
+
+### Capture complète, `main` contre la branche
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 bench/tools/capture/run.py \
+  --binary ~/.cache/yusagent-bin/10b16ae911255c4544c3b50403d17489866d4aa7/yusagent --out runs/ya28-main-10b16ae91
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 bench/tools/capture/run.py \
+  --binary ~/.cache/yusagent-bin/b1e350ab423b49d3f7be4b3fe4bae52d224e6788/yusagent --out runs/ya28-branch-b1e350ab4
+python3 -I bench/tools/capture/compare.py --all runs/ya28-main-10b16ae91 runs/ya28-branch-b1e350ab4 \
+  --out runs/ya28-compare-main-branch.md
+```
+
+- Les deux runs finissent avec `exit=0` (contrôles des chemins avec démon, des trames de l'extension, de l'usage et du masquage passés).
+- `spawn : ok=False` dans les deux runs, comme dans les captures du ticket 26 (`runs/ya26-prefix-main-ea3908688.log`) : préexistant, sans lien avec ce ticket.
+- **`compare.py --all` : TOUT IDENTIQUE.** 17 chemins, dont `acp`, `acp-extension` et `tui`, toutes les requêtes identiques corps entier (UUID normalisés). Seul écart des premières requêtes : `prompt_cache_key` des cas Codex (un UUID par lancement).
+- **`acp-resume`** : `SANS OBJET` sur `main` (pas de `loadSession`), **CONFORME** sur la branche :
+
+| Contrôle | Résultat |
+|---|---|
+| C, reprise worker vivant : requêtes identiques à E, corps entier | oui (5/5) |
+| D, reprise worker neuf : identiques à E hors avis `[python-state-restored]` | oui (avis seul, message 8 de la 5ᵉ requête, juste avant le prompt 2) |
+| F, skill ajouté : prompt 1 identique, puis seule la ligne du skill change le prompt système | oui |
+| Journal : une seule `resume_prefix_change`, dans F, au 1er appel repris (`parts: ["system"]`) ; aucune dans E, C, D | oui |
+| Journal d'usage de chaque session ACP (E, C, D, F, G) | oui |
+| G : `model_change` (`capture/capture-model` → `capture/capture-model-2`) au 1er appel après le changement, seule invalidation | oui |
+| Trames C et D : `saved` dans la réponse de `session/load`, rejeu avant la réponse, sous l'identifiant du fichier, entre `turnStart` et `turnEnd`, mises à jour = direct (7/7) | oui |
+
+### Trames ACP, `main` contre la branche
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/acp_frames.py --binary <main> --out frames-main
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/acp_frames.py --binary <branche> --out frames-branch
+P=.result._meta.ai.primeintellect.prime-agent
+python3 -I bench/tools/capture/compare_frames.py frames-branch --against frames-main \
+  --expect .result.agentCapabilities.sessionCapabilities.list --expect .result._meta --expect $P \
+  --expect $P.saved --expect $P.saved.path --expect $P.saved.sessionId
+```
+
+- Résultat : **`écarts : 0`**. `A-display-auto` (26 trames) et `B-basic-manual-reject` (14 trames) identiques hors les écarts attendus, présents chacun dans deux trames : `sessionCapabilities.list` (réponse d'`initialize`) et `saved` (réponse de `session/new`).
+- `loadSession` passe de `false` à `true` dans la réponse d'`initialize` : même type, l'outil ne le compte pas comme écart ; relevé à part dans les deux transcripts.
+- `compare_frames.py` retouché (`values_at`) : un écart attendu peut être un objet (`list: {}`, `_meta`, `saved`) ; avant, seule une valeur simple comptait comme présente.
+
+**Préfixe envoyé au modèle** : inchangé pour une session neuve (`acp`, `acp-extension`, `tui`, tous les cas `-p` : TOUT IDENTIQUE) et pour une reprise sans changement (C = E ; D = E hors l'avis déjà présent sur `main`).
