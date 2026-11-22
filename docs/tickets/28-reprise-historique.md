@@ -251,3 +251,78 @@ R1, puis X1. Chaque PR suit la boucle de dev (binaire de la branche, capture `ma
 - **Instantané à la veille du worker** (§3) : à vérifier.
 - **Ligne `[python-state-restored]` dans le cas D** : à mesurer (§4.1).
 - **Ligne « restart »** de l'extension (« The agent restarted: it no longer remembers the messages above. ») : d'après la lecture d'Unharnessed, les relances actuelles vident le chat avant de relancer, donc la ligne semble ne plus apparaître. Sans effet sur ce ticket.
+
+## 11. Décisions de Yusuf (22/11/2026)
+
+- **C2** : oui, `saved { sessionId, path }` dans le `_meta` du pont, sous le nom d'Unharnessed, même raison que `turnStart` (ticket 25, T1). Ligne au journal du CDC (22/11/2026).
+- **C3** : `_yus/sessions/delete`, **sauf si l'extension d'Unharnessed appelle déjà une méthode pour supprimer** : elle appelle `_unharnessed/sessions/delete` (`extensions/vscode/src/history.ts:8-9`, `:88`). **Le pont sert donc `_unharnessed/sessions/delete`**, nom d'Unharnessed, comme pour C2.
+- **C4** : oui, la suppression arrête la session dans le démon, puis supprime le fichier et son dossier d'instantané. **Le journal d'usage d'une conversation supprimée est gardé** (données de mesure) : `delete_session_file` ne le retire pas (`crates/pa-daemon/src/saved_session_commands.rs:106-150`), rien à ajouter.
+- **C7** : oui, ligne « kernel restauré » reportée.
+- **C8** : oui, empreinte du prompt système et des tools dans le journal d'usage, une seule entrée `resume_prefix_change` à la reprise.
+- **C12** : oui, refus d'ouvrir la même conversation dans deux fenêtres.
+- **C1, C5, C6, C9, C10, C11, C13** : comme recommandé (C13 : une seule PR R1).
+- **Avant le code de R1** : trois mesures sur le binaire de référence `d2f54743e`, avec un script commité (§12).
+
+## 12. Mesures avant R1 (22/11/2026), binaire de référence `d2f54743e`
+
+Script commité : `bench/tools/capture/resume_probe.py`. Il tourne sur le vrai binaire, avec un démon isolé par cas, le serveur de capture en modèle factice (scénario `basic`, trois cellules), `sandbox-exec`, et le HOME et le venv du banc. Aucun modèle réel.
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/resume_probe.py \
+  --binary ~/.cache/yusagent-bin/d2f54743e1b4ac98f40a6a72f3e098c94bf5fe39/yusagent --out <dossier neuf> [--only M1|M2|M3]
+```
+
+Rapport : `<sortie>/resume-probe.md` et `.json`.
+
+### M1 : le démon écrit le fichier de session avant le premier prompt
+
+`session/new`, attente de 2 s, relevé de `<agent>/sessions/` : **le fichier existe déjà** (`01a20312-27b5-70b4-807e-dc8256d05785.jsonl`), le même après le prompt.
+
+- **Écart avec Unharnessed**, qui n'écrit le fichier qu'à la première réponse (UH `persist.rs:125-134`).
+- **Effet sur R1** : aucun. `session/list` exclut les sessions sans message (C10, `messageCount` 0, `lifecycle: "draft"`, `crates/pa-daemon/src/supervisor/sessions.rs:778-783`).
+- **Effet sur X1** : l'extension juge une conversation « vide », et la ferme quand on la quitte, si son fichier n'existe pas (`extensions/vscode/src/conversations.ts:49-53`, `:60-63`, `:220`). Avec notre démon, le fichier existe dès l'ouverture. Une conversation où rien n'a été demandé ne serait donc plus fermée, et son pont resterait ouvert. **X1 devra juger le vide autrement** : aucun tour dans le chat. À trancher dans X1.
+
+### M2 : où apparaît `[python-state-restored]` après une reprise avec un worker neuf
+
+Déroulé : prompt 1 (trois cellules), 4 s d'attente (instantané présent, `session-artifacts/<id>/kernel-state.dill` et `.json`), fin de stdin, **arrêt du démon**, `--resume <fichier>`, `session/new`, prompt 2, prompt 3.
+
+| Lancement | Prompt 2 envoyé | Première requête qui porte l'avis |
+|---|---|---|
+| 1 (version du script sans prompt 3) | aussitôt | **aucune** des requêtes du prompt 2 |
+| 2, 3, 4 | aussitôt | celle du prompt 2 |
+| 2, 3, 4 | 10 s après `session/new` | celle du prompt 2 |
+
+Dans tous les cas où il apparaît :
+- c'est un **message utilisateur à part** (`role: user`), placé **juste avant** le message du prompt, et pas dans le même message (messages 8 et 9 de la requête) ;
+- **le préfixe est intact** : prompt système et tools identiques à ceux de la dernière requête du prompt 1, messages du prompt 1 en tête sans changement ; ne s'ajoutent que la réponse finale du prompt 1, l'avis et le prompt 2 ;
+- texte : `[python-state-restored]` … `These names are available again: agent_message, agent_observe, c, goal, os, r, rlm_heartbeat, ya_names, ya_sensitive.` … `The working directory and environment variables were reset to the session defaults; …`.
+
+Contre-épreuve, **worker vivant** (fin de stdin sans arrêter le démon, puis `--resume`) : démon, worker et kernel toujours là avant la reprise ; **aucun avis** ; requête du prompt 2 en ajout seul. Trois lancements, mêmes résultats.
+
+**Lecture** :
+- au lancement 1, la restauration du kernel neuf (préchauffé à la création du worker, `crates/pa-core/src/session_engine/engine.rs:733`) a fini après l'admission du prompt 2 ;
+- la ligne attend alors le tour suivant (`adopt_next_turn_rows`, `crates/pa-core/src/session_engine/admission.rs:214-234`, prise à l'admission, `:145`) ;
+- c'est une course entre la restauration et le premier prompt. L'avis reste en ajout seul dans les deux cas.
+
+**Effet sur le plan** : le cas D de `acp-resume` ne peut pas exiger l'avis devant le prompt 2. Le contrôle sera : prompt système et tools identiques à E ; messages identiques à E **une fois retiré le message de l'avis, s'il est là** ; au plus un message d'avis, toujours juste avant un prompt. Pas de contradiction avec le plan : le préfixe reste intact.
+
+### M3 : durée de vie du worker et du kernel après la fermeture du chat
+
+`idleEvictionMinutes: 1` (le défaut est 90). Processus du démon relevés toutes les 2 s.
+
+| Cas | Fin de stdin après le tour | Worker et kernel arrêtés | Délai après la fin de stdin |
+|---|---|---|---|
+| K1 | 0,0 s | 61,6 s après le tour | 61,6 s |
+| K2 : pont gardé 90 s après le tour | 90,2 s | 151,7 s après le tour | **61,5 s** |
+
+- Pendant les 90 s où le pont reste attaché (K2), worker et kernel restent là, alors que le seuil d'une minute est passé : **pas de veille tant qu'un client est attaché** (`idle_passivation_window` rend `None` avec un client, `crates/pa-daemon/src/worker/turn.rs:196-198`).
+- Après la fin de stdin, **la veille repart pour un délai complet**, quel que soit le temps d'inactivité passé avant. Sans ce redémarrage, K2 aurait dû s'arrêter aussitôt.
+- L'instantané du kernel est sur disque après la veille, ce qui permet la reprise avec un worker neuf (M2).
+
+**Durée de vie réelle avec les défauts : déduite, pas mesurée à l'échelle** (la mesure prend un seuil d'une minute) :
+- la veille de l'extension ferme le pont d'une conversation de fond **90 min** après son dernier travail (`extensions/vscode/src/conversations.ts:11-12`, `:243-250`) ;
+- le worker et le kernel restent alors **90 min de plus** (`idleEvictionMinutes`, K2) ;
+- donc **environ 3 h** après le dernier travail pour une conversation laissée en fond ;
+- **90 min** après la fermeture pour une conversation dont le pont est fermé autrement : fermeture de VS Code, conversation quittée vide, suppression exceptée (C4 arrête le worker).
+
+Pas de contradiction avec le plan : point ouvert inchangé (veille en double), à traiter avec l'étape 6 ou un ticket à part si Yusuf le veut.
