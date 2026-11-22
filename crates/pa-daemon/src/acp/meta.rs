@@ -93,6 +93,13 @@ pub struct PrimeAgentSessionMeta {
     /// yusAgent (YA-10, ticket 25): what started the turn, first in it (Unharnessed's names).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_start: Option<super::ya_turns::TurnStartMeta>,
+    /// yusAgent (YA-10, ticket 28): how a replayed turn ended (Unharnessed's `turnEnd`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_end: Option<super::ya_history::TurnEndMeta>,
+    /// yusAgent (YA-10, ticket 28): the session's file, in the `session/new` and `session/load`
+    /// responses (Unharnessed's `saved`, decision C2 of 22/11/2026).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved: Option<super::ya_history::SavedMeta>,
 }
 
 /// A goal's live state, surfaced after `/goal` commands and driver turns.

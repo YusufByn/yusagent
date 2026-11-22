@@ -43,6 +43,8 @@ pub struct McpCapabilities {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionCapabilities {
     pub close: CloseCapability,
+    /// yusAgent (YA-10, ticket 28): `{}`, `session/list` is served.
+    pub list: CloseCapability,
 }
 
 /// `{}`: present means `session/close` is served.
@@ -133,6 +135,13 @@ pub struct AcpStopReasonResponse {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "sessionUpdate")]
 pub enum AcpSessionUpdate {
+    /// yusAgent (YA-10, ticket 28): a block of a prompt, replayed by `session/load`.
+    #[serde(rename = "user_message_chunk")]
+    UserMessageChunk {
+        #[serde(rename = "messageId")]
+        message_id: String,
+        content: Value,
+    },
     /// A streaming chunk of the assistant's visible answer.
     #[serde(rename = "agent_message_chunk")]
     AgentMessageChunk {
@@ -402,7 +411,8 @@ pub fn initialize_result(product_version: &str) -> InitializeResult {
     InitializeResult {
         protocol_version: 1,
         agent_capabilities: AgentCapabilities {
-            load_session: false,
+            // yusAgent (YA-10, ticket 28): `session/load` (`super::ya_history`).
+            load_session: true,
             prompt_capabilities: PromptCapabilities {
                 image: true,
                 embedded_context: true,
@@ -410,6 +420,7 @@ pub fn initialize_result(product_version: &str) -> InitializeResult {
             mcp_capabilities: Some(McpCapabilities { http: true }),
             session_capabilities: SessionCapabilities {
                 close: CloseCapability::default(),
+                list: CloseCapability::default(),
             },
         },
         // yusAgent (YA-16, ticket 19): the agent's own name; the `_meta` namespace below stays
@@ -436,10 +447,10 @@ mod tests {
             json!({
                 "protocolVersion": 1,
                 "agentCapabilities": {
-                    "loadSession": false,
+                    "loadSession": true,
                     "promptCapabilities": { "image": true, "embeddedContext": true },
                     "mcpCapabilities": { "http": true },
-                    "sessionCapabilities": { "close": {} },
+                    "sessionCapabilities": { "close": {}, "list": {} },
                 },
                 "agentInfo": { "name": "yusagent", "title": "yusAgent", "version": "9.9.9" },
                 "_meta": { "ai.primeintellect.prime-agent": {} },

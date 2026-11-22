@@ -123,6 +123,16 @@ impl WorkerPermissions {
             .is_some_and(|client_id| lock(&self.askers).contains(client_id))
     }
 
+    /// yusAgent (YA-10, ticket 28, C12): how many attached clients that answer are not the client
+    /// of `payload` (`clientId`): another window holding the session.
+    pub(crate) fn other_askers(&self, payload: &Value) -> usize {
+        let client_id = payload.get("clientId").and_then(Value::as_str);
+        lock(&self.askers)
+            .iter()
+            .filter(|asker| Some(asker.as_str()) != client_id)
+            .count()
+    }
+
     /// A client detached (or disconnected): when no client that answers is left, the waiting
     /// requests are withdrawn.
     pub(crate) fn client_detached(&self, client_id: &str) {
@@ -383,10 +393,17 @@ impl Worker {
                     Some(json!({ "asker": permissions.has_asker(payload) })),
                 )
             }
+            // yusAgent (YA-10, ticket 28, C12): the other clients that answer (the ACP bridge
+            // refuses `session/load` of a conversation open in another window).
+            Some("others") => response_success(
+                None,
+                COMMAND,
+                Some(json!({ "others": permissions.other_askers(payload) })),
+            ),
             _ => response_failure(
                 None,
                 COMMAND,
-                "the action must be \"respond\", \"set_mode\", \"get\" or \"asker\"",
+                "the action must be \"respond\", \"set_mode\", \"get\", \"asker\" or \"others\"",
                 None,
             ),
         }
