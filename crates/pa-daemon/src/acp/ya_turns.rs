@@ -47,7 +47,7 @@ pub struct TurnStartMeta {
 }
 
 impl TurnStartMeta {
-    fn new(origin: &str, wake: Option<&str>) -> Self {
+    pub(crate) fn new(origin: &str, wake: Option<&str>) -> Self {
         TurnStartMeta {
             origin: origin.to_string(),
             wake: wake.map(str::to_string),
@@ -183,6 +183,17 @@ impl AgentTurns {
             producer: Arc::clone(producer),
             daemon_session_id: daemon_session_id.to_string(),
         })
+    }
+
+    /// yusAgent (YA-10, ticket 28, C9): the turn the worker was running when `session/load`
+    /// replayed the session goes on live under the replay's open turn id, already announced; its
+    /// `agent_end` closes it like any turn the bridge did not start.
+    pub(crate) fn adopt(&mut self, turn_id: u64) {
+        self.running = Some(AgentTurn {
+            turn_id,
+            announced: true,
+            stopped: false,
+        });
     }
 
     /// Stop during a turn this client did not start: only that turn stops (T4). Returns whether
@@ -321,7 +332,7 @@ fn event_type(event: &Value) -> Option<&str> {
 /// The origin of a turn from its first message (E2, E4): a `[bash-done]` notice, a heartbeat, a
 /// goal continuation and a quota resume are wakes; any other user message is a prompt of another
 /// client of the session (an attached TUI, a scheduled prompt).
-fn origin_of(message: &Value) -> TurnStartMeta {
+pub(crate) fn origin_of(message: &Value) -> TurnStartMeta {
     use pa_core::session_engine::messages::{
         ASYNC_BASH_COMPLETION_CUSTOM_TYPE, HEARTBEAT_PROMPT_CUSTOM_TYPE,
     };

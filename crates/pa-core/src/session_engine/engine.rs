@@ -438,7 +438,12 @@ pub async fn create_session_with(
     // yusAgent (T04, YA-13): the per-call usage journal, next to the session file.
     let usage_journal = {
         let session = wiring.session.lock().await;
-        super::usage_log::UsageJournal::for_session(&session)
+        // yusAgent (YA-10, ticket 28): a daemon worker's durable file when the session is kept
+        // in memory.
+        super::usage_log::UsageJournal::for_session(
+            &session,
+            config.conversation_log_path.as_deref(),
+        )
     };
     let mut handlers = wiring.handlers.clone();
     if let Some(extra) = config.extra_host_handlers.clone() {

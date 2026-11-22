@@ -255,6 +255,9 @@ struct DaemonBinding {
     /// session ends with the connection.
     client_owned: bool,
     mcp_owner_id: String,
+    /// yusAgent (YA-10, ticket 28): the session's file (`sessionId`, `sessionFile` of the
+    /// create summary), for `saved`, `session/load`, `session/list` and the delete.
+    file: super::ya_history::SessionFile,
 }
 
 /// The hosted daemon session: the ACP identity, the daemon routing id,
@@ -538,7 +541,9 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
             FrameOrder::Spawn => {
                 // `session/new` settles before the next frame is read, so
                 // EOF's teardown always sees the session it installs.
-                if matches!(&incoming, Incoming::Request { method, .. } if method == "session/new")
+                // yusAgent (YA-10, ticket 28): `session/load` installs the session too.
+                if matches!(&incoming, Incoming::Request { method, .. }
+                    if method == "session/new" || method == "session/load")
                 {
                     let options_tx = tx.clone();
                     handle_incoming(incoming, &link, &state, &options, &binding, options_tx).await;
@@ -651,6 +656,7 @@ async fn bind_daemon_session(
             .to_string(),
         client_owned,
         mcp_owner_id: uuid::Uuid::new_v4().to_string(),
+        file: super::ya_history::SessionFile::from_summary(created.data.as_ref()),
     };
     let attached = link
         .request(DaemonCommand::Attach {
@@ -1098,7 +1104,33 @@ async fn handle_incoming(
             handle_initialize(&id, &params, &options.product_version, &tx);
         }
         "session/new" => {
-            handle_session_new(id, params, link, state, options, binding, tx).await;
+            handle_session_new(id, params, link, state, options, binding, tx, None).await;
+        }
+        // yusAgent (YA-10, ticket 28): resume and history (`super::ya_history`).
+        "session/load" => {
+            let requested = super::ya_history::requested_id(&params);
+            let refused = super::ya_history::load_refusal(
+                link,
+                &binding.active_session_id,
+                &binding.file,
+                &requested,
+            );
+            if let Some(refusal) = refused.await {
+                let _ = tx.send(super::internal_error(&id, &refusal));
+                return;
+            }
+            let load = Some(requested);
+            handle_session_new(id, params, link, state, options, binding, tx, load).await;
+        }
+        // yusAgent (YA-10, ticket 28): `session/list` and the delete.
+        other if super::ya_history::serves(other) => {
+            let bound = super::ya_history::Bound {
+                link,
+                daemon_session_id: &binding.active_session_id,
+                file: &binding.file,
+                actual_cwd: &options.actual_cwd,
+            };
+            super::ya_history::serve(&bound, other, &id, &params, &tx).await;
         }
         "session/set_config_option" => {
             handle_set_config_option(id, params, link, state, tx).await;
@@ -1152,6 +1184,8 @@ fn validate_initialize(id: &Value, params: &Value) -> std::result::Result<(), Va
 
 /// Admit one session over the startup daemon session and admit its MCP
 /// servers through the wire command.
+// yusAgent (YA-10, ticket 28): one more argument, `load`.
+#[allow(clippy::too_many_arguments)]
 async fn handle_session_new(
     id: Value,
     params: Value,
@@ -1160,6 +1194,8 @@ async fn handle_session_new(
     options: &DaemonAcpOptions,
     binding: &DaemonBinding,
     tx: producer::FrameSink,
+    // yusAgent (YA-10, ticket 28): `session/load` of this file's id (checked by the caller).
+    load: Option<String>,
 ) {
     {
         let mut guard = state.lock().await;
@@ -1212,7 +1248,10 @@ async fn handle_session_new(
         return;
     }
 
-    let acp_session_id = uuid::Uuid::new_v4().to_string();
+    // yusAgent (YA-10, ticket 28, C1): a loaded session keeps the file's id, as Unharnessed.
+    let acp_session_id = load
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let producer = UpdateProducer::new(acp_session_id.clone(), tx.clone());
     // Neither picker fetch may fail the admission: discovery failures
     // catch to an empty list, a state fetch failure degrades to no
@@ -1300,6 +1339,32 @@ async fn handle_session_new(
             });
         }
     }
+    // yusAgent (YA-10, ticket 28): the session's file (C2); a load replays the transcript into
+    // the held updates before the session is installed, and a turn the worker still runs goes on
+    // under the replay's open turn (C9).
+    super::ya_history::add_saved(&mut result, &binding.file);
+    if load.is_some() {
+        let replayed = super::ya_history::replay(
+            link,
+            &binding.active_session_id,
+            state_value.as_ref(),
+            &hosted.producer,
+            &mut hosted.ya_turns,
+        )
+        .await;
+        if let Err(error) = replayed {
+            let _ = clear_connection_servers(
+                link,
+                &binding.active_session_id,
+                &binding.mcp_owner_id,
+                state,
+            )
+            .await;
+            state.lock().await.session_new_in_flight = false;
+            let _ = tx.send(super::internal_error(&id, &error.to_string()));
+            return;
+        }
+    }
     // Install the hosted session before the admission response leaves
     // (an immediate `session/set_config_option` must resolve against
     // it). The producer gate opens only after the response is queued,
@@ -1353,6 +1418,10 @@ async fn handle_session_new(
                 }
             }
         }
+    }
+    // yusAgent (YA-10, ticket 28): the replayed conversation comes before the load's answer.
+    if load.is_some() {
+        producer.commit_session_new_response().await;
     }
     let _ = tx.send(jsonrpc::response(&id, &result));
     if let Some((pause_id, lease_key)) = inherited_pause {
@@ -2191,6 +2260,8 @@ mod tests {
             active_session_id: "daemon-1".to_string(),
             client_owned: false,
             mcp_owner_id: "owner-1".to_string(),
+            // yusAgent (YA-10, ticket 28).
+            file: super::super::ya_history::SessionFile::default(),
         };
         let options = DaemonAcpOptions {
             socket_path: PathBuf::new(),
@@ -2206,7 +2277,7 @@ mod tests {
         handle_session_new(
             json!(1),
             json!({ "mcpServers": [{ "name": "example", "command": "echo", "args": [], "env": [] }] }),
-            &link, &state, &options, &binding, tx.clone(),
+            &link, &state, &options, &binding, tx.clone(), None,
         ).await;
         assert!(responses.recv().await.unwrap().get("error").is_some());
         assert_eq!(state.lock().await.mcp_server_names, vec!["example"]);
@@ -2219,6 +2290,7 @@ mod tests {
             &options,
             &binding,
             tx,
+            None,
         )
         .await;
         assert!(responses.recv().await.unwrap().get("result").is_some());

@@ -169,8 +169,9 @@ def update(frames, kind, pred=lambda u: True):
 
 
 def values_at(value, target: str, path: str = "") -> list:
-    """Les valeurs au chemin de clé `target` (même notation que `schema`)."""
-    if path == target and not isinstance(value, (dict, list)):
+    """Les valeurs au chemin de clé `target` (même notation que `schema`) ; ticket 28 : un objet
+    ou une liste à ce chemin compte aussi (un écart attendu peut être un objet ajouté)."""
+    if path == target:
         return [value]
     out = []
     if isinstance(value, dict):
