@@ -2260,6 +2260,8 @@ mod tests {
             active_session_id: "daemon-1".to_string(),
             client_owned: false,
             mcp_owner_id: "owner-1".to_string(),
+            // yusAgent (YA-10, ticket 28).
+            file: super::super::ya_history::SessionFile::default(),
         };
         let options = DaemonAcpOptions {
             socket_path: PathBuf::new(),
@@ -2275,7 +2277,7 @@ mod tests {
         handle_session_new(
             json!(1),
             json!({ "mcpServers": [{ "name": "example", "command": "echo", "args": [], "env": [] }] }),
-            &link, &state, &options, &binding, tx.clone(),
+            &link, &state, &options, &binding, tx.clone(), None,
         ).await;
         assert!(responses.recv().await.unwrap().get("error").is_some());
         assert_eq!(state.lock().await.mcp_server_names, vec!["example"]);
@@ -2288,6 +2290,7 @@ mod tests {
             &options,
             &binding,
             tx,
+            None,
         )
         .await;
         assert!(responses.recv().await.unwrap().get("result").is_some());

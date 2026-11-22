@@ -277,7 +277,7 @@ fn a_prompt_replays_its_text_and_image_blocks() {
 
 fn row(id: &str, modified: &str, count: u64) -> Value {
     json!({
-        "sessionId": id, "sessionFile": format!("/s/{id}.jsonl"), "cwd": "/p",
+        "id": id, "path": format!("/s/{id}.jsonl"), "cwd": "/p",
         "messageCount": count, "modified": modified, "firstMessage": format!("prompt {id}"),
         "rlmDepth": 0,
     })
@@ -325,7 +325,7 @@ fn a_title_is_folded_and_cut_at_80_characters() {
     assert_eq!(title.chars().count(), 80);
     assert!(title.ends_with('…'));
     let mut named = row("b", "2026-11-22T08:00:00.000Z", 1);
-    named["sessionName"] = json!("Mon nom");
+    named["name"] = json!("Mon nom");
     assert_eq!(list_rows(&[named], None)[0]["title"], json!("Mon nom"));
 }
 

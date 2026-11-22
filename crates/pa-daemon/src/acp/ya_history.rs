@@ -591,7 +591,9 @@ pub(crate) async fn serve(
     let _ = tx.send(response);
 }
 
-/// The saved sessions of the bound session's folder (`list_saved_sessions`, current cwd).
+/// The saved sessions of the bound session's folder (`list_saved_sessions`, current cwd): rows
+/// with `id`, `path`, `name`, `cwd`, `modified`, `messageCount`, `firstMessage`, `rlmDepth`,
+/// `parentSessionPath` (`crates/pa-daemon/src/supervisor/sessions.rs`, `saved_session_row`).
 async fn saved_rows(link: &DaemonLink, daemon_session_id: &str) -> anyhow::Result<Vec<Value>> {
     let response = link
         .request(DaemonCommand::ListSavedSessions {
@@ -634,7 +636,7 @@ fn is_conversation(row: &Value) -> bool {
 
 /// The session's name, else the start of its first prompt, spaces folded, cut at 80 characters.
 fn title(row: &Value) -> Option<String> {
-    let text = text_field(row, "sessionName").or_else(|| text_field(row, "firstMessage"))?;
+    let text = text_field(row, "name").or_else(|| text_field(row, "firstMessage"))?;
     let folded = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if folded.is_empty() {
         return None;
@@ -654,9 +656,9 @@ pub(crate) fn list_rows(rows: &[Value], current: Option<&str>) -> Vec<Value> {
     listed
         .into_iter()
         .filter_map(|row| {
-            let session_id = text_field(row, "sessionId")?;
+            let session_id = text_field(row, "id")?;
             let mut ours = Map::new();
-            if let Some(path) = text_field(row, "sessionFile") {
+            if let Some(path) = text_field(row, "path") {
                 ours.insert("path".to_string(), json!(path));
             }
             if current == Some(session_id) {
@@ -731,8 +733,8 @@ async fn delete(
         .map_err(|error| DeleteRefusal::Failed(error.to_string()))?;
     let Some(path) = rows
         .iter()
-        .find(|row| text_field(row, "sessionId") == Some(target))
-        .and_then(|row| text_field(row, "sessionFile"))
+        .find(|row| text_field(row, "id") == Some(target))
+        .and_then(|row| text_field(row, "path"))
         .map(str::to_string)
     else {
         return Err(DeleteRefusal::Invalid(format!(
