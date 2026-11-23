@@ -7,6 +7,7 @@ import { Kernel } from "./kernel";
 import type { ChatMark, Draft } from "./protocol";
 import { Session } from "./session";
 import type { ShownAgent } from "./shown";
+import { dropEmpty } from "./ya/empty"; // yusAgent (ticket 28, D2)
 
 /** A conversation in the background sleeps after this long without work, like Prime's default. */
 const SLEEP_AFTER_MS = 90 * 60_000;
@@ -24,6 +25,8 @@ export class Conversation {
   readonly kernel: Kernel;
   /** The message box while another conversation is in the panel. */
   draft: Draft = NO_DRAFT;
+  /** yusAgent (ticket 28, D2) : ouverte neuve, pas depuis un fichier (rien à garder si elle reste vide). */
+  fresh = false;
 
   constructor(
     readonly tag: number,
@@ -57,9 +60,13 @@ export class Conversation {
     return this.chat.working || this.chat.waiting || this.chat.goalGoing || this.kernel.running;
   }
 
-  /** Nothing was ever asked in it: there is nothing to come back to. */
+  /**
+   * Nothing was ever asked in it: there is nothing to come back to. yusAgent (ticket 28, D1) : jugé
+   * sur le chat (aucun tour, rien en attente, rien en cours) ; notre démon écrit le fichier dès
+   * `session/new` (M1).
+   */
   get empty(): boolean {
-    return !this.busy && !this.file;
+    return !this.busy && !this.chat.hasTurns;
   }
 
   /** The agent starts again on its file, which comes back; before its first message, on a new one. */
@@ -196,6 +203,7 @@ export class Conversations {
     const conversation = new Conversation(tag, this.binary, this.cwd, this.version, this.files, log, () =>
       this.newChat(),
     );
+    conversation.fresh = !saved; // yusAgent (ticket 28, D2)
     this.open.push(conversation);
     this.shownAgent.attach(conversation.agent);
     const update = () => this.update(conversation);
@@ -217,8 +225,19 @@ export class Conversations {
     this.log.info(`conversations: [${next.tag}] in the panel`);
     for (const listener of this.showListeners) listener();
     if (!left) return;
-    if (left.empty) void this.close(left, "nothing asked in it");
+    if (left.empty) void this.leaveEmpty(left, next);
     else this.update(left);
+  }
+
+  /**
+   * yusAgent (ticket 28, D2) : une conversation vide se ferme ; ouverte neuve, elle est ensuite
+   * supprimée par l'agent de celle qui la remplace, une fois sa session ouverte (session du démon
+   * arrêtée, fichier retiré ; `src/ya/empty.ts`).
+   */
+  private async leaveEmpty(left: Conversation, next: Conversation): Promise<void> {
+    const id = left.fresh ? left.session.saved?.id : undefined;
+    await this.close(left, "nothing asked in it");
+    if (id) await dropEmpty(next, id, tagged(this.log, left.tag));
   }
 
   /** It started or stopped working: its mark, and whether it may sleep. */

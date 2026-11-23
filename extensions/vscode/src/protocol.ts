@@ -8,7 +8,8 @@
 export type AgentState =
   | { kind: "starting" }
   | { kind: "ready" }
-  | { kind: "failed"; error: string; stderr: string[] };
+  /** yusAgent (ticket 28, D3) : `session`, la session n'a pas pu s'ouvrir (`error` : la raison du pont). */
+  | { kind: "failed"; error: string; stderr: string[]; session?: true };
 
 /** One provider row, as the agent's `_unharnessed/providers/list` gives it. */
 export type Provider = {
@@ -616,6 +617,11 @@ export type Probe = {
    * mais ignore les clics ; il en faut 0.
    */
   visibleInert: number;
+  /**
+   * Ticket 28 : les boutons qui ouvrent un repli (`aria-expanded`) : texte, ouvert ou non, dans un
+   * bloc inerte ou non, affiché (taille non nulle) ou non.
+   */
+  toggles: { text: string; expanded: boolean; inert: boolean; visible: boolean }[];
 };
 
 /** yusAgent (PR 3, tests e2e) : voir `probeInput`. */
@@ -626,7 +632,7 @@ export type ProbeInput = {
   click?: string;
   /**
    * Contrôle de Yusuf : un clic comme celui d'un utilisateur sur le dernier bouton dont le texte est
-   * ce texte (sinon le contient). Bouton amené à l'écran, élément réellement sous le pointeur
+   * ce texte (sinon le contient ; ticket 28 : un bouton d'icône, sans texte, par son `aria-label` exact). Bouton amené à l'écran, élément réellement sous le pointeur
    * (`elementFromPoint`) ; rien si cet élément est inerte, ou si ce n'est pas le bouton (recouvert,
    * masqué) ; sinon pointeur et souris enfoncés, relâchés, puis `click` sur cet élément.
    */

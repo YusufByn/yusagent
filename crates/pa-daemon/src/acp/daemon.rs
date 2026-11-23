@@ -622,6 +622,17 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
     // Let it finish before EOF teardown takes the hosted session away.
     wait_for_session_close(&state).await;
     teardown(&link, &state, &binding).await;
+    // yusAgent (YA-10, ticket 28): a conversation this bridge opened new, left empty, goes with it.
+    let opened_new = matches!(
+        &options.create,
+        DaemonCommand::Create {
+            session_path: None,
+            ..
+        }
+    );
+    if opened_new && !binding.client_owned {
+        super::ya_history::drop_if_empty(&link, &binding.active_session_id, &binding.file).await;
+    }
     drop(tx);
     let _ = writer.await;
     Ok(0)
@@ -2112,6 +2123,37 @@ async fn teardown(
         let _ = hosted.config.queue.lock().await;
         hosted.producer.close().await;
     }
+}
+
+/// yusAgent (YA-10, ticket 28): a link whose commands `answer` answers, for the bridge's tests
+/// outside this module (`ya_history_tests.rs`).
+#[cfg(test)]
+pub(crate) fn scripted_link(
+    answer: impl Fn(&DaemonCommand) -> DaemonResponse + Send + 'static,
+) -> Arc<DaemonLink> {
+    let (writer, mut commands) = mpsc::unbounded_channel::<String>();
+    let (_frames, frames) = mpsc::unbounded_channel();
+    let pending: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<DaemonResponse>>>> =
+        Arc::default();
+    let link = Arc::new(DaemonLink {
+        writer,
+        pending: Arc::clone(&pending),
+        closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        frames: Mutex::new(frames),
+        protocol_version: DAEMON_PROTOCOL_VERSION,
+        next_request_id: std::sync::atomic::AtomicU64::new(0),
+    });
+    tokio::spawn(async move {
+        while let Some(line) = commands.recv().await {
+            let envelope: DaemonCommandEnvelope = serde_json::from_str(&line).unwrap();
+            let mut response = answer(&envelope.command);
+            response.id = Some(envelope.id.clone());
+            if let Some(reply) = pending.lock().unwrap().remove(&envelope.id) {
+                let _ = reply.send(response);
+            }
+        }
+    });
+    link
 }
 
 #[cfg(test)]

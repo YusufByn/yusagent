@@ -70,6 +70,11 @@ export class Agent {
     return this.saved;
   }
 
+  /** yusAgent (ticket 28, tests e2e) : le processus en cours. */
+  get pid(): number | undefined {
+    return this.proc?.pid;
+  }
+
   /** yusAgent: the binary as launched (the `/login` message names it). */
   get binaryPath(): string {
     return this.resolved ?? this.binary ?? "yusagent";
@@ -171,6 +176,18 @@ export class Agent {
       .then(() => this.start(saved))
       .finally(() => (this.restarting = undefined));
     return this.restarting;
+  }
+
+  /**
+   * yusAgent (ticket 28, D3) : la session ne s'est pas ouverte (`session/new` ou `session/load`
+   * refusé, par exemple une conversation ouverte dans une autre fenêtre). Le processus s'arrête, pour
+   * ne pas rester attaché à la session du démon, et le panneau dit pourquoi ; « Restart » réessaie.
+   */
+  abandon(error: string): Promise<void> {
+    if (this.state.kind !== "ready") return Promise.resolve();
+    this.log.warn(`agent stopped: the session did not open: ${error}`);
+    this.set({ kind: "failed", error, stderr: [], session: true });
+    return this.stop();
   }
 
   /**

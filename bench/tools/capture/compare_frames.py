@@ -7,6 +7,8 @@ YA-10 (ticket 24, PR 3). Vrai binaire : le dossier écrit par `acp_frames.py` (c
 `lent` et `réveil` (ticket 25 : `turnStart` d'un prompt et d'un tour de réveil, fin du réveil). Pour chaque paire de trames : chemins de clés (avec le type de la valeur) présents d'un
 seul côté, types différents, valeurs des champs constants (statuts, genres, titres, identifiants
 d'option, texte du refus, forme des identifiants de requête), trames de fin d'un tour de prompt.
+Ticket 28 : aussi l'ouverture, capacités de la réponse d'`initialize` (dont la valeur de
+`loadSession`) et `_meta` de la réponse de `session/new` (`saved`).
 
 Ticket 26 : `--against <dossier acp_frames d'un autre binaire>` compare deux binaires sans l'agent
 factice : même suite de trames (sens, méthode, genre de mise à jour), puis, trame par trame, mêmes
@@ -86,6 +88,8 @@ def fake_frames(prompt: str) -> list[dict]:
     wait(1)
     send({"id": 2, "method": "session/new", "params": {"cwd": control, "mcpServers": []}})
     sid = wait(2)["result"]["sessionId"]
+    # Ticket 28 : les réponses d'ouverture (capacités, `saved`), gardées à part.
+    OPENING.setdefault(prompt, list(frames))
     frames.clear()
     send({"id": 3, "method": "session/prompt", "params": {"sessionId": sid, "prompt": [{"type": "text", "text": prompt}]}})
     if prompt == "réveil":
@@ -101,6 +105,9 @@ def fake_frames(prompt: str) -> list[dict]:
     proc.stdin.close()
     proc.wait(timeout=5)
     return frames
+
+
+OPENING: dict[str, list[dict]] = {}
 
 
 def schema(value, path="") -> dict[str, str]:
@@ -317,6 +324,23 @@ def wake_end(frames, start):
 print(f"fin du tour de réveil : réel {wake_end(A, real_wake)}, factice {wake_end(reveil, mine_wake)}"
       f" ({'IDENTIQUE' if wake_end(A, real_wake) == wake_end(reveil, mine_wake) else 'DIFFÉRENT'})")
 total += 0 if real_wake and wake_end(A, real_wake) == wake_end(reveil, mine_wake) else 1
+# Ticket 28 : ouverture. Capacités d'`initialize` (`loadSession`, `sessionCapabilities.list`) et
+# `_meta` de la réponse de `session/new` (`saved { sessionId, path }`) ; les options de session
+# (catalogue des modèles) ne sont pas comparées.
+def response(frames, req_id):
+    return next((f for f in frames if f.get("id") == req_id and "result" in f), {})
+real_open = [row["msg"] for row in (json.loads(line) for line in
+             (captured / "B-basic-manual-reject" / "transcript.jsonl").read_text().splitlines())
+             if row["dir"] == "agent->client"]
+mine_open = OPENING["carte"]
+real_caps = response(real_open, 1).get("result", {}).get("agentCapabilities", {})
+mine_caps = response(mine_open, 1).get("result", {}).get("agentCapabilities", {})
+total += compare("initialize : agentCapabilities", real_caps, mine_caps)
+load = (real_caps.get("loadSession"), mine_caps.get("loadSession"))
+print(f"  loadSession réel {load[0]}, factice {load[1]} ({'IDENTIQUE' if load[0] == load[1] else 'DIFFÉRENT'})")
+total += 0 if load[0] == load[1] else 1
+total += compare("session/new : _meta", response(real_open, 2).get("result", {}).get("_meta", {}),
+                 response(mine_open, 2).get("result", {}).get("_meta", {}))
 # Message de l'agent.
 total += compare("agent_message_chunk", update(A, "agent_message_chunk"), update(carte, "agent_message_chunk") or update(lent, "agent_message_chunk"),
                  ignore_values={".params.update.content.type"})

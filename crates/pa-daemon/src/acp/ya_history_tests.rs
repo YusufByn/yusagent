@@ -405,3 +405,186 @@ async fn the_replay_publishes_each_turn_between_its_start_and_end() {
         ]
     );
 }
+
+/// A daemon answer: `data` on success, `error` otherwise.
+fn answer(
+    command: &str,
+    data: Option<Value>,
+    error: Option<&str>,
+) -> pa_types::daemon::DaemonResponse {
+    pa_types::daemon::DaemonResponse {
+        id: None,
+        command: command.to_string(),
+        success: error.is_none(),
+        data,
+        error: error.map(str::to_string),
+        error_info: None,
+    }
+}
+
+/// C12 on a daemon older than the binary (defect 1 of the X1 check): its worker does not serve the
+/// action `others`, so the bridge cannot tell whether another window holds the session. The load
+/// is refused, and the refusal says what to do.
+#[tokio::test]
+async fn a_daemon_that_cannot_count_the_other_windows_refuses_the_load() {
+    let link = super::super::daemon::scripted_link(|command| match command {
+        DaemonCommand::YaPermissions { action, .. } if action == "others" => answer(
+            "ya_permissions",
+            None,
+            Some("the action must be \"respond\", \"set_mode\", \"get\" or \"asker\""),
+        ),
+        other => panic!("unexpected command: {other:?}"),
+    });
+    let file = SessionFile {
+        id: Some("019a".to_string()),
+        path: None,
+    };
+    let refusal = load_refusal(&link, "daemon-1", &file, "019a")
+        .await
+        .expect("the load is refused");
+    assert!(refusal.contains("older than this yusagent"), "{refusal}");
+    assert!(refusal.contains("yusagent shutdown"), "{refusal}");
+}
+
+/// The same daemon question answered: no other window, the load goes on.
+#[tokio::test]
+async fn no_other_window_lets_the_load_go_on() {
+    let link = super::super::daemon::scripted_link(|command| match command {
+        DaemonCommand::YaPermissions { action, .. } if action == "others" => {
+            answer("ya_permissions", Some(json!({ "others": 0 })), None)
+        }
+        other => panic!("unexpected command: {other:?}"),
+    });
+    let file = SessionFile {
+        id: Some("019a".to_string()),
+        path: None,
+    };
+    assert_eq!(load_refusal(&link, "daemon-1", &file, "019a").await, None);
+}
+
+/// The files named after one session, in `<root>/sessions` and `<root>/session-artifacts`: the
+/// file, both forms of its write temporary (`pa-daemon` `<id>.jsonl.tmp-<pid>`, `pa-core`
+/// `<id>.jsonl.tmp<pid>`), both caches and their temporaries, the usage journal, the artifacts.
+fn write_session(root: &std::path::Path, id: &str) {
+    let sessions = root.join("sessions");
+    let artifacts = root.join("session-artifacts").join(id);
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::create_dir_all(&artifacts).unwrap();
+    std::fs::write(artifacts.join("kernel-state.bin"), "x").unwrap();
+    for suffix in [
+        "jsonl",
+        "jsonl.tmp-123",
+        "jsonl.tmp123",
+        "window-cache.json",
+        "info-cache.json",
+        "window-cache-6f1c2d3e-0000-4000-8000-000000000001.tmp",
+        "info-cache-6f1c2d3e-0000-4000-8000-000000000002.tmp",
+        "usage.ndjson",
+    ] {
+        std::fs::write(sessions.join(format!("{id}.{suffix}")), "{}").unwrap();
+    }
+}
+
+fn names_in(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
+}
+
+const SESSION_A: &str = "01a20000-0000-7000-8000-00000000000a";
+const SESSION_B: &str = "01a20000-0000-7000-8000-00000000000b";
+
+/// After a delete, nothing named after the session is left but its usage journal (C4), whatever
+/// the delete itself removed; another session's files stay untouched.
+#[test]
+fn a_deleted_session_leaves_only_its_usage_journal() {
+    let root = tempfile::TempDir::new().unwrap();
+    write_session(root.path(), SESSION_A);
+    write_session(root.path(), SESSION_B);
+    let b_before = names_in(&root.path().join("sessions"))
+        .into_iter()
+        .filter(|name| name.starts_with(SESSION_B))
+        .collect::<Vec<_>>();
+    remove_sidecars(
+        &root
+            .path()
+            .join("sessions")
+            .join(format!("{SESSION_A}.jsonl")),
+    );
+    let mut expected = vec![format!("{SESSION_A}.usage.ndjson")];
+    expected.extend(b_before);
+    expected.sort();
+    assert_eq!(names_in(&root.path().join("sessions")), expected);
+    assert_eq!(
+        names_in(&root.path().join("session-artifacts")),
+        vec![SESSION_B.to_string()]
+    );
+    assert_eq!(
+        names_in(&root.path().join("session-artifacts").join(SESSION_B)),
+        vec!["kernel-state.bin"]
+    );
+}
+
+/// `session/list` sweeps the folder's orphan caches (a cache whose `<uuid>.jsonl` is gone: a
+/// catalog scan can write one after a delete). Only the exact names `<uuid>.window-cache.json` and
+/// `<uuid>.info-cache.json` without their file: never a temporary, a usage journal, a cache whose
+/// file is there, or a name that is not a session id.
+#[tokio::test]
+async fn the_list_sweeps_the_orphan_caches_only() {
+    let root = tempfile::TempDir::new().unwrap();
+    let sessions = root.path().join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let orphan_window = "01a20000-0000-7000-8000-0000000000c1.window-cache.json";
+    let orphan_info = "01a20000-0000-7000-8000-0000000000c2.info-cache.json";
+    let complete = "01a20000-0000-7000-8000-0000000000c3";
+    let gone = "01a20000-0000-7000-8000-0000000000c4";
+    let mut kept = vec![
+        format!("{complete}.jsonl"),
+        format!("{complete}.window-cache.json"),
+        format!("{complete}.info-cache.json"),
+        format!("{gone}.jsonl.tmp-123"),
+        format!("{gone}.jsonl.tmp123"),
+        format!("{gone}.window-cache-6f1c2d3e-0000-4000-8000-000000000001.tmp"),
+        format!("{gone}.info-cache-6f1c2d3e-0000-4000-8000-000000000002.tmp"),
+        format!("{gone}.usage.ndjson"),
+        "notes.window-cache.json".to_string(),
+        "notes.info-cache.json".to_string(),
+    ];
+    for name in kept
+        .iter()
+        .map(String::as_str)
+        .chain([orphan_window, orphan_info])
+    {
+        std::fs::write(sessions.join(name), "{}").unwrap();
+    }
+    let link = super::super::daemon::scripted_link(|command| match command {
+        DaemonCommand::ListSavedSessions { .. } => {
+            answer("list_saved_sessions", Some(json!({ "sessions": [] })), None)
+        }
+        other => panic!("unexpected command: {other:?}"),
+    });
+    let file = SessionFile {
+        id: Some(complete.to_string()),
+        path: Some(
+            sessions
+                .join(format!("{complete}.jsonl"))
+                .display()
+                .to_string(),
+        ),
+    };
+    let bound = Bound {
+        link: &link,
+        daemon_session_id: "daemon-1",
+        file: &file,
+        actual_cwd: root.path(),
+    };
+    let (tx, mut answers) = tokio::sync::mpsc::unbounded_channel();
+    serve(&bound, "session/list", &json!(1), &json!({}), &tx).await;
+    let answer = answers.recv().await.unwrap();
+    assert!(answer.get("result").is_some(), "{answer}");
+    kept.sort();
+    assert_eq!(names_in(&sessions), kept);
+}

@@ -58,6 +58,10 @@ export function activate(context: vscode.ExtensionContext): void {
           agent: agent.current,
           session: session.current,
           chat: chat.current,
+          // yusAgent (ticket 28) : processus de l'agent, fichier de la conversation, historique.
+          pid: agent.pid,
+          saved: session.saved,
+          history: history.current,
           html: view.html,
           rendered: view.rendered,
           badge: view.badgeValue, // yusAgent (PR 3)

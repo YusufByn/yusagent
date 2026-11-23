@@ -16,6 +16,10 @@
 //!    kept.
 //! d. `session/load` of a conversation another client holds is refused (C12).
 //! e. An ACP session writes its usage journal, and an effort change is journaled (J1).
+//! f. A conversation opened new and left empty goes with its bridge: session stopped, file
+//!    deleted (defect 2 of the X1 check). A delete (c, f) leaves no file named after the session
+//!    but its usage journal: the window snapshot and the scan state go too.
+//! g. An empty conversation held by another client, or one where something was asked, stays.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -262,6 +266,19 @@ fn listed_ids(list: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The files next to a session file named after it (`<id>.*`), but its usage journal, which a delete
+/// keeps (C4): the window snapshot, the scan state, their temporaries, the file itself.
+fn session_files(session_file: &Path) -> Vec<String> {
+    let stem = session_file.file_stem().unwrap().to_str().unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(session_file.parent().unwrap())
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&format!("{stem}.")) && !name.ends_with(".usage.ndjson"))
+        .collect();
+    names.sort();
+    names
+}
+
 /// a. The file in `session/new`, then a resume in another process: replay, then a prompt.
 #[test]
 fn a_resumed_session_replays_its_turns_then_takes_a_prompt() {
@@ -432,12 +449,23 @@ fn the_history_lists_conversations_and_deletes_one_with_its_session() {
         one_path.file_stem().unwrap().to_str().unwrap()
     ));
     let journal_before = journal.exists();
+    assert!(
+        one_path.with_extension("window-cache.json").exists(),
+        "the window snapshot is there before the delete: {:?}",
+        session_files(&one_path)
+    );
     let deleted = two.call(
         "_unharnessed/sessions/delete",
         &json!({ "sessionId": one_id }),
     );
     assert_eq!(deleted["result"], json!({}), "{deleted}");
     assert!(!one_path.exists(), "the file is deleted");
+    // The sidecars named after it go too (window snapshot, scan state written as the worker stops).
+    assert_eq!(
+        session_files(&one_path),
+        Vec::<String>::new(),
+        "nothing of it is left"
+    );
     let artifacts = one_path
         .parent()
         .and_then(Path::parent)
@@ -534,5 +562,96 @@ fn an_acp_session_journals_its_calls_and_an_effort_change() {
         mains[1]["invalidation"],
         json!({ "cause": "thinking_level_change", "from": current, "to": other }),
         "{lines:?}"
+    );
+}
+
+/// One daemon command on the test's socket: its response frame (as `acp_mode_e2e.rs`).
+fn daemon_request(home: &Home, id: &str, command: &Value) -> Value {
+    let mut writer =
+        pa_types::platform::transport::connect_blocking(&home.socket).expect("daemon socket");
+    let reader = writer.try_clone_box().expect("daemon socket clone");
+    let _ = reader.set_read_timeout(TIMEOUT);
+    let protocol = json!({ "name": "prime-agent.daemon", "version": pa_types::daemon::DAEMON_PROTOCOL_VERSION });
+    let frame = json!({ "type": "command", "id": id, "protocol": protocol, "command": command });
+    writeln!(writer, "{frame}").expect("daemon frame");
+    writer.flush().expect("daemon flush");
+    BufReader::new(reader)
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(&line.expect("daemon line")).expect("JSON"))
+        .find(|frame| frame["id"] == json!(id))
+        .unwrap_or_else(|| panic!("the daemon closed without answering {id}"))
+}
+
+/// The ids of the daemon's live sessions.
+fn live_ids(home: &Home) -> Vec<String> {
+    let list = daemon_request(home, "live", &json!({ "type": "list" }));
+    list["data"]["sessions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a session list: {list}"))
+        .iter()
+        .filter_map(|row| row["sessionId"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// f. A conversation opened new and left with nothing asked goes with its bridge: at the end of
+/// stdin its session stops in the daemon and its file goes (ticket 28, defect 2: VS Code closed
+/// or reloaded with an empty conversation in the panel).
+#[test]
+fn an_empty_new_conversation_goes_with_its_bridge() {
+    let home = Home::new(&json!({ "engine": "faux", "responses": [{ "text": "done" }] }));
+    let mut client = Client::spawn(&home, &[]);
+    let opened = client.open();
+    let (id, path) = saved(&opened);
+    assert!(path.exists(), "the file exists before the first prompt");
+    assert!(live_ids(&home).contains(&id));
+    client.close();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while (path.exists() || live_ids(&home).contains(&id)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(!path.exists(), "the empty conversation's file is deleted");
+    assert_eq!(
+        session_files(&path),
+        Vec::<String>::new(),
+        "nothing of it is left"
+    );
+    assert!(
+        !live_ids(&home).contains(&id),
+        "the empty conversation's session is stopped: {:?}",
+        live_ids(&home)
+    );
+}
+
+/// g. An empty conversation another client holds stays when its bridge ends; one where something
+/// was asked stays too.
+#[test]
+fn an_empty_conversation_held_elsewhere_or_asked_in_stays() {
+    let home = Home::new(&json!({ "engine": "faux", "responses": [{ "text": "done" }] }));
+    let mut empty = Client::spawn(&home, &[]);
+    let opened = empty.open();
+    let (empty_id, empty_path) = saved(&opened);
+    let mut holder = Client::spawn(&home, &["--resume", empty_path.to_str().unwrap()]);
+    holder.initialize();
+    empty.close();
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(empty_path.exists(), "held elsewhere: the file stays");
+    assert!(
+        live_ids(&home).contains(&empty_id),
+        "held elsewhere: the session stays"
+    );
+    holder.close();
+
+    let mut asked = Client::spawn(&home, &[]);
+    let opened = asked.open();
+    let acp_id = opened["sessionId"].as_str().unwrap().to_string();
+    let (asked_id, asked_path) = saved(&opened);
+    let answered = asked.prompt(&acp_id, "something");
+    assert_eq!(answered["result"]["stopReason"], "end_turn", "{answered}");
+    asked.close();
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(asked_path.exists(), "asked in: the file stays");
+    assert!(
+        live_ids(&home).contains(&asked_id),
+        "asked in: the session stays"
     );
 }

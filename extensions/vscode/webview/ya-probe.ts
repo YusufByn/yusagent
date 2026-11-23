@@ -19,6 +19,15 @@ function probe(): Probe {
       return rect.width > 0 && rect.height > 0;
     }).length,
     text: document.body.innerText,
+    toggles: Array.from(document.querySelectorAll<HTMLElement>("button[aria-expanded]")).map((button) => {
+      const rect = button.getBoundingClientRect();
+      return {
+        text: button.textContent?.trim() ?? "",
+        expanded: button.getAttribute("aria-expanded") === "true",
+        inert: button.closest("[inert]") !== null,
+        visible: rect.width > 0 && rect.height > 0,
+      };
+    }),
     selects: Array.from(document.querySelectorAll("select")).map((select) => ({
       label: select.getAttribute("aria-label"),
       value: select.value,
@@ -37,8 +46,11 @@ function probe(): Probe {
 /** Un clic comme celui d'un utilisateur (voir `ProbeInput.userClick`). */
 function userClick(text: string): Probe["clicked"] {
   // Texte exact d'abord, sinon contenu ; le dernier de la page (le plus récent de la conversation).
+  // Ticket 28 : un bouton sans texte (icône) par son nom, `aria-label` exact.
   const buttons = Array.from(document.querySelectorAll<HTMLElement>("button"));
-  const exact = buttons.filter((candidate) => candidate.textContent?.trim() === text);
+  const exact = buttons.filter(
+    (candidate) => candidate.textContent?.trim() === text || (!candidate.textContent?.trim() && candidate.getAttribute("aria-label") === text),
+  );
   const button = (exact.length > 0 ? exact : buttons.filter((candidate) => candidate.textContent?.includes(text))).at(-1);
   if (!button) return "missing";
   button.scrollIntoView({ block: "center" });

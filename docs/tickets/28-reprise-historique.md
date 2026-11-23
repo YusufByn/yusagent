@@ -470,3 +470,172 @@ python3 -I bench/tools/capture/compare_frames.py frames-branch --against frames-
 - `compare_frames.py` retouché (`values_at`) : un écart attendu peut être un objet (`list: {}`, `_meta`, `saved`) ; avant, seule une valeur simple comptait comme présente.
 
 **Préfixe envoyé au modèle** : inchangé pour une session neuve (`acp`, `acp-extension`, `tui`, tous les cas `-p` : TOUT IDENTIQUE) et pour une reprise sans changement (C = E ; D = E hors l'avis déjà présent sur `main`).
+
+## 17. Réalisation de X1 (branche `ya-28-x1`, PR #80)
+
+Point de départ : `main` à `9937e4ff8` (merge de la PR #78, R1). Binaire de référence : `~/.cache/yusagent-bin/9937e4ff81689db8918a910816d1c12692fb93be/yusagent`.
+
+### Décisions de Yusuf (22/11/2026)
+
+- **D1** : vide = aucun tour dans le chat, aucun message en attente, rien en cours. Une conversation vide se ferme quand on la quitte, comme chez Unharnessed.
+- **D2 (b)** : `_unharnessed/sessions/delete` sur la conversation vide quittée, une fois la session de la nouvelle conversation ouverte. Vérifié d'abord que la suppression accepte une session sans message (ci-dessous).
+- **D3 (a)** : ligne claire avec le message du pont et un bouton « Restart » qui réessaie, agent arrêté ; même affichage pour tout échec de `session/new` ou `session/load`.
+- **D4** : tour affiché en cours et arrêtable, message tapé pendant ce temps mis en attente jusqu'à la fin du tour, sans durée affichée.
+
+### Contrôle avant D2 : suppression d'une session sans message
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/empty_delete_probe.py \
+  --binary ~/.cache/yusagent-bin/9937e4ff81689db8918a910816d1c12692fb93be/yusagent \
+  --out bench/tools/capture/runs/ya28-x1-empty-delete-9937e4ff8
+…
+A_fichier_avant : true
+liste_ids : []
+arbre_avant : {"daemon": [56125], "worker": [56126, 56129], "kernel": [56142, 56148]}
+suppression : {"result": {}}
+suppression_ms : 124
+A_fichier_apres : false
+A_artifacts_apres : false
+arbre_apres : {"daemon": [56125], "worker": [56129], "kernel": [56148]}
+CONFORME
+```
+
+La session vide (pont A, `session/new` sans prompt, puis fin de stdin) est absente de `session/list`, la suppression demandée par le pont B répond `{}`, son fichier est retiré et son worker et son kernel sont arrêtés. Chaque session neuve a son kernel dès `session/new` (deux kernels pour deux sessions vides, `crates/pa-daemon/src/agent_engine/lifecycle.rs:1201`).
+
+### Code
+
+- **Méthodes et `_meta`** : `session/load`, `session/list` et `_unharnessed/sessions/delete` servies (`extensions/vscode/src/ya/methods.ts`), l'historique apparaît ; `yaResultMeta` lit `saved`, `path` et `current` dans le `_meta` du pont (`src/ya/meta.ts`), utilisé par `src/session.ts` et `src/history.ts` (`current` sert tant que la conversation du panneau n'a pas d'identifiant).
+- **D1** : `Conversation.empty` = rien en cours ni en attente et aucun tour (`src/conversations.ts`, `Chat.hasTurns` dans `src/chat.ts`).
+- **D2** : `Conversation.fresh` (ouverte neuve) ; quittée vide, elle se ferme, puis `dropEmpty` (`src/ya/empty.ts`) demande la suppression à l'agent de la conversation qui la remplace, une fois sa session ouverte. Une conversation ouverte depuis un fichier (historique, refus) n'est jamais supprimée ainsi.
+- **D3** : un échec de `session/new` ou `session/load` appelle `Agent.abandon` (`src/agent.ts`) : état `failed` avec `session`, processus arrêté (il ne reste pas attaché au worker). Le panneau affiche « Conversation not opened », la raison du pont et « Restart » (`webview/Status.tsx`) ; « Restart » relance sur le fichier (`--resume`, `session/load`).
+- **D4** : à la fin du chargement, un tour rejoué encore ouvert (C9) devient le tour en cours (`live`) : « Stop » affiché, messages en attente jusqu'à sa frontière, sans durée (`src/chat.ts`, `loaded`).
+- **Menu de l'historique** : règles CSS provisoires (lignes, corbeille), la feuille minimale n'en avait pas.
+
+### Tests
+
+- **Unitaires** (`test/unit/meta.test.ts`) : `saved`, `path`, `current` lus dans notre `_meta` ou dans `_meta.unharnessed` ; méthodes du ticket servies, historique affiché. `test/unit/agent.test.ts` : le cas « méthode non servie » prend `_unharnessed/session/rewind`, `session/list` étant servie. `npm run test:unit` : `ℹ tests 59`, `ℹ pass 59`.
+- **e2e vrai binaire** (`test/e2e/suite-real.ts`, clics sur l'élément réellement sous le pointeur) :
+  1. conversation neuve quittée vide : sa session absente de `list --json` du démon, son worker arrêté, son fichier retiré (D1, D2) ;
+  2. « Restart » après un SIGKILL du pont : la conversation revient par `session/load`, avec le tour `wake: bash` fait par le worker pendant que le chat était fermé, puis prompt suivant accepté ;
+  3. tour de l'agent en cours au chargement : affiché `running`, chat occupé, message tapé en attente jusqu'à la frontière du tour, tour fini `done` sans durée (D4) ;
+  4. même chose, puis « Stop » par un clic : tour `cancelled`, la suite du tour ne vient pas (cellule de 8 s, rien 12 s après) ;
+  5. historique : deuxième conversation, puis retour à la première par sa ligne, telle quelle (même processus) ;
+  6. double ouverture : un second client ACP (le binaire lancé par le test) tient la conversation ; ouverte par l'historique, « Conversation not opened » et « This conversation is open in another window. », agent arrêté ; le client fermé, « Restart » la reprend depuis son fichier (C12, D3) ;
+  7. suppression d'une conversation de fond par la corbeille puis « Delete » : ligne retirée, fichier et `session-artifacts/<id>` retirés, session absente du démon, worker et agent arrêtés.
+- **Vus en échec sans le correctif** : premier push de la PR #80, tests seuls (commit `5e326d730`, extension de `main`). `ya-extension` run 45033767797, job `e2e vrai binaire` 137242853737 : `e2e vrai binaire : 7/13 réussis`, les 6 cas du ticket en échec, `processus restants : aucun`. Les échecs tombent au premier manque : `saved` non lu (`fichier de la conversation vide`, `fichier de la conversation`), bouton de l'historique masqué (`clic sur « History »`), réponses du script décalées par les cas précédents (`réponse avant le plantage`). Le job `extension` (agent factice réaligné, sans le correctif) : vert. Le cas 4 (Stop après chargement) a été ajouté après ce push : sans le correctif, le chat n'est pas occupé après le chargement (constat du cas 3), donc pas de bouton « Stop » ; il n'a pas été vu en échec en CI.
+
+### Agent factice réaligné
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/acp_frames.py \
+  --binary ~/.cache/yusagent-bin/9937e4ff81689db8918a910816d1c12692fb93be/yusagent \
+  --out bench/tools/capture/runs/ya28-x1-frames-9937e4ff8
+python3 -I bench/tools/capture/compare_frames.py bench/tools/capture/runs/ya28-x1-frames-9937e4ff8
+```
+
+- `compare_frames.py` compare maintenant aussi l'ouverture : capacités d'`initialize` (et la valeur de `loadSession`), `_meta` de la réponse de `session/new`.
+- Agent factice de `main` : `écarts : 13` (`loadSession` faux, `sessionCapabilities`, `promptCapabilities`, `mcpCapabilities` et `saved` absents). Agent factice réaligné : `écarts : 0`.
+
+### Second push : un cas du ticket 24 en échec, course du test
+
+`ya-extension` run 45034241467 (commit `3cb0abf02`), job `e2e vrai binaire` 137244320350 : `e2e vrai binaire : 13/14 réussis`, tous les cas du ticket 28 réussis, `processus restants : aucun`. En échec : « cellule avec bash() … carte avec la commande » (ticket 24), `délai dépassé : carte dépliée` ; réussi au premier push (run 45033767797).
+
+- **Pas de régression de X1** (vérifié dans le diff `9937e4ff8..3cb0abf02`, décision de Yusuf du 22/11) : dans `src/chat.ts`, seuls `hasTurns` (lecture) et la fin de `loaded()` (chargement d'une conversation, jamais appelé pour une conversation neuve) changent ; l'état des tours, `answerAt` et le repli (`WorkRun`), la carte (`ToolCall`, `aria-expanded`) ne sont pas touchés (`webview/Chat.tsx` inchangé). Les règles CSS ajoutées (`.menu-row`, `.menu-list`) servent au menu de l'historique et au sélecteur de modèle, pas aux cartes ; la sonde `userClick` n'ajoute que les boutons sans texte par `aria-label` exact, et aucun bouton ne porte `aria-label` « Ran » ou « Worked ».
+- **Course** : le test cliquait « Ran » pour vérifier la carte avant que la webview ait reçu la fin du tour. Travail encore à plat, la carte s'ouvrait ; le clic final sur « Ran » la refermait (`open` est gardé par la carte).
+- **Correctif du test** (`suite-real.ts`) : attendre « Worked » affiché (tour replié), carte fermée à ce moment ; ouvrir « Worked » ; carte affichée, fermée, pas inerte, aucun bloc inerte affiché ; un seul clic sur « Ran », puis la ligne `$ echo lu`. Clics sur l'élément réellement sous le pointeur. Sonde : `toggles` (boutons à `aria-expanded` : texte, ouvert, inerte, affiché).
+
+### Troisième push : le test corrigé lisait le mauvais bouton
+
+`ya-extension` run 45035376564 (commit `0837cc924`), job `e2e vrai binaire` 137247838915 : `13/14 réussis`, même cas en échec, cette fois à l'assertion `carte affichée, fermée, pas inerte` : `[false, true, false]` au lieu de `[true, false, false]`. Le bouton lu n'était pas la carte : `CallRun` (`webview/Chat.tsx`) rend toujours un en-tête de groupe « Ran 1 Python cell » (`aria-expanded`), masqué et inerte pour une cellule seule, avant la carte. La recherche `startsWith("Ran")` prenait cet en-tête. Correctif du test : la carte est cherchée par sa commande (`echo lu`).
+
+## 18. Contrôle manuel de X1 : deux défauts (22/11/2026)
+
+Contrôle de Yusuf sur le binaire `9937e4ff8` : points 1 à 6 et 8 conformes ; 9 (menu plus large que le chat) gardé pour la passe de design ; 10 couvert par l'e2e. **Deux défauts**, corrigés dans la PR #80 sur décision de Yusuf (périmètre élargi au pont, commits Rust séparés de ceux de l'extension).
+
+### Défaut 1 : double ouverture acceptée (point 7)
+
+- **Cause, prouvée par `ps` et reproduction.** Le démon de Yusuf (pid 64617, lancé à 16:43:32) et tous ses workers tournaient sur `d2f54743e`. Ce démon a été démarré par le premier pont de window1, puis gardé quand `yusagent.binaryPath` est passé à `9937e4ff8`.
+- **Mécanisme.** Le worker `d2f54743e` ne sert pas l'action `others` (`d2f54743e:crates/pa-daemon/src/ya_permissions.rs:389`). Le pont lisait cet échec comme « aucun autre client » (`9937e4ff8:crates/pa-daemon/src/acp/ya_history.rs:162-163`).
+- **Pourquoi l'e2e ne l'attrapait pas.** La CI démarre toujours un démon neuf du binaire testé.
+- **Reproduction** : `bench/tools/capture/c12_repro.py`, 4 cas (A charge ou crée, avec ou sans prompt). Démon `9937e4ff8` : B refusé partout. Démon `d2f54743e` avec ponts `9937e4ff8` : B accepté partout.
+- **Décision** :
+  - (b) dans cette PR : C12 échoue fermé, avec le refus `OLDER_DAEMON` (« Run `yusagent shutdown`, then Restart ») ;
+  - (a), la détection d'un démon d'un autre build : ticket 29 (`docs/tickets/29-demon-autre-build.md`, constat seulement).
+
+### Défaut 2 : sessions vides laissées dans le démon
+
+- **Cause, prouvée par le code et les logs.** La suppression D2 ne part que quand on change de conversation dans le panneau (`extensions/vscode/src/conversations.ts:228`). À la fermeture ou au rechargement de VS Code, `deactivate` → `stopAll` ferme seulement stdin de chaque pont (`src/extension.ts:81-82`, `src/conversations.ts:183-187`). La session résidente reste, avec son fichier (M1). Elle est invisible dans l'historique (`ya_history.rs:634`).
+- **Les cinq sessions vides** correspondent une à une aux lignes « new » de window1, jamais suivies de « closes » : 16:43:32, 16:56:09, 16:56:27, 16:57:16 et 17:14:42.
+- **Les « [3] new » avant chaque rechargement** : une conversation neuve ne naît que de `start()` (activation, toujours `[1]`), du bouton « New conversation » (`webview/Status.tsx:127`) ou d'un `/new` (`src/chat.ts:263-265`). C'est donc une action de l'utilisateur, et rien à corriger dans l'extension (explication acceptée par Yusuf).
+- **Décision : O1.** À la fin de stdin, le pont supprime une conversation qu'il a créée neuve et où rien n'a été demandé (`drop_if_empty`). Elle reste si un autre client est attaché, si le démon ne sait pas le dire, ou si le transcript a un message. Un pont tué par un signal la laisse, car « Restart » reprend ce fichier. D2 reste dans l'extension, comme filet.
+
+### Tests, vus en échec sans les correctifs
+
+Premier push (tests seuls, `8320ebc70`), rouge attendu, commentaire `issuecomment-7083257683` de la PR :
+
+| Test | Job | Échec |
+|---|---|---|
+| e2e vrai binaire : fermeture de VS Code avec une conversation neuve vide | ya-extension 45052494007, job 137300505495 | `délai dépassé : fichier de la conversation vide retiré` ; `14/15 réussis`, aucun processus restant |
+| `ya_acp_resume_e2e` : `an_empty_new_conversation_goes_with_its_bridge` | ci 45052494021, shard 2/8, job 137300592780 | `ya_acp_resume_e2e.rs:587` (fichier toujours là) |
+| `ya_history_tests` : `a_daemon_that_cannot_count_the_other_windows_refuses_the_load` | ci 45052494021, shard 3/8, job 137300592847 | `ya_history_tests.rs:444` (chargement non refusé) |
+
+Les gardes restent vertes avant et après le correctif : `an_empty_conversation_held_elsewhere_or_asked_in_stays`, la conversation tenue ailleurs dans l'e2e, `no_other_window_lets_the_load_go_on`.
+
+Échec hors périmètre dans le même run : `the_tui_answers_switches_to_auto_and_back` (shard 8/8, job 137300592813). Inscrit en « Instabilité probable » dans `docs/fork-changes.md`, sur décision de Yusuf.
+
+### Second contrôle manuel (e5030fbfb) : fichiers laissés par la suppression
+
+Contrôle de Yusuf : conformes A (conversation vide quittée par l'historique), B (double ouverture, puis Restart), C (fermeture de fenêtre et Reload Window avec une conversation vide) et D (reprise, `pkill` puis Restart). **Un défaut** : une suppression (D2, O1 ou corbeille) retire le `.jsonl` mais laisse `~/.yusagent/sessions/<id>.window-cache.json`. Exemples : `01a20752-b137…`, `01a20752-c4f9…`, `01a20754-50d3…`.
+
+- **Ce qui crée ces fichiers.** Tous deux sont dérivés du fichier de la session par `with_extension`, donc propres à cette session :
+  - `<id>.window-cache.json` : instantané de fenêtre de `pa-core` (`crates/pa-core/src/session/window_cache.rs:98-99`, écrit par `save` `:139-148`). Il existe dès `session/new`.
+  - `<id>.info-cache.json` : état de scan de `pa-daemon` (`crates/pa-daemon/src/session_store/info_sidecar.rs:37-38`, `persist_info_sidecar` `:60`). Il est écrit quand le worker libère le fichier (`crates/pa-daemon/src/lease.rs:359`) et par le scan du catalogue (`crates/pa-daemon/src/session_scan.rs:69`).
+- **Ce que retire la suppression aujourd'hui.** `delete_saved_session` (upstream) retire le fichier (`trash`, sinon `unlink`), puis `session-artifacts/<id>` (`crates/pa-daemon/src/saved_session_commands.rs:106-148`). Rien d'autre.
+- **Fichiers propres à une session :**
+  - à retirer : `sessions/<id>.jsonl`, `sessions/<id>.window-cache.json`, `sessions/<id>.info-cache.json`, leurs temporaires (`<id>.window-cache-<uuid>.tmp`, `<id>.info-cache-<uuid>.tmp`, laissés seulement par une écriture interrompue) et `session-artifacts/<id>/` ;
+  - gardé : `sessions/<id>.usage.ndjson` (C4) ;
+  - hors suppression : le bail `session-leases/<sha256(chemin)>.lock` (`crates/pa-daemon/src/lease.rs:113-122`), libéré par le worker.
+- **Relevé sur le disque de Yusuf** (22/11) : 22 `window-cache.json` sur 45 et 5 `info-cache.json` sur 15 sans `.jsonl` ; aucun `session-artifacts/<id>` orphelin ; les 2 baux appartiennent à des sessions vivantes.
+- **Correctif** dans `ya_history.rs` :
+  - `remove_sidecars` après une suppression réussie, par la corbeille comme par O1 ; les caches sont supprimés, pas mis à la corbeille ;
+  - la suppression attend aussi la sortie du processus worker, pour que l'info-cache qu'il écrit en partant ne revienne pas après.
+- **Vu en échec sans le correctif** : `bench/tools/capture/delete_files_check.py` sur `e5030fbfb` répond NON CONFORME.
+  - Corbeille : il reste `<id>.info-cache.json` et `<id>.window-cache.json`.
+  - Conversation vide, fin du pont : il reste `<id>.window-cache.json`.
+  - Les tests Rust et e2e ajoutés dans le même push (un seul push demandé) vérifient d'abord que l'instantané existe avant la suppression.
+
+### Écrivains des fichiers d'une session, et balayage des caches orphelins
+
+Second push du correctif (f77c1f76c) rouge :
+- lint clippy sur `ends_with(".tmp")` ;
+- un `<id>.jsonl.tmp-<pid>` laissé dans le cas D2 de l'e2e ;
+- deux préconditions fausses sous Linux : l'instantané n'existe pas encore juste après `session/new`.
+
+**Écrivains** (vérifiés avant de coder, sur décision de Yusuf) :
+
+| Fichier | Écrivain | Processus | Après la suppression ? |
+|---|---|---|---|
+| `<id>.jsonl`, `<id>.jsonl.tmp-<pid>` | `SessionFile::rewrite` (`crates/pa-daemon/src/session_store/write.rs:107-147`, temporaire `:128`) ; ajouts `append_cached` (`write.rs:41`, `:257`) | worker | non : la suppression attend la sortie du processus worker |
+| `<id>.jsonl`, `<id>.jsonl.tmp<pid>` | `atomic_write` (`crates/pa-core/src/session/manager/persist.rs:151-163`) ; `repair` (`crates/pa-core/src/session/manager/repair.rs:99-144`) | worker | non, même raison |
+| `<id>.jsonl` (ajout) | `append_cached` (`crates/pa-core/src/session/window_cache.rs:200-201`), dont `child_usage.rs:339`, `:416` et `lease.rs:443` | worker | non : ouverture en ajout sans création |
+| `<id>.jsonl` | renommage d'une session fermée, `append_saved_session_name` (`crates/pa-daemon/src/saved_session_commands.rs:98-102`) | démon | seulement s'il a commencé avant la suppression ; l'extension n'envoie pas de renommage |
+| — | `rewrite_records` (`crates/pa-daemon/src/journal.rs:77-93`) | démon | hors sujet : journaux des workers et `compaction-supervision.jsonl` |
+| `<id>.window-cache.json`, `-<uuid>.tmp` | `save` (`window_cache.rs:139-151`) à l'ouverture d'une fenêtre (`crates/pa-core/src/session/window.rs:587`, `manager/lifecycle.rs:262`) ; `flush` à la libération du bail (`lease.rs:357`) | worker | non : `generation.valid` relit le chemin juste avant (`window.rs:584`) ; `flush` vient du détenteur du bail |
+| `<id>.info-cache.json`, `-<uuid>.tmp` | libération du bail (`lease.rs:359`) | worker | non : la suppression attend la sortie du processus worker |
+| `<id>.info-cache.json`, `-<uuid>.tmp` | **scan du catalogue** (`crates/pa-daemon/src/session_scan.rs:61-72`, via `:191` et `supervisor/sessions.rs:284`) | démon | **oui** : un scan qui a lu le fichier avant la suppression écrit après, sans revérifier le fichier |
+
+**Aucun état normal ne laisse un cache sans son `.jsonl`** dans le dossier plat :
+- Le fichier se nomme toujours `<id>.jsonl` (`crates/pa-daemon/src/session_store/read.rs:17-19`). Le catalogue ne lit que les `*.jsonl` du dossier plat (`session_scan.rs:116-122`).
+- Les caches sont toujours écrits à côté du fichier (`with_extension`), et seulement après l'avoir lu : la fenêtre lit le fichier ouvert, l'état de scan vient de sa lecture.
+- La réécriture remplace le fichier par un renommage atomique (`crates/pa-telemetry/src/rename.rs:69-83`, `fs::rename`, réessayé sous Windows sans retirer la destination). Le fichier n'est donc jamais absent pendant une écriture.
+- Une copie de session (fork) écrit un nouveau fichier sous un autre identifiant et laisse la source (`crates/pa-daemon/src/branch_navigation.rs:398`, `crates/pa-daemon/src/rpc/session_commands.rs:241`).
+- Le renommage d'une session change son nom dans le fichier, pas son chemin.
+- Les autres appels de `set_path` sont dans des tests.
+- La restauration d'archive copie `sessions-archive/<id>.jsonl` vers `sessions/<id>.jsonl` (lien dur, puis retrait de l'archive : `crates/pa-daemon/src/session_catalog.rs:55-79`). Le dossier d'archive n'est pas balayé.
+- Un `<id>.jsonl` qui est un lien cassé compte comme présent (`symlink_metadata`).
+
+**Correctif :**
+- `remove_sidecars` retire, après une suppression réussie, tout ce qui porte le nom de la session : le fichier s'il est revenu, les deux formes de temporaire du `.jsonl`, les deux caches et leurs temporaires, et `session-artifacts/<id>`.
+- `sweep_orphan_caches` balaie, à chaque `session/list` et à chaque suppression, les noms exacts `<uuid>.window-cache.json` et `<uuid>.info-cache.json` sans leur `<uuid>.jsonl`. Ce balayage retire aussi les orphelins déjà présents.
+- Le contrôle de l'extension `.tmp` passe par `Path::extension()`.
+- Préconditions retirées des cas « conversation vide ».

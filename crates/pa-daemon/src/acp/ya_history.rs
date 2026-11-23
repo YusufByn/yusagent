@@ -19,6 +19,7 @@
 //!
 //! Nothing here reaches the model's requests: ACP frames only.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use pa_types::daemon::DaemonCommand;
@@ -136,8 +137,11 @@ pub(crate) async fn load_refusal(
     // the check looks again until `RELEASE_WAIT` has passed.
     let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
     loop {
-        if other_askers(link, daemon_session_id).await == 0 {
-            return None;
+        match other_askers(link, daemon_session_id).await {
+            Ok(0) => return None,
+            Ok(_) => {}
+            // Unknown is refused: a load that cannot be checked could open the session twice.
+            Err(refusal) => return Some(refusal),
         }
         if tokio::time::Instant::now() >= deadline {
             return Some("This conversation is open in another window.".to_string());
@@ -146,9 +150,15 @@ pub(crate) async fn load_refusal(
     }
 }
 
-/// The session's attached clients that answer, other than this bridge; `0` when unknown.
-async fn other_askers(link: &DaemonLink, daemon_session_id: &str) -> u64 {
-    let Ok(response) = link
+/// The refusal when the daemon cannot count the other windows: its worker does not serve the
+/// action `others` (C12), so the daemon was started by an older binary and kept running after the
+/// binary changed; the bridge does not detect a daemon of another build (ticket 29).
+pub(crate) const OLDER_DAEMON: &str = "The yusAgent daemon is older than this yusagent: it cannot tell whether this conversation is open in another window. Run `yusagent shutdown`, then Restart.";
+
+/// The session's attached clients that answer, other than this bridge; `Err` is the refusal when
+/// the daemon cannot tell (defect 1 of the X1 check: it was read as `0`, and the load went on).
+async fn other_askers(link: &DaemonLink, daemon_session_id: &str) -> Result<u64, String> {
+    let response = link
         .request(DaemonCommand::YaPermissions {
             id: None,
             active_session_id: daemon_session_id.to_string(),
@@ -156,18 +166,18 @@ async fn other_askers(link: &DaemonLink, daemon_session_id: &str) -> u64 {
             rest: crate::ya_permissions::asker_fields(),
         })
         .await
-    else {
-        return 0;
-    };
+        .map_err(|error| {
+            format!("Could not check whether this conversation is open in another window: {error}")
+        })?;
     if !response.success {
-        return 0;
+        return Err(OLDER_DAEMON.to_string());
     }
-    response
+    Ok(response
         .data
         .as_ref()
         .and_then(|data| data.get("others"))
         .and_then(Value::as_u64)
-        .unwrap_or(0)
+        .unwrap_or(0))
 }
 
 /// The `sessionId` a `session/load` asks for.
@@ -696,6 +706,10 @@ async fn list(
         return Ok(json!({ "sessions": [] }));
     }
     let rows = saved_rows(link, daemon_session_id).await?;
+    // yusAgent (the X1 check): after the catalog scan, which may write a cache of a deleted file.
+    if let Some(dir) = sessions_dir(file) {
+        sweep_orphan_caches(dir);
+    }
     Ok(json!({ "sessions": list_rows(&rows, file.id.as_deref()) }))
 }
 
@@ -772,12 +786,18 @@ async fn delete(
             }
             tokio::time::sleep(STOP_POLL).await;
         }
+        // Its process writes the scan-state sidecar as it releases the file: then it is gone.
+        if !worker_exited(live.worker_pid, deadline).await {
+            return Err(DeleteRefusal::Failed(
+                "the session did not stop in time".to_string(),
+            ));
+        }
     }
     let deleted = link
         .request(DaemonCommand::DeleteSavedSession {
             id: None,
             active_session_id: None,
-            session_path: path,
+            session_path: path.clone(),
             rest: Map::default(),
         })
         .await
@@ -790,6 +810,10 @@ async fn delete(
             .and_then(Value::as_bool)
             == Some(true);
     if ok {
+        remove_sidecars(Path::new(&path));
+        if let Some(dir) = sessions_dir(file) {
+            sweep_orphan_caches(dir);
+        }
         return Ok(());
     }
     let reason = deleted
@@ -822,9 +846,196 @@ async fn released_session(
     }
 }
 
+// The bridge's end
+
+/// yusAgent (YA-10, ticket 28, defect 2 of the X1 check): at the end of stdin, a conversation this
+/// bridge opened new where nothing was asked goes with it: its session stops in the daemon, then
+/// its file and artifacts are deleted, as the history's delete does (C4). VS Code closed or
+/// reloaded with a new conversation in the panel left one behind: invisible in the history (no
+/// message), a worker and a kernel until the daemon's idle eviction (90 min), then a file for
+/// good. It stays when its transcript has a message, when another client is attached (another
+/// window), and when the daemon cannot tell. A bridge killed by a signal leaves it: the
+/// extension's « Restart » resumes that file. Best-effort: a failure leaves the session as it is.
+pub(crate) async fn drop_if_empty(link: &DaemonLink, daemon_session_id: &str, file: &SessionFile) {
+    let (Some(id), Some(path)) = (file.id.as_deref(), file.path.as_deref()) else {
+        return;
+    };
+    if !transcript(link, daemon_session_id)
+        .await
+        .is_ok_and(|messages| messages.is_empty())
+    {
+        return;
+    }
+    if other_askers(link, daemon_session_id).await != Ok(0) {
+        return;
+    }
+    // This bridge is still attached (until its link drops): one client, itself.
+    let Ok(Some(live)) = live_session(link, id, path).await else {
+        return;
+    };
+    if live.attached_clients > 1 {
+        return;
+    }
+    let stopped = link
+        .request(DaemonCommand::Kill {
+            id: None,
+            active_session_id: live.active_session_id,
+            rest: Map::default(),
+        })
+        .await
+        .is_ok_and(|response| response.success);
+    if !stopped {
+        return;
+    }
+    let deadline = tokio::time::Instant::now() + STOP_WAIT;
+    while matches!(live_session(link, id, path).await, Ok(Some(_))) {
+        if tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(STOP_POLL).await;
+    }
+    if !worker_exited(live.worker_pid, deadline).await {
+        return;
+    }
+    let deleted = link
+        .request(DaemonCommand::DeleteSavedSession {
+            id: None,
+            active_session_id: None,
+            session_path: path.to_string(),
+            rest: Map::default(),
+        })
+        .await
+        .is_ok_and(|response| {
+            response.success
+                && response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("ok"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+        });
+    if deleted {
+        remove_sidecars(Path::new(path));
+    }
+}
+
+/// yusAgent (YA-10, ticket 28, the X1 check): after a delete, nothing named after the session is
+/// left but its usage journal (`<stem>.usage.ndjson`, kept: C4). `delete_saved_session` removes the
+/// file and `session-artifacts/<id>` (`crate::saved_session_commands::delete_session_file`), not
+/// the rest. Removed here, whoever wrote them (`docs/tickets/28-reprise-historique.md`, §18):
+/// - the file `<stem>.jsonl`, should a writer have put it back, and its write temporaries
+///   `<stem>.jsonl.tmp-<pid>` (`crate::session_store` rewrite, `crate::journal`) and
+///   `<stem>.jsonl.tmp<pid>` (`pa-core` `session/manager/persist.rs`, `repair.rs`);
+/// - the window snapshot `<stem>.window-cache.json` (`pa-core` `session/window_cache.rs`) and the
+///   scan state `<stem>.info-cache.json` (`crate::session_store::persist_info_sidecar`), and their
+///   temporaries `<stem>.window-cache-<uuid>.tmp`, `<stem>.info-cache-<uuid>.tmp`;
+/// - `session-artifacts/<stem>` (`crate::saved_session_commands::remove_session_artifacts`).
+///
+/// The callers run it once no worker of the session runs: none was live, or its process exited.
+/// Disposable or already deleted: removed, not trashed.
+fn remove_sidecars(session_file: &Path) {
+    crate::saved_session_commands::remove_session_artifacts(session_file);
+    let (Some(dir), Some(stem)) = (
+        session_file.parent(),
+        session_file.file_stem().and_then(|stem| stem.to_str()),
+    ) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(stem))
+            .and_then(|rest| rest.strip_prefix('.'))
+        else {
+            continue;
+        };
+        if is_session_leftover(rest) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Whether `<stem>.<rest>` is one of the files `remove_sidecars` removes (not `usage.ndjson`).
+fn is_session_leftover(rest: &str) -> bool {
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    let temporary = |prefix: &str| {
+        rest.strip_prefix(prefix).is_some_and(|tail| {
+            std::path::Path::new(tail)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("tmp"))
+        })
+    };
+    matches!(rest, "jsonl" | "window-cache.json" | "info-cache.json")
+        || rest
+            .strip_prefix("jsonl.tmp")
+            .is_some_and(|tail| digits(tail.strip_prefix('-').unwrap_or(tail)))
+        || temporary("window-cache-")
+        || temporary("info-cache-")
+}
+
+/// yusAgent (YA-10, ticket 28, the X1 check): remove the orphan caches of `sessions_dir`, the
+/// exact names `<uuid>.window-cache.json` and `<uuid>.info-cache.json` whose `<uuid>.jsonl` is not
+/// there (not even a dangling link). A cache lives only next to its file, which is never absent
+/// while a session lives (atomic renames; §18); an orphan is what a delete left, or what a catalog
+/// scan that read the file before the delete wrote after it
+/// (`crate::session_scan` → `persist_info_sidecar`). Never a temporary, a usage journal, or a name
+/// that is not a session id.
+fn sweep_orphan_caches(sessions_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(sessions_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(stem) = name
+            .strip_suffix(".window-cache.json")
+            .or_else(|| name.strip_suffix(".info-cache.json"))
+        else {
+            continue;
+        };
+        let session_id = stem.len() == 36 && uuid::Uuid::parse_str(stem).is_ok();
+        if session_id
+            && std::fs::symlink_metadata(sessions_dir.join(format!("{stem}.jsonl"))).is_err()
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The folder of the bridge's session file, where `session/list` and the delete look.
+fn sessions_dir(file: &SessionFile) -> Option<&Path> {
+    file.path
+        .as_deref()
+        .and_then(|path| Path::new(path).parent())
+}
+
+/// Whether the worker process `pid` has exited by `deadline` (`true` when the daemon gave none).
+async fn worker_exited(pid: Option<u32>, deadline: tokio::time::Instant) -> bool {
+    let Some(pid) = pid else {
+        return true;
+    };
+    loop {
+        if !pa_types::platform::process::is_process_alive(pid).unwrap_or(false) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(STOP_POLL).await;
+    }
+}
+
 struct LiveSession {
     active_session_id: String,
     attached_clients: u64,
+    /// The worker's process (`workerPid`), when the daemon gives it.
+    worker_pid: Option<u32>,
 }
 
 /// The daemon's live session for a saved file, if a worker serves it.
@@ -864,6 +1075,10 @@ async fn live_session(
                     .get("attachedClients")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
+                worker_pid: row
+                    .get("workerPid")
+                    .and_then(Value::as_u64)
+                    .and_then(|pid| u32::try_from(pid).ok()),
             })
         }))
 }

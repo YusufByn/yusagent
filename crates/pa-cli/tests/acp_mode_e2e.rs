@@ -822,10 +822,10 @@ fn acp_daemon_attached_eof_teardown_clears_the_connection_mcp_servers() {
         ]}),
     );
     let (new_response, _) = client.wait_response(new, TIMEOUT);
-    assert!(
-        new_response["result"]["sessionId"].is_string(),
-        "admission succeeds: {new_response}"
-    );
+    let session_id = new_response["result"]["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("admission succeeds: {new_response}"))
+        .to_string();
     let active_session_id = wait_live_session(&socket)["activeSessionId"]
         .as_str()
         .expect("the daemon session id")
@@ -835,6 +835,9 @@ fn acp_daemon_attached_eof_teardown_clears_the_connection_mcp_servers() {
         owned["success"], false,
         "the open session owns its admitted servers: {owned}"
     );
+    // yusAgent (YA-10, ticket 28): a new session left empty goes with its bridge at EOF (O1); one
+    // prompt keeps it resident, so the probe below still reaches it.
+    assert_prompt_ends_turn(&mut client, &session_id, "keep the session");
     client.close_stdin();
     assert!(client.child.wait().expect("the ACP child exits").success());
     let released = probe_acp_mcp_servers(&socket, &active_session_id);

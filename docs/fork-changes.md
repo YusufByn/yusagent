@@ -634,6 +634,35 @@ Symptôme : « the compaction never ran behind the stalled reader: the flush wed
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
+## Instabilité probable : `request_timing::payload` (YA-10, ticket 28)
+
+`crates/pa-core/src/session_engine/request_timing/payload/tests.rs`, test `concurrent_producers_drop_at_the_reserve_when_the_queue_is_full` (`:563`, assertion `:626`), shard 2/8 de `ci.yml`. Code upstream (commit `883b5a1f6`, ancêtre de `upstream/main`) ; aucun commit du fork ne touche ce module (`git log -- crates/pa-core/src/session_engine/request_timing/payload/tests.rs` : commits upstream seulement).
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 45023618061 | `b1e350ab4` (`ya-28-reprise`, PR #78) | 1 | test réussi (le run a échoué sur d'autres jobs) |
+| 45026623245 | `00f9653cc` (`ya-28-reprise`, PR #78), 22/11/2026 | 1 (job 137221049774) | échec du shard 2/8 |
+| 45026623245 | `00f9653cc` (`ya-28-reprise`, PR #78) | 2 (job 137228921531, relance du job seul, sans push, décidée par Yusuf) | réussi, aucun changement de code ; relance notée dans un commentaire de la PR #78 |
+
+Symptôme : « no storm body may land: every storm producer dropped at the reserve » à `tests.rs:626`. Le test sature la file du rédacteur de corps de requêtes (`fill_until_saturated`), lance `4 * REQUEST_PAYLOAD_CAPTURE_KEEP` producteurs en même temps, puis exige qu'aucun de leurs corps ne soit écrit. Hypothèse : sur un runner chargé, le corps « stall » finit de s'écrire pendant la rafale, une place se libère et un producteur passe. La PR #78 ne touche pas ce module.
+
+Si ce test retombe : relancer le shard une fois, et noter le run ici.
+
+## Instabilité probable : `ya_permissions_tui_pty_e2e` (YA-11, ticket 22)
+
+`crates/pa-cli/tests/ya_permissions_tui_pty_e2e.rs`, test `the_tui_answers_switches_to_auto_and_back` (`:391`), contrôle `assert_waiting` (`:61-63`, appelé `:423` et `:425`), shard 8/8 de `ci.yml`. Test du fork (commits `c98b8e612`, `fce42c20e`, `d957ebe7e`, ticket 22).
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 45037783868 | `2a418f405` (`ya-28-x1`, PR #80) | 1 | test réussi |
+| 45052494021 | `8320ebc70` (`ya-28-x1`, PR #80, push de tests seuls), 22/11/2026 | 1 (job 137300592813) | échec du shard 8/8 |
+
+Symptôme : « the loader awaits the permission » à `:63`. L'écran montre la demande (carte `◇ python · open("allowed.txt", 'w').write('x')`) et le chargeur `⠴ Waiting · 0s` au lieu de « Awaiting permission ». Ce push ne changeait aucun code du binaire : tests, script du banc, et dans `crates/pa-daemon/src/acp/daemon.rs` le seul `scripted_link` sous `#[cfg(test)]` (`git diff --stat 2a418f405 8320ebc70`). Le TUI ne passe pas par le pont ACP.
+
+Lien avec le point ouvert du ticket 22 (`docs/tickets/22-carte-cellule-permission.md:12-13`, `:36`) : l'ordre entre `tool_execution_start` et la demande de permission n'est pas garanti. La demande part directement par le hook, `tool_execution_start` par la file du tour, et elle peut le doubler. Le TUI garde la carte « non lancée » quand une demande ouverte porte son `toolCallId` (`apply.rs`), et la carte peut paraître lancée un court instant. Hypothèse, non vérifiée : l'écran est lu entre ces deux événements, avant que le chargeur passe à « Awaiting permission ».
+
+Si ce test retombe avec le même symptôme : relancer son job une fois, seul et sans push, et noter le run ici et dans la PR.
+
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
 Le shard 1 de `ci.yml` téléchargeait la release `v0.9.8` depuis `${GITHUB_REPOSITORY}`. Le fork n'a pas de release, l'étape échouait et faisait échouer tout le shard.
@@ -1303,6 +1332,38 @@ Constat, décisions (C1 à C13, 22/11/2026) et mesures : `docs/tickets/28-repris
 | `.changes/ya-28-reprise.md` | nouveau | Fragment de changelog. | YA-10 (ticket 28) |
 
 Limites connues : le rejeu ne montre ni la durée du raisonnement ni les avis (`[bash-done]`, `[python-state-restored]`), comme Unharnessed ; un tour coupé puis suivi d'un prompt est montré `done` (comme un message envoyé pendant le tour) ; l'extension ne sert ces méthodes qu'avec la PR X1.
+
+## Reprise et historique dans l'extension, PR X1 (YA-10, ticket 28)
+
+Décisions D1 à D4 du 22/11/2026 : `docs/tickets/28-reprise-historique.md`, §17. Extension seule : rien de ce qui part au modèle ne change.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `extensions/vscode/src/ya/methods.ts`, `src/ya/meta.ts` | modif. (fichiers du fork) | `session/load`, `session/list` et `_unharnessed/sessions/delete` servies (l'historique apparaît) ; `yaResultMeta` : `saved`, `path` et `current` lus dans le `_meta` du pont (C2). | YA-10 (ticket 28) |
+| `extensions/vscode/src/ya/empty.ts` | nouveau | D2 : une conversation ouverte neuve et quittée vide est supprimée par l'agent de celle qui la remplace, une fois sa session ouverte (session du démon arrêtée, fichier retiré). | YA-10 (ticket 28) |
+| `extensions/vscode/src/session.ts`, `src/history.ts` | modif. (repris d'Unharnessed) | `saved`, `path` et `current` par `yaResultMeta` ; une session refusée arrête l'agent (D3). | YA-10 (ticket 28) |
+| `extensions/vscode/src/conversations.ts`, `src/chat.ts` | modif. (repris d'Unharnessed) | D1 : vide = aucun tour, rien en attente, rien en cours (le démon écrit le fichier dès `session/new`, M1) ; `fresh` et suppression de la conversation vide quittée (D2) ; D4 : un tour de l'agent encore en cours au chargement reste en cours (`live`), sans durée. | YA-10 (ticket 28) |
+| `extensions/vscode/src/agent.ts`, `src/protocol.ts`, `webview/Status.tsx` | modif. (repris d'Unharnessed) | D3 : `abandon` (agent arrêté, état `failed` avec `session`), ligne « Conversation not opened », raison du pont et « Restart » ; `pid` pour les tests e2e. | YA-10 (ticket 28) |
+| `extensions/vscode/webview/styles.css`, `webview/ya-probe.ts`, `src/extension.ts`, `src/protocol.ts` | modif. | Règles provisoires du menu de l'historique ; sonde `userClick` sur un bouton d'icône (`aria-label`) et `toggles` (boutons à `aria-expanded`) ; état de test : `pid`, `saved`, `history`. Cas e2e « cellule avec bash() » (ticket 24) rendu déterministe : il attend le repli du tour avant de vérifier la carte. | YA-10 (ticket 28) |
+| `extensions/vscode/test/` | modif. | Agent factice aligné sur 9937e4ff8 (capacités, `saved`, réponses de liste et de suppression) ; `test/unit/meta.test.ts` ; e2e vrai binaire : conversation vide quittée, « Restart » après un plantage du pont avec le réveil fait pendant la fermeture, tour en cours au chargement, historique, double ouverture, suppression d'une conversation de fond. | YA-10 (ticket 28) |
+| `bench/tools/capture/compare_frames.py`, `empty_delete_probe.py` | modif., nouveau (outils du fork) | Comparaison de l'ouverture (capacités d'`initialize`, `_meta` de `session/new`) ; contrôle de la suppression d'une session sans message. | YA-10 (ticket 28) |
+| `.changes/ya-28-x1.md` | nouveau | Fragment de changelog. | YA-10 (ticket 28) |
+
+Contrôle manuel de X1 (22/11/2026, deux défauts ; `docs/tickets/28-reprise-historique.md`, §18), corrigés dans la même PR sur décision de Yusuf :
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/ya_history.rs`, `ya_history_tests.rs` | modif. (fichiers du fork) | Défaut 1 : C12 échoue fermé ; un démon qui ne sert pas l'action `others` (démon d'un binaire plus ancien, gardé après un changement de binaire, ticket 29) fait refuser `session/load` avec `OLDER_DAEMON` (« Run `yusagent shutdown`, then Restart »). Défaut 2 : `drop_if_empty`, à la fin de stdin, arrête la session d'une conversation ouverte neuve où rien n'a été demandé, puis supprime son fichier et ses artefacts ; gardée si son transcript a un message, si un autre client est attaché ou si le démon ne sait pas le dire. Tests unitaires contre un démon simulé. | YA-10 (ticket 28) |
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, environ 40 lignes) | Appel de `drop_if_empty` après `teardown`, pour une session créée neuve par ce pont (ni `--resume`, ni `--no-session`) ; `scripted_link` (`#[cfg(test)]`), lien au démon simulé pour les tests hors du module. | YA-10 (ticket 28) |
+| `crates/pa-cli/tests/acp_mode_e2e.rs` | modif. (test upstream, 1 prompt) | `acp_daemon_attached_eof_teardown_clears_the_connection_mcp_servers` : un prompt avant la fin de stdin. O1 supprime une session vide à la fin du pont, et la sonde suivante ne la trouvait plus (« Unknown active session », ci 45054655340, job 137307223845) ; le test vérifie toujours la libération des serveurs MCP d'une session résidente. | YA-10 (ticket 28) |
+| `crates/pa-cli/tests/ya_acp_resume_e2e.rs` | modif. (test du fork) | f : conversation neuve vide partie avec son pont (session et fichier) ; g : une vide tenue par un autre client, ou une où quelque chose a été demandé, reste. | YA-10 (ticket 28) |
+| `extensions/vscode/src/ya/empty.ts` | modif. (fichier du fork) | La suppression D2 trouve la conversation déjà partie avec son pont : notée comme telle dans le journal, plus en avertissement. | YA-10 (ticket 28) |
+| `extensions/vscode/test/e2e/suite-real.ts` | modif. | Fermeture de VS Code (chemin de `deactivate`) avec une conversation neuve vide : session et fichier retirés ; une vide tenue par une autre fenêtre reste. | YA-10 (ticket 28) |
+| `bench/tools/capture/c12_repro.py` | nouveau (outil du fork) | Contrôle C12 en quatre cas, avec un démon du même binaire ou d'un autre (`--daemon-binary`). | YA-10 (ticket 28) |
+| `crates/pa-daemon/src/acp/ya_history.rs`, `ya_history_tests.rs`, `crates/pa-cli/tests/ya_acp_resume_e2e.rs`, `extensions/vscode/test/e2e/suite-real.ts`, `bench/tools/capture/delete_files_check.py` | modif., nouveau (fichiers du fork) | Second contrôle manuel : la suppression (corbeille, D2, O1) laissait `<id>.window-cache.json` et `<id>.info-cache.json`, que `delete_saved_session` (upstream) ne retire pas. Après une suppression réussie, `remove_sidecars` retire tout ce qui porte le nom de la session : `<id>.jsonl` s'il est revenu, `<id>.jsonl.tmp-<pid>` (pa-daemon), `<id>.jsonl.tmp<pid>` (pa-core), `<id>.window-cache.json`, `<id>.info-cache.json`, `<id>.window-cache-<uuid>.tmp`, `<id>.info-cache-<uuid>.tmp` et `session-artifacts/<id>`. Le journal d'usage `<id>.usage.ndjson` reste (C4). `sweep_orphan_caches` balaie, à chaque `session/list` et à chaque suppression, les noms exacts `<uuid>.window-cache.json` et `<uuid>.info-cache.json` sans leur `<uuid>.jsonl` : le scan du catalogue peut en écrire un après la suppression (`session_scan.rs:61-72`). Jamais un temporaire ni un journal d'usage ; un lien cassé compte comme présent. La suppression attend aussi la sortie du processus worker (`workerPid`), qui écrit l'info-cache en libérant le fichier. Tests : unitaire, e2e Rust et e2e vrai binaire (rien de nommé d'après la session ne reste) ; contrôle du banc. | YA-10 (ticket 28) |
+| `docs/tickets/29-demon-autre-build.md` | nouveau | Constat : le pont garde un démon lancé par un autre binaire de même schéma. | YA-10 (ticket 29) |
+
+Limites connues : une conversation vide dont le pont est tué par un signal garde sa session et son fichier (« Restart » en a besoin), jusqu'à la veille du démon pour le worker ; une conversation reprise par `--resume` puis laissée vide n'est pas supprimée à la fin de son pont ; le rejeu ne donne pas la durée d'un tour, ni d'un tour encore en cours au chargement.
 
 ## Code repris d'Unharnessed
 
