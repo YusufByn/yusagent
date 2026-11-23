@@ -582,3 +582,24 @@ Premier push (tests seuls, `8320ebc70`), rouge attendu, commentaire `issuecommen
 Les gardes restent vertes avant et après le correctif : `an_empty_conversation_held_elsewhere_or_asked_in_stays`, la conversation tenue ailleurs dans l'e2e, `no_other_window_lets_the_load_go_on`.
 
 Échec hors périmètre dans le même run : `the_tui_answers_switches_to_auto_and_back` (shard 8/8, job 137300592813). Inscrit en « Instabilité probable » dans `docs/fork-changes.md`, sur décision de Yusuf.
+
+### Second contrôle manuel (e5030fbfb) : fichiers laissés par la suppression
+
+Contrôle de Yusuf : conformes A (conversation vide quittée par l'historique), B (double ouverture, puis Restart), C (fermeture de fenêtre et Reload Window avec une conversation vide) et D (reprise, `pkill` puis Restart). **Un défaut** : une suppression (D2, O1 ou corbeille) retire le `.jsonl` mais laisse `~/.yusagent/sessions/<id>.window-cache.json`. Exemples : `01a20752-b137…`, `01a20752-c4f9…`, `01a20754-50d3…`.
+
+- **Ce qui crée ces fichiers.** Tous deux sont dérivés du fichier de la session par `with_extension`, donc propres à cette session :
+  - `<id>.window-cache.json` : instantané de fenêtre de `pa-core` (`crates/pa-core/src/session/window_cache.rs:98-99`, écrit par `save` `:139-148`). Il existe dès `session/new`.
+  - `<id>.info-cache.json` : état de scan de `pa-daemon` (`crates/pa-daemon/src/session_store/info_sidecar.rs:37-38`, `persist_info_sidecar` `:60`). Il est écrit quand le worker libère le fichier (`crates/pa-daemon/src/lease.rs:359`) et par le scan du catalogue (`crates/pa-daemon/src/session_scan.rs:69`).
+- **Ce que retire la suppression aujourd'hui.** `delete_saved_session` (upstream) retire le fichier (`trash`, sinon `unlink`), puis `session-artifacts/<id>` (`crates/pa-daemon/src/saved_session_commands.rs:106-148`). Rien d'autre.
+- **Fichiers propres à une session :**
+  - à retirer : `sessions/<id>.jsonl`, `sessions/<id>.window-cache.json`, `sessions/<id>.info-cache.json`, leurs temporaires (`<id>.window-cache-<uuid>.tmp`, `<id>.info-cache-<uuid>.tmp`, laissés seulement par une écriture interrompue) et `session-artifacts/<id>/` ;
+  - gardé : `sessions/<id>.usage.ndjson` (C4) ;
+  - hors suppression : le bail `session-leases/<sha256(chemin)>.lock` (`crates/pa-daemon/src/lease.rs:113-122`), libéré par le worker.
+- **Relevé sur le disque de Yusuf** (22/11) : 22 `window-cache.json` sur 45 et 5 `info-cache.json` sur 15 sans `.jsonl` ; aucun `session-artifacts/<id>` orphelin ; les 2 baux appartiennent à des sessions vivantes.
+- **Correctif** dans `ya_history.rs` :
+  - `remove_sidecars` après une suppression réussie, par la corbeille comme par O1 ; les caches sont supprimés, pas mis à la corbeille ;
+  - la suppression attend aussi la sortie du processus worker, pour que l'info-cache qu'il écrit en partant ne revienne pas après.
+- **Vu en échec sans le correctif** : `bench/tools/capture/delete_files_check.py` sur `e5030fbfb` répond NON CONFORME.
+  - Corbeille : il reste `<id>.info-cache.json` et `<id>.window-cache.json`.
+  - Conversation vide, fin du pont : il reste `<id>.window-cache.json`.
+  - Les tests Rust et e2e ajoutés dans le même push (un seul push demandé) vérifient d'abord que l'instantané existe avant la suppression.
