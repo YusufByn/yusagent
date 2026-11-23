@@ -90,10 +90,14 @@ pre {
   cursor: default;
 }
 
-.ya-banner {
-  padding: 6px 10px;
-  background: var(--vscode-inputValidation-warningBackground);
-  border-bottom: 1px solid var(--vscode-inputValidation-warningBorder);
+/* yusAgent (ticket 30, C1 option B) : « auto » sans sandbox, étiquette discrète comme celle du TUI. */
+.ya-auto-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground));
+  border-radius: 4px;
+  color: var(--vscode-editorWarning-foreground);
+  font-size: 0.9em;
+  white-space: nowrap;
 }
 
 .transcript-shell {

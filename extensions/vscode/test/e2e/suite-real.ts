@@ -1,9 +1,11 @@
 // yusAgent (YA-10, ticket 24, PR 3, étape 6) : e2e dans VS Code contre le vrai binaire (debug),
 // provider factice, kernel réel. Lancé par `run-real.ts` (CI seulement).
-// - session 1 (manuel) : cellule avec `bash()` (accord par le bouton de la boîte), `edit()` puis
+// - session 1 (manuel, écrit par `run-real.ts`) : cellule avec `bash()` (accord par le bouton de la boîte), `edit()` puis
 //   « Revert », refus (fichier absent, « Declined », le tour s'arrête), texte `[user-reverted]` dans
 //   le message suivant (fichier de session), Stop pendant une cellule ;
-// - session 2 (auto) : bandeau, cellule exécutée sans demande ; tour lancé par l'agent (avis
+// - ticket 30 : sans réglage `permissions`, la conversation s'ouvre en auto (défaut du binaire),
+//   étiquette discrète « auto · no sandbox », cellule exécutée sans demande ;
+// - session 2 (auto) : étiquette, cellule exécutée sans demande ; tour lancé par l'agent (avis
 //   `[bash-done]`, ticket 25) ouvert par `turnStart` et fermé sur `responseBoundary`, message suivant
 //   envoyé tout de suite ; suppression pure par `edit()` après un emoji, puis « Revert » (ticket 26 :
 //   colonne du pont), fichier revenu octet pour octet ;
@@ -48,6 +50,10 @@ const binary = process.env.YUSAGENT_E2E_BINARY as string;
 const script = process.env.PRIME_AGENT_FAUX_SCRIPT as string;
 const SLOW = 90_000;
 const BOX = "Allow this Python cell to run?";
+// Ticket 30 (C1, option B) : l'étiquette discrète de « auto » sans sandbox, comme le TUI.
+const AUTO_BADGE = "auto · no sandbox";
+const OLD_BANNER = "Mode auto sans sandbox";
+const SETTINGS = () => join(home, ".yusagent", "settings.json");
 
 const state = async () => (await vscode.commands.executeCommand<State>("yusagent._test.state"))!;
 const post = (message: WebviewMessage) => vscode.commands.executeCommand("yusagent._test.post", message);
@@ -234,9 +240,28 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
-    "auto : bandeau, cellule exécutée sans demande",
+    "sans réglage (ticket 30) : conversation en auto, étiquette sans bandeau, cellule exécutée sans demande",
     async () => {
-      writeFileSync(join(home, ".yusagent", "settings.json"), JSON.stringify({ permissions: "auto" }));
+      writeFileSync(SETTINGS(), JSON.stringify({}));
+      writeScript([cell("call-default", "open('defaut.txt', 'w').write('x')"), { text: "défaut fini" }]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await waitFor(async () => {
+        const s = (await state()).session;
+        return s?.kind === "open" && s.config.permissions === "auto";
+      }, "permissions = auto sans réglage", SLOW);
+      const shown = await shows(AUTO_BADGE, "étiquette");
+      assert.ok(!shown.includes(OLD_BANNER), "plus de bandeau d'alerte");
+      await post({ type: "send", text: "défaut", images: [] });
+      await idle();
+      assert.equal((await tool("call-default"))?.status, "done");
+      assert.ok(existsSync(join(workspace, "defaut.txt")), "cellule exécutée");
+      assert.equal((await state()).badge, undefined, "aucune demande");
+    },
+  ],
+  [
+    "auto : étiquette, cellule exécutée sans demande",
+    async () => {
+      writeFileSync(SETTINGS(), JSON.stringify({ permissions: "auto" }));
       writeScript([
         cell("call-auto", "open('auto.txt', 'w').write('x')"),
         { text: "auto fini" },
@@ -254,12 +279,13 @@ const tests: [string, () => Promise<void>][] = [
         const s = (await state()).session;
         return s?.kind === "open" && s.config.permissions === "auto";
       }, "permissions = auto", SLOW);
-      await shows("Mode auto sans sandbox", "bandeau");
       await post({ type: "send", text: "auto", images: [] });
       await idle();
       assert.equal((await tool("call-auto"))?.status, "done");
       assert.ok(existsSync(join(workspace, "auto.txt")), "cellule exécutée");
       assert.equal((await state()).badge, undefined, "aucune demande");
+      // En dernier : un échec ici ne décale pas le script des cas suivants (même session).
+      assert.ok(!(await shows(AUTO_BADGE, "étiquette", 5_000)).includes(OLD_BANNER), "plus de bandeau d'alerte");
     },
   ],
   [

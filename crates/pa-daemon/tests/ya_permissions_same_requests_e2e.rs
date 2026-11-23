@@ -9,9 +9,9 @@
 //!
 //! Two sessions of the same daemon play the same turn (one cell, then an answer), one after the
 //! other, in the same project:
-//! - manual (the default: `PRIME_AGENT_TEST_PERMISSIONS`, which `.cargo/config.toml` sets to
-//!   `auto` for the upstream tests, is removed): a client that answers (as the TUI) allows the
-//!   cell;
+//! - manual (written in the agent dir's `settings.json`, ticket 30: unset is `"auto"`;
+//!   `PRIME_AGENT_TEST_PERMISSIONS`, which `.cargo/config.toml` sets to `auto` for the upstream
+//!   tests, is removed): a client that answers (as the TUI) allows the cell;
 //! - auto: the same client switches the session to `"auto"` first (`/permissions auto` in the
 //!   TUI, the `permissions` selector in ACP); no request is asked.
 //!
@@ -446,6 +446,12 @@ fn manual_and_auto_send_the_same_requests() {
         }]
     }}});
     std::fs::write(agent_dir.join("models.json"), models.to_string()).expect("models.json");
+    // Ticket 30: unset is "auto".
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        json!({ "permissions": "manual" }).to_string(),
+    )
+    .expect("settings.json");
     let socket = dir.path().join("ya-same.sock");
     let _supervisor = spawn_supervisor(&socket, &agent_dir);
     let mut client = Client::connect(&socket);

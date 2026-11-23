@@ -4,8 +4,9 @@
 
 //! yusAgent (YA-11, ticket 20, PR 2): `session/request_permission` end to end. The real binary
 //! serves ACP over stdio on its own sandboxed daemon; the worker runs the real engine on the faux
-//! provider (`"engine": "faux"`) and a real kernel, in `"manual"` (the default: [`TEST_ENV`],
-//! which `.cargo/config.toml` sets to `auto` for the upstream tests, is removed).
+//! provider (`"engine": "faux"`) and a real kernel, in `"manual"`: written in the global settings
+//! (ticket 30: unset is `"auto"`); [`TEST_ENV`], which `.cargo/config.toml` sets to `auto` for the
+//! upstream tests, is removed.
 //! a. Allowed then declined: the tool call is published `pending`, the request carries the
 //!    `allow_once` and `reject_once` options; allowed, the cell runs and goes `in_progress`;
 //!    declined, it does not run, its result is the `[permission-denied]` text and the turn ends.
@@ -21,6 +22,8 @@
 //!    again; both changes are journaled.
 //! e. yusAgent (YA-10, ticket 24): the worker is killed between two turns and relaunched by the
 //!    supervisor: the next request still reaches the ACP client.
+//! f. Ticket 30 (decision of Yusuf, 22/11/2026): without a setting, the session opens in `auto`:
+//!    a cell runs without a request; the selector back to `manual` asks again.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -77,8 +80,19 @@ struct Client {
 }
 
 impl Client {
+    /// In `"manual"`, written in the global settings (ticket 30: unset is `"auto"`).
     fn spawn(script: &Value) -> Client {
+        Self::spawn_in(script, Some(&json!({ "permissions": "manual" })))
+    }
+
+    /// With `global` as the global `settings.json` (none when `None`).
+    fn spawn_in(script: &Value, global: Option<&Value>) -> Client {
         let home = tempfile::TempDir::new().unwrap();
+        if let Some(global) = global {
+            let agent_dir = home.path().join(".yusagent");
+            std::fs::create_dir_all(&agent_dir).unwrap();
+            std::fs::write(agent_dir.join("settings.json"), global.to_string()).unwrap();
+        }
         let socket = home.path().join("daemon.sock");
         let script_path = home.path().join("worker-script.json");
         std::fs::write(&script_path, script.to_string()).unwrap();
@@ -635,6 +649,72 @@ fn the_permissions_selector_switches_to_auto_and_back() {
         ],
         "{journal:?}"
     );
+    assert_eq!(decisions(&journal), vec!["allow"], "{journal:?}");
+}
+
+/// f. Ticket 30: no setting, the session opens in auto; back to manual, a cell asks again.
+#[test]
+fn without_a_setting_the_session_opens_in_auto() {
+    let mut client = Client::spawn_in(
+        &json!({ "engine": "faux", "responses": [
+            touch("call-default", "default.txt"),
+            { "text": "ran without a request" },
+            touch("call-manual", "manual.txt"),
+            { "text": "ran after the request" },
+        ] }),
+        None,
+    );
+    let (session_id, options) = client.open_session();
+    assert_eq!(
+        permissions_option(&options)["currentValue"],
+        "auto",
+        "{options}"
+    );
+    let prompt = client.prompt(&session_id, "create default.txt");
+    let (response, frames) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| frame["method"] == "session/request_permission"),
+        "no request in auto: {frames:?}"
+    );
+    assert_eq!(
+        tool_updates(&frames, "tool_call", "call-default")[0]["status"],
+        "in_progress"
+    );
+    assert!(client.path("default.txt").exists());
+
+    let switched = client.set_permissions(&session_id, "manual");
+    assert_eq!(
+        permissions_option(&switched["result"]["configOptions"])["currentValue"],
+        "manual",
+        "{switched}"
+    );
+    let prompt = client.prompt(&session_id, "create manual.txt");
+    let (request, _) = client.wait_permission_request();
+    assert_eq!(request["params"]["toolCall"]["toolCallId"], "call-manual");
+    client.answer(
+        &request,
+        &json!({ "outcome": "selected", "optionId": "allow-once" }),
+    );
+    let (response, _) = client.wait_response(prompt);
+    assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+    assert!(client.path("manual.txt").exists());
+
+    let journal = client.journal_until(|journal| journal.len() >= 2);
+    let changes: Vec<String> = journal
+        .iter()
+        .filter(|data| data.get("previousMode").is_some())
+        .map(|data| {
+            format!(
+                "{}->{}",
+                data["previousMode"].as_str().unwrap_or_default(),
+                data["mode"].as_str().unwrap_or_default()
+            )
+        })
+        .collect();
+    assert_eq!(changes, ["auto->manual"], "{journal:?}");
     assert_eq!(decisions(&journal), vec!["allow"], "{journal:?}");
 }
 

@@ -317,8 +317,9 @@ def write_agent_config(agent_dir: Path, proxy_port: int, source: dict, settings:
         provider["models"] = [source["fiche"]]
     (agent_dir / "models.json").write_text(json.dumps({"providers": {PROVIDER: provider}},
                                                       indent=2) + "\n")
-    # YA-11 (ticket 20) : le banc tourne sans humain, permissions « auto » (manuel par défaut,
-    # refusé au démarrage en -p) ; ignoré par les binaires d'avant le réglage.
+    # YA-11 (ticket 20) : le banc tourne sans humain, permissions « auto », écrit même depuis
+    # qu'« auto » est le défaut (ticket 30, C8) : les binaires d'avant le ticket 30 sont en manuel
+    # par défaut et refusent -p ; ignoré par les binaires d'avant le réglage.
     (agent_dir / "settings.json").write_text(
         json.dumps({"cacheRetention": CACHE_RETENTION, **settings, **PERMISSIONS_SETTINGS},
                    indent=2) + "\n")

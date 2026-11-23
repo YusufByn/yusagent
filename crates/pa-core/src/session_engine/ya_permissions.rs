@@ -3,7 +3,8 @@
 //! The setting `"permissions"` (`"manual"` or `"auto"`) is read from the **global** settings
 //! only (`<agent dir>/settings.json`), never from the project's `.yusagent/settings.json`: a
 //! cloned repository must not be able to turn the confirmations off (the merged settings let the
-//! project win, `crate::settings::SettingsManager::from_storage`). Unset is `"manual"`.
+//! project win, `crate::settings::SettingsManager::from_storage`). Unset is `"auto"` (ticket 30,
+//! decision of Yusuf of 22/11/2026; `"manual"` until then).
 //!
 //! - `"manual"`: every tool call (`python_repl` cell, `apply_patch`, the native shell tools) is
 //!   put to a [`PermissionAsker`] before it runs, with no classification (decision of Yusuf,
@@ -13,7 +14,7 @@
 //!   session file as a custom entry [`JOURNAL_TYPE`] (never sent to the model).
 //! - `"auto"`: the calls run without asking, as upstream. Without a sandbox (none before the
 //!   second part of YA-11), a session without a daemon prints [`AUTO_WARNING`] on stderr at
-//!   startup when the mode comes from the user's settings (D4).
+//!   startup when the mode comes from the user's settings or from the default (D4; ticket 30, C2).
 //!
 //! A session in `"manual"` whose embedding cannot ask (no asker: `-p`, RPC, and the daemon until
 //! PR 2 of the ticket) is refused at creation, before any model request, with a message that
@@ -72,9 +73,9 @@ pub const AUTO_WARNING: &str = "yusAgent: permissions are \"auto\" and there is 
 /// The permission mode of a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionMode {
-    /// Every tool call is confirmed before it runs (the default).
+    /// Every tool call is confirmed before it runs.
     Manual,
-    /// Tool calls run without confirmation.
+    /// Tool calls run without confirmation (the default, ticket 30).
     Auto,
 }
 
@@ -98,7 +99,7 @@ impl PermissionMode {
 /// Where the mode of a session comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeSource {
-    /// No setting: `"manual"`.
+    /// No setting: `"auto"` (ticket 30).
     Default,
     /// The global `settings.json`.
     GlobalSettings,
@@ -266,7 +267,7 @@ pub fn mode_from(
             .ok_or_else(|| format!("{TEST_ENV} must be \"manual\" or \"auto\", got {value:?}"));
     }
     match global_raw.and_then(|raw| raw.get(SETTING_KEY)) {
-        None => Ok((PermissionMode::Manual, ModeSource::Default)),
+        None => Ok((PermissionMode::Auto, ModeSource::Default)),
         Some(value) => value
             .as_str()
             .and_then(parse_mode)
@@ -284,7 +285,7 @@ pub fn mode_from(
 #[must_use]
 pub fn no_asker_message(agent_dir: &Path) -> String {
     format!(
-        "permissions are \"manual\" (the default) and this mode cannot ask for confirmation. \
+        "permissions are \"manual\" and this mode cannot ask for confirmation. \
          To run tool calls without confirmation (there is no sandbox yet), add this line to {}:\n  \
          \"{SETTING_KEY}\": \"auto\"\n\
          A project's .yusagent/settings.json is not read for this setting.",
@@ -347,7 +348,11 @@ pub fn resolve(
     if mode == PermissionMode::Manual && wiring.asker.is_none() {
         anyhow::bail!(no_asker_message(agent_dir));
     }
-    if mode == PermissionMode::Auto && source == ModeSource::GlobalSettings && announce {
+    // Ticket 30 (C2): the default warns as the written setting does.
+    if mode == PermissionMode::Auto
+        && matches!(source, ModeSource::GlobalSettings | ModeSource::Default)
+        && announce
+    {
         eprintln!("{AUTO_WARNING}");
     }
     if let Some(switch) = &wiring.switch {
@@ -577,15 +582,16 @@ mod tests {
         PathBuf::from("/home/u/.yusagent/settings.json")
     }
 
+    /// Ticket 30 (decision of Yusuf, 22/11/2026): unset is `"auto"`.
     #[test]
-    fn unset_is_manual() {
+    fn unset_is_auto() {
         assert_eq!(
             mode_from(None, None, &path()),
-            Ok((PermissionMode::Manual, ModeSource::Default))
+            Ok((PermissionMode::Auto, ModeSource::Default))
         );
         assert_eq!(
             mode_from(Some(&json!({"other": 1})), None, &path()),
-            Ok((PermissionMode::Manual, ModeSource::Default))
+            Ok((PermissionMode::Auto, ModeSource::Default))
         );
     }
 
@@ -628,6 +634,8 @@ mod tests {
             .to_string();
         assert!(error.contains("/home/u/.yusagent/settings.json"), "{error}");
         assert!(error.contains("\n  \"permissions\": \"auto\"\n"), "{error}");
+        // Ticket 30 (C5): manual is no longer the default.
+        assert!(!error.contains("(the default)"), "{error}");
     }
 
     #[test]

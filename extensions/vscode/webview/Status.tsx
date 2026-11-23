@@ -55,9 +55,8 @@ export function Status({
   history: HistoryState;
 }) {
   const [browsing, setBrowsing] = useState(false);
-  // yusAgent : entrées masquées tant que le pont ne sert pas leurs méthodes ; bandeau D4.
+  // yusAgent : entrées masquées tant que le pont ne sert pas leurs méthodes. D4 : étiquette du compositeur (ticket 30).
   const features = useFeatures();
-  const auto = session?.kind === "open" && session.config.permissions === "auto";
   // The agent lists the conversations: the menu closes when it stops.
   useEffect(() => {
     if (agent.kind !== "ready") setBrowsing(false);
@@ -131,11 +130,6 @@ export function Status({
         </div>
         {browsing && <HistoryMenu history={history} draft={draft} onClose={() => setBrowsing(false)} />}
       </header>
-      {auto && (
-        <div className="ya-banner" role="alert">
-          ⚠ Mode auto sans sandbox : les cellules s'exécutent sans demander, avec vos droits.
-        </div>
-      )}
       {/* yusAgent (PR 3, étape 4) : « Revert » grisé pendant un tour. */}
       <YaBusyContext.Provider value={chat.busy}>
       <Transcript chat={chat} editing={editing}>

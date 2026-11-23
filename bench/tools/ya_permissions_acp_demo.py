@@ -3,7 +3,8 @@
 
 Lance le binaire en mode ACP sur un démon isolé (`--daemon-socket` dans un dossier temporaire),
 avec le provider factice (`PRIME_AGENT_FAUX_SCRIPT`, `"engine": "faux"`) : aucun appel de modèle.
-Réglages globaux vides dans un dossier agent temporaire : mode « manual » (le défaut). Deux tours
+Réglages globaux d'un dossier agent temporaire : `"permissions": "manual"` (écrit : « auto » est le
+défaut depuis le ticket 30). Deux tours
 scriptés, chacun une cellule `python_repl` qui crée un fichier dans le projet temporaire. À chaque
 `session/request_permission`, le script affiche la cellule et demande au terminal : `a`
 (autoriser une fois) ou `r` (refuser une fois). À la fin : fichiers créés, réponses des tours,
@@ -167,7 +168,7 @@ def main() -> None:
     project, agent, tmp = work / "project", work / "agent", work / "tmp"
     for directory in (project, agent, tmp):
         directory.mkdir()
-    (agent / "settings.json").write_text("{}\n")
+    (agent / "settings.json").write_text(json.dumps({"permissions": "manual"}) + "\n")
     script = work / "faux-script.json"
     script.write_text(json.dumps(faux_script()))
     env = {
