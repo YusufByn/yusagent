@@ -482,7 +482,7 @@ Aucun code du produit et aucune ébauche : les tests passent par le binaire (ACP
 | 2 | `crates/pa-core/tests/prefix_stability.rs` (vraie session, vrai kernel, serveur local ; en CI, échoue si le kernel manque, `:175-179`) : tests 1 à 5 et 14 | **rouges sur leur assertion** : 1, 2, 3, 4, 14 ; **vert** : 5 |
 | 3 | `crates/pa-cli/tests/ya_resources_acp_e2e.rs` et `ya_settings_acp_e2e.rs` (vrai binaire, serveur local qui joue le modèle) : tests 6 à 12 | **rouges** : 6 à 10 et 12 sur la forme de la réponse ou le texte exact, car le pont répond aujourd'hui `-32601` ; 11 sur la compaction (§7.3) |
 | 4 | `crates/pa-daemon/tests/ya_announce_path_e2e.rs` (modèle : `ya_permissions_same_requests_e2e.rs`) : test 13 | **vert** (constat du §1.6 confirmé) ; s'il est rouge, arrêt et retour vers Yusuf avant tout code |
-| 5 | `bench/tools/capture/acp_live_changes.py`, autonome (`run.py` ne l'appelle pas encore) | lancé par Claude Code sur le binaire du push 1 : NON CONFORME sur L1, L2, L4 et L6 ; sortie jointe à la PR |
+| 5 | `bench/tools/capture/acp_live_changes.py`, autonome (`run.py` ne l'appelle pas encore) | lancé par Claude Code sur le binaire du push 1 : NON CONFORME sur L1, L2, L3, L4 et L6 (L3 passe aussi par `_yus/skills/set`, absent au push 1), CONFORME sur L5 (skill écrit sur disque) ; sortie jointe à la PR |
 
 Run attendu : seuls les tests 1 à 4, 6 à 12 et 14 échouent, chacun sur son assertion. fmt et clippy sont verts. Le job `real-binary` ne tourne pas : aucun chemin de son filtre n'est touché. Un commentaire de la PR liste ces échecs attendus.
 
