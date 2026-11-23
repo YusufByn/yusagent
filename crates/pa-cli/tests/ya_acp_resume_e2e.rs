@@ -17,7 +17,8 @@
 //! d. `session/load` of a conversation another client holds is refused (C12).
 //! e. An ACP session writes its usage journal, and an effort change is journaled (J1).
 //! f. A conversation opened new and left empty goes with its bridge: session stopped, file
-//!    deleted (defect 2 of the X1 check).
+//!    deleted (defect 2 of the X1 check). A delete (c, f) leaves no file named after the session
+//!    but its usage journal: the window snapshot and the scan state go too.
 //! g. An empty conversation held by another client, or one where something was asked, stays.
 //!
 //! Listed in `docs/fork-changes.md`.
@@ -265,6 +266,19 @@ fn listed_ids(list: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The files next to a session file named after it (`<id>.*`), but its usage journal, which a delete
+/// keeps (C4): the window snapshot, the scan state, their temporaries, the file itself.
+fn session_files(session_file: &Path) -> Vec<String> {
+    let stem = session_file.file_stem().unwrap().to_str().unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(session_file.parent().unwrap())
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&format!("{stem}.")) && !name.ends_with(".usage.ndjson"))
+        .collect();
+    names.sort();
+    names
+}
+
 /// a. The file in `session/new`, then a resume in another process: replay, then a prompt.
 #[test]
 fn a_resumed_session_replays_its_turns_then_takes_a_prompt() {
@@ -435,12 +449,23 @@ fn the_history_lists_conversations_and_deletes_one_with_its_session() {
         one_path.file_stem().unwrap().to_str().unwrap()
     ));
     let journal_before = journal.exists();
+    assert!(
+        one_path.with_extension("window-cache.json").exists(),
+        "the window snapshot is there before the delete: {:?}",
+        session_files(&one_path)
+    );
     let deleted = two.call(
         "_unharnessed/sessions/delete",
         &json!({ "sessionId": one_id }),
     );
     assert_eq!(deleted["result"], json!({}), "{deleted}");
     assert!(!one_path.exists(), "the file is deleted");
+    // The sidecars named after it go too (window snapshot, scan state written as the worker stops).
+    assert_eq!(
+        session_files(&one_path),
+        Vec::<String>::new(),
+        "nothing of it is left"
+    );
     let artifacts = one_path
         .parent()
         .and_then(Path::parent)
@@ -578,6 +603,11 @@ fn an_empty_new_conversation_goes_with_its_bridge() {
     let opened = client.open();
     let (id, path) = saved(&opened);
     assert!(path.exists(), "the file exists before the first prompt");
+    assert!(
+        path.with_extension("window-cache.json").exists(),
+        "the window snapshot is there: {:?}",
+        session_files(&path)
+    );
     assert!(live_ids(&home).contains(&id));
     client.close();
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -585,6 +615,11 @@ fn an_empty_new_conversation_goes_with_its_bridge() {
         std::thread::sleep(Duration::from_millis(100));
     }
     assert!(!path.exists(), "the empty conversation's file is deleted");
+    assert_eq!(
+        session_files(&path),
+        Vec::<String>::new(),
+        "nothing of it is left"
+    );
     assert!(
         !live_ids(&home).contains(&id),
         "the empty conversation's session is stopped: {:?}",

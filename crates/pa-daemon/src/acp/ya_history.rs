@@ -19,6 +19,7 @@
 //!
 //! Nothing here reaches the model's requests: ACP frames only.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use pa_types::daemon::DaemonCommand;
@@ -781,12 +782,18 @@ async fn delete(
             }
             tokio::time::sleep(STOP_POLL).await;
         }
+        // Its process writes the scan-state sidecar as it releases the file: then it is gone.
+        if !worker_exited(live.worker_pid, deadline).await {
+            return Err(DeleteRefusal::Failed(
+                "the session did not stop in time".to_string(),
+            ));
+        }
     }
     let deleted = link
         .request(DaemonCommand::DeleteSavedSession {
             id: None,
             active_session_id: None,
-            session_path: path,
+            session_path: path.clone(),
             rest: Map::default(),
         })
         .await
@@ -799,6 +806,7 @@ async fn delete(
             .and_then(Value::as_bool)
             == Some(true);
     if ok {
+        remove_sidecars(Path::new(&path));
         return Ok(());
     }
     let reason = deleted
@@ -879,19 +887,89 @@ pub(crate) async fn drop_if_empty(link: &DaemonLink, daemon_session_id: &str, fi
         }
         tokio::time::sleep(STOP_POLL).await;
     }
-    let _ = link
+    if !worker_exited(live.worker_pid, deadline).await {
+        return;
+    }
+    let deleted = link
         .request(DaemonCommand::DeleteSavedSession {
             id: None,
             active_session_id: None,
             session_path: path.to_string(),
             rest: Map::default(),
         })
-        .await;
+        .await
+        .is_ok_and(|response| {
+            response.success
+                && response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("ok"))
+                    .and_then(Value::as_bool)
+                    == Some(true)
+        });
+    if deleted {
+        remove_sidecars(Path::new(path));
+    }
+}
+
+/// yusAgent (YA-10, ticket 28, the X1 check): the files a delete leaves next to the session file,
+/// named after it. `delete_saved_session` removes the file and `session-artifacts/<id>`
+/// (`crate::saved_session_commands::delete_session_file`), not these: the window snapshot
+/// (`<stem>.window-cache.json`, `pa-core` `session/window_cache.rs`, written from the session's
+/// open), the scan state (`<stem>.info-cache.json`, `crate::session_store::persist_info_sidecar`,
+/// written as the worker releases the file and by the catalog scan), and a temporary of either
+/// that an interrupted write left (`<stem>.window-cache-<uuid>.tmp`, `<stem>.info-cache-<uuid>.tmp`).
+/// Both caches are disposable: removed, not trashed. The usage journal (`<stem>.usage.ndjson`)
+/// stays (C4).
+fn remove_sidecars(session_file: &Path) {
+    for extension in ["window-cache.json", "info-cache.json"] {
+        let _ = std::fs::remove_file(session_file.with_extension(extension));
+    }
+    let (Some(dir), Some(stem)) = (
+        session_file.parent(),
+        session_file.file_stem().and_then(|stem| stem.to_str()),
+    ) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let prefixes = [
+        format!("{stem}.window-cache-"),
+        format!("{stem}.info-cache-"),
+    ];
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.ends_with(".tmp") && prefixes.iter().any(|prefix| name.starts_with(prefix)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Whether the worker process `pid` has exited by `deadline` (`true` when the daemon gave none).
+async fn worker_exited(pid: Option<u32>, deadline: tokio::time::Instant) -> bool {
+    let Some(pid) = pid else {
+        return true;
+    };
+    loop {
+        if !pa_types::platform::process::is_process_alive(pid).unwrap_or(false) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(STOP_POLL).await;
+    }
 }
 
 struct LiveSession {
     active_session_id: String,
     attached_clients: u64,
+    /// The worker's process (`workerPid`), when the daemon gives it.
+    worker_pid: Option<u32>,
 }
 
 /// The daemon's live session for a saved file, if a worker serves it.
@@ -931,6 +1009,10 @@ async fn live_session(
                     .get("attachedClients")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
+                worker_pid: row
+                    .get("workerPid")
+                    .and_then(Value::as_u64)
+                    .and_then(|pid| u32::try_from(pid).ok()),
             })
         }))
 }

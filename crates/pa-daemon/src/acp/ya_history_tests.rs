@@ -461,3 +461,32 @@ async fn no_other_window_lets_the_load_go_on() {
     };
     assert_eq!(load_refusal(&link, "daemon-1", &file, "019a").await, None);
 }
+
+/// A delete leaves nothing named after the session but its usage journal (C4); another session's
+/// files stay.
+#[test]
+fn the_sidecars_of_a_deleted_session_go_its_journal_stays() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let file = dir.path().join("019a.jsonl");
+    for name in [
+        "019a.window-cache.json",
+        "019a.info-cache.json",
+        "019a.window-cache-1f2e.tmp",
+        "019a.info-cache-3c4d.tmp",
+        "019a.usage.ndjson",
+        "019b.window-cache.json",
+        "019b.jsonl",
+    ] {
+        std::fs::write(dir.path().join(name), "{}").unwrap();
+    }
+    remove_sidecars(&file);
+    let mut left: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        vec!["019a.usage.ndjson", "019b.jsonl", "019b.window-cache.json"]
+    );
+}
