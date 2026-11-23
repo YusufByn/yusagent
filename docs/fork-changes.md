@@ -1051,7 +1051,7 @@ Corrigés après le run `ci` 44593768562 :
 
 ## Permissions, PR 1 : cœur et banc (YA-11, ticket 20)
 
-Décisions : `docs/tickets/20-ya11-permissions.md`. Réglage global `permissions` (`"manual"` par défaut, `"auto"`), lu dans le seul `<dossier agent>/settings.json` ; en manuel, chaque appel de tool est confirmé avant de s'exécuter, un refus arrête le tour ; une session manuelle sans moyen de demander (`-p`, RPC, et le démon jusqu'à la PR 2) est refusée à sa création. **Ni prompt, ni tools, ni paramètres de requête touchés : préfixe inchangé** (test `permissions_manual_and_auto_send_the_same_prefix`).
+Décisions : `docs/tickets/20-ya11-permissions.md`. Réglage global `permissions` (`"manual"` par défaut, `"auto"` ; « auto » par défaut depuis le ticket 30), lu dans le seul `<dossier agent>/settings.json` ; en manuel, chaque appel de tool est confirmé avant de s'exécuter, un refus arrête le tour ; une session manuelle sans moyen de demander (`-p`, RPC, et le démon jusqu'à la PR 2) est refusée à sa création. **Ni prompt, ni tools, ni paramètres de requête touchés : préfixe inchangé** (test `permissions_manual_and_auto_send_the_same_prefix`).
 
 | Fichier | Type | Raison | Ticket |
 |---|---|---|---|
@@ -1364,6 +1364,27 @@ Contrôle manuel de X1 (22/11/2026, deux défauts ; `docs/tickets/28-reprise-his
 | `docs/tickets/29-demon-autre-build.md` | nouveau | Constat : le pont garde un démon lancé par un autre binaire de même schéma. | YA-10 (ticket 29) |
 
 Limites connues : une conversation vide dont le pont est tué par un signal garde sa session et son fichier (« Restart » en a besoin), jusqu'à la veille du démon pour le worker ; une conversation reprise par `--resume` puis laissée vide n'est pas supprimée à la fin de son pont ; le rejeu ne donne pas la durée d'un tour, ni d'un tour encore en cours au chargement.
+
+## Permissions en « auto » par défaut (YA-11, ticket 30)
+
+Décision de Yusuf du 22/11/2026 et choix C1 à C9 du 23/11/2026 : `docs/tickets/30-permissions-auto-defaut.md`. Sans réglage `permissions`, le mode est « auto » ; « manual » s'écrit dans les réglages globaux. **Préfixe inchangé** (le mode n'entre ni dans le prompt, ni dans les tools, ni dans `yaRequest`). Aucun fichier upstream touché, hors le commentaire de `.cargo/config.toml`.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-core/src/session_engine/ya_permissions.rs` | modif. (fichier du fork) | Réglage absent : `Auto` ; avertissement sur stderr en `-p` et RPC aussi pour le défaut (C2) ; message D6 sans « (the default) » (C5) ; docs ; test `unset_is_auto`. | YA-11 (ticket 30) |
+| `.cargo/config.toml` | modif. (commentaire seul) | `PRIME_AGENT_TEST_PERMISSIONS = "auto"` gardée (C3) : un mode explicite n'imprime pas l'avertissement, que le défaut imprime en `-p` et RPC. | YA-11 (ticket 30) |
+| `crates/pa-cli/tests/ya_permissions_e2e.rs` | modif. (test du fork) | `-p` et RPC sans réglage en auto, avec l'avertissement ; réglage de projet jamais lu, dans les deux sens ; `"manual"` global refusé au démarrage, sans « (the default) ». | YA-11 (ticket 30) |
+| `crates/pa-cli/tests/ya_permissions_acp_e2e.rs`, `ya_permissions_tui_pty_e2e.rs` | modif. (tests du fork) | Sans réglage : session ACP en auto (cellule sans demande, retour en manuel par le sélecteur) ; TUI avec l'étiquette dès l'ouverture. Les autres cas en `"manual"` écrit dans les réglages globaux. | YA-11 (ticket 30) |
+| `crates/pa-cli/tests/ya_session_lease_symlink_e2e.rs` | modif. (test du fork) | Manuel par `PRIME_AGENT_TEST_PERMISSIONS=manual` (le dossier agent reste neuf, sans `settings.json`). | YA-11 (ticket 30) |
+| `crates/pa-daemon/tests/ya_permissions_direct_link_e2e.rs`, `ya_permissions_same_requests_e2e.rs` | modif. (tests du fork) | `"permissions": "manual"` écrit dans le `settings.json` du dossier agent. | YA-11 (ticket 30) |
+| `extensions/vscode/webview/Composer.tsx`, `Status.tsx`, `styles.css` | modif. | C1, option B : étiquette « auto · no sandbox » dans la barre du compositeur (`role="status"`, texte complet en infobulle), à la place du bandeau `role="alert"`. | YA-10, YA-11 (ticket 30) |
+| `extensions/vscode/test/fake-agent/fake-agent.mjs`, `test/unit/agent.test.ts`, `test/e2e/suite.ts`, `test/e2e/suite-real.ts`, `test/e2e/run-real.ts` | modif. | Agent factice en auto par défaut (C7) ; tests de boîte en manuel explicite ; étiquette au lieu du bandeau ; e2e réel : session 1 en manuel écrit par `run-real.ts`, cas « sans réglage » en auto. | YA-10, YA-11 (ticket 30) |
+| `extensions/vscode/README.md` | modif. | Étiquette, et comment passer en manuel. | YA-10 (ticket 30) |
+| `bench/tools/ya_permissions_acp_demo.py`, `ya_permissions_tui_demo.py` | modif. (outils du fork) | `"permissions": "manual"` écrit. | YA-11 (ticket 30) |
+| `bench/tools/ya_permissions_auto_default_check.py` | nouveau (outil du fork) | Contrôle du défaut sur un binaire : `-p` sans réglage, `"manual"` global, ACP sans réglage puis manuel, réglage de projet ignoré. | YA-11 (ticket 30) |
+| `bench/smoke/run.py` | modif. (commentaire) | Le banc écrit toujours `"auto"` (C8). | YA-11 (ticket 30) |
+| `docs/yusAgent-cdc.md` | modif. | Ligne du journal du 22/11/2026 ; écarts notés à YA-11 (réglages par défaut sûrs) et YA-16 (build publié, point ouvert). | YA-11 (ticket 30) |
+| `.changes/ya-30-auto-defaut.md` | nouveau | Fragment de changelog. | YA-11 (ticket 30) |
 
 ## Code repris d'Unharnessed
 
