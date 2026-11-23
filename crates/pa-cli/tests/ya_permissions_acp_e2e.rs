@@ -4,8 +4,9 @@
 
 //! yusAgent (YA-11, ticket 20, PR 2): `session/request_permission` end to end. The real binary
 //! serves ACP over stdio on its own sandboxed daemon; the worker runs the real engine on the faux
-//! provider (`"engine": "faux"`) and a real kernel, in `"manual"` (the default: [`TEST_ENV`],
-//! which `.cargo/config.toml` sets to `auto` for the upstream tests, is removed).
+//! provider (`"engine": "faux"`) and a real kernel, in `"manual"`: written in the global settings
+//! (ticket 30: unset is `"auto"`); [`TEST_ENV`], which `.cargo/config.toml` sets to `auto` for the
+//! upstream tests, is removed.
 //! a. Allowed then declined: the tool call is published `pending`, the request carries the
 //!    `allow_once` and `reject_once` options; allowed, the cell runs and goes `in_progress`;
 //!    declined, it does not run, its result is the `[permission-denied]` text and the turn ends.
@@ -79,8 +80,9 @@ struct Client {
 }
 
 impl Client {
+    /// In `"manual"`, written in the global settings (ticket 30: unset is `"auto"`).
     fn spawn(script: &Value) -> Client {
-        Self::spawn_in(script, None)
+        Self::spawn_in(script, Some(&json!({ "permissions": "manual" })))
     }
 
     /// With `global` as the global `settings.json` (none when `None`).

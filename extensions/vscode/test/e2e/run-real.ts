@@ -27,6 +27,8 @@ async function main(): Promise<void> {
   const home = join(base, "home");
   const temp = join(base, "tmp");
   for (const dir of [workspace, join(userData, "User"), join(home, ".yusagent"), temp]) mkdirSync(dir, { recursive: true });
+  // Ticket 30 : le binaire est en auto par défaut ; la session 1 demande chaque cellule (manuel écrit).
+  writeFileSync(join(home, ".yusagent", "settings.json"), JSON.stringify({ permissions: "manual" }));
   writeFileSync(
     join(userData, "User", "settings.json"),
     JSON.stringify({ "yusagent.binaryPath": binary, "security.workspace.trust.enabled": false }),

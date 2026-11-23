@@ -3,8 +3,9 @@
 //! yusAgent (ticket 21): the first session of a fresh agent dir reached through a symlink keeps
 //! its messages. `HOME` (so the agent dir `~/.yusagent`, whose `sessions` dir does not exist yet)
 //! is a symlink to a real directory, as macOS's `/var/folders` and `/tmp`. The real binary serves
-//! ACP on its own daemon; the worker runs the faux provider and a real kernel in `"manual"`: one
-//! turn, one cell, allowed. The session file must hold the turn's messages and the `ya-permission`
+//! ACP on its own daemon; the worker runs the faux provider and a real kernel in `"manual"` (ticket
+//! 30: unset is `"auto"`; set by `PRIME_AGENT_TEST_PERMISSIONS`, debug builds only, so that the
+//! agent dir stays fresh, without a `settings.json`): one turn, one cell, allowed. The session file must hold the turn's messages and the `ya-permission`
 //! entry, and the worker's stderr log no `pa-daemon:` line.
 //!
 //! Before the lease fix (upstream `12a5081ac`, `crates/pa-daemon/src/lease.rs`), the lease kept
@@ -81,7 +82,7 @@ impl Client {
                 pa_daemon::worker::WORKER_SUPERVISOR_LOST_EXIT_MS_ENV,
                 "15000",
             )
-            .env_remove(TEST_ENV)
+            .env(TEST_ENV, "manual")
             .env_remove("PRIME_AGENT_CODING_AGENT_DIR")
             .env_remove("PRIME_AGENT_SESSION_DIR")
             .current_dir(&home)

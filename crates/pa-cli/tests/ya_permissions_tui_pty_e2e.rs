@@ -4,9 +4,9 @@
 
 //! yusAgent (YA-11, ticket 20, PR 3): the permission panel of the TUI, end to end. The real
 //! binary runs the TUI on a pty (its controlling terminal) against its own daemon; the worker runs
-//! the faux provider (`PRIME_AGENT_FAUX_SCRIPT`) and a real kernel, in `"manual"` (the default:
-//! `PRIME_AGENT_TEST_PERMISSIONS`, which `.cargo/config.toml` sets to `auto` for the upstream
-//! tests, is removed). The screen is read through a terminal emulator (`vt100`).
+//! the faux provider (`PRIME_AGENT_FAUX_SCRIPT`) and a real kernel, in `"manual"`: written in the
+//! global settings (ticket 30: unset is `"auto"`); `PRIME_AGENT_TEST_PERMISSIONS`, which
+//! `.cargo/config.toml` sets to `auto` for the upstream tests, is removed. The screen is read through a terminal emulator (`vt100`).
 //!
 //! One session, three turns:
 //! 1. a cell asks; text typed while the panel waits (`any`: an `n` and a `y`) goes to the
@@ -121,7 +121,8 @@ const WORKER_ENV: [&str; 9] = [
     pa_daemon::lease::SESSION_LEASE_OWNER_ID_ENV,
 ];
 
-/// An isolated home: `<home>/.yusagent` (no permission setting: manual), `<home>/project`.
+/// An isolated home: `<home>/.yusagent` (`"permissions": "manual"` by [`Lane::new`]),
+/// `<home>/project`.
 struct Lane {
     home: tempfile::TempDir,
     socket: PathBuf,
@@ -131,8 +132,8 @@ struct Lane {
 
 impl Lane {
     fn new() -> Self {
-        // No onboarding screen; no `permissions` key: the default, manual.
-        Self::with_settings(&json!({ "onboardingShown": true }))
+        // No onboarding screen; manual, written (ticket 30: unset is `"auto"`).
+        Self::with_settings(&json!({ "onboardingShown": true, "permissions": "manual" }))
     }
 
     /// With `settings` as the global `settings.json`.

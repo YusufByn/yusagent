@@ -10,8 +10,9 @@
 //! the request when the link closes (refusal, the turn stops, D7), as it does when the last
 //! answering client detaches.
 //!
-//! Real supervisor and worker (`pa-daemon`), faux provider and a real kernel, in `"manual"`
-//! (`PRIME_AGENT_TEST_PERMISSIONS`, which `.cargo/config.toml` sets to `auto` for the upstream
+//! Real supervisor and worker (`pa-daemon`), faux provider and a real kernel, in `"manual"`,
+//! written in the agent dir's `settings.json` (ticket 30: unset is `"auto"`;
+//! `PRIME_AGENT_TEST_PERMISSIONS`, which `.cargo/config.toml` sets to `auto` for the upstream
 //! tests, is removed). A second client stays attached through the supervisor without answering,
 //! and watches the session events.
 //!
@@ -89,6 +90,12 @@ impl Drop for Supervisor {
 #[allow(clippy::zombie_processes)]
 fn spawn_supervisor(socket: &Path, agent_dir: &Path, script: &Path) -> Supervisor {
     std::fs::create_dir_all(agent_dir).expect("agent dir");
+    // Ticket 30: unset is "auto".
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        json!({ "permissions": "manual" }).to_string(),
+    )
+    .expect("settings.json");
     let child = Command::new(env!("CARGO_BIN_EXE_pa-daemon"))
         .arg("supervisor")
         .arg("--socket")

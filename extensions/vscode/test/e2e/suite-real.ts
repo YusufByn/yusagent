@@ -1,6 +1,6 @@
 // yusAgent (YA-10, ticket 24, PR 3, étape 6) : e2e dans VS Code contre le vrai binaire (debug),
 // provider factice, kernel réel. Lancé par `run-real.ts` (CI seulement).
-// - session 1 (manuel) : cellule avec `bash()` (accord par le bouton de la boîte), `edit()` puis
+// - session 1 (manuel, écrit par `run-real.ts`) : cellule avec `bash()` (accord par le bouton de la boîte), `edit()` puis
 //   « Revert », refus (fichier absent, « Declined », le tour s'arrête), texte `[user-reverted]` dans
 //   le message suivant (fichier de session), Stop pendant une cellule ;
 // - ticket 30 : sans réglage `permissions`, la conversation s'ouvre en auto (défaut du binaire),

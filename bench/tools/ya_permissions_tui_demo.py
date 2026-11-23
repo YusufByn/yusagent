@@ -3,8 +3,8 @@
 
 Lance un démon isolé (`--mode daemon --daemon-socket` dans un dossier temporaire) puis le TUI
 du binaire, avec le provider factice (`PRIME_AGENT_FAUX_SCRIPT`, `"engine": "faux"`) : aucun
-appel de modèle. Dossier agent temporaire sans réglage `permissions` : mode « manual » (le
-défaut). Le provider factice joue, dans l'ordre, une cellule qui crée `autorise.txt`, un texte,
+appel de modèle. Dossier agent temporaire avec `"permissions": "manual"` (écrit : « auto » est le
+défaut depuis le ticket 30). Le provider factice joue, dans l'ordre, une cellule qui crée `autorise.txt`, un texte,
 une cellule qui crée `refuse.txt`, une cellule qui crée `auto.txt`, un texte. Un tour arrêté par
 un refus ne demande rien de plus au modèle : la cellule `auto.txt` sert donc au tour suivant.
 
@@ -275,8 +275,9 @@ def main() -> None:
     project, agent, tmp = work / "project", work / "agent", work / "tmp"
     for directory in (project, agent, tmp):
         directory.mkdir()
-    # Pas d'écran d'accueil ; pas de réglage `permissions` : « manual ».
-    (agent / "settings.json").write_text(json.dumps({"onboardingShown": True}) + "\n")
+    # Pas d'écran d'accueil ; « manual » écrit (« auto » est le défaut depuis le ticket 30).
+    (agent / "settings.json").write_text(
+        json.dumps({"onboardingShown": True, "permissions": "manual"}) + "\n")
     script = work / "faux-script.json"
     script.write_text(json.dumps(faux_script()))
     socket = work / "d.sock"
