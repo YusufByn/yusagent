@@ -119,12 +119,14 @@ Script de contrôle (`daemon_build_check.py --binary <branche> --other-binary <m
 4. même build deux fois : pas de relance ;
 5. `c12_repro.py` (avec et sans `--daemon-binary`) : `CONFORME`.
 
-Contrôle manuel prévu pour Yusuf (extension) :
-1. `yusagent.binaryPath` sur `main` (`beecf3f38`), une fenêtre, une conversation. Relever le pid du démon (`ps -o pid,command | grep 'yusagent --mode daemon'`).
-2. `binaryPath` sur la branche, Restart dans la même fenêtre. Attendu : nouveau pid, démon et workers lancés depuis le chemin de la branche, et la conversation reprend.
-3. Deux fenêtres sur `main`, puis la seconde passe sur la branche et fait Restart pendant que la première tient sa conversation. Attendu (A3) : refus lisible dans le panneau d'échec, avec les deux versions et `yusagent shutdown` ; la première fenêtre continue.
-4. `yusagent shutdown`, puis Restart de la seconde fenêtre : démon de la branche. La première fenêtre affiche une erreur au prompt suivant, puis repart après un Restart.
-5. Deux fenêtres sur la branche, même conversation : C12 refuse toujours la seconde.
+Contrôle manuel prévu pour Yusuf (extension). Version finale du 23/11/2026, après P1a. M = `main` (`beecf3f38`, sans `holds`) ; N = `56b37be13` (branche, autre version, avec `holds`) ; F = le binaire final (`c052c7ad5`). Pour relever le démon : `ps -axo pid,command | grep -- '--mode daemon' | grep -v grep`.
+1. `yusagent.binaryPath` sur M, `M shutdown`, rechargement de la fenêtre, une conversation et un prompt. Relever le pid du démon.
+2. `binaryPath` sur F, puis Restart. Attendu (P1a) : refus avec les deux versions, « cannot tell what it holds » et `yusagent shutdown` ; démon inchangé.
+3. `F shutdown`, puis Restart. Attendu : démon lancé depuis le chemin de F, conversation reprise.
+4. `binaryPath` sur N, Restart, un prompt, puis `binaryPath` sur F et Restart. Attendu : remplacement automatique.
+5. **Corrigée** : `yusagent.binaryPath` est un réglage « User » seulement, il n'est pas réglable dans l'onglet Workspace, donc la version d'origine de cette étape (`.vscode/settings.json`) était impossible. Deux fenêtres sur N, une conversation chacune, puis `"$F" --mode acp` lancé dans un Terminal. Attendu : refus, chaque session avec « a client is attached ».
+6. Une fenêtre sur N, l'agent lance `bash('sleep 300')` sans l'attendre, la fenêtre est fermée, puis `"$F" --mode acp` dans un Terminal. Attendu : refus « it holds work… ».
+7. Deux fenêtres sur F, même conversation : C12 refuse toujours la seconde.
 
 ## 8. Choix à trancher
 
@@ -281,3 +283,25 @@ Then Restart (stopping the daemon ends that work).
 - **Binaire final** : `c052c7ad5` (run `ya-build-macos-arm64` 45171416079, artefact `yusagent-aarch64-apple-darwin-c052c7ad5564117ce2b95fb9275ad026d452646d`). `57072c563` ne touche que `docs/fork-changes.md` et n'a pas de build. Somme vérifiée, extrait dans `~/.cache/yusagent-bin/c052c7ad5564117ce2b95fb9275ad026d452646d/`, version `0.10.2-continuous.c052c7ad5564117ce2b95fb9275ad026d452646d`.
 - **Script de contrôle relancé sur ce binaire** (même commande que ci-dessus, avec `--binary` sur ce chemin) : **CONFORME**, 6 cas sur 6, mêmes résultats qu'au §15. Dans les cas 1 et 3, le démon est remplacé (le pid change et la version devient celle de `c052c7ad5…`). Dans les cas 2, 4 et 5, le pont refuse et le démon reste le même (pid inchangé). Dans le cas 6, le démon est gardé.
 - **.vsix** : pas de .vsix dans cette PR, car l'extension ne change pas (job `extension` sans paquet). Artefact `yusagent-vsix-96be9d1b89b934823be6cf3cf30e13d7094cba1c` du run 45152332356 (PR #81, tête `bdf881644`) : son `extensions/vscode/` est identique à `main` (`git diff bdf881644 origin/main -- extensions/vscode` vide).
+
+## 17. Contrôle manuel de Yusuf (23/11/2026, binaire `c052c7ad5`) : conforme
+
+1. Sur M : démon `beecf3f38`, pid 46719.
+2. `binaryPath` sur F, puis Restart : refus P1a (deux versions, « cannot tell what it holds », `yusagent shutdown`), démon inchangé.
+3. `F shutdown`, puis Restart : démon `c052c7ad5` (pid 48182), conversation reprise.
+4. N puis F : remplacement automatique dans les deux sens (pid 48318, puis 48580).
+5. Faite autrement, voir le §7.5 corrigé : deux fenêtres sur N avec une conversation chacune, puis `"$F" --mode acp` dans le Terminal. Refus, les deux sessions avec « a client is attached ».
+6. `bash('sleep 300')` en arrière-plan, fenêtre fermée, puis `"$F" --mode acp` : refus « it holds work (a background bash(), a scheduled job or RLM work) ».
+7. Deux fenêtres sur F, même dossier (via un `.code-workspace`) : C12 refuse la seconde, mais le message met environ 5 s à s'afficher.
+
+**Délai de l'étape 7 : il ne vient pas de ce ticket, et il existait déjà sur `main`.**
+- Avec un démon du même build, `replace_other_build_as` s'arrête après la lecture du hello (`crates/pa-cli/src/ya_daemon_build.rs:58-64`), sans `list` ni attente.
+- Le refus attend `RELEASE_WAIT` = 3 s (`crates/pa-daemon/src/acp/ya_history.rs:46`, boucle `:138-150`). Ce délai vient du ticket 28 : un client qui vient de fermer (« Relancer ») peut rester attaché un instant. Sur `origin/main` (`beecf3f38`), les lignes sont les mêmes : `:46` et `:138`.
+- Mesure, `c12_repro.py`, quatre ponts B par binaire. Commande : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/c12_repro.py --binary <bin> --out <dossier>`. Délais lus dans `transcript-*B.jsonl` (heure d'envoi et de réponse de `initialize` et de `session/load`).
+
+  | Binaire | `initialize` | `session/load` jusqu'au refus |
+  |---|---|---|
+  | `main` `beecf3f38` | 0,03 à 0,04 s | 3,07 à 3,08 s |
+  | branche `56b37be13` | 0,03 à 0,04 s | 3,07 à 3,08 s |
+
+- Les 2 s restantes environ viennent du démarrage du pont et de l'affichage côté extension. Ce n'est pas mesuré, c'est une estimation.
