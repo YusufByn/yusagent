@@ -4,7 +4,7 @@
 //
 // Pilotage : variable FAKE_ACP_DIR (dossier existant).
 // - `<dir>/scenario.json` (facultatif), lu à chaque lancement : { "permissions": "manual" | "auto" | null,
-//   "protocolVersion": 1 } ;
+//   "protocolVersion": 1 } ; `permissions` absent : « auto », comme le pont sans réglage (ticket 30) ;
 // - `<dir>/received-<pid>.jsonl` : chaque ligne reçue, telle quelle ;
 // - `<dir>/starts.log` : une ligne par lancement (pid, cwd, arguments).
 // Le comportement d'un prompt dépend de son texte (voir `onPrompt`).
@@ -56,7 +56,7 @@ const config = [
     options: ["off", "low", "medium", "high", "xhigh"].map((level) => ({ value: level, name: level })),
   },
 ];
-const permissions = scenario.permissions === undefined ? "manual" : scenario.permissions;
+const permissions = scenario.permissions === undefined ? "auto" : scenario.permissions;
 if (permissions !== null) {
   config.push({
     id: "permissions",

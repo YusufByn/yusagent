@@ -150,7 +150,8 @@ const tests: [string, () => Promise<void>][] = [
   [
     "vue de la barre latérale : trames du fixture, CSP stricte, texte streamé affiché",
     async () => {
-      setScenario(control, {});
+      // Ticket 30 : l'agent factice ouvre en auto par défaut (C7) ; les boîtes de permission ci-dessous, en manuel.
+      setScenario(control, { permissions: "manual" });
       await vscode.commands.executeCommand("yusagent.open");
       const view = await ready();
       const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(view.html)?.[1] ?? "";

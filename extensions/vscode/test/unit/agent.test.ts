@@ -89,7 +89,7 @@ test("méthode non servie : rejet sur place, aucune trame", async () => {
 });
 
 test("Arrêter : session/cancel, puis cancelled à la demande ouverte, demande retirée de la boîte", async () => {
-  const h = open();
+  const h = open({ permissions: "manual" }); // ticket 30 : l'agent factice est en auto par défaut
   await ready(h);
   shown(h).chat.send("lent", []);
   await waitFor(() => shown(h).agent.permissions.waiting === 1, "demande ouverte");
@@ -117,7 +117,7 @@ test("Arrêter : session/cancel, puis cancelled à la demande ouverte, demande r
 });
 
 test("$/cancel_request du pont : réponse cancelled, le tour continue", async () => {
-  const h = open();
+  const h = open({ permissions: "manual" }); // ticket 30 : l'agent factice est en auto par défaut
   await ready(h);
   shown(h).chat.send("retire", []);
   // Défaut 3 : `pending` à l'annonce, `running` seulement à `in_progress`.
@@ -166,7 +166,7 @@ test("cartes (PR 3, étape 2) : bash() réels, vrais diffs, sortie sans les bloc
 });
 
 test("boîte (PR 3, étape 3) : Allow → selected allow-once, la cellule tourne ; Reject → reject-once, Declined", async () => {
-  const h = open();
+  const h = open({ permissions: "manual" }); // ticket 30 : l'agent factice est en auto par défaut
   await ready(h);
   const permissions = shown(h).agent.permissions;
   shown(h).chat.send("accord", []);
@@ -333,13 +333,13 @@ test("binaire absent, aucun dossier, version ACP inattendue : pas de session", a
   assert.ok(c.kind === "failed" && c.error.includes("ACP version 2"));
 });
 
-test("bandeau D4 : permissions annoncé à l'ouverture, puis config_option_update", async () => {
-  const auto = open({ permissions: "auto" });
+test("D4 : permissions annoncé à l'ouverture (auto par défaut, ticket 30), puis config_option_update", async () => {
+  const auto = open();
   await ready(auto);
   const a = shown(auto).session.current;
   assert.ok(a?.kind === "open" && a.config.permissions === "auto");
 
-  const manual = open();
+  const manual = open({ permissions: "manual" });
   await ready(manual);
   const b = shown(manual).session.current;
   assert.ok(b?.kind === "open" && b.config.permissions === "manual");
