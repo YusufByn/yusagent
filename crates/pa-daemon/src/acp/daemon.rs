@@ -402,6 +402,8 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                             )
                             .await;
                             updates.extend(ya_permissions.updates(&event));
+                            // yusAgent (YA-10, ticket 31): the notice of an announcement.
+                            updates.extend(super::ya_notice::updates(&event));
                             current
                                 .ya_turns
                                 .announce(&event, !updates.is_empty(), &current.producer)

@@ -17,6 +17,8 @@ mod ya_history;
 mod ya_permissions;
 // yusAgent (YA-10, ticket 25): the start and the end of the turns the bridge did not start.
 mod ya_turns;
+// yusAgent (YA-10, ticket 31): the notice of a skills or MCP announcement.
+mod ya_notice;
 
 use std::path::{Path, PathBuf};
 

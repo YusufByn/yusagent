@@ -310,6 +310,12 @@ impl Replay {
                     self.run_open = true;
                 }
                 Some("custom") => {
+                    // yusAgent (YA-10, ticket 31): an announcement rides the next turn, before its
+                    // prompt, and starts no wake.
+                    if let Some(notice) = super::ya_notice::of_row(message) {
+                        self.pending_updates.push(notice);
+                        continue;
+                    }
                     if !self.run_open && self.pending_wake.is_none() {
                         self.pending_wake = Some(message.clone());
                     }
