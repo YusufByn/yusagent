@@ -210,6 +210,21 @@ class Acp:
             time.sleep(0.2)
 
 
+def turn(acp: Acp, session_id: str, text: str, option: str) -> tuple[dict, list[str]]:
+    """Un tour ; chaque demande reçoit `option`. Rend la réponse et les appels demandés."""
+    prompt = acp.request("session/prompt", {
+        "sessionId": session_id, "prompt": [{"type": "text", "text": text}]})
+    asked = []
+    for frame in acp.frames():
+        if frame.get("method") == "session/request_permission":
+            asked.append(frame["params"]["toolCall"]["toolCallId"])
+            acp.send({"jsonrpc": "2.0", "id": frame["id"], "result": {
+                "outcome": {"outcome": "selected", "optionId": option}}})
+        if frame.get("id") == prompt and "method" not in frame:
+            return frame, asked
+    raise AssertionError("unreachable")
+
+
 def cell(call_id: str, name: str) -> dict:
     return {"content": [{"type": "toolCall", "id": call_id, "name": "python_repl",
                          "arguments": {"code": f"open({name!r}, 'w').write('ok')"}}]}
@@ -228,7 +243,8 @@ def acp_case(binary: Path, home: Path, work: Path) -> None:
         cell("call-manuel", "manuel.txt"), {"text": "cellule demandée puis exécutée"},
     ]}))
     env = base_env(home, agent, tmp) | {"PRIME_AGENT_FAUX_SCRIPT": str(script)}
-    acp = Acp(binary, env, project, root / "d.sock", root / "acp-stderr.log")
+    # Socket court : chemin d'un socket Unix limité à 104 octets sur macOS.
+    acp = Acp(binary, env, project, work / "4.sock", root / "acp-stderr.log")
     try:
         acp.wait(acp.request("initialize", {"protocolVersion": 1, "clientCapabilities": {}}))
         new, _ = acp.wait(acp.request("session/new", {"cwd": str(project), "mcpServers": []}))
@@ -237,10 +253,8 @@ def acp_case(binary: Path, home: Path, work: Path) -> None:
         value = permissions_value(result.get("configOptions", []))
         print(f"  sélecteur permissions à l'ouverture : {value}")
         check(value == "auto", "session ouverte en auto")
-        done, frames = acp.wait(acp.request("session/prompt", {
-            "sessionId": session_id, "prompt": [{"type": "text", "text": "Crée defaut.txt."}]}))
-        asked = [frame for frame in frames if frame.get("method") == "session/request_permission"]
-        print(f"  tour 1 : {json.dumps(done.get('result') or done.get('error'))} ; demandes : {len(asked)}")
+        done, asked = turn(acp, session_id, "Crée defaut.txt.", "reject-once")
+        print(f"  tour 1 : {json.dumps(done.get('result') or done.get('error'))} ; demandes : {asked}")
         check(not asked, "aucune demande en auto")
         check((project / "defaut.txt").exists(), "defaut.txt créé sans demande")
         switched, _ = acp.wait(acp.request("session/set_config_option", {
@@ -248,18 +262,9 @@ def acp_case(binary: Path, home: Path, work: Path) -> None:
         value = permissions_value((switched.get("result") or {}).get("configOptions", []))
         print(f"  sélecteur après set_config_option : {value}")
         check(value == "manual", "passage en manuel")
-        prompt = acp.request("session/prompt", {
-            "sessionId": session_id, "prompt": [{"type": "text", "text": "Crée manuel.txt."}]})
-        requests = 0
-        for frame in acp.frames():
-            if frame.get("method") == "session/request_permission":
-                requests += 1
-                print(f"  demande pour {frame['params']['toolCall']['toolCallId']} : accordée")
-                acp.send({"jsonrpc": "2.0", "id": frame["id"], "result": {
-                    "outcome": {"outcome": "selected", "optionId": "allow-once"}}})
-            if frame.get("id") == prompt and "method" not in frame:
-                print(f"  tour 2 : {json.dumps(frame.get('result') or frame.get('error'))}")
-                break
+        done, asked = turn(acp, session_id, "Crée manuel.txt.", "allow-once")
+        print(f"  tour 2 : {json.dumps(done.get('result') or done.get('error'))} ; demandes accordées : {asked}")
+        requests = len(asked)
         check(requests == 1, "une demande en manuel")
         check((project / "manuel.txt").exists(), "manuel.txt créé après l'accord")
     except RuntimeError as error:
