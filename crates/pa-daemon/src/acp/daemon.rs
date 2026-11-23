@@ -65,6 +65,8 @@ pub(crate) struct DaemonLink {
     frames: Mutex<mpsc::UnboundedReceiver<LinkFrame>>,
     protocol_version: u64,
     next_request_id: std::sync::atomic::AtomicU64,
+    /// yusAgent (YA-10, ticket 29): the daemon's `appVersion`, for C12's refusal.
+    pub(crate) daemon_version: Option<String>,
 }
 
 impl DaemonLink {
@@ -159,6 +161,10 @@ impl DaemonLink {
             frames: Mutex::new(frame_rx),
             protocol_version: version,
             next_request_id: std::sync::atomic::AtomicU64::new(0),
+            daemon_version: hello
+                .get("appVersion")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         })
     }
 
@@ -2125,6 +2131,10 @@ async fn teardown(
     }
 }
 
+/// yusAgent (YA-10, ticket 29): the `appVersion` of the daemon behind [`scripted_link`].
+#[cfg(test)]
+pub(crate) const SCRIPTED_DAEMON_VERSION: &str = "9.9.9-scripted-daemon";
+
 /// yusAgent (YA-10, ticket 28): a link whose commands `answer` answers, for the bridge's tests
 /// outside this module (`ya_history_tests.rs`).
 #[cfg(test)]
@@ -2142,6 +2152,7 @@ pub(crate) fn scripted_link(
         frames: Mutex::new(frames),
         protocol_version: DAEMON_PROTOCOL_VERSION,
         next_request_id: std::sync::atomic::AtomicU64::new(0),
+        daemon_version: Some(SCRIPTED_DAEMON_VERSION.to_string()),
     });
     tokio::spawn(async move {
         while let Some(line) = commands.recv().await {
@@ -2250,6 +2261,7 @@ mod tests {
             frames: Mutex::new(frames),
             protocol_version: DAEMON_PROTOCOL_VERSION,
             next_request_id: std::sync::atomic::AtomicU64::new(0),
+            daemon_version: None,
         });
         let worker = tokio::spawn(async move {
             let mut replacements = Vec::new();

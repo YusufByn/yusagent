@@ -325,11 +325,25 @@ pub(crate) fn install(
     engine.ya_permissions.install(emit, journal);
 }
 
+/// yusAgent (YA-10, ticket 29): whether the session holds work a daemon stop would lose (action
+/// `holds`). It is the passivation's own gate (`SessionEngine::can_passivate_worker`): a live
+/// background `bash()`, unsettled RLM work (a goal continuation waits behind it), an armed cron
+/// or heartbeat, an RLM child record. The ACP bridge asks before replacing a daemon of another
+/// build. The goal states kept only in memory are outside it, as for the passivation.
+pub(crate) async fn holds_work(engine: &dyn crate::engine::SessionEngine) -> bool {
+    !engine.can_passivate_worker().await
+}
+
 impl Worker {
     /// The command [`COMMAND`].
-    pub(crate) fn handle_ya_permissions(&self, payload: &Value) -> DaemonResponse {
+    pub(crate) async fn handle_ya_permissions(&self, payload: &Value) -> DaemonResponse {
         if let Err(response) = self.require_created(COMMAND) {
             return response;
+        }
+        // yusAgent (YA-10, ticket 29): what a daemon stop would lose, for any session.
+        if payload.get("action").and_then(Value::as_str) == Some("holds") {
+            let holds = holds_work(self.engine.as_ref()).await;
+            return response_success(None, COMMAND, Some(json!({ "holds": holds })));
         }
         let Some(engine) = self.agent_engine.as_ref() else {
             return response_failure(
@@ -403,7 +417,7 @@ impl Worker {
             _ => response_failure(
                 None,
                 COMMAND,
-                "the action must be \"respond\", \"set_mode\", \"get\", \"asker\" or \"others\"",
+                "the action must be \"respond\", \"set_mode\", \"get\", \"asker\", \"others\" or \"holds\"",
                 None,
             ),
         }
@@ -698,5 +712,148 @@ mod tests {
         let resumed = context(&with);
         assert_eq!(resumed.as_array().map(Vec::len), Some(3), "{resumed}");
         assert_eq!(resumed, context(&without));
+    }
+
+    /// yusAgent (YA-10, ticket 29): `holds` answers with the passivation's gate.
+    mod holds {
+        use std::sync::Arc;
+
+        use crate::agent_engine::tests::{
+            admit, faux_engine_with_settings, goal_admission_collector, FAUX_TEST_LOCK,
+        };
+        use crate::agent_engine::{AgentEngineConfig, AgentSessionEngine};
+        use crate::engine::EngineEvent;
+
+        use super::super::holds_work;
+
+        fn holds(engine: &Arc<AgentSessionEngine>) -> bool {
+            engine.runtime.block_on(holds_work(&**engine))
+        }
+
+        fn warm_engine() -> (Arc<AgentSessionEngine>, tempfile::TempDir) {
+            let (engine, dir) = faux_engine_with_settings(
+                &serde_json::json!({ "responses": [{"text": "warm ok"}, {"text": "turn reply"}] }),
+                u64::MAX,
+            );
+            let engine = Arc::new(engine);
+            let mut events: Vec<EngineEvent> = Vec::new();
+            admit(&engine, "warm".to_string(), &mut events);
+            (engine, dir)
+        }
+
+        fn set_background_bash(engine: &AgentSessionEngine, live: bool) {
+            *engine
+                .background_bash_probe
+                .lock()
+                .expect("background bash probe lock") = Some(Arc::new(move || live));
+        }
+
+        #[test]
+        fn a_session_at_rest_holds_nothing() {
+            let _faux = FAUX_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (engine, _dir) = warm_engine();
+            assert!(!holds(&engine));
+        }
+
+        #[test]
+        fn a_background_bash_holds_the_session() {
+            let _faux = FAUX_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (engine, _dir) = warm_engine();
+            set_background_bash(&engine, true);
+            assert!(
+                holds(&engine),
+                "a live background bash() is lost by a daemon stop"
+            );
+            set_background_bash(&engine, false);
+            assert!(!holds(&engine), "a finished bash() holds nothing");
+        }
+
+        #[test]
+        fn an_armed_cron_or_heartbeat_holds_the_session() {
+            let _faux = FAUX_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (engine, _dir) = warm_engine();
+            engine.set_registered_jobs_probe(Arc::new(|| true));
+            assert!(
+                holds(&engine),
+                "an armed job would not fire until the resume"
+            );
+        }
+
+        #[test]
+        fn a_goal_waiting_behind_a_background_bash_holds_the_session() {
+            let _faux = FAUX_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (engine, _dir) = faux_engine_with_settings(
+                &serde_json::json!({ "responses": [{"text": "warm ok"}, {"text": "turn reply"}] }),
+                u64::MAX,
+            );
+            let engine = Arc::new(engine);
+            let goal_work = goal_admission_collector(&engine);
+            let mut events: Vec<EngineEvent> = Vec::new();
+            admit(&engine, "warm".to_string(), &mut events);
+            set_background_bash(&engine, true);
+            admit(
+                &engine,
+                "/goal ship behind the bash handle".to_string(),
+                &mut events,
+            );
+            assert!(
+                goal_work.lock().unwrap().is_empty(),
+                "the goal continuation waits behind the bash handle"
+            );
+            assert!(
+                holds(&engine),
+                "the owed goal continuation is lost by a daemon stop"
+            );
+        }
+
+        #[test]
+        fn a_running_rlm_child_holds_the_session() {
+            let dir = tempfile::TempDir::new().unwrap();
+            let engine = Arc::new(
+                AgentSessionEngine::new(AgentEngineConfig {
+                    cwd: dir.path().to_path_buf(),
+                    agent_dir: dir.path().join("agent"),
+                    provider: None,
+                    model: None,
+                    api_key: None,
+                    thinking: None,
+                    session_dir: None,
+                    session_file: None,
+                    faux_script: None,
+                    supervisor_link: Some(crate::agent_engine::SupervisorLinkConfig {
+                        socket_path: dir.path().join("dead.sock"),
+                        active_session_id: "parent-session".to_string(),
+                        worker_token: "token".to_string(),
+                    }),
+                    telemetry_disabled: None,
+                    cron_store: None,
+                    queued_steering_probe: None,
+                })
+                .unwrap(),
+            );
+            let children = engine.children.clone().expect("children registry");
+            engine.runtime.block_on(async {
+                children
+                    .push_test_child(crate::rlm_children::RlmChildIdentity {
+                        rlm_child_id: "child-1".to_string(),
+                        active_session_id: "child-session".to_string(),
+                        session_id: None,
+                        session_name: "worker-1".to_string(),
+                    })
+                    .await;
+            });
+            assert!(
+                holds(&engine),
+                "a running RLM child is lost by a daemon stop"
+            );
+        }
     }
 }

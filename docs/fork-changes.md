@@ -1084,7 +1084,7 @@ Décisions : `docs/tickets/20-ya11-permissions.md`, section « PR 2 ». En manue
 | `crates/pa-daemon/src/agent_engine/lifecycle.rs` | modif. (fichier upstream, 6 lignes) | Initialisation du champ ; `build_session` appelle `create_session_with(config, wiring)` par une fermeture locale (le bloc de configuration n'est pas réindenté). | YA-11 |
 | `crates/pa-daemon/src/worker.rs` | modif. (fichier upstream, 2 lignes) | Installe les puits (événements de session, journal) à côté de `set_ya_header_sink`. | YA-11 |
 | `crates/pa-daemon/src/worker/create.rs`, `crates/pa-daemon/src/worker/connection.rs` | modif. (fichiers upstream, 2 lignes pour `create.rs`, 4 pour `connection.rs`) | `create` : la session sait-elle demander ; `attach` : ce client répond-il ; `detach` : retrait des demandes quand plus aucun client ne répond. | YA-11 |
-| `crates/pa-daemon/src/worker/commands.rs` | modif. (fichier upstream, 2 lignes) | Bras de dispatch `ya_permissions`. | YA-11 |
+| `crates/pa-daemon/src/worker/commands.rs` | modif. (fichier upstream, 2 lignes) | Bras de dispatch `ya_permissions`. Ticket 29 : `.await` ajouté sur cette même ligne (le gestionnaire est devenu asynchrone pour l'action `holds`). | YA-11, YA-10 (ticket 29) |
 | `crates/pa-daemon/src/state_getters.rs` | modif. (fichier upstream, 2 lignes) | `get_connection_state` porte `yaPermissions` pour une session qui sait demander (source du sélecteur ACP). | YA-11 |
 | `crates/pa-daemon/src/supervisor/worker_lifecycle.rs` | modif. (fichier upstream, 2 lignes) | `yaPermissionAsker` ajouté à la liste blanche des champs de la commande `create` durable : le worker la reçoit, et un worker relancé la rejoue. | YA-11 |
 | `crates/pa-types/src/daemon/command.rs` | modif. (fichier upstream, 11 lignes) | Variante `DaemonCommand::YaPermissions` (`activeSessionId`, `action`, le reste dans `rest`). | YA-11 |
@@ -1385,6 +1385,26 @@ Décision de Yusuf du 22/11/2026 et choix C1 à C9 du 23/11/2026 : `docs/tickets
 | `bench/smoke/run.py` | modif. (commentaire) | Le banc écrit toujours `"auto"` (C8). | YA-11 (ticket 30) |
 | `docs/yusAgent-cdc.md` | modif. | Ligne du journal du 22/11/2026 ; écarts notés à YA-11 (réglages par défaut sûrs) et YA-16 (build publié, point ouvert). | YA-11 (ticket 30) |
 | `.changes/ya-30-auto-defaut.md` | nouveau | Fragment de changelog. | YA-11 (ticket 30) |
+
+## Démon lancé par un autre build (YA-10, ticket 29)
+
+Décisions de Yusuf du 23/11/2026 : `docs/tickets/29-demon-autre-build.md`, §9 et §12. En mode ACP seulement, le pont compare l'`appVersion` du hello du démon à la sienne. Si elles diffèrent, il remplace le démon quand rien ne le tient (A3), et refuse sinon avec les deux versions et `yusagent shutdown`. Le TUI garde le comportement d'upstream (`interactive_mode/daemon.rs` intact). **Préfixe inchangé** : rien n'entre dans le prompt, les tools ou `yaRequest`.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-cli/src/ya_daemon_build.rs` | nouveau | Lecture du hello. Pour un démon d'un autre build (même protocole et même schéma, `appVersion` différent) : `list`. Une session vivante (avec `activeSessionId`) le tient si un client est attaché (attente de 3 s pour un pont qui vient de fermer), si l'un des champs `isSessionActive`, `isBashRunning`, `isRunningTools`, `hasRunningSubagents` ou `isQuotaParked` est vrai, ou si l'action `holds` du worker répond vrai ou échoue (démon d'avant ce ticket, P1a). Sinon `shutdown`, puis attente du socket vide (30 s au plus). Tests contre un superviseur factice (Unix). | YA-10 (ticket 29) |
+| `crates/pa-cli/src/lib.rs` | modif. (fichier upstream, 1 ligne + commentaire) | Déclare `ya_daemon_build`. | YA-10 (ticket 29) |
+| `crates/pa-cli/src/print_runtime.rs` | modif. (fichier upstream, 1 ligne + commentaire) | Le mode ACP appelle `replace_other_build` avant `ensure_daemon_running`. | YA-10 (ticket 29) |
+| `crates/pa-daemon/src/ya_permissions.rs` | modif. (fichier du fork) | `holds_work`, qui vaut `!can_passivate_worker()` : la garde de la passivation, réutilisée telle quelle (`bash()` en arrière-plan, travail RLM non réglé, dont une suite de goal différée, cron ou heartbeat armé, enfants RLM). Action `holds` de `ya_permissions`, servie pour toute session créée ; le gestionnaire devient asynchrone. Tests sur le moteur factice d'upstream. | YA-10 (ticket 29) |
+| `crates/pa-daemon/src/worker/commands.rs` | modif. (fichier upstream, notre ligne du ticket 20) | `.await` sur le bras `ya_permissions`. | YA-10 (ticket 29) |
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, 7 lignes + `#[cfg(test)]` du fork) | Champ `daemon_version` de `DaemonLink`, lu dans le hello à la connexion ; `None` dans le constructeur du test upstream `lost_replace_and_clear_ack_retries_clear_before_an_empty_session` ; `SCRIPTED_DAEMON_VERSION` pour `scripted_link`. | YA-10 (ticket 29) |
+| `crates/pa-daemon/src/acp/ya_history.rs`, `ya_history_tests.rs` | modif. (fichiers du fork) | `OLDER_DAEMON` devient `older_daemon(link)` : « may be from another build », avec la version du démon et celle du pont. Il reste un garde-fou pour ce que le contrôle du démarrage ne voit pas. | YA-10 (ticket 29) |
+| `bench/tools/capture/attached_clients_probe.py` | nouveau (outil du fork) | Vérification A : `attachedClients` dans les lignes de `list` d'un vrai démon. | YA-10 (ticket 29) |
+| `bench/tools/capture/daemon_build_check.py` | nouveau (outil du fork) | Script de contrôle, six cas sur de vrais binaires : build O (d'avant le ticket) et B' (copie de la branche avec une autre version). | YA-10 (ticket 29) |
+| `bench/tools/capture/server.py` | modif. (outil du fork) | Scénario `ya29-bash-long` : un seul `bash()` en arrière-plan de 40 s, sans réveil avant sa fin (cas 5 du script de contrôle). | YA-10 (ticket 29) |
+| `bench/tools/capture/c12_repro.py` | modif. (outil du fork) | Avec `--daemon-binary`, le démon ancien sans session est remplacé : le verdict vérifie la version du démon après le premier pont, et B est refusé par le C12 normal. | YA-10 (ticket 29) |
+| `docs/yusAgent-cdc.md` | modif. | Ligne du journal du 23/11/2026 ; point ouvert de YA-16 (le .vsix avec binaire doit garder le manifeste à côté du binaire). | YA-10 (ticket 29) |
+| `.changes/ya-29-demon-autre-build.md` | nouveau | Fragment de changelog. | YA-10 (ticket 29) |
 
 ## Code repris d'Unharnessed
 

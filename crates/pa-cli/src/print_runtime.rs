@@ -101,6 +101,8 @@ async fn acp_mode_main(options: &RunOptions) -> Result<i32, String> {
     // would target the TypeScript default socket and treat the schema
     // mismatch as a stale daemon).
     let socket_path = crate::config::resolve_daemon_socket_path(options.daemon_socket.as_deref());
+    // yusAgent (YA-10, ticket 29): a daemon of another build is replaced when nothing holds it.
+    crate::ya_daemon_build::replace_other_build(&socket_path).await?;
     crate::interactive_mode::ensure_daemon_running(&socket_path, &options.config.cwd)
         .await
         .map_err(|error| format!("{error:#}"))?;
