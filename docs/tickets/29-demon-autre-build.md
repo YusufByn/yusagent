@@ -274,3 +274,10 @@ Then Restart (stopping the daemon ends that work).
 **`c12_repro.py`** (binaire de la branche) :
 - sans `--daemon-binary` : **CONFORME**, B refusé dans les 4 cas (« This conversation is open in another window. ») ;
 - avec `--daemon-binary` (`beecf3f38`) : **CONFORME**. Le démon après le premier pont est celui de la branche (`0.10.2-continuous.56b37be13…`), et B est refusé dans les 4 cas par le C12 normal.
+
+## 16. Binaire final et contrôle manuel
+
+- **CI** : `gh pr checks 82 --required` sur `57072c563` : les 16 checks requis sont en succès, aucun n'est sauté.
+- **Binaire final** : `c052c7ad5` (run `ya-build-macos-arm64` 45171416079, artefact `yusagent-aarch64-apple-darwin-c052c7ad5564117ce2b95fb9275ad026d452646d`). `57072c563` ne touche que `docs/fork-changes.md` et n'a pas de build. Somme vérifiée, extrait dans `~/.cache/yusagent-bin/c052c7ad5564117ce2b95fb9275ad026d452646d/`, version `0.10.2-continuous.c052c7ad5564117ce2b95fb9275ad026d452646d`.
+- **Script de contrôle relancé sur ce binaire** (même commande que ci-dessus, avec `--binary` sur ce chemin) : **CONFORME**, 6 cas sur 6, mêmes résultats qu'au §15. Dans les cas 1 et 3, le démon est remplacé (le pid change et la version devient celle de `c052c7ad5…`). Dans les cas 2, 4 et 5, le pont refuse et le démon reste le même (pid inchangé). Dans le cas 6, le démon est gardé.
+- **.vsix** : pas de .vsix dans cette PR, car l'extension ne change pas (job `extension` sans paquet). Artefact `yusagent-vsix-96be9d1b89b934823be6cf3cf30e13d7094cba1c` du run 45152332356 (PR #81, tête `bdf881644`) : son `extensions/vscode/` est identique à `main` (`git diff bdf881644 origin/main -- extensions/vscode` vide).
