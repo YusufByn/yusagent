@@ -666,6 +666,13 @@ def main() -> None:
     resume_report = acp_resume.resume_cases(binary, cache, work, project, out)
     run_info["acp-resume"] = {"verdict": resume_report["verdict"]}
     print(f"acp-resume : {resume_report['verdict']} ({out / 'acp-resume' / 'resume-report.md'})")
+    # YA-10 (ticket 31) : skills, MCP et réglages changés en cours de session
+    # (`acp_live_changes.py`, dossier `acp-live/`) ; le run échoue à la fin si NON CONFORME.
+    acp_live = _load_sibling("ya_acp_live", "acp_live_changes.py")
+    live_report = acp_live.live_cases(binary, cache, work, project, out)
+    run_info["acp-live"] = {"verdict": live_report["verdict"],
+                            "duree_comparaison": live_report["duree_comparaison"]}
+    print(f"acp-live : {live_report['verdict']} ({out / 'acp-live' / 'live-report.md'})")
 
     (out / "run.json").write_text(json.dumps(run_info, indent=2, ensure_ascii=False) + "\n")
     analysis_env = {"PATH": "/usr/bin:/bin", "HOME": str(cache / "home"),
@@ -696,6 +703,8 @@ def main() -> None:
     print(f"extension : {out / 'extension-frames-report.md'}")
     if resume_report["verdict"] == "NON CONFORME":
         sys.exit(f"acp-resume NON CONFORME : {out / 'acp-resume' / 'resume-report.md'}")
+    if live_report["verdict"] == "NON CONFORME":
+        sys.exit(f"acp-live NON CONFORME : {out / 'acp-live' / 'live-report.md'}")
 
 
 def _load_sibling(name: str, file: str):
