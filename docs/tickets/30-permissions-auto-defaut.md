@@ -164,3 +164,18 @@ Puis, à la main : extension (bandeau ou étiquette selon A ou B, puis `"manual"
 - **C7, agent factice** de l'extension : défaut aligné sur le pont (`auto`, recommandé) ou gardé en `manual`.
 - **C8, banc** : garder l'écriture explicite de `"auto"` (recommandé : les A/B sur binaires d'avant ce ticket en dépendent) ou la retirer.
 - **C9, CDC** : ligne du journal dans la PR de code, avec les écarts à `docs/yusAgent-cdc.md:409` (« auto-approve désactivé » par défaut) et `:492` (YA-16, build publié). À confirmer pour le build publié : « auto » par défaut aussi, ou manuel pour les builds distribués.
+
+## PR #81 : push 1, tests seuls (23/11/2026)
+
+Commit `775a9379c` (avec le ticket et le fragment de changelog, demandé par le contrôle « Changelog fragment » : le test unitaire du cœur est sous `crates/pa-core/src/`). Cœur, extension et agent factice de `main`.
+
+- **`ci`** run 45148055075 : `test summary`, 4 binaires en échec, **les seuls** (les autres unités des 8 shards vertes) :
+  - `pa-core#lib` : `unset_is_auto` (`ya_permissions.rs:583`, mode `Manual`) ; `manual_without_asker_is_refused_with_the_exact_line_and_path` (`:633`, « (the default) » présent) ;
+  - `pa-cli#test:ya_permissions_e2e` : `print_without_setting_runs_in_auto_and_warns` et `rpc_without_setting_runs_in_auto` (refus au démarrage, `:217`) ; `global_manual_is_refused_before_any_request` et `project_settings_are_not_read` (« (the default) », `:199`) ; `global_auto_reaches_the_model_and_warns` vert ;
+  - `pa-cli#test:ya_permissions_acp_e2e` : `without_a_setting_the_session_opens_in_auto` (`currentValue` `manual`, `:666`) ; les 6 autres verts ;
+  - `pa-cli#test:ya_permissions_tui_pty_e2e` : `without_a_setting_the_tui_opens_in_auto` (pas d'étiquette à l'ouverture, `:524`) ; l'autre vert.
+  - `fmt`, `check + clippy`, Windows : verts.
+- **`ya-extension`** run 45148055322 :
+  - agent factice : 59/59 tests unitaires ; e2e 10/11, seul échec « étiquette D4 (ticket 30) » (`délai dépassé : permissions = auto`) ;
+  - vrai binaire : 14/16, seuls échecs « sans réglage (ticket 30) » (`délai dépassé : permissions = auto sans réglage`) et « auto : étiquette » (`délai dépassé : étiquette`, vérifiée en fin de cas, après la cellule) ; aucun processus restant.
+- Build macOS du commit : run 45147420584, succès.
