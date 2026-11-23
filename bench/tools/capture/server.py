@@ -204,6 +204,9 @@ SCENARIOS: dict[str, list[str]] = {
     "wake-stop-apres": [
         "h1 = bash('sleep 2; echo un')\nh2 = bash('sleep 20; echo deux')\nprint('LANCES')",
     ],
+    # YA-10 (ticket 29) : un seul bash() en arrière-plan, de 40 s, sans tour de réveil avant sa fin :
+    # la session est au repos mais tient du travail (action `holds`).
+    "ya29-bash-long": ["h = bash('sleep 40; echo fin')\nprint('LANCE')"],
     # Smoke bench (T06, YA-14) : chaque scénario résout sa tâche d'exemple en
     # quelques cellules, après la sonde réseau ; `smoke-fail` ne corrige rien.
     "smoke-probe": [NET_PROBE, READ_PROBE],

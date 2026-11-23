@@ -18,7 +18,8 @@ Cas :
      nouveau démon (`--resume`, `session/load`) ;
   4. démon B', une fenêtre B' ouverte (client attaché) : refus après l'attente, la fenêtre B'
      répond toujours ;
-  5. démon B', une conversation fermée avec un `bash()` en arrière-plan (20 s) : refus (`holds`) ;
+  5. démon B', une conversation fermée au repos avec un `bash()` en arrière-plan (40 s, scénario
+     `ya29-bash-long`) : refus (`holds`) ;
   6. démon B, même build : gardé.
 
 Usage :
@@ -316,11 +317,10 @@ def main() -> None:
         case.stop()
 
     # 5. Démon B', bash() en arrière-plan : refus (holds).
-    case = Case(out, cache, "5-bprime-bash", scenario="wake-stop-apres")
+    case = Case(out, cache, "5-bprime-bash", scenario="ya29-bash-long")
     try:
         case.conversation(prime, "P")
-        # Le premier bash() (2 s) finit et réveille l'agent ; le second (20 s) tourne encore.
-        time.sleep(6)
+        # Le bash() de 40 s tourne : pas de tour, pas de client, mais du travail (holds).
         quiet = wait_quiet(case.socket)
         before = daemon_id(case.socket)
         _, refused = case.start(binary, "B")

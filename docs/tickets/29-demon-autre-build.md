@@ -229,3 +229,48 @@ Une session vivante tient le démon si l'un de ces points est vrai :
 - `check + clippy (workspace)` : `clippy::unused_async` sur l'ébauche `holds_work`, qui n'avait pas d'`await` (`ya_permissions.rs:334`). Le correctif l'attend, la cause disparaît.
 - `windows cross-check + clippy` : `tokio::net::UnixListener` n'existe pas sous Windows (`ya_daemon_build.rs:92`). Le module de tests passe sous `#[cfg(all(test, unix))]`, comme les tests à socket Unix d'upstream (`crates/pa-cli/src/update_flow/legacy_restart.rs:470`).
 - `Changelog fragment` : pas encore de `.changes/ya-29-demon-autre-build.md`. Il arrive avec le push 2, comme aux tickets 28 et 30.
+
+## 15. Push 2 : correctif (`56b37be13`) et contrôles sur le binaire
+
+**CI du push 2** (run `ci` 45168693748) : 8 shards de test, `test summary`, `windows cross-check + clippy`, `fmt`, `e2e vrai binaire`, `Check changelog fragment` et `build-aarch64-apple-darwin` (run 45168685568) en succès. `check + clippy (workspace)` en échec sur un seul lint, `clippy::single_match_else`, dans le superviseur factice des tests (`ya_daemon_build.rs:293`, `match script.holds`). Corrigé au push 3 par un `if let … else`.
+
+**Binaire** : `0.10.2-continuous.56b37be13f257e470246bf102a0ec2b00aeed3c0`. Commande : `gh run download 45168685568`, `shasum -a 256 -c SHA256SUMS` OK, extrait dans `~/.cache/yusagent-bin/56b37be13f257e470246bf102a0ec2b00aeed3c0/`. Le push 3 ne change que des tests, des scripts et de la doc : ce binaire reste celui du correctif.
+
+**Préfixe** : inchangé.
+- `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/run.py --binary <bin> --out bench/tools/capture/runs/ya29-{main-beecf3f38,branche-56b37be13}` : exit 0 des deux côtés. Sur la branche, `prefix_paths_check` est **CONFORME** et `extension_frames_check` est **TOUT IDENTIQUE**.
+- `python3 -I bench/tools/capture/compare.py runs/ya29-main-beecf3f38 runs/ya29-branche-56b37be13 --all --out runs/ya29-compare.md` : **TOUT IDENTIQUE**.
+
+**Script de contrôle** : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/daemon_build_check.py --binary ~/.cache/yusagent-bin/56b37be13f257e470246bf102a0ec2b00aeed3c0/yusagent --other-binary ~/.cache/yusagent-bin/beecf3f38233a79f72e90ce6ca0ddf6d496def92/yusagent --out <dossier>` : **CONFORME**. B est la branche, O est `main` à `beecf3f38` (sans `holds`), B' est la copie de B avec la version `…-copie`.
+
+| Cas | Démon avant (version, pid) | Après | Pont B |
+|---|---|---|---|
+| 1. O sans session | O, 41645 | **B, 41662** | accepté, `session/new` OK |
+| 2. O, conversation fermée au repos (P1a) | O, 41679 | O, 41679 | refusé : « its worker cannot tell what it holds (a build from before this check) » |
+| 3. B', conversation fermée au repos | B', 41738 | **B, 41769** | accepté, et la conversation reprend sur le nouveau démon (`--resume` + `session/load` OK) |
+| 4. B', fenêtre B' ouverte | B', 41783 | B', 41783 | refusé après 3,5 s : « a client is attached » ; la fenêtre B' répond toujours à un prompt |
+| 5. B', `bash()` de 40 s en arrière-plan | B', 41824 | B', 41824 | refusé : « it holds work (a background bash(), a scheduled job or RLM work) » |
+| 6. B, même build | B, 41841 | B, 41841 | accepté, démon gardé |
+
+Texte complet d'un refus (cas 5, stderr du pont, qui est aussi ce que montre le panneau d'échec de l'extension) :
+
+```
+Error: A yusAgent daemon from another build is running on /private/tmp/ya-build-check/5-bprime-bash/d.sock.
+  daemon:        0.10.2-continuous.56b37be13f257e470246bf102a0ec2b00aeed3c0-copie
+  this yusagent: 0.10.2-continuous.56b37be13f257e470246bf102a0ec2b00aeed3c0
+It was kept because it still holds work:
+  - d6a18401fa11: it holds work (a background bash(), a scheduled job or RLM work)
+
+Run:
+  yusagent shutdown
+
+Then Restart (stopping the daemon ends that work).
+```
+
+**Premier lancement du script : NON CONFORME (cas 5), à cause du script et non du correctif.** Le cas 5 utilisait le scénario `wake-stop-apres` : deux `bash()` de 2 s et 20 s, et un tour de réveil de 15 s après le premier. Le script attendait la fin de ce tour avant de lancer B, ce qui laissait environ 2,6 s au `bash()` de 20 s (capture : cellule à 12:02:32,6, fin du tour de réveil à 12:02:49,7, fin du `bash()` à 12:02:52,6). Pendant ses 3 s d'attente, B a vu la session active, puis le `bash()` finir : `holds` est passé à faux, et le démon a été remplacé.
+- Diagnostic sur le même binaire, avec `list` et `holds` lus toutes les secondes : `holds` vaut `true` de 0,4 s à 19,9 s après la cellule, puis `false` dès 20,9 s. La garde de la passivation voit donc bien le `bash()`.
+- Correction : un scénario dédié dans `bench/tools/capture/server.py`, `ya29-bash-long`, avec un seul `bash()` de 40 s et sans réveil avant sa fin.
+- L'attente de 3 s porte sur tous les critères, pas seulement sur les clients attachés : un tour ou un `bash()` qui finit pendant ces 3 s laisse partir le démon. **Course résiduelle** : l'état peut changer entre la dernière lecture et `shutdown`. Un tour coupé par l'arrêt du démon est remis en file et repris au démarrage suivant (`crates/pa-daemon/src/worker/lifecycle.rs:105-131`).
+
+**`c12_repro.py`** (binaire de la branche) :
+- sans `--daemon-binary` : **CONFORME**, B refusé dans les 4 cas (« This conversation is open in another window. ») ;
+- avec `--daemon-binary` (`beecf3f38`) : **CONFORME**. Le démon après le premier pont est celui de la branche (`0.10.2-continuous.56b37be13…`), et B est refusé dans les 4 cas par le C12 normal.

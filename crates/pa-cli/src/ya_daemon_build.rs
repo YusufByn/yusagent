@@ -290,13 +290,14 @@ mod tests {
                             let sessions = script.lists[served.min(script.lists.len() - 1)].clone();
                             response["data"] = json!({ "sessions": sessions });
                         }
-                        "ya_permissions" => match script.holds {
-                            Some(holds) => response["data"] = json!({ "holds": holds }),
-                            None => {
+                        "ya_permissions" => {
+                            if let Some(holds) = script.holds {
+                                response["data"] = json!({ "holds": holds });
+                            } else {
                                 response["success"] = json!(false);
                                 response["error"] = json!("the action must be \"respond\", \"set_mode\", \"get\", \"asker\" or \"others\"");
                             }
-                        },
+                        }
                         "shutdown" => {}
                         other => panic!("unexpected command: {other}"),
                     }
