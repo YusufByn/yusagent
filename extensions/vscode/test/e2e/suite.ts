@@ -28,6 +28,9 @@ const probe = () => vscode.commands.executeCommand<Probe | undefined>("yusagent.
 const probeInput = (input: ProbeInput) => vscode.commands.executeCommand<Probe | undefined>("yusagent._test.probeInput", input);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const BOX = "Allow this Python cell to run?";
+// Ticket 30 (C1, option B) : l'étiquette discrète de « auto » sans sandbox, comme le TUI ; plus de bandeau d'alerte.
+const AUTO_BADGE = "auto · no sandbox";
+const OLD_BANNER = "Mode auto sans sandbox";
 
 /** Contrôle de Yusuf : des clics d'utilisateur, dans l'ordre ; chacun doit atteindre son bouton. */
 async function userClicks(...texts: string[]): Promise<void> {
@@ -176,7 +179,7 @@ const tests: [string, () => Promise<void>][] = [
       assert.deepEqual(normalize(received(control, lastPid()), { cwd: workspace, sessionId: "fake-session-1", prompt: "bonjour" }), fixtureFrames());
       const shown = await shows("Bonjour", "texte streamé affiché");
       assert.ok(shown.includes("bonjour"), "message de l'utilisateur affiché");
-      assert.ok(!shown.includes("Mode auto sans sandbox"), "pas de bandeau en manuel");
+      assert.ok(!shown.includes(AUTO_BADGE) && !shown.includes(OLD_BANNER), "ni étiquette ni bandeau en manuel");
       // PR 3, défauts 1 et 2 : aucun « Unharnessed » visible ; panneau du kernel masqué (non servi).
       assert.doesNotMatch(shown, /unharnessed/i);
       assert.ok(!shown.includes("Running servers") && !shown.includes("REPL variables"), "panneau du kernel masqué");
@@ -367,18 +370,21 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
-    "bandeau D4 : nouvelle conversation en auto, puis config_option_update en manuel",
+    "étiquette D4 (ticket 30) : auto par défaut comme le pont, étiquette discrète sans bandeau ; manuel sans étiquette, puis config_option_update",
     async () => {
-      setScenario(control, { permissions: "auto" });
-      await post({ type: "newChat", draft: { text: "", images: [] } });
-      await permissionsIs("auto");
-      await shows("Mode auto sans sandbox", "bandeau");
+      // Sans réglage, l'agent factice ouvre en auto, comme le pont (C7).
       setScenario(control, {});
       await post({ type: "newChat", draft: { text: "", images: [] } });
+      await permissionsIs("auto");
+      const shown = await shows(AUTO_BADGE, "étiquette");
+      assert.ok(!shown.includes(OLD_BANNER), "plus de bandeau d'alerte");
+      setScenario(control, { permissions: "manual" });
+      await post({ type: "newChat", draft: { text: "", images: [] } });
       await permissionsIs("manual");
+      await waitFor(async () => (await probe())?.text.includes(AUTO_BADGE) === false, "pas d'étiquette en manuel");
       await post({ type: "send", text: "auto", images: [] });
       await permissionsIs("auto");
-      await shows("Mode auto sans sandbox", "bandeau après config_option_update");
+      await shows(AUTO_BADGE, "étiquette après config_option_update");
     },
   ],
 ];

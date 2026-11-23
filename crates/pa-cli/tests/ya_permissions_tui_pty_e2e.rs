@@ -20,7 +20,12 @@
 //!
 //! Ticket 22: while a request waits, the loader says `Awaiting permission` (never `Executing`)
 //! and the cell's card shows no success mark; the allowed card ends in `✓`, the denied one in
-//! `✗`. Listed in `docs/fork-changes.md`.
+//! `✗`.
+//!
+//! Ticket 30 (decision of Yusuf, 22/11/2026): without a setting, the session opens in `auto`: the
+//! tray shows `auto · no sandbox` at once and a cell runs without a panel.
+//!
+//! Listed in `docs/fork-changes.md`.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -126,16 +131,18 @@ struct Lane {
 
 impl Lane {
     fn new() -> Self {
+        // No onboarding screen; no `permissions` key: the default, manual.
+        Self::with_settings(&json!({ "onboardingShown": true }))
+    }
+
+    /// With `settings` as the global `settings.json`.
+    fn with_settings(settings: &Value) -> Self {
         let home = tempfile::TempDir::new().expect("temp home");
         let agent_dir = home.path().join(".yusagent");
         std::fs::create_dir_all(&agent_dir).expect("agent dir");
         std::fs::create_dir_all(home.path().join("project")).expect("project");
-        // No onboarding screen; no `permissions` key: the default, manual.
-        std::fs::write(
-            agent_dir.join("settings.json"),
-            json!({ "onboardingShown": true }).to_string(),
-        )
-        .expect("settings.json");
+        std::fs::write(agent_dir.join("settings.json"), settings.to_string())
+            .expect("settings.json");
         let socket = home.path().join("daemon.sock");
         Lane {
             home,
@@ -494,4 +501,35 @@ fn the_tui_answers_switches_to_auto_and_back() {
         ["allow", "manual->auto", "auto->manual", "deny"],
         "{journal:?}"
     );
+}
+
+/// Ticket 30: no `permissions` key, the session opens in auto: the badge shows at once and a cell
+/// runs without a panel.
+#[test]
+fn without_a_setting_the_tui_opens_in_auto() {
+    let mut lane = Lane::with_settings(&json!({ "onboardingShown": true }));
+    lane.start_daemon();
+    let mut screen = lane.start_tui(&json!({ "engine": "faux", "responses": [
+        touch("call-default", "default.txt"),
+        { "text": "the default cell ran" },
+    ] }));
+    let project = lane.project();
+
+    screen.wait_for("project");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !screen.contents().contains(BADGE) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let opened = screen.contents();
+    assert!(
+        opened.contains(BADGE),
+        "the badge shows at the opening:\n{opened}"
+    );
+
+    screen.submit("create default.txt");
+    screen.wait_for("the default cell ran");
+    assert!(project.join("default.txt").exists(), "the cell ran");
+    let after = screen.contents();
+    assert!(!after.contains(PANEL), "no panel in auto:\n{after}");
+    assert!(lane.journal().is_empty(), "nothing journaled in auto");
 }

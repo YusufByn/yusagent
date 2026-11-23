@@ -6,12 +6,16 @@
 //! loopback server that plays the model (an `openai-responses` provider in `models.json`, as the
 //! capture bench does) and counts its connections. [`TEST_ENV`] is removed: `.cargo/config.toml`
 //! sets it to `auto` for the upstream tests.
-//! a. No setting: `-p` is manual and cannot ask, so it fails at startup with the exact line to
-//!    add and the path of the global settings, before any request to the model.
-//! b. A project's `.yusagent/settings.json` with `"permissions": "auto"` does not change that.
-//! c. RPC in manual fails the same way.
+//! Ticket 30 (decision of Yusuf, 22/11/2026): unset is `"auto"`.
+//! a. No setting: `-p` runs in auto: it reaches the model and prints the warning on stderr (C2).
+//! b. A project's `.yusagent/settings.json` is not read (D1): its `"auto"` does not lift a global
+//!    `"manual"`, its `"manual"` does not stop the default auto.
+//! c. RPC without a setting runs in auto the same way (warning on stderr, no refusal).
 //! d. Control: `"auto"` in the global settings reaches the model (the server gets a connection)
 //!    and prints the warning on stderr.
+//! e. `"manual"` in the global settings: `-p` cannot ask, so it fails at startup with the exact
+//!    line to change and the path of the global settings, before any request to the model (D6);
+//!    the message no longer says manual is the default (C5).
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -193,6 +197,10 @@ fn assert_refused(lane: &Lane, stderr: &str, code: i32) {
     );
     assert!(stderr.contains(LINE), "the exact line; stderr: {stderr}");
     assert!(
+        !stderr.contains("(the default)"),
+        "manual is not the default; stderr: {stderr}"
+    );
+    assert!(
         stderr.contains(&lane.global_settings().display().to_string()),
         "the path of the global settings; stderr: {stderr}"
     );
@@ -203,32 +211,68 @@ fn assert_refused(lane: &Lane, stderr: &str, code: i32) {
     );
 }
 
-/// a. No setting: manual, refused before any request.
-#[test]
-fn print_without_setting_is_refused_before_any_request() {
-    let lane = Lane::new(None, None);
-    let (stderr, code) = lane.run(&PRINT, None);
-    assert_refused(&lane, &stderr, code);
+/// A run that went through in auto: the model was reached (for `-p`), the warning is on stderr,
+/// and nothing was refused.
+fn assert_auto(lane: &Lane, stderr: &str, reached: bool) {
+    assert!(
+        !stderr.contains("permissions are \"manual\""),
+        "not refused; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(AUTO_WARNING),
+        "the warning; stderr: {stderr}"
+    );
+    if reached {
+        assert!(
+            lane.server.connections() >= 1,
+            "the model was reached; stderr: {stderr}"
+        );
+    }
 }
 
-/// b. A project's settings cannot turn the session to auto.
+/// a. No setting: auto, the model is reached, the warning is printed (C2).
 #[test]
-fn project_settings_cannot_turn_the_session_to_auto() {
+fn print_without_setting_runs_in_auto_and_warns() {
+    let lane = Lane::new(None, None);
+    let python = kernel_python();
+    let (stderr, _code) = lane.run(&PRINT, Some(&python));
+    assert_auto(&lane, &stderr, true);
+}
+
+/// b. A project's settings are never read for this setting (D1).
+#[test]
+fn project_settings_are_not_read() {
+    // The project's "auto" does not lift a global "manual".
     let auto = serde_json::json!({ "permissions": "auto" });
-    let lane = Lane::new(None, Some(&auto));
-    let (stderr, code) = lane.run(&PRINT, None);
-    assert_refused(&lane, &stderr, code);
-    // A global "manual" with the same project file: still manual.
     let manual = serde_json::json!({ "permissions": "manual" });
     let lane = Lane::new(Some(&manual), Some(&auto));
     let (stderr, code) = lane.run(&PRINT, None);
     assert_refused(&lane, &stderr, code);
+    // The project's "manual" does not stop the default auto.
+    let lane = Lane::new(None, Some(&manual));
+    let python = kernel_python();
+    let (stderr, _code) = lane.run(&PRINT, Some(&python));
+    assert_auto(&lane, &stderr, true);
 }
 
-/// c. RPC in manual: refused at startup.
+/// c. RPC without a setting: auto at startup, warned, not refused. The RPC client sends nothing
+/// (stdin is closed), so the model is not reached.
 #[test]
-fn rpc_without_setting_is_refused_before_any_request() {
+fn rpc_without_setting_runs_in_auto() {
     let lane = Lane::new(None, None);
+    let python = kernel_python();
+    let (stderr, _code) = lane.run(&RPC, Some(&python));
+    assert_auto(&lane, &stderr, false);
+}
+
+/// e. A global "manual": `-p` and RPC are refused at startup, before any request (D6).
+#[test]
+fn global_manual_is_refused_before_any_request() {
+    let manual = serde_json::json!({ "permissions": "manual" });
+    let lane = Lane::new(Some(&manual), None);
+    let (stderr, code) = lane.run(&PRINT, None);
+    assert_refused(&lane, &stderr, code);
+    let lane = Lane::new(Some(&manual), None);
     let (stderr, code) = lane.run(&RPC, None);
     assert_refused(&lane, &stderr, code);
 }

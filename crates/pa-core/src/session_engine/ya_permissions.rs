@@ -577,15 +577,16 @@ mod tests {
         PathBuf::from("/home/u/.yusagent/settings.json")
     }
 
+    /// Ticket 30 (decision of Yusuf, 22/11/2026): unset is `"auto"`.
     #[test]
-    fn unset_is_manual() {
+    fn unset_is_auto() {
         assert_eq!(
             mode_from(None, None, &path()),
-            Ok((PermissionMode::Manual, ModeSource::Default))
+            Ok((PermissionMode::Auto, ModeSource::Default))
         );
         assert_eq!(
             mode_from(Some(&json!({"other": 1})), None, &path()),
-            Ok((PermissionMode::Manual, ModeSource::Default))
+            Ok((PermissionMode::Auto, ModeSource::Default))
         );
     }
 
@@ -628,6 +629,8 @@ mod tests {
             .to_string();
         assert!(error.contains("/home/u/.yusagent/settings.json"), "{error}");
         assert!(error.contains("\n  \"permissions\": \"auto\"\n"), "{error}");
+        // Ticket 30 (C5): manual is no longer the default.
+        assert!(!error.contains("(the default)"), "{error}");
     }
 
     #[test]
