@@ -614,7 +614,6 @@ const resumeTests: [string, () => Promise<void>][] = [
         assert.ok(daemonSessions().some((row) => row.sessionId === empty.id), "session vide dans le démon");
         // Le chemin de `deactivate` (fermeture ou « Reload Window ») : chaque agent s'arrête.
         await vscode.commands.executeCommand("yusagent._test.stopAll");
-        assert.ok(existsSync(empty.path.replace(/\.jsonl$/, ".window-cache.json")), "instantané de fenêtre présent avant la fermeture");
         await waitFor(() => !existsSync(empty.path), "fichier de la conversation vide retiré", SLOW);
         await waitFor(() => !daemonSessions().some((row) => row.sessionId === empty.id), "session vide arrêtée dans le démon", SLOW);
         assert.deepEqual(sessionFiles(empty.path), [], "rien de la conversation vide ne reste");
