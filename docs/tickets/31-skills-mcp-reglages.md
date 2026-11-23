@@ -567,3 +567,30 @@ Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `w
 3. **Fichiers upstream ajoutés validés** : `acp/mod.rs`, `session_engine/mod.rs`, `session_engine/engine.rs`, `session_engine/wiring.rs`.
    - Tous seront listés avec `fichier:ligne` dans `docs/fork-changes.md`, au commit de doc.
    - `engine.rs` touche la zone du prompt d'ouverture : `compare_capture_prompts.py` doit donner TOUT IDENTIQUE sur les cas existants (§7.2, point 2).
+
+## 8. Réalisation (PR #83)
+
+### 8.1 Push 1 : tests seuls (`1f55754f0`, run `ci` 45196437703)
+
+- **Rouges sur leur assertion, seuls échecs du run** : tests 1, 2, 3, 4, 14 (shard 6), 6, 7, 8, 12 (shard 8), 9, 10, 11 (shard 5). fmt, clippy et la vérification de compilation sont verts.
+- **Verts** : test 5 (shard 6) et test 13 (shard 5, constat du §1.6 confirmé).
+- **Build macOS du push 1** : aucun runner (« The job was not acquired by Runner of type hosted even after multiple attempts »), relancé une fois, second échec identique. Le script `acp_live_changes.py` a tourné sur le binaire de `main` à `9f40fe5d8`, équivalent faute de code du produit (décision de Yusuf) :
+  - NON CONFORME sur L1, L2, L3, L4 et L6 : `-32601` ;
+  - L5 conforme : une seule `invalidation` `resume_prefix_change`, `parts: ["system"]`.
+  - L3 est NON CONFORME parce qu'il exige que ses deux appels réussissent. C'est attendu (décision de Yusuf : L3 reste tel quel). Sortie jointe à la PR.
+
+### 8.2 Push 2 : écarts au plan validé (§7), signalés à Yusuf
+
+1. **Écrans dans le pont, pas dans `pa-core`.** La logique des skills et des réglages est dans `crates/pa-daemon/src/acp/ya_resources.rs` et `ya_resources/settings.rs`, avec la seule API publique de `pa-core` (`load_resources`, `SettingsManager`, `FileSettingsStorage`, `InMemorySettingsStorage`, `set_global_resource_array`). Le §7.2 prévoyait `crates/pa-core/src/skills/ya_list.rs` : cela aurait demandé une déclaration de plus dans `skills/mod.rs` (upstream).
+2. **`engine.rs` : 15 lignes au lieu d'environ 4.** `rustfmt` étale l'appel de `Tracker::at_creation` sur 13 lignes. `config` étant déjà en partie déplacé à cet endroit, ses champs sont passés un à un.
+3. **`acp/daemon.rs` : 11 lignes au lieu de 6.** L'aiguillage prend 9 lignes, sur le modèle de celui de `ya_history`.
+4. **Règle de `compaction.enabled`.** Le fichier de réglages s'impose quand sa valeur a changé depuis la dernière lecture ; sinon, le réglage vivant (`set_auto_compaction_enabled`) reste. Une session sans suivi (construite hors de `create_session_with`) ne lit pas le disque. Raison : le test d'upstream `saved_percentage_applies_to_existing_sessions_without_changing_manual_budgets` (`crates/pa-core/src/session_engine/compaction_threshold_tests.rs:108`) règle `enabled` en mémoire sans écrire le fichier.
+5. **`ya_prompt_v2.rs`** (fichier du fork) : `shown_skill` sort une ligne de l'inventaire, pour que les annonces reprennent exactement le format du prompt. La sortie de `skills_inventory` est inchangée.
+6. **Défauts de `_yus/settings/get`** : seul celui de `compaction.enabled` (`true`, `get_compaction_enabled`) est donné ; les autres sont `null`. À compléter en X3 si l'écran en a besoin.
+
+### 8.3 Limites (lues ou déduites, non mesurées)
+
+- Un skill Python modifié après son installation en cours de session n'est vu qu'au redémarrage du kernel (§3.2).
+- La relecture du disque à chaque prompt passe par `load_resources`. Un paquet configuré manquant serait installé au prompt suivant, comme à la création (`crates/pa-core/src/packages/resolve/manager.rs:129`, « installing missing configured package sources »).
+- Une annonce mise en file avant un tour lancé par l'agent (avis `[bash-done]`, `admission.rs:46`) est la première ligne de ce tour. L'origine du tour (`ya_turns::origin_of`) pourrait alors perdre son genre (`bash`). Déduit, à vérifier.
+- Une session en prompt v1 reçoit ses annonces au format et avec le filtre de l'inventaire v2.
