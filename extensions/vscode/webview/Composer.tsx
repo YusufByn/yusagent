@@ -522,6 +522,7 @@ export function Composer({
               />
             )}
             {pickers && pickers.fast !== null && <FastToggle on={pickers.fast} />}
+            {config?.permissions === "auto" && <AutoBadge />}
             <span className="composer-spacer" />
             {config && chat.usage && <UsageRing usage={chat.usage} empty={chat.entries.length === 0} />}
             {chat.goal && phase && <GoalPill goal={chat.goal} phase={phase} lit={lit} />}
@@ -995,6 +996,24 @@ function ModelButton({
       <span className="chip-label">{current?.name ?? model.current}</span>
       <IconChevronDown className="chip-chevron" />
     </button>
+  );
+}
+
+/**
+ * yusAgent (ticket 30, C1 option B): "auto" without a sandbox, a discreet badge, as the TUI's
+ * (`crates/pa-tui/src/ya_permission_panel.rs`, `AUTO_BADGE`), in place of the D4 banner. Not
+ * clickable in this ticket; the full text in its tip, as the TUI's `/permissions auto` note.
+ */
+function AutoBadge() {
+  return (
+    <span
+      className="ya-auto-badge"
+      role="status"
+      data-tip="Permissions: auto. Tool calls run without asking, with your user's rights (no sandbox)."
+      data-tip-align="start"
+    >
+      auto · no sandbox
+    </span>
   );
 }
 

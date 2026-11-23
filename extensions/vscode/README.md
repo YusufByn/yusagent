@@ -9,7 +9,7 @@ Base : l'extension d'Unharnessed (MIT, `github.com/unharnessed-agent/Unharnessed
 - **Une conversation = un processus**, lancé dans le premier dossier du workspace. Sans dossier ouvert, rien ne démarre.
 - **Connexion** : pas encore dans l'extension. Une fois, dans un terminal : `yusagent`, puis `/login`.
 - **Sélecteurs** de modèle et d'effort : rien n'est envoyé à l'ouverture, seulement quand on change une valeur.
-- **Bandeau** « Mode auto sans sandbox » quand l'agent annonce `permissions` = `auto`.
+- **Étiquette** « auto · no sandbox » dans la barre du compositeur quand l'agent annonce `permissions` = `auto`, le défaut du binaire (ticket 30). Passer en manuel : `"permissions": "manual"` dans `~/.yusagent/settings.json`, puis une nouvelle conversation.
 - **Plantage** : pas de relance automatique ; la fin du journal du binaire s'affiche, avec « Restart ».
 - **Arrêt** : fin de stdin, puis SIGKILL au bout de 10 s ; la session reste dans le démon, qui la met en veille après 90 min.
 
