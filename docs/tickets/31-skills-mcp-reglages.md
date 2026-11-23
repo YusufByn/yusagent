@@ -558,3 +558,12 @@ Lignes upstream ajoutées (commentaire `yusAgent` compris) :
 | `bench/tools/capture/run.py` | après l'appel d'`acp_resume` (`:662-698`) | environ 8 | commit f |
 
 Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `wire_events.rs`. Tous listés dans `docs/fork-changes.md` (commit g).
+
+### 7.5 Décisions de Yusuf sur les §7.3 et §7.4 (23/11/2026)
+
+1. **`compaction.enabled` relu sur disque** dans `wiring.rs`, comme `thresholdPercent`, avec le test 11 réécrit (`compaction_disabled_in_the_settings_file_applies_without_restart`). `_yus/settings/set` devient une simple écriture du fichier.
+   - **Candidat à une PR upstream plus tard** : la relecture de `compaction.enabled` sur disque.
+2. **Notice** : `session_info_update` avec `_meta["_yus/notice"]`, publiée par le producteur comme `turnStart`, rejouée à `session/load` par `ya_history.rs`.
+3. **Fichiers upstream ajoutés validés** : `acp/mod.rs`, `session_engine/mod.rs`, `session_engine/engine.rs`, `session_engine/wiring.rs`.
+   - Tous seront listés avec `fichier:ligne` dans `docs/fork-changes.md`, au commit de doc.
+   - `engine.rs` touche la zone du prompt d'ouverture : `compare_capture_prompts.py` doit donner TOUT IDENTIQUE sur les cas existants (§7.2, point 2).
