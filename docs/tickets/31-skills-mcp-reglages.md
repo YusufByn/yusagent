@@ -467,3 +467,94 @@ L'annonce passe par `queue_next_turn_row` (`admission.rs:201-208`), et non par `
 
 - **Ticket 32, « identité yusAgent »** : les noms Unharnessed déjà sur `main`, à passer à yusAgent comme dans la décision 1. Cela couvre `_unharnessed/sessions/delete` du ticket 28 et tout le reste : méthodes, clés, chaînes, identifiants, dont `_meta.unharnessed`, le nom `saved` et `turnStart` si Yusuf les range dans l'identité. Constat d'abord, avec la liste `fichier:ligne`.
 - **Ticket 33, « invalidations à la reprise non vues par l'empreinte »** : `masking.*`, `harnessRefinements` et `cacheRetention` changés avant une reprise ne sont pas journalisés (§3.5). Constat d'abord.
+
+## 7. Plan des pushs de R3 (validé par Yusuf le 23/11/2026, avec trois ajouts)
+
+Branche `ya-31-skills-mcp-reglages`. La PR s'ouvre **prête dès le push 1** : un run en brouillon saute les jobs lourds.
+
+### 7.1 Push 1 : tests seuls, plus le ticket et le script de contrôle
+
+Aucun code du produit et aucune ébauche : les tests passent par le binaire (ACP), par le disque ou par l'API du moteur qui existe déjà.
+
+| Commit | Contenu | Attendu au run du push 1 |
+|---|---|---|
+| 1 | ce ticket | — |
+| 2 | `crates/pa-core/tests/prefix_stability.rs` (vraie session, vrai kernel, serveur local ; en CI, échoue si le kernel manque, `:175-179`) : tests 1 à 5 et 14 | **rouges sur leur assertion** : 1, 2, 3, 4, 14 ; **vert** : 5 |
+| 3 | `crates/pa-cli/tests/ya_resources_acp_e2e.rs` et `ya_settings_acp_e2e.rs` (vrai binaire, serveur local qui joue le modèle) : tests 6 à 12 | **rouges** : 6 à 10 et 12 sur la forme de la réponse ou le texte exact, car le pont répond aujourd'hui `-32601` ; 11 sur la compaction (§7.3) |
+| 4 | `crates/pa-daemon/tests/ya_announce_path_e2e.rs` (modèle : `ya_permissions_same_requests_e2e.rs`) : test 13 | **vert** (constat du §1.6 confirmé) ; s'il est rouge, arrêt et retour vers Yusuf avant tout code |
+| 5 | `bench/tools/capture/acp_live_changes.py`, autonome (`run.py` ne l'appelle pas encore) | lancé par Claude Code sur le binaire du push 1 : NON CONFORME sur L1, L2, L4 et L6 ; sortie jointe à la PR |
+
+Run attendu : seuls les tests 1 à 4, 6 à 12 et 14 échouent, chacun sur son assertion. fmt et clippy sont verts. Le job `real-binary` ne tourne pas : aucun chemin de son filtre n'est touché. Un commentaire de la PR liste ces échecs attendus.
+
+### 7.2 Push 2 : le code, un sujet par commit
+
+| Commit | Contenu | Tests au vert |
+|---|---|---|
+| a | annonces, moteur : `session_engine/ya_resource_notice.rs` (diff, textes du §3.2, ligne `ya-resources-changed`, durée dans la trace) et les points d'accroche du §7.4 | 1 à 5, 14 |
+| b | annonces, pont : `acp/ya_notice.rs` (`_yus/notice`, §7.4) ; rejeu à `session/load` dans `ya_history.rs` (fichier du fork) | 12, et la moitié « notice » du 7 |
+| c | skills : `skills/ya_list.rs`, `acp/ya_resources.rs` (`_yus/skills/*`), aiguillage | 6, 7 |
+| d | MCP : `_yus/mcp/{list,set_token,logout}` dans `ya_resources.rs` | 8 |
+| e | réglages : `acp/ya_settings.rs` (liste blanche `retry.*`, `auxiliaryModel`, `compaction.enabled`), écriture du global (fonction du fork), `compaction.enabled` relu à chaque décision (§7.3) | 9, 10, 11 |
+| f | appel d'`acp_live_changes.py` dans `run.py`, comme `acp-resume` | — |
+| g | doc : `docs/fork-changes.md` (fichiers upstream du §7.4), journal du CDC (décisions du 23/11, écart `queue_next_turn_row` contre `AppendCustomMessage`), réalisation dans ce ticket | — |
+
+Run attendu : tous les checks requis verts. `real-binary` tourne (`crates/pa-daemon/src/acp/` change) et l'extension, inchangée, reste verte.
+
+**Après le push 2, avant la remise**, Claude Code lance sur le binaire de la branche (`ya-build-macos-arm64.yml`, `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`). Les sorties sont jointes à la PR.
+1. `run.py`, qui inclut `acp_live_changes.py` : L1 à L6 CONFORME, médiane et maximum de la durée de comparaison.
+2. `compare_capture_prompts.py` entre `main` et la branche : TOUT IDENTIQUE sur les cas existants.
+3. **Ajout 1 (le pont change)** : `acp_frames.py --binary <main>/yusagent --out <scratch>/frames-main` et `acp_frames.py --binary <branche>/yusagent --out <scratch>/frames-branche`, puis `python3 -I bench/tools/capture/compare_frames.py <scratch>/frames-branche --against <scratch>/frames-main`.
+   - Attendu : `écarts : 0`. Aucun cas d'`acp_frames.py` ne change de skills ni de MCP, donc aucune notice ne part.
+   - Si un cas en produit une, elle est déclarée par `--expect <chemin de clé>` et la raison est notée dans la PR.
+
+Ensuite, contrôle de Yusuf au TUI (§5.4). Merge seulement sur `gh pr checks` vert du dernier commit.
+
+Risque à surveiller : le test 14 installe le skill de test, qui demande `hatchling`. Pris dans le cache de `uv`, rempli par `ci.yml:344`, sinon sur le réseau. Une panne réseau avant compilation est une panne d'infrastructure : une relance du job seul, notée dans la PR.
+
+### 7.3 Ajout 2 : voir le test 11 rouge sur la compaction, pas sur `-32601`
+
+**Une entrée existe déjà : le fichier `~/.yusagent/settings.json` lui-même.**
+- `thresholdPercent` y est déjà relu à chaque décision de compaction. Commentaire du code : « another client's settings save applies to an already-running session » (`crates/pa-core/src/session_engine/wiring.rs:166-178`).
+- `enabled`, lui, reste celui de la création (`auto_compaction_enabled`, `wiring.rs:160-165`, réglé une fois en `engine.rs:1046-1056`).
+- La commande RPC d'upstream `set_auto_compaction` écrit aussi le fichier avant le réglage en mémoire (`crates/pa-daemon/src/rpc/commands.rs:537-545`) : le fichier est bien la source.
+
+**Test 11 réécrit** : `compaction_disabled_in_the_settings_file_applies_without_restart`.
+- Session ACP ouverte, prompt 1.
+- Écriture directe de `"compaction": {"enabled": false}` dans le fichier global.
+- Le serveur local annonce un usage proche de la fenêtre, puis prompt 2.
+- Attendu : aucune requête de compaction.
+- Aujourd'hui, la compaction part, donc **rouge sur l'assertion qu'il doit garder**.
+- Il passe au vert si `enabled` est relu à chaque décision, comme `thresholdPercent`.
+
+`_yus/settings/set` n'est alors qu'une écriture du fichier. Son refus et son écriture restent couverts par les tests 9 et 10, plus un cas d'écriture ajouté au 10.
+
+**Conséquence sur le plan** : `compaction.enabled` n'est plus appliqué par `set_compaction_settings` depuis le pont. Il est relu sur disque dans `wiring.rs`, ce qui est une **modification d'upstream** (§7.4) à valider. Elle vaut aussi pour le TUI et pour une édition à la main, comme `thresholdPercent`.
+
+### 7.4 Ajout 3 : fichiers upstream touchés, lignes exactes
+
+**`wire_events.rs` n'est pas touché.**
+- La boucle des événements du pont ajoute déjà les mises à jour des modules du fork (`updates.extend(ya_permissions.updates(&event))`, `crates/pa-daemon/src/acp/daemon.rs:404`).
+- Un module du fork `acp/ya_notice.rs` fait de même : il repère le `message_start` de la ligne `ya-resources-changed` et rend une mise à jour.
+- Forme de la notice : `session_info_update` avec `_meta["_yus/notice"] = {kind: "resources", details}`, publiée par le producteur, comme `turnStart` (`ya_turns.rs:213-231`). Elle suit ainsi l'ordre et le tampon d'ouverture des autres mises à jour.
+- Une notification JSON-RPC à part passerait hors du producteur. Elle sortirait de l'ordre (`eventSequence`) et du tampon tant que `session/new` n'a pas répondu (`producer.rs:112-135`).
+- Le rejeu à `session/load` passe par `ya_history.rs`, fichier du fork.
+
+Lignes upstream ajoutées (commentaire `yusAgent` compris) :
+
+| Fichier | Où | Lignes | Pourquoi |
+|---|---|---|---|
+| `crates/pa-core/src/session_engine/admission.rs` | avant `:46` (`prompt_injected_message`) et avant `:145` (prompt de l'utilisateur), juste avant `prompt_messages.extend(self.take_next_turn_rows().await)` | 2 × 2 = **4** | comparer avec le disque et mettre l'annonce en file avant de vider la file |
+| `crates/pa-daemon/src/acp/daemon.rs` | après `:404` | **2** | `updates.extend(super::ya_notice::updates(&event));` |
+| `crates/pa-daemon/src/acp/daemon.rs` | avant `:1152` (`"session/set_config_option"`), sur le modèle de l'arm `ya_history` (`:1142-1151`) | **4** | aiguillage de `_yus/skills/*`, `_yus/mcp/*` et `_yus/settings/*` vers `ya_resources` |
+| `crates/pa-daemon/src/acp/mod.rs` | après `:19` | **4** | `mod ya_notice;` et `mod ya_resources;` (`ya_settings` est un sous-module de `ya_resources`) |
+
+**Fichiers upstream que le plan validé ne nommait pas**, nécessaires à la décision 2. Le moteur doit savoir ce que le modèle a reçu à l'ouverture, et rien ne garde la liste MCP du prompt :
+
+| Fichier | Où | Lignes | Pourquoi |
+|---|---|---|---|
+| `crates/pa-core/src/session_engine/mod.rs` | après `:70` ; après `:212` ; après `:282` | **6** | `pub mod ya_resource_notice;` ; champ `ya_known_resources` à côté de `ya_tool_family` (même précédent, YA-03) ; son initialisation |
+| `crates/pa-core/src/session_engine/engine.rs` | avant `:781` (copie de `generic_mcp_servers`, déplacé en `:814`) ; après `:1076` (`set_skills`) | **4** | inscrire les skills visibles et les serveurs MCP du prompt d'ouverture |
+| `crates/pa-core/src/session_engine/wiring.rs` | `:160-165` (corps d'`auto_compaction_enabled` : 1 ligne au lieu de 4) ; dans le bloc `if let` de `:172-176` | **environ 5** | §7.3 : `enabled` relu sur disque comme `thresholdPercent` |
+| `bench/tools/capture/run.py` | après l'appel d'`acp_resume` (`:662-698`) | environ 8 | commit f |
+
+Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `wire_events.rs`. Tous listés dans `docs/fork-changes.md` (commit g).
