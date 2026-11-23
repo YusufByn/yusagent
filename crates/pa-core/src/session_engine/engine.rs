@@ -778,6 +778,19 @@ pub async fn create_session_with(
                 &model_prompts.errors,
             ));
     }
+    // yusAgent (YA-10, ticket 31): what the opening prompt lists (`ya_resource_notice`).
+    let ya_resources = super::ya_resource_notice::Tracker::at_creation(
+        &cwd,
+        &config.agent_dir,
+        &config.additional_skill_paths,
+        &config.extra_builtin_skill_overrides,
+        &config.generic_mcp_servers,
+        config.rlm_depth,
+        conversation_log.as_deref(),
+        &resources.skills,
+        &model_visible_skills,
+        &generic_mcp_servers,
+    );
     let system_prompt = crate::prompts::system_prompt::build_system_prompt(
         &crate::prompts::system_prompt::BuildSystemPromptOptions {
             custom_prompt: resources.system_prompt.clone(),
@@ -1074,6 +1087,8 @@ pub async fn create_session_with(
     // inventory (TS `_expandSkillCommand` expands from the loader); the
     // model-visible list only shapes the prompt, pre-import, and counts.
     session.set_skills(resources.skills.clone());
+    // yusAgent (YA-10, ticket 31): the announcements of skills and MCP changes.
+    session.ya_set_resource_tracker(ya_resources);
     session.set_image_model_router(config.image_model_router.clone());
     // The semantic-edge handoff: the daemon's child registry and retry
     // park read the recorder; the side question keeps the pre-semantic

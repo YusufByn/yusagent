@@ -69,6 +69,8 @@ pub mod ya_request;
 pub mod ya_session_id_header;
 // yusAgent (YA-03): native tools by model family, frozen per session.
 pub mod ya_tool_family;
+// yusAgent (YA-10, ticket 31): skills and MCP changes announced at the end of the history.
+pub mod ya_resource_notice;
 
 mod admission;
 mod compaction_arms;
@@ -210,6 +212,8 @@ pub struct AgentSession {
     /// yusAgent (YA-03): the model family the session's tools were chosen for
     /// (`ya_tool_family`); a model change to another family is refused.
     ya_tool_family: std::sync::OnceLock<ya_tool_family::ToolFamily>,
+    /// yusAgent (YA-10, ticket 31): what the model was told of skills and MCP servers.
+    ya_resources: std::sync::Mutex<Option<ya_resource_notice::Tracker>>,
 }
 
 impl AgentSession {
@@ -280,6 +284,7 @@ impl AgentSession {
             agent_dir: None,
             compaction_flight: tokio::sync::Mutex::new(()),
             ya_tool_family: std::sync::OnceLock::new(),
+            ya_resources: std::sync::Mutex::new(None),
         };
         this.ensure_harness_digest_context().await?;
         Ok(this)
