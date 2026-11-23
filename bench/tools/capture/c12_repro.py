@@ -13,15 +13,16 @@ session, puis la fenêtre B lance `--resume <fichier>` et `session/load` :
 
 Avec `--daemon-binary`, le démon est lancé d'abord depuis ce binaire (un démon plus ancien que les
 ponts, comme après un changement de binaire sans `yusagent shutdown`) ; les ponts restent ceux de
-`--binary`.
+`--binary`. Depuis le ticket 29, le premier pont remplace ce démon, qui n'a pas de session : les
+quatre cas tournent sur un démon de `--binary`.
 
 Usage :
     DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I \\
       bench/tools/capture/c12_repro.py --binary <yusagent> [--daemon-binary <yusagent ancien>] \\
       --out <dossier neuf>
 
-Verdict : CONFORME si B est refusé dans les quatre cas ; avec `--daemon-binary`, le refus doit en
-plus dire que le démon est plus ancien et nommer `yusagent shutdown`. Code de sortie 0 si
+Verdict : CONFORME si B est refusé dans les quatre cas ; avec `--daemon-binary`, le démon doit en
+plus avoir été remplacé par un démon de `--binary` (ticket 29 : `appVersion` du hello). Code de sortie 0 si
 CONFORME, 1 sinon. Aucun modèle réel. macOS (sandbox-exec) requis ; bibliothèque standard
 uniquement.
 """
@@ -33,6 +34,7 @@ import importlib.util
 import json
 import os
 import shutil
+import socket as socket_module
 import subprocess
 import sys
 import time
@@ -70,6 +72,19 @@ def refusal(response: dict | None) -> str | None:
         return None
     error = response["error"]
     return str((error.get("data") or {}).get("details") or error.get("message"))
+
+
+def hello_version(path: Path) -> str | None:
+    """L'`appVersion` du hello du démon (ticket 29)."""
+    sock = socket_module.socket(socket_module.AF_UNIX)
+    sock.settimeout(10)
+    try:
+        sock.connect(str(path))
+        return json.loads(sock.makefile("r", encoding="utf-8").readline()).get("appVersion")
+    except OSError:
+        return None
+    finally:
+        sock.close()
 
 
 def main() -> None:
@@ -131,6 +146,8 @@ def main() -> None:
     try:
         # Une conversation avec un tour, fermée (son worker reste dans le démon).
         p, psid, s = new_bridge("P")
+        info["demon_apres_P"] = hello_version(socket)
+        print(f"démon après le premier pont : {info['demon_apres_P']}")
         p.prompt(psid, "un")
         p.close()
         path, fid = s["path"], s["sessionId"]
@@ -168,11 +185,10 @@ def main() -> None:
         server.stop()
 
     def ok(case: dict) -> bool:
-        if case["B"] == "ACCEPTÉ":
-            return False
-        return not old or ("older than this yusagent" in case["B"] and "yusagent shutdown" in case["B"])
+        return case["B"] != "ACCEPTÉ"
 
-    conforme = len(info["cas"]) == 4 and all(ok(case) for case in info["cas"].values())
+    replaced = not old or info.get("demon_apres_P") == version
+    conforme = replaced and len(info["cas"]) == 4 and all(ok(case) for case in info["cas"].values())
     info["conforme"] = conforme
     (out / "c12-repro.json").write_text(json.dumps(info, indent=2, ensure_ascii=False) + "\n")
     print("CONFORME" if conforme else "NON CONFORME")

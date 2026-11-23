@@ -330,17 +330,20 @@ pub(crate) fn install(
 /// background `bash()`, unsettled RLM work (a goal continuation waits behind it), an armed cron
 /// or heartbeat, an RLM child record. The ACP bridge asks before replacing a daemon of another
 /// build. The goal states kept only in memory are outside it, as for the passivation.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn holds_work(engine: &dyn crate::engine::SessionEngine) -> bool {
-    let _ = engine;
-    false
+    !engine.can_passivate_worker().await
 }
 
 impl Worker {
     /// The command [`COMMAND`].
-    pub(crate) fn handle_ya_permissions(&self, payload: &Value) -> DaemonResponse {
+    pub(crate) async fn handle_ya_permissions(&self, payload: &Value) -> DaemonResponse {
         if let Err(response) = self.require_created(COMMAND) {
             return response;
+        }
+        // yusAgent (YA-10, ticket 29): what a daemon stop would lose, for any session.
+        if payload.get("action").and_then(Value::as_str) == Some("holds") {
+            let holds = holds_work(self.engine.as_ref()).await;
+            return response_success(None, COMMAND, Some(json!({ "holds": holds })));
         }
         let Some(engine) = self.agent_engine.as_ref() else {
             return response_failure(
@@ -414,7 +417,7 @@ impl Worker {
             _ => response_failure(
                 None,
                 COMMAND,
-                "the action must be \"respond\", \"set_mode\", \"get\", \"asker\" or \"others\"",
+                "the action must be \"respond\", \"set_mode\", \"get\", \"asker\", \"others\" or \"holds\"",
                 None,
             ),
         }

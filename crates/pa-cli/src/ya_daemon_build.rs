@@ -8,32 +8,189 @@
 //! refused otherwise. The TUI keeps upstream's behavior.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use pa_tui::daemon_client::DaemonClient;
+use pa_types::daemon::{DaemonCommand, DAEMON_PROTOCOL_VERSION, DAEMON_SCHEMA_ID};
+use serde_json::{json, Map, Value};
 
 /// How long a client still attached may take to go (a bridge that just closed; C12 waits as long).
 const ATTACHED_GRACE: Duration = Duration::from_secs(3);
+/// The pause between two `list` while a client may still go.
+const POLL: Duration = Duration::from_millis(100);
+/// The stop pass snapshots every kernel before the socket goes (the supervisor keeps accepting
+/// until its workers are stopped), so a bridge that started now would join the dying daemon.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(30);
+/// The `list` fields of a live session that keep the daemon when true: a turn, a compaction or
+/// queued work (`isSessionActive`), the user's `!` bash, tools running, RLM children, a quota park.
+const BUSY_FIELDS: [&str; 5] = [
+    "isSessionActive",
+    "isBashRunning",
+    "isRunningTools",
+    "hasRunningSubagents",
+    "isQuotaParked",
+];
 
 /// Replace a daemon of another build on `socket_path` when nothing holds it.
 ///
 /// # Errors
 /// Returns the refusal when the daemon of another build still holds work, or does not stop.
-#[allow(dead_code)]
 pub(crate) async fn replace_other_build(socket_path: &Path) -> Result<(), String> {
     replace_other_build_as(socket_path, crate::config::version(), ATTACHED_GRACE).await
 }
 
 /// [`replace_other_build`] for the build `own_version`, waiting `grace` for attached clients.
-#[cfg_attr(not(test), allow(dead_code))]
 async fn replace_other_build_as(
     socket_path: &Path,
     own_version: &str,
     grace: Duration,
 ) -> Result<(), String> {
-    let _ = (socket_path, own_version, grace);
+    // No daemon: `ensure_daemon_running` starts one.
+    let Ok((client, _events)) = DaemonClient::connect(socket_path).await else {
+        return Ok(());
+    };
+    let hello = client.hello().clone();
+    // Another protocol or schema is upstream's stale daemon (`probe_daemon`); no version, nothing
+    // to compare.
+    let same_schema = hello.get("protocol").and_then(|p| p.get("version"))
+        == Some(&json!(DAEMON_PROTOCOL_VERSION))
+        && hello.get("schemaId") == Some(&json!(DAEMON_SCHEMA_ID));
+    let Some(daemon_version) = hello
+        .get("appVersion")
+        .and_then(Value::as_str)
+        .filter(|version| same_schema && *version != own_version)
+    else {
+        client.close();
+        return Ok(());
+    };
+    let deadline = Instant::now() + grace;
+    let holders = loop {
+        let holders = holders(&client).await;
+        if holders.is_empty() || Instant::now() >= deadline {
+            break holders;
+        }
+        tokio::time::sleep(POLL).await;
+    };
+    if !holders.is_empty() {
+        client.close();
+        return Err(format!(
+            "A yusAgent daemon from another build is running on {}.\n  daemon:        {daemon_version}\n  this yusagent: {own_version}\nIt was kept because it still holds work:\n{}\n\nRun:\n  yusagent shutdown\n\nThen Restart (stopping the daemon ends that work).",
+            socket_path.display(),
+            holders
+                .iter()
+                .map(|holder| format!("  - {holder}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    let _ = client
+        .request_ok(DaemonCommand::Shutdown {
+            id: None,
+            force: None,
+            rest: Map::default(),
+        })
+        .await;
+    client.close();
+    if !socket_gone(socket_path).await {
+        return Err(format!(
+            "The yusAgent daemon from another build ({daemon_version}) on {} did not stop within {} s.\n\nRun:\n  yusagent shutdown\n\nThen Restart.",
+            socket_path.display(),
+            SHUTDOWN_WAIT.as_secs()
+        ));
+    }
     Ok(())
 }
 
-#[cfg(test)]
+/// The live sessions that hold the daemon, each with its reasons. A `list` that fails holds it.
+async fn holders(client: &DaemonClient) -> Vec<String> {
+    let listed = client
+        .request_ok(DaemonCommand::List {
+            id: None,
+            all: None,
+            cwd: None,
+            session_dir: None,
+            include_client_owned: None,
+            rest: Map::default(),
+        })
+        .await;
+    let Some(rows) = listed
+        .ok()
+        .and_then(|data| data.get("sessions").and_then(Value::as_array).cloned())
+    else {
+        return vec!["the daemon did not list its sessions".to_string()];
+    };
+    let mut holders = Vec::new();
+    for row in rows {
+        // A passivated row has no worker left, so nothing to lose: it has no `activeSessionId`
+        // (`crates/pa-daemon/src/supervisor_roster.rs`, `passivated_summary`).
+        let Some(id) = row.get("activeSessionId").and_then(Value::as_str) else {
+            continue;
+        };
+        let mut reasons = Vec::new();
+        if row
+            .get("attachedClients")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        {
+            reasons.push("a client is attached".to_string());
+        }
+        reasons.extend(
+            BUSY_FIELDS
+                .iter()
+                .filter(|field| row.get(**field) == Some(&Value::Bool(true)))
+                .map(|field| (*field).to_string()),
+        );
+        if reasons.is_empty() {
+            match holds(client, id).await {
+                Some(false) => {}
+                Some(true) => reasons.push(
+                    "it holds work (a background bash(), a scheduled job or RLM work)".to_string(),
+                ),
+                None => reasons.push(
+                    "its worker cannot tell what it holds (a build from before this check)"
+                        .to_string(),
+                ),
+            }
+        }
+        if !reasons.is_empty() {
+            holders.push(format!("{id}: {}", reasons.join(", ")));
+        }
+    }
+    holders
+}
+
+/// The worker's answer to `holds` (the passivation's gate); `None` when it does not serve it.
+async fn holds(client: &DaemonClient, active_session_id: &str) -> Option<bool> {
+    let response = client
+        .request(DaemonCommand::YaPermissions {
+            id: None,
+            active_session_id: active_session_id.to_string(),
+            action: "holds".to_string(),
+            rest: Map::default(),
+        })
+        .await
+        .ok()?;
+    if !response.success {
+        return None;
+    }
+    response.data.as_ref()?.get("holds")?.as_bool()
+}
+
+/// Wait until nothing accepts connections on the socket (bounded by [`SHUTDOWN_WAIT`]).
+async fn socket_gone(socket_path: &Path) -> bool {
+    let deadline = Instant::now() + SHUTDOWN_WAIT;
+    while Instant::now() < deadline {
+        if !pa_daemon::socket::can_connect(socket_path, Duration::from_millis(250)).await {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    false
+}
+
+// The fake supervisor listens on a Unix socket.
+#[cfg(all(test, unix))]
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};

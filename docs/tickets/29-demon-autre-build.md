@@ -196,3 +196,36 @@ Une session vivante tient le démon si l'un de ces points est vrai :
 
 - `can_passivate_worker` est asynchrone (`session_engine_impl.rs:30-32`). Notre gestionnaire `handle_ya_permissions` est synchrone (`crates/pa-daemon/src/ya_permissions.rs:330`). Son appel, `crates/pa-daemon/src/worker/commands.rs:163-164`, est notre ligne (YA-11, ticket 20) dans un fichier upstream, à l'intérieur d'un dispatch `async` dont les voisins font déjà `.await`. Pour l'attendre, il faut écrire `self.handle_ya_permissions(payload).await` sur cette ligne. **C'est la seule retouche d'un fichier upstream, sur une ligne déjà à nous.** En attente de l'accord de Yusuf.
 - **Garde des goals** : la passivation n'a pas de garde propre aux goals. Le goal est tenu par les gardes « réglées » de `goal_continuation.rs` : la suite d'un goal attend le travail RLM non réglé ou un `bash()` en arrière-plan (`goal_continuation.rs:1-4`, `:218-235`). Une suite déjà produite est dans la file, donc `isSessionActive`. Les autres états du goal en mémoire (`crates/pa-core/src/session_engine/goal_driver.rs:48-63` : suite due, suite en attente d'admission, attente après une absence de progrès) ne sont pas lus par la passivation, et ne le seront donc pas par `holds`. Le test « goal en cours » portera sur une suite de goal différée derrière un travail RLM non réglé.
+
+### Limite (décision 2 du 23/11/2026)
+
+`holds` est aligné sur la passivation : les états du goal gardés seulement en mémoire (`crates/pa-core/src/session_engine/goal_driver.rs:48-63`) n'y entrent pas. Ce sont la suite due, la suite en attente d'admission et l'attente après une absence de progrès. Si A3 relance le démon, ils sont perdus, comme après une passivation. Le test « goal en cours » porte sur une suite de goal différée derrière un `bash()` en arrière-plan, le chemin du test upstream `live_background_bash_holds_the_goal_continuation_until_it_settles` (`goal_continuation.rs`). La fonction privée `goal_children_settled` n'est pas accessible depuis nos tests, d'où ce choix plutôt qu'un travail RLM. Le travail RLM a son propre test (`a_running_rlm_child_holds_the_session`).
+
+## 13. Réalisation (PR #82)
+
+- `crates/pa-cli/src/ya_daemon_build.rs` (nouveau) : `replace_other_build`, appelé par le mode ACP avant `ensure_daemon_running` (`crates/pa-cli/src/print_runtime.rs`).
+  - Hello : même protocole et même schéma, mais `appVersion` différent de `crate::config::version()`. Sinon rien ne change : pas de démon, autre schéma (laissé à `probe_daemon`), même build, version absente.
+  - `list` : seules comptent les lignes avec un `activeSessionId`. Une ligne passivée n'en a plus (`passivated_summary`, `crates/pa-daemon/src/supervisor_roster.rs`), et `lifecycle` y reste `"live"`.
+  - Une session tient le démon si un client est attaché, si un des champs de `BUSY_FIELDS` est vrai, ou si `holds` répond vrai ou échoue (P1a). Les lectures se répètent toutes les 100 ms pendant 3 s au plus.
+  - Si rien ne le tient : `shutdown`, puis attente que le socket ne réponde plus, 30 s au plus. Le superviseur accepte des connexions jusqu'à l'arrêt de ses workers, qui écrivent chacun un instantané : sans cette attente, un pont lancé tout de suite rejoindrait le démon mourant.
+  - Sinon : refus sur stderr, qui finit dans le panneau d'échec de l'extension. Il donne les deux versions, la liste des sessions avec leurs raisons, et `yusagent shutdown`.
+- `crates/pa-daemon/src/ya_permissions.rs` : `holds_work` vaut `!can_passivate_worker()`, et l'action `holds` est servie avant le contrôle `agent_engine`. `.await` ajouté sur `crates/pa-daemon/src/worker/commands.rs:163`.
+- `crates/pa-daemon/src/acp/daemon.rs`, `ya_history.rs` : `DaemonLink::daemon_version`, et `older_daemon(link)` à la place d'`OLDER_DAEMON`.
+
+## 14. Push 1 : tests seuls (`9b7a9454d`, run `ci` 45166498970)
+
+Ébauches : `replace_other_build_as` renvoie `Ok(())` sans rien envoyer, et `holds_work` renvoie `false`. Échecs relevés par `gh run view 45166498970 --log-failed`.
+
+**Tests rouges sur leur assertion, comme prévu (13)** :
+- shard 8, `pa-cli` : 7 tests de `ya_daemon_build`.
+  - `an_idle_daemon_of_another_build_is_shut_down`, `a_client_leaving_during_the_wait_lets_the_daemon_go` et `a_passivated_session_does_not_keep_the_daemon` échouent à `ya_daemon_build.rs:187` (`shutdown` attendu).
+  - `a_busy_session_keeps…`, `an_attached_client_keeps…`, `a_session_holding_work_keeps…` et `a_daemon_without_holds_counts_every_live_session_as_busy` échouent à `:170` (refus attendu).
+- shard 3, `pa-daemon` : 6 tests.
+  - `holds::a_background_bash_holds_the_session` (`ya_permissions.rs:764`), `an_armed_cron_or_heartbeat_holds_the_session` (`:779`), `a_goal_waiting_behind_a_background_bash_holds_the_session` (`:808`, après l'assertion « suite de goal différée », qui passe) et `a_running_rlm_child_holds_the_session` (`:850`) échouent tous sur `assert!(holds(&engine))`.
+  - `acp::ya_history::tests::a_daemon_that_cannot_count_the_other_windows_refuses_the_load` échoue à `ya_history_tests.rs:446` (« another build »).
+- Verts dès le push 1, comme prévu : `a_daemon_of_the_same_build_is_kept`, `a_daemon_without_version_or_of_another_schema_is_left_to_upstream`, `no_daemon_is_nothing_to_do`, `holds::a_session_at_rest_holds_nothing`. Les autres tests des 8 shards passent.
+
+**Trois autres échecs, dus au push lui-même et non au comportement** :
+- `check + clippy (workspace)` : `clippy::unused_async` sur l'ébauche `holds_work`, qui n'avait pas d'`await` (`ya_permissions.rs:334`). Le correctif l'attend, la cause disparaît.
+- `windows cross-check + clippy` : `tokio::net::UnixListener` n'existe pas sous Windows (`ya_daemon_build.rs:92`). Le module de tests passe sous `#[cfg(all(test, unix))]`, comme les tests à socket Unix d'upstream (`crates/pa-cli/src/update_flow/legacy_restart.rs:470`).
+- `Changelog fragment` : pas encore de `.changes/ya-29-demon-autre-build.md`. Il arrive avec le push 2, comme aux tickets 28 et 30.

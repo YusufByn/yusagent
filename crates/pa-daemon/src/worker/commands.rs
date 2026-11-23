@@ -160,7 +160,7 @@ impl Worker {
             "heartbeat_set" => self.handle_heartbeat_set(payload).await,
             "heartbeat_update" => self.handle_heartbeat_update(payload).await,
             // yusAgent (YA-11, ticket 20).
-            "ya_permissions" => self.handle_ya_permissions(payload),
+            "ya_permissions" => self.handle_ya_permissions(payload).await,
             other => response_failure(
                 None,
                 command_type,

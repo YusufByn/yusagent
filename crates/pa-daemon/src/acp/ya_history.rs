@@ -151,9 +151,17 @@ pub(crate) async fn load_refusal(
 }
 
 /// The refusal when the daemon cannot count the other windows: its worker does not serve the
-/// action `others` (C12), so the daemon was started by an older binary and kept running after the
-/// binary changed; the bridge does not detect a daemon of another build (ticket 29).
-pub(crate) const OLDER_DAEMON: &str = "The yusAgent daemon is older than this yusagent: it cannot tell whether this conversation is open in another window. Run `yusagent shutdown`, then Restart.";
+/// action `others` (C12). Since ticket 29 the bridge replaces a daemon of another build before it
+/// starts (`crates/pa-cli/src/ya_daemon_build.rs`); this refusal remains for what that check
+/// cannot see: builds without a packaged manifest (same `appVersion`), two bridges of different
+/// builds starting together, or another failure of the action.
+pub(crate) fn older_daemon(link: &DaemonLink) -> String {
+    format!(
+        "The yusAgent daemon (version {}) may be from another build than this yusagent (version {}): it cannot tell whether this conversation is open in another window. Run `yusagent shutdown`, then Restart.",
+        link.daemon_version.as_deref().unwrap_or("unknown"),
+        crate::protocol::app_version()
+    )
+}
 
 /// The session's attached clients that answer, other than this bridge; `Err` is the refusal when
 /// the daemon cannot tell (defect 1 of the X1 check: it was read as `0`, and the load went on).
@@ -170,7 +178,7 @@ async fn other_askers(link: &DaemonLink, daemon_session_id: &str) -> Result<u64,
             format!("Could not check whether this conversation is open in another window: {error}")
         })?;
     if !response.success {
-        return Err(OLDER_DAEMON.to_string());
+        return Err(older_daemon(link));
     }
     Ok(response
         .data
