@@ -20,7 +20,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import * as vscode from "vscode";
 
@@ -349,6 +349,18 @@ async function historyShows(title: string): Promise<void> {
   await shows(title, `ligne « ${title} » affichée`);
 }
 
+/**
+ * Les fichiers nommés d'après une session (`<id>.*`) à côté de son fichier, hors son journal d'usage,
+ * gardé à la suppression (C4) : le fichier lui-même, l'instantané de fenêtre, l'état de scan.
+ */
+function sessionFiles(path: string): string[] {
+  const dir = join(path, "..");
+  const stem = basename(path, ".jsonl");
+  return readdirSync(dir)
+    .filter((name) => name.startsWith(`${stem}.`) && !name.endsWith(".usage.ndjson"))
+    .sort();
+}
+
 /** Un second client ACP (une autre fenêtre) : le vrai binaire, mêmes HOME, TMPDIR et dossier. */
 class OtherWindow {
   private readonly proc: ChildProcessWithoutNullStreams;
@@ -430,6 +442,7 @@ const resumeTests: [string, () => Promise<void>][] = [
       await waitFor(() => !daemonSessions().some((row) => row.sessionId === empty.id), "session vide arrêtée dans le démon", SLOW);
       await waitFor(() => !alive(worker), "worker arrêté", 15_000);
       await waitFor(() => !existsSync(empty.path), "fichier vide retiré", 15_000);
+      assert.deepEqual(sessionFiles(empty.path), [], "rien de la conversation vide ne reste");
     },
   ],
   [
@@ -576,6 +589,7 @@ const resumeTests: [string, () => Promise<void>][] = [
       }, "ligne retirée de l'historique", SLOW);
       assert.equal((await state()).history.error, undefined);
       assert.equal(existsSync(saved.path), false, "fichier retiré");
+      assert.deepEqual(sessionFiles(saved.path), [], "rien de la conversation supprimée ne reste");
       assert.equal(existsSync(join(saved.path, "..", "..", "session-artifacts", saved.id)), false, "instantané retiré");
       assert.ok(!daemonSessions().some((row) => row.sessionId === saved.id), "session absente du démon");
       await waitFor(() => !alive(worker) && !alive(pid), "agent et worker arrêtés", 15_000);
@@ -600,8 +614,10 @@ const resumeTests: [string, () => Promise<void>][] = [
         assert.ok(daemonSessions().some((row) => row.sessionId === empty.id), "session vide dans le démon");
         // Le chemin de `deactivate` (fermeture ou « Reload Window ») : chaque agent s'arrête.
         await vscode.commands.executeCommand("yusagent._test.stopAll");
+        assert.ok(existsSync(empty.path.replace(/\.jsonl$/, ".window-cache.json")), "instantané de fenêtre présent avant la fermeture");
         await waitFor(() => !existsSync(empty.path), "fichier de la conversation vide retiré", SLOW);
         await waitFor(() => !daemonSessions().some((row) => row.sessionId === empty.id), "session vide arrêtée dans le démon", SLOW);
+        assert.deepEqual(sessionFiles(empty.path), [], "rien de la conversation vide ne reste");
         assert.ok(existsSync(held.path), "la conversation tenue ailleurs garde son fichier");
         assert.ok(daemonSessions().some((row) => row.sessionId === held.id), "la conversation tenue ailleurs garde sa session");
       } finally {
