@@ -1401,6 +1401,7 @@ Décisions de Yusuf du 23/11/2026 : `docs/tickets/29-demon-autre-build.md`, §9 
 | `crates/pa-daemon/src/acp/ya_history.rs`, `ya_history_tests.rs` | modif. (fichiers du fork) | `OLDER_DAEMON` devient `older_daemon(link)` : « may be from another build », avec la version du démon et celle du pont. Il reste un garde-fou pour ce que le contrôle du démarrage ne voit pas. | YA-10 (ticket 29) |
 | `bench/tools/capture/attached_clients_probe.py` | nouveau (outil du fork) | Vérification A : `attachedClients` dans les lignes de `list` d'un vrai démon. | YA-10 (ticket 29) |
 | `bench/tools/capture/daemon_build_check.py` | nouveau (outil du fork) | Script de contrôle, six cas sur de vrais binaires : build O (d'avant le ticket) et B' (copie de la branche avec une autre version). | YA-10 (ticket 29) |
+| `bench/tools/capture/server.py` | modif. (outil du fork) | Scénario `ya29-bash-long` : un seul `bash()` en arrière-plan de 40 s, sans réveil avant sa fin (cas 5 du script de contrôle). | YA-10 (ticket 29) |
 | `bench/tools/capture/c12_repro.py` | modif. (outil du fork) | Avec `--daemon-binary`, le démon ancien sans session est remplacé : le verdict vérifie la version du démon après le premier pont, et B est refusé par le C12 normal. | YA-10 (ticket 29) |
 | `docs/yusAgent-cdc.md` | modif. | Ligne du journal du 23/11/2026 ; point ouvert de YA-16 (le .vsix avec binaire doit garder le manifeste à côté du binaire). | YA-10 (ticket 29) |
 | `.changes/ya-29-demon-autre-build.md` | nouveau | Fragment de changelog. | YA-10 (ticket 29) |
