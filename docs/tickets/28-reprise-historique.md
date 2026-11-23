@@ -603,3 +603,39 @@ Contrôle de Yusuf : conformes A (conversation vide quittée par l'historique), 
   - Corbeille : il reste `<id>.info-cache.json` et `<id>.window-cache.json`.
   - Conversation vide, fin du pont : il reste `<id>.window-cache.json`.
   - Les tests Rust et e2e ajoutés dans le même push (un seul push demandé) vérifient d'abord que l'instantané existe avant la suppression.
+
+### Écrivains des fichiers d'une session, et balayage des caches orphelins
+
+Second push du correctif (f77c1f76c) rouge :
+- lint clippy sur `ends_with(".tmp")` ;
+- un `<id>.jsonl.tmp-<pid>` laissé dans le cas D2 de l'e2e ;
+- deux préconditions fausses sous Linux : l'instantané n'existe pas encore juste après `session/new`.
+
+**Écrivains** (vérifiés avant de coder, sur décision de Yusuf) :
+
+| Fichier | Écrivain | Processus | Après la suppression ? |
+|---|---|---|---|
+| `<id>.jsonl`, `<id>.jsonl.tmp-<pid>` | `SessionFile::rewrite` (`crates/pa-daemon/src/session_store/write.rs:107-147`, temporaire `:128`) ; ajouts `append_cached` (`write.rs:41`, `:257`) | worker | non : la suppression attend la sortie du processus worker |
+| `<id>.jsonl`, `<id>.jsonl.tmp<pid>` | `atomic_write` (`crates/pa-core/src/session/manager/persist.rs:151-163`) ; `repair` (`crates/pa-core/src/session/manager/repair.rs:99-144`) | worker | non, même raison |
+| `<id>.jsonl` (ajout) | `append_cached` (`crates/pa-core/src/session/window_cache.rs:200-201`), dont `child_usage.rs:339`, `:416` et `lease.rs:443` | worker | non : ouverture en ajout sans création |
+| `<id>.jsonl` | renommage d'une session fermée, `append_saved_session_name` (`crates/pa-daemon/src/saved_session_commands.rs:98-102`) | démon | seulement s'il a commencé avant la suppression ; l'extension n'envoie pas de renommage |
+| — | `rewrite_records` (`crates/pa-daemon/src/journal.rs:77-93`) | démon | hors sujet : journaux des workers et `compaction-supervision.jsonl` |
+| `<id>.window-cache.json`, `-<uuid>.tmp` | `save` (`window_cache.rs:139-151`) à l'ouverture d'une fenêtre (`crates/pa-core/src/session/window.rs:587`, `manager/lifecycle.rs:262`) ; `flush` à la libération du bail (`lease.rs:357`) | worker | non : `generation.valid` relit le chemin juste avant (`window.rs:584`) ; `flush` vient du détenteur du bail |
+| `<id>.info-cache.json`, `-<uuid>.tmp` | libération du bail (`lease.rs:359`) | worker | non : la suppression attend la sortie du processus worker |
+| `<id>.info-cache.json`, `-<uuid>.tmp` | **scan du catalogue** (`crates/pa-daemon/src/session_scan.rs:61-72`, via `:191` et `supervisor/sessions.rs:284`) | démon | **oui** : un scan qui a lu le fichier avant la suppression écrit après, sans revérifier le fichier |
+
+**Aucun état normal ne laisse un cache sans son `.jsonl`** dans le dossier plat :
+- Le fichier se nomme toujours `<id>.jsonl` (`crates/pa-daemon/src/session_store/read.rs:17-19`). Le catalogue ne lit que les `*.jsonl` du dossier plat (`session_scan.rs:116-122`).
+- Les caches sont toujours écrits à côté du fichier (`with_extension`), et seulement après l'avoir lu : la fenêtre lit le fichier ouvert, l'état de scan vient de sa lecture.
+- La réécriture remplace le fichier par un renommage atomique (`crates/pa-telemetry/src/rename.rs:69-83`, `fs::rename`, réessayé sous Windows sans retirer la destination). Le fichier n'est donc jamais absent pendant une écriture.
+- Une copie de session (fork) écrit un nouveau fichier sous un autre identifiant et laisse la source (`crates/pa-daemon/src/branch_navigation.rs:398`, `crates/pa-daemon/src/rpc/session_commands.rs:241`).
+- Le renommage d'une session change son nom dans le fichier, pas son chemin.
+- Les autres appels de `set_path` sont dans des tests.
+- La restauration d'archive copie `sessions-archive/<id>.jsonl` vers `sessions/<id>.jsonl` (lien dur, puis retrait de l'archive : `crates/pa-daemon/src/session_catalog.rs:55-79`). Le dossier d'archive n'est pas balayé.
+- Un `<id>.jsonl` qui est un lien cassé compte comme présent (`symlink_metadata`).
+
+**Correctif :**
+- `remove_sidecars` retire, après une suppression réussie, tout ce qui porte le nom de la session : le fichier s'il est revenu, les deux formes de temporaire du `.jsonl`, les deux caches et leurs temporaires, et `session-artifacts/<id>`.
+- `sweep_orphan_caches` balaie, à chaque `session/list` et à chaque suppression, les noms exacts `<uuid>.window-cache.json` et `<uuid>.info-cache.json` sans leur `<uuid>.jsonl`. Ce balayage retire aussi les orphelins déjà présents.
+- Le contrôle de l'extension `.tmp` passe par `Path::extension()`.
+- Préconditions retirées des cas « conversation vide ».
