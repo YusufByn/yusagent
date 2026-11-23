@@ -179,3 +179,14 @@ Commit `775a9379c` (avec le ticket et le fragment de changelog, demandé par le 
   - agent factice : 59/59 tests unitaires ; e2e 10/11, seul échec « étiquette D4 (ticket 30) » (`délai dépassé : permissions = auto`) ;
   - vrai binaire : 14/16, seuls échecs « sans réglage (ticket 30) » (`délai dépassé : permissions = auto sans réglage`) et « auto : étiquette » (`délai dépassé : étiquette`, vérifiée en fin de cas, après la cellule) ; aucun processus restant.
 - Build macOS du commit : run 45147420584, succès.
+
+## PR #81 : push 2, correctif (23/11/2026)
+
+Commit `f917ffe6a`. Fichiers : `docs/fork-changes.md`, section « Permissions en « auto » par défaut ». Aucun fichier upstream touché, hors le commentaire de `.cargo/config.toml`.
+
+- **CI** : `ci` run 45150074343 et `ya-extension` run 45150074617 en succès ; `gh pr checks 81 --required` : 16 checks `pass`. Les 8 tests rouges du push 1 passent. Extension : 59/59 tests unitaires, e2e agent factice 11/11, e2e vrai binaire 16/16, aucun processus restant.
+- **Build macOS** : run 45150065943, succès ; binaire `~/.cache/yusagent-bin/f917ffe6a6c8c7518f6f2ba9859d77e19be32b9d/yusagent` (`0.10.2-continuous.f917ffe6a…`, SHA256 vérifié par `bench/smoke/tools/install-bin.sh`).
+- **Préfixe** (Claude Code) : capture `py-example-001`, binaires `60b05a595` (`main`, run 45143034861) et `f917ffe6a` : `('py-example-001', 'resolved', 0)` en mode `capture` des deux côtés ; `find ~/.yusagent ~/.prime/agent -newer` vide ; `compare_capture_prompts.py` sur 9 requêtes : **TOUT IDENTIQUE**. Le banc écrit `"auto"` des deux côtés (C8) : la capture montre que le changement ne touche pas les requêtes ; l'égalité entre modes repose sur `prefix_stability.rs` et `manual_and_auto_send_the_same_requests`.
+- **Script de contrôle** (Claude Code, règle 13) : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/ya_permissions_auto_default_check.py --binary <binaire>`.
+  - Sur `60b05a595` (`main`), pour vérifier que le script voit l'ancien défaut : ÉCHEC attendu, partout où le défaut compte (1 et 3 refusés au démarrage, 2 avec « (the default) », 4 ouvert en `manual`).
+  - Sur `f917ffe6a` : **OK**, code de sortie 0. 1 : une connexion, avertissement sur stderr, pas de refus (code 1 : le 400 du serveur local). 2 : code 1, refus avec la ligne et le chemin, sans « (the default) », 0 connexion. 3 : le `"manual"` du projet n'est pas lu, comme 1. 4 : ACP ouvert en `auto`, cellule sans demande, `manual` par le sélecteur, une demande accordée, journal `auto->manual`, `allow`. 5 : `find` vide.
