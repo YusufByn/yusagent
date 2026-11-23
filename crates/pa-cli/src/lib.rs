@@ -53,6 +53,8 @@ pub(crate) mod telemetry_notice;
 pub(crate) mod traces_login;
 // yusAgent (YA-16, ticket 19): self-update is disabled.
 pub(crate) mod ya_update_off;
+// yusAgent (YA-10, ticket 29): a daemon started by another build.
+pub(crate) mod ya_daemon_build;
 
 /// The runtime boundary: everything a mode-runner crate implements to plug
 /// into the `prime-agent` binary, plus the entry point that drives it.

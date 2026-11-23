@@ -2125,6 +2125,10 @@ async fn teardown(
     }
 }
 
+/// yusAgent (YA-10, ticket 29): the `appVersion` of the daemon behind [`scripted_link`].
+#[cfg(test)]
+pub(crate) const SCRIPTED_DAEMON_VERSION: &str = "9.9.9-scripted-daemon";
+
 /// yusAgent (YA-10, ticket 28): a link whose commands `answer` answers, for the bridge's tests
 /// outside this module (`ya_history_tests.rs`).
 #[cfg(test)]

@@ -424,7 +424,8 @@ fn answer(
 
 /// C12 on a daemon older than the binary (defect 1 of the X1 check): its worker does not serve the
 /// action `others`, so the bridge cannot tell whether another window holds the session. The load
-/// is refused, and the refusal says what to do.
+/// is refused, and the refusal says what to do. yusAgent (YA-10, ticket 29): the daemon may be
+/// from another build; the refusal gives both versions (the daemon's hello, this binary).
 #[tokio::test]
 async fn a_daemon_that_cannot_count_the_other_windows_refuses_the_load() {
     let link = super::super::daemon::scripted_link(|command| match command {
@@ -442,7 +443,15 @@ async fn a_daemon_that_cannot_count_the_other_windows_refuses_the_load() {
     let refusal = load_refusal(&link, "daemon-1", &file, "019a")
         .await
         .expect("the load is refused");
-    assert!(refusal.contains("older than this yusagent"), "{refusal}");
+    assert!(refusal.contains("another build"), "{refusal}");
+    assert!(
+        refusal.contains(super::super::daemon::SCRIPTED_DAEMON_VERSION),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains(crate::protocol::app_version()),
+        "{refusal}"
+    );
     assert!(refusal.contains("yusagent shutdown"), "{refusal}");
 }
 
