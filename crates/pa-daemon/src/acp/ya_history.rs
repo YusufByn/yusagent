@@ -706,6 +706,10 @@ async fn list(
         return Ok(json!({ "sessions": [] }));
     }
     let rows = saved_rows(link, daemon_session_id).await?;
+    // yusAgent (the X1 check): after the catalog scan, which may write a cache of a deleted file.
+    if let Some(dir) = sessions_dir(file) {
+        sweep_orphan_caches(dir);
+    }
     Ok(json!({ "sessions": list_rows(&rows, file.id.as_deref()) }))
 }
 
@@ -807,6 +811,9 @@ async fn delete(
             == Some(true);
     if ok {
         remove_sidecars(Path::new(&path));
+        if let Some(dir) = sessions_dir(file) {
+            sweep_orphan_caches(dir);
+        }
         return Ok(());
     }
     let reason = deleted
@@ -912,19 +919,22 @@ pub(crate) async fn drop_if_empty(link: &DaemonLink, daemon_session_id: &str, fi
     }
 }
 
-/// yusAgent (YA-10, ticket 28, the X1 check): the files a delete leaves next to the session file,
-/// named after it. `delete_saved_session` removes the file and `session-artifacts/<id>`
-/// (`crate::saved_session_commands::delete_session_file`), not these: the window snapshot
-/// (`<stem>.window-cache.json`, `pa-core` `session/window_cache.rs`, written from the session's
-/// open), the scan state (`<stem>.info-cache.json`, `crate::session_store::persist_info_sidecar`,
-/// written as the worker releases the file and by the catalog scan), and a temporary of either
-/// that an interrupted write left (`<stem>.window-cache-<uuid>.tmp`, `<stem>.info-cache-<uuid>.tmp`).
-/// Both caches are disposable: removed, not trashed. The usage journal (`<stem>.usage.ndjson`)
-/// stays (C4).
+/// yusAgent (YA-10, ticket 28, the X1 check): after a delete, nothing named after the session is
+/// left but its usage journal (`<stem>.usage.ndjson`, kept: C4). `delete_saved_session` removes the
+/// file and `session-artifacts/<id>` (`crate::saved_session_commands::delete_session_file`), not
+/// the rest. Removed here, whoever wrote them (`docs/tickets/28-reprise-historique.md`, §18):
+/// - the file `<stem>.jsonl`, should a writer have put it back, and its write temporaries
+///   `<stem>.jsonl.tmp-<pid>` (`crate::session_store` rewrite, `crate::journal`) and
+///   `<stem>.jsonl.tmp<pid>` (`pa-core` `session/manager/persist.rs`, `repair.rs`);
+/// - the window snapshot `<stem>.window-cache.json` (`pa-core` `session/window_cache.rs`) and the
+///   scan state `<stem>.info-cache.json` (`crate::session_store::persist_info_sidecar`), and their
+///   temporaries `<stem>.window-cache-<uuid>.tmp`, `<stem>.info-cache-<uuid>.tmp`;
+/// - `session-artifacts/<stem>` (`crate::saved_session_commands::remove_session_artifacts`).
+///
+/// The callers run it once no worker of the session runs: none was live, or its process exited.
+/// Disposable or already deleted: removed, not trashed.
 fn remove_sidecars(session_file: &Path) {
-    for extension in ["window-cache.json", "info-cache.json"] {
-        let _ = std::fs::remove_file(session_file.with_extension(extension));
-    }
+    crate::saved_session_commands::remove_session_artifacts(session_file);
     let (Some(dir), Some(stem)) = (
         session_file.parent(),
         session_file.file_stem().and_then(|stem| stem.to_str()),
@@ -934,19 +944,75 @@ fn remove_sidecars(session_file: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let prefixes = [
-        format!("{stem}.window-cache-"),
-        format!("{stem}.info-cache-"),
-    ];
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(stem))
+            .and_then(|rest| rest.strip_prefix('.'))
+        else {
+            continue;
+        };
+        if is_session_leftover(rest) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Whether `<stem>.<rest>` is one of the files `remove_sidecars` removes (not `usage.ndjson`).
+fn is_session_leftover(rest: &str) -> bool {
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    let temporary = |prefix: &str| {
+        rest.strip_prefix(prefix).is_some_and(|tail| {
+            std::path::Path::new(tail)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("tmp"))
+        })
+    };
+    matches!(rest, "jsonl" | "window-cache.json" | "info-cache.json")
+        || rest
+            .strip_prefix("jsonl.tmp")
+            .is_some_and(|tail| digits(tail.strip_prefix('-').unwrap_or(tail)))
+        || temporary("window-cache-")
+        || temporary("info-cache-")
+}
+
+/// yusAgent (YA-10, ticket 28, the X1 check): remove the orphan caches of `sessions_dir`, the
+/// exact names `<uuid>.window-cache.json` and `<uuid>.info-cache.json` whose `<uuid>.jsonl` is not
+/// there (not even a dangling link). A cache lives only next to its file, which is never absent
+/// while a session lives (atomic renames; §18); an orphan is what a delete left, or what a catalog
+/// scan that read the file before the delete wrote after it
+/// (`crate::session_scan` → `persist_info_sidecar`). Never a temporary, a usage journal, or a name
+/// that is not a session id.
+fn sweep_orphan_caches(sessions_dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(sessions_dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             continue;
         };
-        if name.ends_with(".tmp") && prefixes.iter().any(|prefix| name.starts_with(prefix)) {
+        let Some(stem) = name
+            .strip_suffix(".window-cache.json")
+            .or_else(|| name.strip_suffix(".info-cache.json"))
+        else {
+            continue;
+        };
+        let session_id = stem.len() == 36 && uuid::Uuid::parse_str(stem).is_ok();
+        if session_id
+            && std::fs::symlink_metadata(sessions_dir.join(format!("{stem}.jsonl"))).is_err()
+        {
             let _ = std::fs::remove_file(entry.path());
         }
     }
+}
+
+/// The folder of the bridge's session file, where `session/list` and the delete look.
+fn sessions_dir(file: &SessionFile) -> Option<&Path> {
+    file.path
+        .as_deref()
+        .and_then(|path| Path::new(path).parent())
 }
 
 /// Whether the worker process `pid` has exited by `deadline` (`true` when the daemon gave none).

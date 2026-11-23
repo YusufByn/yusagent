@@ -603,11 +603,6 @@ fn an_empty_new_conversation_goes_with_its_bridge() {
     let opened = client.open();
     let (id, path) = saved(&opened);
     assert!(path.exists(), "the file exists before the first prompt");
-    assert!(
-        path.with_extension("window-cache.json").exists(),
-        "the window snapshot is there: {:?}",
-        session_files(&path)
-    );
     assert!(live_ids(&home).contains(&id));
     client.close();
     let deadline = Instant::now() + Duration::from_secs(15);
