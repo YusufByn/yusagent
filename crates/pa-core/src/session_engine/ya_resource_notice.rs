@@ -361,17 +361,23 @@ impl AgentSession {
 
     /// Compares what the model was told with the disk; a difference queues its announcement as
     /// a next-turn row (module docs). Called at the admission of a prompt, before the next-turn
-    /// rows are taken.
+    /// rows are taken; a row already queued for this change by the daemon's worker
+    /// ([`Self::ya_take_resource_notice`]) leaves nothing more to announce.
     pub(crate) async fn ya_announce_resources(&self) {
+        let _ = self.ya_take_resource_notice().await;
+    }
+
+    /// [`Self::ya_announce_resources`], returning the row it queued. The daemon's worker calls it
+    /// before a turn's prefix rows and writes the row with them, before the prompt's row, as the
+    /// model receives it (ticket 31, option 1 of the push 2): the session file then keeps the
+    /// announcement where the request had it, and the bridge sees it.
+    pub async fn ya_take_resource_notice(&self) -> Option<pa_types::session::CustomMessage> {
         let inputs = self
             .ya_resources
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
-            .map(|tracker| tracker.inputs.clone());
-        let Some(inputs) = inputs else {
-            return;
-        };
+            .map(|tracker| tracker.inputs.clone())?;
         let started = std::time::Instant::now();
         let current = tokio::task::spawn_blocking(move || current(&inputs))
             .await
@@ -381,31 +387,27 @@ impl AgentSession {
             TRACE_PHASE,
             &json!({ "micros": u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX) }),
         );
-        let Some(current) = current else {
-            return;
-        };
-        let row = {
+        let current = current?;
+        let (text, details) = {
             let mut guard = self
                 .ya_resources
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let Some(tracker) = guard.as_mut() else {
-                return;
-            };
+            let tracker = guard.as_mut()?;
             let row = announcement(&tracker.known, &current);
             tracker.known = current;
             row
+        }?;
+        let row = pa_types::session::CustomMessage {
+            custom_type: CUSTOM_TYPE.to_string(),
+            content: pa_types::ai::UserContent::Text(text),
+            display: true,
+            details: Some(details),
+            timestamp: now_millis(),
+            rest: serde_json::Map::default(),
         };
-        if let Some((text, details)) = row {
-            self.queue_next_turn_row(pa_types::session::CustomMessage {
-                custom_type: CUSTOM_TYPE.to_string(),
-                content: pa_types::ai::UserContent::Text(text),
-                display: true,
-                details: Some(details),
-                timestamp: now_millis(),
-                rest: serde_json::Map::default(),
-            });
-        }
+        self.queue_next_turn_row(row.clone());
+        Some(row)
     }
 }
 
