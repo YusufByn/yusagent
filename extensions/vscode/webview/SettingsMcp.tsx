@@ -8,14 +8,20 @@ import { post } from "./vscode";
 /** One entry of the `mcpServers` setting, as the file holds it. */
 type ServerConfig = Record<string, unknown>;
 
+/**
+ * yusAgent (ticket 31, C4) : la section du catalogue (connexion OAuth ou par jeton) est masquée
+ * jusqu'au ticket du login dans l'extension ; un service déjà connecté reste dans « Your servers ».
+ */
+const CATALOG = false;
+
 /** The name the agent addresses a server by. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 /**
  * The MCP servers: yours (the `mcpServers` setting and the services you
- * added), then the Marketplace, Prime's catalog of services to add in one
- * click. The agent calls their tools from its Python kernel; it keeps the
- * servers and sign-ins it started with.
+ * added), then the catalog of services (masked, `CATALOG`). The agent calls
+ * their tools from its Python kernel; a change reaches it with the next
+ * message.
  */
 export function McpTab({
   servers,
@@ -128,14 +134,16 @@ export function McpTab({
         </ul>
         {open === null && actions.errors.mcpServers && <p className="error">{actions.errors.mcpServers}</p>}
       </section>
-      <Marketplace
-        services={market}
-        none={!servers.some((server) => server.source === "catalog")}
-        open={open}
-        actions={actions}
-        onToggle={toggle}
-        onClose={() => setOpen(null)}
-      />
+      {CATALOG && (
+        <Marketplace
+          services={market}
+          none={!servers.some((server) => server.source === "catalog")}
+          open={open}
+          actions={actions}
+          onToggle={toggle}
+          onClose={() => setOpen(null)}
+        />
+      )}
     </>
   );
 }

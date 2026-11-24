@@ -12,11 +12,12 @@ import { post } from "./vscode";
 
 export type SettingsTab = "general" | "mcp" | "skills" | "instructions";
 
+// yusAgent (ticket 31, C9) : l'onglet Instructions (`modelInstructions`, ajouté au prompt système
+// chez Unharnessed) est masqué ; son code reste jusqu'au ticket 32 ou au visuel.
 const TABS: [SettingsTab, string][] = [
   ["general", "General"],
   ["mcp", "MCP"],
   ["skills", "Skills"],
-  ["instructions", "Instructions"],
 ];
 
 /** How a number is shown and typed; the file holds tokens, counts or ms. */
@@ -35,6 +36,9 @@ type Group = {
   gate?: string;
 };
 
+// yusAgent (ticket 31, décision 5) : seulement les clés appliquées au message suivant sans miss de
+// cache (`retry.*`, `auxiliaryModel`, `compaction.enabled`), celles que sert `_yus/settings/*` ; plus
+// les images, masquées (§5.4 du ticket 24).
 const GROUPS: Group[] = [
   {
     label: "Compaction",
@@ -110,31 +114,6 @@ const GROUPS: Group[] = [
         label: "Pauses per limit",
         unit: "count",
         max: 100,
-      },
-    ],
-  },
-  {
-    label: "Images",
-    fields: [
-      {
-        kind: "model",
-        key: "imageModel",
-        label: "Image model",
-        help: "Reads the images when the chat model can't. Without one, such messages are refused.",
-        none: "None",
-        images: true,
-      },
-      {
-        kind: "switch",
-        key: "images.autoResize",
-        label: "Shrink large images",
-        help: "Large images are scaled down before they are sent.",
-      },
-      {
-        kind: "switch",
-        key: "images.blockImages",
-        label: "Block images",
-        help: "Images are never sent to a provider.",
       },
     ],
   },
@@ -319,7 +298,7 @@ export function Settings({
   );
 }
 
-/** Compaction, retries, usage limits, images. */
+/** Compaction, retries, switching providers, usage limits. */
 function General({
   settings,
   ready,
