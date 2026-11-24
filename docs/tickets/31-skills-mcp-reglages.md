@@ -795,3 +795,22 @@ Contrôle TUI du §5.4, étape 7 : le journal d'usage est `~/.yusagent/sessions/
 10. Remise en état :
     - `mv ~/.yusagent/settings.json.avant-x3 ~/.yusagent/settings.json` ;
     - `rm -rf ~/.yusagent/skills/demo-y /tmp/ya31-x3`.
+
+### 9.8 Push 1 : tests seuls (`8ff03bf04`, PR #84)
+
+- **`ci`** run 45392710567 :
+  - **rouge attendu**, shard 3 : `the_view_gives_the_core_defaults` (`ya_resources/settings.rs:313`, `assertion left == right failed`). Défauts rendus : `null` partout sauf `compaction.enabled: true`. Défauts attendus du cœur : `retry.enabled: true`, `maxRetries: 3`, `baseDelayMs: 2000`, `provider.maxRetryDelayMs: 60000`, `failover.enabled: true`, `failover.maxRetries: 3`, `failover.baseDelayMs: 1000`, `failover.maxDelayMs: 30000`, `waitForUsage.pauseUntilReset: true`, `maxPauseMs: 86400000`, `maxParks: 8`.
+  - **rouge inattendu**, shard 2 : `the_history_lists_conversations_and_deletes_one_with_its_session` (`crates/pa-cli/tests/ya_acp_resume_e2e.rs:452`, « the window snapshot is there before the delete », seuls `<id>.info-cache.json` et `<id>.jsonl` présents). Test du ticket 28, sans lien avec ce push (aucun code du produit). Il n'est pas listé en « Instabilité probable » : **pas de relance**, signalé à Yusuf.
+  - fmt, clippy (Linux et Windows) et les autres shards : verts.
+- **`ya-extension`** run 45392710453 :
+  - tests unitaires : 66, 59 verts, **7 rouges, tous attendus et sur leur assertion** :
+    - « sélecteur de permissions » : `expected 'manual'`, `actual null` ;
+    - « notice » : lignes attendues, `actual undefined` ;
+    - « méthodes du ticket 31 (X3) servies » : `_yus/settings/get`, `false !== true` ;
+    - « écrans » : `_yus/settings/get envoyée`, `false` ;
+    - « interrupteur d'un skill » et « journal » : `accepté`, `actual '_unharnessed/… : méthode pas encore servie par yusAgent'` ;
+    - « refus de permissions » : texte du pont attendu, même message reçu.
+  - **e2e sur l'agent factice : non lancé.** L'étape est sautée parce que les tests unitaires, plus tôt dans le même job, échouent (`ya-extension.yml`, étapes en série). Les 3 cas du ticket 31 n'ont donc pas été vus rouges.
+  - e2e sur le vrai binaire : 16/18. Seuls rouges, les 2 cas du ticket 31 : « délai dépassé : clic sur « Settings » » et « délai dépassé : clic sur « auto · no sandbox » ». Aucun processus restant.
+- **`ya-build-macos-arm64`** run 45392698295 : succès (binaire du push 1, sans code du produit).
+- **Changelog fragment**, codebase-health, contribution gate : verts.
