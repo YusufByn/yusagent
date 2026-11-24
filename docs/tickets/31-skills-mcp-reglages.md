@@ -616,3 +616,33 @@ Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `w
 ### Tickets à part, ajout du 24/11/2026
 
 - **Ticket 34, « lignes du tour suivant absentes du fichier du worker »** : dans le démon, les lignes custom de la file du tour suivant d'upstream (`[python-state-restored]`, suite d'objectif, `[python-skills-unavailable]`) atteignent le modèle sans être écrites dans le fichier de session ni envoyées aux clients (`run_once.rs:162-245`). À la reconstruction du worker, l'historique relu les perd : un miss non journalisé possible. Lu à `upstream/main` `798d97032` (23/11/2026) : `run_once.rs` ne les transmet toujours pas. Constat d'abord ; non traité dans le 31.
+
+### 8.5 Push 3 (`8205f0bbe`), contrôles et contrôle de Yusuf (24/11/2026)
+
+- **CI** :
+  - run `ci` 45349487727 sur `8205f0bbe` : seul le shard 8 échoue, sur deux tests d'upstream sans lien avec le ticket, maintenant listés en « Instabilité probable » dans `docs/fork-changes.md` :
+    - tentative 1 : `protocol_breadth_b6_b9`, même symptôme que sur `main` au run 43492287310 ;
+    - tentative 2 (relance du job seul, sans push) : `terminal_state_differential_e2e`, superviseur factice, sans prompt ;
+  - run `ci` 45358650280 sur `574ed9f03` (doc seule, aucun fichier sous `crates/` modifié depuis `8205f0bbe`) : vert ; les 16 checks requis par la règle `protect-main` réussissent.
+- **Binaire** : `ya-build-macos-arm64` 45349481082, `8205f0bbe4db2d9bc1e13d3f8fdf8a99a3cb080c`, SHA256 vérifié.
+- **Contrôles lancés par Claude Code sur ce binaire** (`DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`, sorties jointes à la PR) :
+  - `bench/tools/capture/run.py` : code de sortie 0, `acp-resume` CONFORME, `acp-live` CONFORME (L1 à L6). L5 relit l'historique à l'identique après la reconstruction du worker, avec un seul `resume_prefix_change`, `parts: ["system"]`. `spawn : ok=False` existait déjà sur `main` (tickets 24 et 28).
+  - **Durée de la comparaison avec le disque : médiane 1 742 µs, maximum 19 258 µs, sur 28 prompts** (trace `ya.resource_notice.compare`).
+  - `compare_capture_prompts.py` : smoke bench en capture, `py-example-001`, `main` `9f40fe5d8` contre la branche, `resolved` des deux côtés, 9 requêtes : TOUT IDENTIQUE.
+  - `compare_frames.py --against` (`acp_frames.py`, `main` contre la branche) : `A-display-auto` (26 trames) et `B-basic-manual-reject` (14) IDENTIQUE, écarts : 0, sans `--expect`.
+- **Contrôle de Yusuf au TUI** (8 étapes, binaire `8205f0bbe`) : conforme.
+  - Même pid de worker aux étapes 3 et 7.
+  - Aucune annonce sur l'aller-retour de l'étape 5.
+  - Skill Python importé avec les lignes annoncées (`DEMO-PY-OK`).
+  - Reprise après reconstruction : panneaux rejoués à leur place, un seul miss `resume_prefix_change`, `parts: ["system"]`.
+  - Remise en état faite.
+- **Constat hors ticket, non traité** : `yusagent --continue` lancé dans `/tmp/ya31-tui` ouvre le sélecteur de sessions au lieu de reprendre directement la dernière conversation du dossier.
+
+### 8.6 Points ouverts
+
+- **X3** (extension) : écrans sur `_yus/*`, ligne visible sur `_yus/notice`, sélecteur de permissions, onglet Instructions masqué, journal sans valeur de `mcpServers`, défauts de l'écran General (`null` sauf `compaction.enabled`).
+- **Tickets à part** :
+  - 32, « identité yusAgent » ;
+  - 33, « invalidations à la reprise non vues par l'empreinte » ;
+  - 34, « lignes du tour suivant absentes du fichier du worker ».
+- **Limites du §8.3.**
