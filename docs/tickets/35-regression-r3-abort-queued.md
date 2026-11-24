@@ -448,3 +448,19 @@ Aucune ligne upstream ajoutée : `admission.rs` garde ses deux appels, et `turn.
   - Comparaisons du worker : 13 136 µs et 12 253 µs.
   - Comparaison du tour 1, faite par l'admission : 18 529 µs.
   - Avant R3, la fenêtre ne contenait aucune entrée-sortie (§4).
+
+### 14.2 Push 2 : le code de A (`535b51f45`, `a12826d03`, `48d8f4b05`)
+
+- **Code** :
+  - `ya_resource_notice.rs` (fork) : jeton `delivery_compared`, levé par `ya_take_resource_notice` (worker) et pris par `ya_announce_resources` (admission) ;
+  - `session_engine_impl.rs:1115-1124` (lignes de R3) : le verrou ne couvre plus que le clone.
+  - **Aucune ligne upstream ajoutée.**
+- **CI** :
+  - run `ci` 45472360799 : 16 checks requis verts, aucun sauté (`gh pr checks 85 --required`) ;
+  - `a_daemon_delivery_compares_with_the_disk_once` et `abort_and_send_queued_acks_before_the_follow_up_delivery` : `ok` ;
+  - `ya-build-macos-arm64` 45472346390 vert, SHA256 vérifié.
+- **Contrôles sur ce binaire** (`DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`, commandes et sorties dans la PR #85) :
+  - `compare_capture_prompts.py`, smoke bench en capture, `py-example-001`, `main` `1093d646c` contre la branche : `resolved` des deux côtés, 9 requêtes, **TOUT IDENTIQUE** ; rien d'écrit dans `~/.yusagent` ni `~/.prime/agent` ;
+  - `bench/tools/capture/run.py` : code de sortie 0, `acp-resume` CONFORME, **`acp-live` CONFORME (L1 à L6)**, textes d'annonce inchangés ;
+  - comparaisons : médiane 1 831,5 µs, maximum 1 981 µs, sur 14 comparaisons. Le ticket 31 en comptait 28 sur les mêmes cas : moitié moins, cohérent avec une seule par livraison (déduit).
+- **Préfixe de prompt : inchangé.**
