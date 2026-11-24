@@ -13,6 +13,7 @@ Demande de Yusuf du 24/11/2026. Branche `ya-35-constat`, depuis `main` à `1093d
   - run `ci` 45376832870, `main` à `2e8dfdf41`, tentative 1, job 138385395316 (shard 3/8) ;
   - run `ci` 45429516827, PR #84 (`ya-31-x3`, `559823811`), tentative 1, job 138570835612 (shard 3/8) ; vert à la tentative 3 (job 138648679736).
 - Le test n'est **pas** listé en « Instabilité probable » et ne doit pas l'être : le constat ci-dessous désigne une cause dans notre code.
+- **Décisions de Yusuf du 24/11/2026 (§10)** : option A dans ce ticket. Option C en **ticket 36**, traité juste après le 35 et avant le 32, constat d'abord. Option B écartée.
 
 ## Résumé
 
@@ -225,7 +226,7 @@ Contraintes communes :
 - **Fichiers** : `ya_resource_notice.rs` (fork) et les lignes de R3 dans `session_engine_impl.rs`, déjà listées dans `docs/fork-changes.md`. **Aucune ligne upstream de plus** : `admission.rs` garde ses deux appels.
 - **Effet sur l'annonce du ticket 31** :
   - démon : inchangée. Le worker annonce avant la ligne du prompt, et l'admission ne trouvait déjà plus rien (ticket 31, §8.4) ;
-  - un changement fait sur le disque entre `turn.rs:1041` et l'admission (quelques ms) est annoncé au tour suivant au lieu de celui-ci. Aujourd'hui, il atteint le modèle sans être écrit dans le fichier (ticket 34) : l'option A supprime ce cas ;
+  - un changement fait sur le disque entre `turn.rs:1041` et l'admission (quelques ms) est annoncé au tour suivant au lieu de celui-ci. Aujourd'hui, il atteint le modèle sans être écrit dans le fichier, par le même mécanisme que le ticket 34 mais pour notre annonce, pas pour les avis d'upstream : l'option A supprime ce cas pour la première admission de la livraison (formulation corrigée au §11.2) ;
   - `-p` et RPC sans démon : inchangés.
 - **Limites** :
   - la fenêtre reste élargie pour les continuations autonomes d'un même tour, et en `-p` / RPC ;
@@ -274,3 +275,130 @@ En attendant la décision : le test reste hors de la liste « Instabilité proba
 - `-p` et RPC sans démon : la même fenêtre existe-t-elle pour leur commande d'abandon ? Non lu.
 - Le coût de `ya_compaction_enabled` (`wiring.rs:167`, `:186`) à chaque décision de compaction : lu, non mesuré. Il n'est pas dans la fenêtre.
 - Les deux vérifications du §7.2, avant d'écrire ce test.
+
+## 10. Décisions de Yusuf (24/11/2026)
+
+1. **Option A dans ce ticket.**
+   - Dans le démon, la comparaison du worker (`turn.rs:1041`) devient la seule de la livraison.
+   - L'admission consomme son jeton au lieu de relire le disque.
+   - Le verrou de session est relâché avant `block_on`.
+   - Hors démon (`-p`, RPC), l'admission garde sa lecture.
+2. **Option C en ticket 36**, juste après le 35 et avant le 32, constat d'abord. Le test du §7.1 ira avec le ticket 36. **Option B écartée.**
+3. **Tests** :
+   - celui du §7.2 (FIFO) ;
+   - plus un test sans horloge qui compte les comparaisons par livraison : 2 aujourd'hui, 1 attendue.
+
+   La ligne `mod` dans `crates/pa-daemon/src/worker/turn_stream_tests.rs` est acceptée. Les deux points du §7.2 sont à vérifier avant d'écrire le test : si l'un échoue, arrêt et autre proposition, sans dépendre de l'horloge. **L'un échoue : voir le §12.**
+4. **Méthode** :
+   - push des tests seuls, rouges sur leur assertion, puis le code ;
+   - le préfixe de prompt et le texte des annonces ne changent pas, vérifié par `compare_capture_prompts.py` et `acp_live_changes.py`.
+
+## 11. Réponses avant le code
+
+### 11.1 Comment le jeton est lié à sa livraison
+
+**Ce que le jeton porte, et ce qu'il ne porte pas.**
+
+- Le jeton ne porte **pas** l'annonce. Il dit seulement : « le disque a été comparé pour cette livraison, ne pas relire ».
+- L'annonce elle-même suit le chemin de R3, inchangé :
+  - le worker la calcule (`turn.rs:1041`) ;
+  - le moteur la met dans la boîte du tour suivant d'upstream (`ya_resource_notice.rs:409` → `admission.rs:207`) ;
+  - le worker l'écrit dans le fichier avant la ligne du prompt (`turn.rs:1043-1047`) ;
+  - la première admission la sort de la boîte (`admission.rs:47`, `:148`, juste après l'appel de R3).
+- Aucune admission ne « consomme l'annonce d'un autre » par le jeton : il n'y a rien à consommer, seulement une lecture à sauter.
+
+**Forme prévue.**
+
+- Le jeton est un booléen dans le tracker de la session, sous le verrou de `ya_resources`, dans `ya_resource_notice.rs` (fichier du fork).
+- Il est levé par la variante appelée par le worker (`session_engine_impl.rs:1117-1123`).
+- `ya_announce_resources` le prend, c'est-à-dire le lit et le remet à faux. S'il était levé, la fonction rend sans lire le disque ; sinon, elle lit comme aujourd'hui.
+- `-p` et RPC ne le lèvent jamais.
+
+**Pourquoi « la prochaine admission » est bien celle de la livraison.** Lu :
+
+- Dans le démon, toutes les admissions passent par `run_once.rs:380` (prompt) ou `:386` (ligne injectée).
+- `run_once` n'est appelé que par `run_turns` → `run_model_turn` (`run_loop.rs:66`).
+- `run_turns` n'est appelé que depuis `run_prompt` (`session_engine_impl.rs:1384`, `:1481`).
+- `run_prompt` n'est appelé que par le worker, juste après `turn.rs:1041` (`turn.rs:1066`).
+- Les livraisons sont sérialisées par l'unique `TurnRunner` : prise d'une livraison en `turn.rs:62-83`, fin attendue en `turn.rs:1068` avant la suivante.
+- Conséquence : entre un appel du worker et la première admission qui suit, aucune admission d'une autre livraison ne peut s'intercaler.
+
+**Les cas posés.**
+
+- **Un prompt en file d'attente** :
+  - il n'atteint `pa-core` qu'à sa prise par le runner, donc après son propre appel de `turn.rs:1041`, qui recompare et relève le jeton ;
+  - le steering envoyé pendant un run passe par `agent.steer`, sans admission : il ne touche pas au jeton.
+- **Une ligne injectée (`admission.rs:47`)** :
+  - livrée par la file du worker (avis `[bash-done]`, suite d'objectif) : même règle que pour un prompt, elle a son propre appel du worker ;
+  - continuation autonome dans le même `run_prompt` (`run_loop.rs`) : le jeton a déjà été pris par la première admission de la livraison, donc elle relit le disque comme aujourd'hui (limite du §11.3).
+- **Livraison abandonnée entre le calcul du jeton et l'admission** (abandon vu par la ligne acceptée, `session_engine_impl.rs:1434`, ou par les vérifications `model.rs:93`, `run_once.rs:337`) :
+  - `run_prompt` rend la main sans admission, et le jeton reste levé ;
+  - la prochaine admission de la session appartient à la livraison suivante, qui repasse d'abord par `turn.rs:1041` : comparaison faite, jeton relevé ;
+  - aucune admission ne saute donc une lecture sur la foi d'une comparaison plus ancienne que sa propre livraison.
+  - Ce qui reste, déjà vrai depuis R3 et inchangé par A : si la livraison abandonnée portait une annonce, celle-ci est déjà écrite dans le fichier avant la ligne du prompt abandonnée (`turn.rs:1043-1047`). Elle reste dans la boîte et atteint le modèle à la livraison suivante. Le modèle la reçoit une fois.
+- **Un seul cas où une admission saute sa lecture sans être la première de sa livraison** :
+  - quand la première itération de `run_turns` n'admet pas, c'est-à-dire la reprise après dépassement de fenêtre (`continue_run`, `run_once.rs:391`), et qu'une continuation autonome admet ensuite dans le même `run_prompt` ;
+  - effet : un changement du disque survenu entre-temps est annoncé à l'admission suivante, pas à celle-là ; rien n'est perdu ni annoncé deux fois ;
+  - pour le fermer : remettre le jeton à faux à la fin de `run_prompt`. Cela coûte une ligne dans `turn.rs` après `:1066` (upstream). **Je ne la propose pas** sauf avis contraire.
+
+### 11.2 « Le cas du ticket 34 » : formulation corrigée
+
+Le ticket 34 (`docs/tickets/31-skills-mcp-reglages.md:623`) porte sur les **avis d'upstream** de la boîte du tour suivant : `[python-state-restored]`, suite d'objectif, `[python-skills-unavailable]`. Dans le démon, ils atteignent le modèle sans être écrits dans le fichier de session. La cause : l'abonné de `run_once.rs:162-245` ne transmet pas les lignes custom de cette boîte.
+
+Ce que le §8 appelait « le cas du ticket 34 » est **le même mécanisme, appliqué à notre annonce** :
+
+- quand l'annonce est produite par l'admission (`admission.rs:47`, `:148`) et non par le worker, elle passe par la même boîte ;
+- elle atteint donc le modèle sans être écrite dans le fichier.
+
+Avec A, cela n'arrive plus pour la première admission d'une livraison. Cela reste possible pour une continuation autonome (§11.3).
+
+Le ticket 34, tel qu'il est écrit, ne couvre pas ce cas. Il faudrait l'y ajouter, ou le garder dans la limite du §11.3.
+
+### 11.3 Limite qui reste avec A (couverte par le ticket 36)
+
+- **Continuations autonomes dans le démon** (objectif et pilote autonome, `run_loop.rs`, admission par `admission.rs:47`) : la lecture du disque reste dans la fenêtre d'abandon d'upstream. Un abandon tombé pendant cette lecture est perdu jusqu'au premier événement transmis. De plus, une annonce produite là atteint le modèle sans être écrite dans le fichier (§11.2).
+- **`-p` et RPC sans démon** (`crates/pa-daemon/src/rpc/prompt_commands.rs:39`, `:197` ; `crates/pa-cli/src/print_runtime.rs:1618` ; `crates/pa-cli/src/print_goal.rs:612`, `:655`) : l'admission garde sa lecture dans la fenêtre. Que leur commande d'abandon ait la même fenêtre n'a pas été lu (§9).
+- **Couverture** : le **ticket 36** (option C) ferme la fenêtre elle-même, en relisant le drapeau d'abandon une fois le run enregistré. Après lui, une lecture dans la fenêtre ne peut plus perdre un abandon, sur aucun chemin du démon. Son constat dira aussi ce qu'il en est de `-p` et du RPC.
+
+## 12. Vérification du §7.2 : échec, arrêt et proposition
+
+### 12.1 Les deux points
+
+1. **La découverte des skills accepte-t-elle une FIFO ? Non.**
+   - Un `SKILL.md` n'est chargé que si `std::fs::metadata(path).is_file()` est vrai (`crates/pa-core/src/skills/discovery.rs:273-274`, puis `if *is_file` en `:284`).
+   - Pour un fichier `.md` à la racine d'un dossier de skills, c'est la même chose (`:317`, puis `if !is_file` en `:342`).
+   - Une FIFO n'est pas un fichier régulier : elle est ignorée sans être ouverte, donc le tour ne bloque jamais.
+2. **Aucun cache n'évite-t-il la relecture ?**
+   - **Skills : pas de cache trouvé.** Aucun `static`, `OnceLock` ou cache lu dans `crates/pa-core/src/skills/` ni dans `crates/pa-core/src/resources/`, et `load_resources` relit à chaque appel.
+   - **Réglages : un cache existe.** `FileSettingsStorage::read` rend le contenu en cache tant que l'identité `stat` ne change pas (`dev`, `ino`, `mtime`, `len`), dans `crates/pa-core/src/settings/storage.rs:173-217` et `:136-145`. Un fichier de réglages en FIFO ne serait lu qu'une fois.
+
+**Le §7.2 tel qu'il est écrit ne marche pas. Arrêt avant d'écrire les tests, comme demandé.**
+
+### 12.2 Propositions, sans horloge
+
+**P1 (recommandée) : garder le test de comptage seul pour le ticket 35 ; la position dans la fenêtre va au ticket 36.**
+
+- **Le test** : un e2e du démon, ajouté au fichier du fork `crates/pa-daemon/tests/ya_announce_path_e2e.rs`. Il lance déjà le vrai `pa-daemon` avec ses variables (`:199-215`).
+  - Il ajoute `PA_COMPACTION_TRACE=<fichier>`. Le puits de la trace s'ouvre une fois par processus (`crates/pa-core/src/session_engine/compaction_trace.rs:20-29`) et écrit une ligne JSON par point.
+  - Il envoie deux prompts.
+  - Il compte les lignes `ya.resource_notice.compare` (`ya_resource_notice.rs:386-389`) écrites pendant chacun.
+- **Attendu** : 2 par prompt aujourd'hui, 1 attendue. **Rouge sur cette assertion** avant le code.
+- **Ni horloge, ni FIFO, ni ligne upstream** : la ligne `mod` dans `turn_stream_tests.rs` n'est plus nécessaire.
+- **À vérifier en l'écrivant** : que le worker hérite de l'environnement du démon. Sinon, le test le dira par 0 ligne, pas par un faux vert : l'assertion porte sur « 2 », puis sur « 1 ».
+- **Ce qu'il prouve** : dans le démon, aucune lecture du disque ne reste à l'admission. C'est la seule lecture de R3 qui tombait dans la fenêtre pour ce scénario (§2.2).
+- **Ce qu'il ne prouve pas** : la position exacte par rapport à la vérification de `run_once.rs:337`. C'est l'objet du test du §7.1, sonde à état, entièrement déterministe, qui va avec le ticket 36.
+
+**P2 : une FIFO sur un fichier d'exclusion des skills, à la place de `SKILL.md`.**
+
+- **Le point d'arrêt** : `add_ignore_rules` lit `.gitignore`, `.ignore` et `.fdignore` de chaque dossier parcouru par `std::fs::read_to_string`, sans vérifier le type ni passer par un cache (`discovery.rs:159-177`, lecture en `:168`). Un `.ignore` en FIFO dans `agent_dir/skills/` bloquerait donc à chaque chargement des skills : à la construction de la session et à chaque comparaison.
+- **Le problème** : il n'existe aucun point où le test sait, sans horloge, que le tour est entre la ligne acceptée et l'admission.
+  - Le `get_messages` du test ne voit la ligne acceptée qu'après coup.
+  - Il faudrait donc bloquer la N-ième ouverture de la FIFO, N compté à l'avance : construction, admission du tour 1, `turn.rs:1041` du suivi, admission du suivi.
+  - Ce compte dépend de détails d'upstream : combien de fois la résolution des paquets et la découverte ouvrent ce fichier.
+- **Bilan** : déterministe mais fragile au moindre changement d'upstream dans le chargement. Après A, la N-ième ouverture n'arrive plus au même moment, et le test doit savoir l'attendre sans délai. Faisable, plus lourd ; **non recommandée**.
+
+**P3, écartée d'emblée** : un point d'accroche de test dans `ya_resource_notice.rs`. C'est du code du produit, contraire au push 1 « tests seuls ».
+
+### 12.3 En attente
+
+La décision de Yusuf entre P1 et P2 (ou autre chose) avant d'écrire les tests. Rien n'est poussé.
