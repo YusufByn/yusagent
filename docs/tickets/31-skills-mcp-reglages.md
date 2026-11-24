@@ -822,3 +822,25 @@ Contrôle TUI du §5.4, étape 7 : le journal d'usage est `~/.yusagent/sessions/
   - **Symptôme** : run `ci` 45376832870 sur `main` à `2e8dfdf41` (24/11/2026), shard 3, job 138385395316. Panique en `queue.rs:725:9` : « the follow-up's turn never settled on the bare abort ». Après un `abort` seul, `worker.core.busy` reste vrai au-delà de 10 s (`:719-727`).
   - **Autres échecs** : aucun dans les 40 derniers runs `ci` en échec du dépôt (17/11 au 24/11/2026), recherche dans les journaux des shards en échec.
   - **Upstream depuis notre base** : `2e8dfdf41..upstream/main` touche ce fichier (5 commits, +177/-12 lignes), sans changer cette assertion.
+
+### 9.9 Push 1 bis (`ca2e562f5`) et test du ticket 28
+
+- **Push 1 bis** : `if: ${{ !cancelled() && steps.changes.outputs.run == 'true' }}` sur l'étape e2e de l'agent factice. La condition existante est gardée pour la sortie rapide hors du périmètre. On y ajoute le compte rendu du push 1 et la note du ticket 35.
+- **`ya-extension`** run 45398633893 :
+  - tests unitaires : les mêmes 7 rouges qu'au push 1 ;
+  - e2e sur le vrai binaire : 16/18, les mêmes 2 rouges, aucun processus restant ;
+  - e2e sur l'agent factice, lancé cette fois : 9/14.
+    - **Les 3 cas du ticket 31 sont rouges sur leur assertion** :
+      - réglages : « délai dépassé : clic sur « Settings » » (bouton masqué). Le « (issue : clicked) » du message est la sonde d'avant le clic : le texte du message est calculé avant l'attente ;
+      - skills : « délai dépassé : _yus/skills/create reçu » ;
+      - permissions : « délai dépassé : clic sur « auto · no sandbox » (issue : covered) ».
+    - **2 rouges inattendus, sur des cas de la PR 3 (ticket 24)** :
+      - « boîte de permission » : « y moins d'1 s après la dernière frappe : rien » (`suite.ts:100-103`, fenêtre de calme mesurée à l'horloge du test) ;
+      - « cartes » : « délai dépassé : carte d'une cellule refusée » (`suite.ts:330-331`, clic sur le dernier « Worked » juste après le tour).
+    - Ces deux cas ne passent par aucun code changé ici. Ils ne sont pas listés en instabilité : pas de relance, signalé à Yusuf. Le dernier run où cette étape a vraiment tourné est celui du ticket 30 (45150074617, 11/11).
+- **`ya_acp_resume_e2e`, `the_history_lists_conversations_and_deletes_one_with_its_session`** (point 1 de Yusuf, lecture seule) :
+  - **Écrivain réel du snapshot de fenêtre.** C'est la construction du moteur au premier prompt de « one » (`crates/pa-daemon/src/agent_engine/lifecycle.rs:455-472`, `WindowedSessionStore::open`), qui écrit le fichier par `window_cache::save` (`crates/pa-core/src/session/window.rs:587`), de façon synchrone. Ni le scan (`session_scan.rs:61-72`, info-cache seulement), ni la création du worker (conversation neuve, pas d'ouverture en mode fenêtre, `worker/create.rs:228` est pour un fichier existant), ni la reprise de `holder` (même worker vivant) ne l'écrivent.
+  - **Pourquoi il peut manquer.** L'ouverture en mode fenêtre renvoie `Ok(None)` sans rien écrire quand le fichier a changé pendant sa lecture (`window.rs:583-584`, contrôle de génération taille/mtime/ctime, `window_cache.rs:46-50`). Or le worker écrit les lignes du prompt pendant cette construction (commentaire `lifecycle.rs:480`, « The worker persisted accepted rows while this lazy session built »). Le moteur repasse alors par l'ouverture complète (`lifecycle.rs:466-471`) et le processus n'a aucun snapshot en mémoire. Ensuite, `flush` n'écrit qu'un snapshot en mémoire (`window_cache.rs:164-172`, appelé à la libération, `lease.rs:356-360`) : plus personne n'écrit le fichier pendant le test. Les autres sorties `Ok(None)` de `WindowedSessionStore::open` (`window.rs:225-559`) ont le même effet.
+  - **Option retenue : le test dépose le fichier s'il manque.** Une attente ne peut pas réussir quand la construction l'a sauté.
+  - **Aucun écrivain après la suppression.** La suppression arrête la session et attend la sortie de son worker (`ya_history.rs:793-808`) avant de retirer le fichier et ce qui porte son nom (`:826-830`). La libération du worker, seule autre écriture possible du snapshot, a donc lieu avant le retrait. Après la suppression, aucun worker ne tient « one » ; `session/list` ne lit pas un fichier retiré (le scan part des `.jsonl`) et n'écrit que l'info-cache, que le balayage couvre. Rien ne peut rendre le test instable dans l'autre sens.
+  - Le fichier n'est déposé que s'il manque. Contenu `{}` : une ouverture qui le lirait le refuserait et repasserait par la lecture complète (`window_cache.rs:121-124`). Commit séparé (`f89ac3f59`), test seul, poussé avec le push 2.
