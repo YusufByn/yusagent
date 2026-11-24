@@ -346,9 +346,26 @@ const SETTING_KEYS = [
 const FROZEN = ["reasoningSummary", "bashWaitSeconds", "promptVersion", "codexSessionIdHeader", "existingTestsRule", "editTool", "shellTool"];
 const PERMISSIONS_REFUSAL =
   "permissions is not set here: change it for this conversation with the permissions menu, or in ~/.yusagent/settings.json for every new session.";
-/** Défauts que donne le pont (`settings.rs`, `view`). */
-const SETTING_DEFAULTS = Object.fromEntries(SETTING_KEYS.map((key) => [key, null]));
-SETTING_DEFAULTS["compaction.enabled"] = true;
+/**
+ * Défauts que donne le pont (`settings.rs`, `defaults` : getters du cœur sur des réglages vides,
+ * ticket 31 C1), relevés par le test `the_view_gives_the_core_defaults` (run `ci` 45392710567).
+ */
+const SETTING_DEFAULTS = {
+  "compaction.enabled": true,
+  auxiliaryModel: null,
+  "retry.enabled": true,
+  "retry.maxRetries": 3,
+  "retry.baseDelayMs": 2000,
+  "retry.provider.maxRetryDelayMs": 60000,
+  "retry.failover.enabled": true,
+  "retry.failover.maxRetries": 3,
+  "retry.failover.baseDelayMs": 1000,
+  "retry.failover.maxDelayMs": 30000,
+  "retry.provider.waitForUsage.pauseUntilReset": true,
+  "retry.provider.waitForUsage.maxPauseMs": 86400000,
+  "retry.provider.waitForUsage.maxParks": 8,
+  mcpServers: null,
+};
 const settingValues = Object.fromEntries(SETTING_KEYS.map((key) => [key, null]));
 const home = dir ?? process.cwd();
 const skillFile = (root, name) => join(home, root, name, "SKILL.md");
