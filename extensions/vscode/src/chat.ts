@@ -24,6 +24,7 @@ import type { Session } from "./session";
 import { authText, isAuthFailure } from "./ya/auth";
 import { features } from "./ya/methods";
 import { yaMeta } from "./ya/meta";
+import { noticeLines } from "./ya/notice";
 import { bashRuns, cellOfEdits, cellOfRuns, fileEdits, fragments, isDeclined, type Fragment } from "./ya/cells";
 import { diffFiles } from "./ya/diff-files";
 import { Reverts } from "./ya/reverts";
@@ -758,9 +759,19 @@ export class Chat {
       case "tool_call_update":
         this.toolDone(turn, update, meta);
         break;
-      case "session_info_update":
+      case "session_info_update": {
+        // yusAgent (ticket 31) : la notice d'une annonce, une ligne du tour au-dessus de son message.
+        const lines = noticeLines(update._meta);
+        if (lines) {
+          turn.notices = [...(turn.notices ?? []), ...lines];
+          this.dirtyHeads.add(turn.id);
+          if (!this.loading) this.log.info(`chat: turn ${turn.id} notice: ${lines.join(" ")}`);
+          this.changed();
+          break;
+        }
         this.info(turn, meta);
         break;
+      }
     }
   }
 

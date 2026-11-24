@@ -424,3 +424,10 @@ button.ya-run-head {
 .menu-empty.is-error {
   color: var(--vscode-errorForeground);
 }
+
+/* yusAgent (ticket 31) : une annonce du moteur (skills, MCP), discrète, au-dessus du message. */
+.ya-turn-notice {
+  margin: 0 0 4px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}

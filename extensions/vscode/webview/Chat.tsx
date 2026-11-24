@@ -267,6 +267,12 @@ const TurnView = memo(function TurnView({
     );
   return (
     <section className={dim ? `turn is-dimmed-${dim}` : "turn"}>
+      {/* yusAgent (ticket 31) : les annonces parties avec ce tour, au-dessus de son message. */}
+      {turn.notices?.map((text, at) => (
+        <p key={`notice ${at}`} className="ya-turn-notice" role="note">
+          {text}
+        </p>
+      ))}
       {turn.prompt && (
         <UserMessage
           text={turn.prompt.text}

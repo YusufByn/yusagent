@@ -348,6 +348,11 @@ export type TurnHead = {
   id: number;
   /** What the user sent; absent on a turn the agent started on its own. */
   prompt?: { text: string; images: Thumb[] };
+  /**
+   * yusAgent (ticket 31) : les lignes visibles des annonces du moteur (`_yus/notice`) parties avec ce
+   * tour, au-dessus de son message (`src/ya/notice.ts`).
+   */
+  notices?: string[];
   /** What woke the agent, on its own turns: a background command ended, a usage limit reset, a goal's pause ended, a heartbeat (yusAgent, ticket 25). */
   wake?: "bash" | "quota" | "goal" | "heartbeat";
   state: "running" | "done" | "cancelled" | "failed";
