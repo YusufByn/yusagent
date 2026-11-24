@@ -848,3 +848,28 @@ Contrôle TUI du §5.4, étape 7 : le journal d'usage est `~/.yusagent/sessions/
 ### 9.10 Limite du produit notée (décision de Yusuf du 24/11/2026)
 
 - **Un snapshot de fenêtre sauté à la construction du moteur n'est réécrit par personne tant que vit le worker** (§9.9 : `window.rs:583-584`, `lifecycle.rs:466-471`, `window_cache.rs:164-172`). La prochaine ouverture de la session fait donc une lecture complète du fichier. Coût en temps seulement, non mesuré ; à mesurer plus tard si utile.
+
+### 9.11 Les deux rouges inattendus de l'e2e de l'agent factice (constat et décisions du 24/11/2026)
+
+**Constat.**
+- **L'agent factice de la branche ne change rien pour ces cas.** La même suite a été jouée contre l'agent factice de `main` (`2e8dfdf41`) et celui de la branche : initialize, session/new, `accord` (accord à 200 ms), `carte`, `refus`, en manuel. Résultat : 26 trames de chaque côté. Seule la réponse de `session/new` diffère : identifiant du fichier (pid) et valeurs du modèle (C7). Durées : main 206, 0 et 0 ms ; branche 207, 1 et 1 ms. Dans `onPrompt`, les branches `accord`, `carte` et `refus` sont intactes.
+- **Pas de lancement local.** L'e2e local n'a pas pu tourner dans la session de Claude Code. `@vscode/test-electron` cherche `Contents/MacOS/Electron`, qui s'appelle `Code` dans VS Code 1.146 sur macOS. Avec un lanceur qui appelle `Code`, le processus est tué aussitôt par SIGKILL, signature valide ; cause probable : le bac à sable de la session.
+- **Les causes sont des dépendances au temps dans nos tests** :
+  - « boîte de permission » (`test/e2e/suite.ts:84-103`, avant correction) : les fenêtres de calme sont mesurées par la webview, depuis l'ouverture de la boîte et la dernière frappe. Le test, lui, les mesurait avec sa propre horloge (`opened = Date.now()` après le sondage, `sleep(opened + 800)`, `sleep(opened + 1150)`), avec entre les deux les allers-retours de la sonde (50 ms au moins chacun) et le lot du chat ;
+  - « cartes » (`suite.ts:328-331`, avant correction) : clic sur le dernier « Worked » de la page juste après le tour. Si le lot du chat qui replie le tour `refus` n'est pas encore affiché, le clic referme le « Worked » du tour `carte`.
+
+**Décisions de Yusuf.**
+- Pas de lancements en série sur une branche jetable ; pas de liste « Instabilité probable » sans son accord.
+- Version déterministe, en commit de tests séparé (`a11e88e28`, push 2) :
+  1. **Boîte** : la sonde lit l'état de la boîte avec les fonctions de `src/ya/permission-keys.ts` (`armed`, nouvelle `readyAt`, `buttonsReady`) et agit dans le même appel.
+     - Le clic grisé sur « Allow » et `y` sont joués dans l'appel même qui ouvre la boîte (`ProbeInput.atBoxOpen`, nouveau module `webview/ya-box-state.ts`).
+     - Une frappe relance les touches mais pas les boutons : `a` puis `y` dans un seul appel (`y` toujours dans la fenêtre que `a` relance), et `keysReadyAt > buttonsReadyAt`.
+     - Les boutons sont attendus prêts sur l'état de la boîte, puis `a` puis `y` : rien.
+     - Plus aucun `sleep` sur l'horloge du test pour un « pas encore ». Les cas « Entrée » et « sans focus » sont inchangés.
+  2. **Clics sur « Worked » juste après un tour.** Le test attend que la page ait autant de « Worked » que de tours non vides dans l'état du chat (`workedCount`), puis, après le tour, un « Worked » de plus, affiché et fermé (`openNewWork`), et clique sur celui-là. Endroits touchés :
+     - `suite.ts` : boîte, étape 2 (Esc puis « Declined ») ; « diffs » ; « cartes » (tour `carte` et tour `refus`) ;
+     - `suite-real.ts` : « cellule avec bash() » (attente du « Worked » du tour, au lieu du premier de la page) ; « edit() » ; « suppression pure après un emoji ».
+  3. **Sonde réservée aux tests**, comme avant. La webview n'agit que sur les messages `probe` et `probeInput` (`webview/ya-probe.ts:136`). L'hôte ne les envoie que depuis `view.probe` et `view.probeInput` (`src/view.ts:427`, `:445`). Ces fonctions ne sont appelées que par les commandes `yusagent._test.probe` et `yusagent._test.probeInput`, déclarées seulement si `YUSAGENT_EXTENSION_TEST === "1"` (`src/extension.ts:51-74`), que pose le seul lanceur e2e.
+     - Dans le `.vsix`, la boîte pose son état dans `ya-box-state.ts` à son ouverture et note chaque touche reçue ; rien ne le lit sans sonde, et aucune action n'est enregistrée sans `probeInput`.
+- **Ces corrections ne peuvent pas être vues en échec de façon déterministe** : elles retirent une dépendance au temps. Le contrôle est qu'elles passent, au push 2 et ensuite.
+- Commits du ticket dans ce push : `69dc040ba` (§9.10) et celui-ci.
