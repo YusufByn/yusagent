@@ -231,7 +231,8 @@ export function Settings({
   }, [tab]);
 
   return (
-    <div className="screen">
+    // yusAgent (ticket 31) : `ya-settings`, la portée des règles d'Unharnessed (`ya-settings.css`).
+    <div className="screen ya-settings">
       <header className="topbar">
         <div className="topbar-title">
           <button
