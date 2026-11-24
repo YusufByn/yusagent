@@ -890,3 +890,15 @@ Commits, un sujet chacun (avant celui de cette doc) :
 - doc : `docs/fork-changes.md` (section « Skills, MCP et réglages dans l'extension, PR X3 »), `extensions/vscode/README.md`, ce ticket.
 
 En local (Claude Code) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run test:unit` donne `ℹ tests 67`, `ℹ pass 67`, `ℹ fail 0`. Le test Rust est seulement formaté (`rustfmt`), compilé en CI (règle 8).
+
+### 9.13 Run du push 2 et contrôles sur le binaire de la branche (24/11/2026)
+
+- **CI** :
+  - `ci` 45404118237 : succès ;
+  - `ya-extension` 45404118247 : unitaires 67/67, e2e de l'agent factice 14/14, e2e du vrai binaire 18/18, aucun processus restant, `.vsix` 200 848 octets ;
+  - `ya-build-macos-arm64` 45404103532 : succès ;
+  - `gh pr checks 84 --required` : 16 `pass`.
+- **Binaire** `02c32497ecc32140c6bfa416ba50a51d5f6362d9`, SHA256 vérifié par `install-bin.sh`. `install-vsix.sh 45404118247` dans un dossier isolé : 200 848 octets, sha256 `90239ab4…fa41f`, installé.
+- **`acp_frames.py`** sur ce binaire : `A-display-auto` (26 trames), `B-basic-manual-reject` (14), `C-resources` (44, refus D1, skill créé, `manual`, une notice), aucun processus restant, `CONFORME`. Défauts rendus : `retry.enabled: true`, `maxRetries: 3`, `baseDelayMs: 2000`, `provider.maxRetryDelayMs: 60000`, failover `true/3/1000/30000`, `waitForUsage` `true/86400000/8`, `compaction.enabled: true`.
+- **`compare_frames.py`** contre l'agent factice : `écarts : 0`.
+- **`compare_frames.py --against`** la capture de `8205f0bbe` (`main`) : A et B `IDENTIQUE` ; `C-resources` : 22 écarts, tous attendus (C1). Ce sont les 11 défauts `retry.*`, `null` sur `main`, nombre ou booléen sur la branche, dans les réponses de `_yus/settings/get` et `set` (trames 18 et 20). `--expect` ne couvre que des clés ajoutées, pas un changement de type.
