@@ -595,6 +595,10 @@ Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `w
 - Une session en prompt v1 reçoit ses annonces au format et avec le filtre de l'inventaire v2.
 - Ajout du 24/11/2026 (X3, §9.3) : `_yus/mcp/set_token` n'est accessible depuis aucun écran. Le pont ne donne jamais le champ `token` d'un service (`ya_resources.rs:441-448`), donc le formulaire de jeton de l'extension ne s'ouvre pas.
 - Ajout du 24/11/2026 (écart 8 de X3, §9.3) : un prompt venu du TUI attaché au même worker, précédé d'une annonce, perd son origine `prompt`. Le pont annonce le tour d'un autre client à son premier `message_start`, ici la ligne d'annonce (`crates/pa-daemon/src/acp/ya_turns.rs:126-127`), et `origin_of` en fait un réveil sans genre (`:340-347`). Hors X3 : correction dans le pont, à faire plus tard.
+- Ajout du 24/11/2026 (contrôle de Yusuf, §9.15) :
+  - un serveur MCP HTTP déclaré sans identifiant n'est annoncé au modèle qu'une fois utilisable. `get_enabled_persistent_generic_servers` (`crates/pa-core/src/mcp/mod.rs:899-923`) ne le garde que si `is_authed` (`:487-537`) trouve un identifiant (variable de jeton remplie ou accès OAuth valide). On ne peut pas encore le rendre utilisable depuis l'extension : login et `set_token` arrivent avec le ticket du login (C4) ;
+  - l'écran MCP affiche « connected » pour un serveur stdio jamais lancé : cela veut dire « utilisable », pas « joint » ;
+  - le bouton « New skill » (`.button`, `extensions/vscode/webview/SettingsSkills.tsx:46`) garde le style provisoire du chat (`extensions/vscode/webview/styles.css:140`), non repris dans `ya-settings.css` : à traiter à la passe de design.
 
 ### 8.4 Run du push 2 (`2b1c6c668`) et option 1 (décision de Yusuf du 24/11/2026)
 
@@ -709,6 +713,12 @@ Branche `ya-31-x3`, depuis `main` à `2e8dfdf41`. Constat et plan présentés à
 
 Écart 8 (prompt du TUI attaché qui perd son origine après une annonce) : en limite au §8.3, hors X3.
 
+Limites ajoutées au contrôle de Yusuf (24/11/2026, §9.15), aussi au §8.3 :
+- Ajout du 24/11/2026 (contrôle de Yusuf, §9.15) :
+  - un serveur MCP HTTP déclaré sans identifiant n'est annoncé au modèle qu'une fois utilisable. `get_enabled_persistent_generic_servers` (`crates/pa-core/src/mcp/mod.rs:899-923`) ne le garde que si `is_authed` (`:487-537`) trouve un identifiant (variable de jeton remplie ou accès OAuth valide). On ne peut pas encore le rendre utilisable depuis l'extension : login et `set_token` arrivent avec le ticket du login (C4) ;
+  - l'écran MCP affiche « connected » pour un serveur stdio jamais lancé : cela veut dire « utilisable », pas « joint » ;
+  - le bouton « New skill » (`.button`, `extensions/vscode/webview/SettingsSkills.tsx:46`) garde le style provisoire du chat (`extensions/vscode/webview/styles.css:140`), non repris dans `ya-settings.css` : à traiter à la passe de design.
+
 **Fichiers upstream** : aucun. X3 touche du code repris d'Unharnessed (`extensions/vscode/src`, `webview`), des fichiers du fork (`src/ya/`, agent factice, `bench/tools/capture/acp_frames.py`, `compare_frames.py`, `README.md` du banc) et `crates/pa-daemon/src/acp/ya_resources/settings.rs` (fork).
 
 **Préfixe de prompt** : inchangé. Aucune trame de plus à l'ouverture ; prompt inchangé ; la notice n'est que de l'affichage ; le mode de permissions n'entre pas dans les requêtes (`prefix_stability.rs:2425`) ; C1 ne change qu'une réponse de `_yus/settings/get`.
@@ -786,7 +796,7 @@ Contrôle TUI du §5.4, étape 7 : le journal d'usage est `~/.yusagent/sessions/
 3. Skills > New skill `demo-y`, description `Demo skill.`, puis « quels skills as-tu ? ». Attendu : `Skills updated: added demo-y. Sent to the agent.` au-dessus du message, et `demo-y` cité.
 4. Éteins `demo-y`, puis envoie un message. Attendu : `Skills updated: removed demo-y. Sent to the agent.`
 5. Rallume puis éteins `demo-y`, puis envoie un message. Attendu : aucune ligne.
-6. MCP > Add a server `demo-mcp`, URL `http://127.0.0.1:9/mcp`, puis un message. Attendu :
+6. MCP > Add a server `demo-mcp`, en Command `ya-demo-never-run` (serveur stdio ; corrigé le 24/11/2026, §9.15 : un serveur HTTP sans identifiant n'est pas annoncé), puis un message. Attendu :
    - `MCP servers updated: added demo-mcp. Sent to the agent.` ;
    - dans Output > yusAgent, `settings: mcpServers set`, sans valeur.
 7. General : éteins « Retry failed requests », puis un message. Attendu : aucune ligne, et `grep -c '"invalidation"' $(ls -t ~/.yusagent/sessions/*.usage.ndjson | head -1)` donne `0`.
@@ -938,3 +948,17 @@ En local (Claude Code) : `cd extensions/vscode && npm run typecheck && npm run l
   - **seul rouge** : « réglages stylés », sur son assertion « libellé collé à sa description » ;
   - unitaires 67/67, e2e de l'agent factice 14/15, e2e du vrai binaire 18/18, aucun processus restant.
 - **Push B** : la feuille (`ya-settings.css`) et cette doc.
+
+### 9.15 Contrôle de Yusuf repris (24/11/2026)
+
+Sur le `.vsix` du run `ya-extension` 45411474069, binaire `02c32497e`. Remise en état faite.
+
+- **Étapes 0 à 5, 7, 8 et 9 conformes.** Les écrans Settings sont stylés : libellés et descriptions séparés, interrupteurs avec état visible, onglets stylés, menu de permissions lisible et cliquable.
+- **Étape 6 telle qu'écrite** (serveur HTTP `http://127.0.0.1:9/mcp`) : aucune annonce, et c'est le comportement attendu du cœur.
+  - `get_enabled_persistent_generic_servers` (`crates/pa-core/src/mcp/mod.rs:899-923`) ne garde un serveur HTTP déclaré que si `is_authed` (`:487-537`) trouve un identifiant utilisable : variable de jeton remplie ou accès OAuth valide. L'écran le montrait `not_connected`.
+  - Le calcul est le même qu'à l'ouverture de la session : le préfixe reste cohérent.
+  - Les tests de R3 utilisaient un serveur stdio (`crates/pa-core/tests/prefix_stability.rs:2839`).
+  - Étape 6 corrigée au §9.7.
+- **Étape 6 bis** : `demo-mcp` passé en Command `ya-demo-never-run`. On voit `MCP servers updated: added demo-mcp. Sent to the agent.`, et le journal Output n'affiche que `settings: mcpServers set`, sans valeur. Conforme.
+- **Étape 7** : `grep -c '"invalidation"'` donne 0.
+- Limites relevées : §9.3 et §8.3.
