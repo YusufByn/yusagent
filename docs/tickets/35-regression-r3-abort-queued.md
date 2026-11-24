@@ -14,6 +14,7 @@ Demande de Yusuf du 24/11/2026. Branche `ya-35-constat`, depuis `main` à `1093d
   - run `ci` 45429516827, PR #84 (`ya-31-x3`, `559823811`), tentative 1, job 138570835612 (shard 3/8) ; vert à la tentative 3 (job 138648679736).
 - Le test n'est **pas** listé en « Instabilité probable » et ne doit pas l'être : le constat ci-dessous désigne une cause dans notre code.
 - **Décisions de Yusuf du 24/11/2026 (§10)** : option A dans ce ticket. Option C en **ticket 36**, traité juste après le 35 et avant le 32, constat d'abord. Option B écartée.
+- **Décisions de Yusuf du 24/11/2026, suite (§13)** : test de comptage seul (P1). **Ticket 37**, après le 36, constat d'abord : une annonce produite par l'admission n'est pas écrite dans le fichier de session.
 
 ## Résumé
 
@@ -339,7 +340,7 @@ En attendant la décision : le test reste hors de la liste « Instabilité proba
 - **Un seul cas où une admission saute sa lecture sans être la première de sa livraison** :
   - quand la première itération de `run_turns` n'admet pas, c'est-à-dire la reprise après dépassement de fenêtre (`continue_run`, `run_once.rs:391`), et qu'une continuation autonome admet ensuite dans le même `run_prompt` ;
   - effet : un changement du disque survenu entre-temps est annoncé à l'admission suivante, pas à celle-là ; rien n'est perdu ni annoncé deux fois ;
-  - pour le fermer : remettre le jeton à faux à la fin de `run_prompt`. Cela coûte une ligne dans `turn.rs` après `:1066` (upstream). **Je ne la propose pas** sauf avis contraire.
+  - pour le fermer, il faudrait remettre le jeton à faux à la fin de `run_prompt`, ce qui coûte une ligne upstream dans `turn.rs` après `:1066`. **Refusé par Yusuf (§13)** : c'est une limite.
 
 ### 11.2 « Le cas du ticket 34 » : formulation corrigée
 
@@ -399,6 +400,37 @@ Le ticket 34, tel qu'il est écrit, ne couvre pas ce cas. Il faudrait l'y ajoute
 
 **P3, écartée d'emblée** : un point d'accroche de test dans `ya_resource_notice.rs`. C'est du code du produit, contraire au push 1 « tests seuls ».
 
-### 12.3 En attente
+### 12.3 Décision
 
-La décision de Yusuf entre P1 et P2 (ou autre chose) avant d'écrire les tests. Rien n'est poussé.
+P1, au §13.
+
+## 13. Décisions de Yusuf, suite (24/11/2026)
+
+1. **P1** : le test de comptage seul, dans `crates/pa-daemon/tests/ya_announce_path_e2e.rs`. Pas de ligne `mod` dans `turn_stream_tests.rs`. Si le worker n'hérite pas de `PA_COMPACTION_TRACE` : arrêt et compte rendu, sans contournement.
+   - **Lu** : le worker hérite. `apply_worker_env` garde l'environnement du démon comme base et n'en retire que `RLM_DEPTH` (`crates/pa-daemon/src/supervisor/supervision.rs:62-72`). Le test le confirmera : 0 ligne de trace donnerait un rouge sur « 0 », pas un faux vert.
+2. **Cas résiduel de `continue_run` (§11.1) : aucune ligne upstream dans `turn.rs`.**
+   - **Limite** : après une reprise sur dépassement de fenêtre (`continue_run`, `run_once.rs:391`), la première continuation autonome du même `run_prompt` prend le jeton. Elle ne relit donc pas le disque.
+   - Effet : un changement survenu depuis la comparaison du worker est annoncé une admission plus tard ; il n'est ni perdu, ni annoncé deux fois.
+   - La fenêtre d'abandon, elle, est couverte par le ticket 36.
+3. **Ticket 37**, après le 36, constat d'abord : « une annonce produite par l'admission n'est pas écrite dans le fichier de session ». Ce qui est déjà trouvé :
+   - **Les chemins** :
+     - continuations autonomes du démon (`admission.rs:47`, appelé par `run_once.rs:386` depuis `run_loop.rs`) ;
+     - `-p` (`crates/pa-cli/src/print_runtime.rs:1618`, `crates/pa-cli/src/print_goal.rs:612`, `:655`) ;
+     - RPC sans démon (`crates/pa-daemon/src/rpc/prompt_commands.rs:39`, `:197`).
+   - **Démon** :
+     - l'annonce va dans la boîte du tour suivant (`ya_resource_notice.rs:409` → `admission.rs:207`), puis dans la requête ;
+     - l'abonné de `run_once.rs:162-245` ne transmet pas les lignes custom de cette boîte au worker : la ligne n'est donc ni écrite dans le fichier, ni envoyée aux clients ;
+     - même mécanisme que le ticket 34, mais pour notre annonce (§11.2).
+   - **`-p` et RPC sans démon** : le ticket 31 dit que le moteur écrit lui-même la ligne dans l'ordre de la requête (`persist_event`, `crates/pa-core/src/session_engine/mod.rs:412-438`, ticket 31, §8.4). **À revérifier dans le constat du 37** : la demande de Yusuf range ces chemins parmi ceux où la ligne manque.
+   - **Conséquences** :
+     - le prompt s'écarte du fichier de session : à la reprise, l'historique relu n'a pas l'annonce, d'où un miss possible non journalisé ;
+     - la notice `_yus/notice` n'est pas rejouée à `session/load`, car `ya_history.rs` rejoue depuis le fichier.
+
+### 13.1 Plan des pushs
+
+| Push | Contenu | Attendu |
+|---|---|---|
+| 1 | ce ticket ; `a_daemon_delivery_compares_with_the_disk_once` dans `ya_announce_path_e2e.rs` (tours 2 et 3 comptés) | **rouge sur son assertion** : `[2, 2]` au lieu de `[1, 1]` ; tout le reste vert |
+| 2 | option A : jeton dans `ya_resource_notice.rs` (fichier du fork), variante appelée par le worker et verrou relâché avant `block_on` dans `session_engine_impl.rs` (lignes de R3) ; doc (`docs/fork-changes.md`, ce ticket) | tout vert ; puis, sur le binaire de la branche, `compare_capture_prompts.py` TOUT IDENTIQUE et `acp_live_changes.py` L1 à L6 CONFORME |
+
+Aucune ligne upstream ajoutée : `admission.rs` garde ses deux appels, et `turn.rs` reste tel quel.
