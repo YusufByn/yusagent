@@ -8,7 +8,7 @@ import * as vscode from "vscode";
 
 import type { AgentState, ChatState, Probe, ProbeInput, SessionState, WebviewMessage } from "../../src/protocol";
 import { authText } from "../../src/ya/auth";
-import { fakeAgentPath, fixtureFrames, normalize, received, setScenario, starts, waitFor } from "../helpers";
+import { fakeAgentPath, fixtureFrames, noticesOf, normalize, permissionsOf, received, setScenario, starts, waitFor } from "../helpers";
 
 interface State {
   agent: AgentState;
@@ -72,7 +72,7 @@ async function shows(text: string, what: string): Promise<string> {
 async function permissionsIs(value: string): Promise<void> {
   await waitFor(async () => {
     const s = (await state()).session;
-    return s?.kind === "open" && s.config.permissions === value;
+    return s?.kind === "open" && permissionsOf(s.config) === value;
   }, `permissions = ${value}`);
 }
 
@@ -386,6 +386,92 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "send", text: "auto", images: [] });
       await permissionsIs("auto");
       await shows(AUTO_BADGE, "étiquette après config_option_update");
+    },
+  ],
+  [
+    "réglages (ticket 31, X3) : bouton Settings, onglets General, MCP et Skills sans Instructions ni Images ni « restart », écran lu à son ouverture seulement, catalogue masqué",
+    async () => {
+      setScenario(control, {});
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      const screenFrames = () => received(control, lastPid()).filter((frame) => String(frame.method ?? "").startsWith("_yus/"));
+      await sleep(300);
+      assert.deepEqual(screenFrames(), [], "rien lu avant l'ouverture de l'écran (E7)");
+      await userClicks("Settings");
+      const general = await shows("Compaction", "onglet General");
+      for (const label of ["General", "MCP", "Skills", "Retries", "Switching providers", "Usage limits"]) {
+        assert.ok(general.includes(label), `${label} affiché`);
+      }
+      for (const absent of ["Instructions", "Image model", "Block images"]) assert.ok(!general.includes(absent), `${absent} absent`);
+      assert.ok(!/restart/i.test(general), "aucun texte « restart »");
+      await waitFor(
+        () => ["_yus/settings/get", "_yus/skills/list", "_yus/mcp/list"].every((method) => screenFrames().some((frame) => frame.method === method)),
+        "écran lu à son ouverture",
+      );
+      await userClicks("Skills");
+      const skills = await shows("Changes reach the agent with your next message.", "texte de l'onglet Skills (C3)");
+      assert.ok(!/restart/i.test(skills), "aucun « restart » dans Skills");
+      await userClicks("MCP");
+      const mcp = await shows("Your servers", "onglet MCP");
+      assert.ok(mcp.includes("Changes reach the agent with your next message."), "texte de l'onglet MCP (C3)");
+      for (const absent of ["Marketplace", "Catalog", "Linear"]) assert.ok(!mcp.includes(absent), `${absent} masqué (C4)`);
+      await userClicks("Back");
+    },
+  ],
+  [
+    "skills (ticket 31) : skill créé puis message, ligne au-dessus du message ; interrupteur → _yus/skills/set, ligne du retrait",
+    async () => {
+      setScenario(control, {});
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      // Le premier prompt construit la session : ce que le modèle sait part de là.
+      await post({ type: "send", text: "bonjour", images: [] });
+      await idle();
+      await post({ type: "createSkill", name: "demo-e2e", description: "Demo skill." });
+      await waitFor(() => received(control, lastPid()).some((frame) => frame.method === "_yus/skills/create"), "_yus/skills/create reçu");
+      await post({ type: "send", text: "x3 un", images: [] });
+      await idle();
+      const added = "Skills updated: added demo-e2e. Sent to the agent.";
+      const text = await shows(added, "ligne de l'ajout");
+      assert.ok(text.indexOf(added) < text.indexOf("x3 un"), "au-dessus du message");
+      assert.deepEqual(noticesOf((await state()).chat.entries.at(-1)), [added]);
+      await userClicks("Settings", "Skills", "Use demo-e2e");
+      await waitFor(
+        () => received(control, lastPid()).some((frame) => frame.method === "_yus/skills/set" && (frame.params as { enabled?: boolean }).enabled === false),
+        "_yus/skills/set reçu",
+      );
+      await userClicks("Back");
+      await post({ type: "send", text: "x3 deux", images: [] });
+      await idle();
+      await shows("Skills updated: removed demo-e2e. Sent to the agent.", "ligne du retrait");
+    },
+  ],
+  [
+    "permissions (ticket 31, C5, C6) : menu sur l'étiquette, libellés du pont, set_config_option seulement sur un changement, étiquette manual",
+    async () => {
+      setScenario(control, {});
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await permissionsIs("auto");
+      const sets = () => received(control, lastPid()).filter((frame) => frame.method === "session/set_config_option");
+      await userClicks(AUTO_BADGE);
+      const menu = await shows("Ask before each tool call", "menu des permissions");
+      assert.ok(menu.includes("Run tool calls without asking (no sandbox)"), "les deux libellés du pont");
+      // La valeur courante : rien ne part.
+      await userClicks("Run tool calls without asking (no sandbox)");
+      await sleep(300);
+      assert.equal(sets().length, 0, "rien pour la valeur courante");
+      await userClicks(AUTO_BADGE, "Ask before each tool call");
+      await permissionsIs("manual");
+      await waitFor(() => sets().length === 1, "set_config_option reçu");
+      assert.deepEqual(sets()[0].params, { sessionId: "fake-session-1", configId: "permissions", value: "manual" });
+      const shown = await shows("manual", "étiquette manual");
+      assert.ok(!shown.includes(AUTO_BADGE), "plus d'étiquette auto");
+      await userClicks("manual", "Run tool calls without asking (no sandbox)");
+      await permissionsIs("auto");
+      await waitFor(() => sets().length === 2, "second set_config_option");
+      assert.deepEqual(sets()[1].params, { sessionId: "fake-session-1", configId: "permissions", value: "auto" });
+      await shows(AUTO_BADGE, "étiquette auto revenue");
     },
   ],
 ];

@@ -17,6 +17,8 @@
 //   à une conversation de fond, telle quelle ; double ouverture (un second client ACP tient la
 //   conversation) : refus affiché, agent arrêté, puis « Restart » la reprend une fois libérée ;
 //   suppression d'une conversation de fond : son agent, sa session du démon, son fichier ;
+// - ticket 31 (X3, avant ceux du ticket 28) : skill créé et éteint depuis l'écran, lignes visibles des
+//   annonces en direct et rejouées par `session/load` ; permissions changées par le menu de l'étiquette ;
 // - fin : démon arrêté, aucun processus restant.
 
 import assert from "node:assert/strict";
@@ -27,7 +29,7 @@ import { createInterface } from "node:readline";
 import * as vscode from "vscode";
 
 import type { AgentState, ChatState, HistoryState, Probe, ProbeInput, SessionState, TurnItem, WebviewMessage } from "../../src/protocol";
-import { waitFor } from "../helpers";
+import { noticesOf, permissionsOf, waitFor } from "../helpers";
 
 interface State {
   agent: AgentState;
@@ -247,7 +249,7 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await waitFor(async () => {
         const s = (await state()).session;
-        return s?.kind === "open" && s.config.permissions === "auto";
+        return s?.kind === "open" && permissionsOf(s.config) === "auto";
       }, "permissions = auto sans réglage", SLOW);
       const shown = await shows(AUTO_BADGE, "étiquette");
       assert.ok(!shown.includes(OLD_BANNER), "plus de bandeau d'alerte");
@@ -277,7 +279,7 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await waitFor(async () => {
         const s = (await state()).session;
-        return s?.kind === "open" && s.config.permissions === "auto";
+        return s?.kind === "open" && permissionsOf(s.config) === "auto";
       }, "permissions = auto", SLOW);
       await post({ type: "send", text: "auto", images: [] });
       await idle();
@@ -651,7 +653,79 @@ const resumeTests: [string, () => Promise<void>][] = [
     },
   ],
 ];
-tests.push(...resumeTests);
+// Ticket 31 (X3) : écrans skills et réglages, notice `_yus/notice` en direct et au rejeu de
+// `session/load`, sélecteur de permissions. Avant les cas du ticket 28 (Restart réutilisé ici).
+const x3Tests: [string, () => Promise<void>][] = [
+  [
+    "skills (ticket 31) : skill créé par l'écran puis message, ligne visible au-dessus ; éteint, ligne du retrait ; lignes rejouées par session/load",
+    async () => {
+      writeFileSync(SETTINGS(), JSON.stringify({ permissions: "auto" }));
+      writeScript([{ text: "x3 un fini" }, { text: "x3 deux fini" }, { text: "x3 trois fini" }]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      // Le premier prompt construit la session : ce que le modèle sait part de là.
+      await post({ type: "send", text: "x3 un", images: [] });
+      await idle();
+      await userClicks("Settings", "Skills");
+      await post({ type: "createSkill", name: "demo-x3", description: "Demo skill." });
+      await shows("demo-x3", "skill créé dans la liste");
+      await userClicks("Back");
+      await post({ type: "send", text: "x3 deux", images: [] });
+      await idle();
+      const added = "Skills updated: added demo-x3. Sent to the agent.";
+      const text = await shows(added, "ligne de l'ajout");
+      assert.ok(text.indexOf(added) < text.indexOf("x3 deux"), "au-dessus du message");
+      await userClicks("Settings", "Skills", "Use demo-x3", "Back");
+      await post({ type: "send", text: "x3 trois", images: [] });
+      await idle();
+      const removed = "Skills updated: removed demo-x3. Sent to the agent.";
+      await shows(removed, "ligne du retrait");
+      const live = (await turns()).map((turn) => noticesOf(turn) ?? []);
+      assert.deepEqual(live.slice(-3), [[], [added], [removed]], "une ligne par changement, sur son tour");
+      await crashBridge();
+      await userClicks("Restart");
+      await loaded();
+      const back = (await turns()).map((turn) => [turn.prompt?.text, noticesOf(turn) ?? []]);
+      assert.deepEqual(back, [["x3 un", []], ["x3 deux", [added]], ["x3 trois", [removed]]], "lignes rejouées à leur place");
+      await shows(removed, "ligne rejouée affichée");
+    },
+  ],
+  [
+    "permissions (ticket 31, C5, C6) : manual par le menu de l'étiquette, la cellule suivante demande ; auto, sans demande",
+    async () => {
+      writeFileSync(SETTINGS(), JSON.stringify({ permissions: "auto" }));
+      writeScript([
+        cell("call-x3m", "open('x3m.txt', 'w').write('x')"),
+        { text: "x3 manuel fini" },
+        cell("call-x3a", "open('x3a.txt', 'w').write('x')"),
+        { text: "x3 auto fini" },
+      ]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await userClicks(AUTO_BADGE, "Ask before each tool call");
+      await waitFor(async () => {
+        const s = (await state()).session;
+        return s?.kind === "open" && permissionsOf(s.config) === "manual";
+      }, "permissions = manual", SLOW);
+      await shows("manual", "étiquette manual");
+      await post({ type: "send", text: "x3 manuel", images: [] });
+      await answer("call-x3m", "allow-once");
+      await idle();
+      assert.ok(existsSync(join(workspace, "x3m.txt")), "cellule exécutée après l'accord");
+      await userClicks("manual", "Run tool calls without asking (no sandbox)");
+      await waitFor(async () => {
+        const s = (await state()).session;
+        return s?.kind === "open" && permissionsOf(s.config) === "auto";
+      }, "permissions = auto", SLOW);
+      await post({ type: "send", text: "x3 auto", images: [] });
+      await idle();
+      assert.equal((await tool("call-x3a"))?.status, "done");
+      assert.ok(existsSync(join(workspace, "x3a.txt")), "cellule exécutée sans demande");
+      assert.equal((await state()).badge, undefined, "aucune demande");
+    },
+  ],
+];
+tests.push(...x3Tests, ...resumeTests);
 
 /** Après un échec : chaque cellule de la conversation (statut, sortie, fichiers), et le workspace. */
 async function diagnose(): Promise<void> {
