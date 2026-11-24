@@ -246,13 +246,12 @@ Removed (no longer available, do not use): `slack`.
   - Son champ `details` porte `{"skills": {"added": [...], "removed": [...], "changed": [...]}, "mcp": {"added": [...], "removed": [...]}}`.
   - Le texte visible ci-dessous est calculé à partir de `details`, jamais du texte reçu par le modèle.
 - **Au TUI (R3)** : la ligne custom s'affiche dans le panneau générique, avec le texte complet reçu par le modèle (`crates/pa-tui/src/custom_message/mod.rs:163-185`).
-- **Dans l'extension (X3)** : une ligne discrète, juste au-dessus du message de l'utilisateur, en anglais comme le reste de l'interface. Exemples :
-  - ajout : `Skills updated: added deploy. Sent to the agent with this message.`
-  - retrait : `Skills updated: removed old-helper, linear. Sent to the agent with this message.`
-  - les deux : `Skills updated: added deploy; removed old-helper. Sent to the agent with this message.`
-  - MCP, ajout : `MCP servers updated: added github. Sent to the agent with this message.`
-  - MCP, retrait : `MCP servers updated: removed slack. Sent to the agent with this message.`
-  - un skill modifié : `changed <nom>`, au même format.
+- **Dans l'extension (X3)** : une ligne discrète, juste au-dessus du message de l'utilisateur (ou en tête d'un tour lancé par l'agent), en anglais comme le reste de l'interface. Un seul texte partout, sans variante (décision C2 du 24/11/2026, §9.2) :
+  - ajout : `Skills updated: added deploy. Sent to the agent.`
+  - retrait : `Skills updated: removed old-helper, linear. Sent to the agent.`
+  - ajout, modification et retrait : `Skills updated: added a; changed c; removed d. Sent to the agent.` (dans cet ordre, une partie vide n'est pas écrite)
+  - MCP, ajout et retrait : `MCP servers updated: added x; removed y. Sent to the agent.`
+  - skills et MCP dans la même annonce : les deux lignes, skills d'abord.
 - **Le pont doit transmettre cette ligne.** Aujourd'hui, le pont n'envoie au client aucune ligne custom : `wire_events.rs:74-128` ne traduit que les messages de l'assistant et les tools. R3 ajoute une notification `_yus/notice {sessionId, kind: "resources", details}`. La même ligne doit être rejouée à `session/load` (`ya_history.rs`).
 
 ### 3.3 Vérifier que le préfixe reste intact
@@ -425,12 +424,12 @@ X3 :
 4. Remettre `demo-x`, puis le retirer encore, avant d'envoyer un message. Attendu : aucune annonce.
 5. Ajouter un serveur dans `mcpServers` de `~/.yusagent/settings.json` (URL locale quelconque), puis un message. Attendu : `[mcp-changed]` ; `mcp.list_connections()` dans une cellule le montre.
 6. Skill Python : copier un skill fourni qui a un `pyproject.toml` sous un autre nom dans `~/.yusagent/skills/`, puis « utilise-le ». Attendu : l'annonce donne les trois lignes, et l'agent importe le skill sans redémarrer.
-7. Quitter, `yusagent shutdown`, `yusagent --resume`, puis un message. Attendu : une seule entrée `resume_prefix_change` dans le journal d'usage (`grep -c resume_prefix_change <fichier>.usage.jsonl`).
+7. Quitter, `yusagent shutdown`, `yusagent --resume`, puis un message. Attendu : une seule entrée `resume_prefix_change` dans le journal d'usage (`grep -c resume_prefix_change ~/.yusagent/sessions/<id>.usage.ndjson` ; chemin corrigé le 24/11/2026, §9.6).
 
 **X3, dans l'extension** (binaire de la branche R3 mergée, `.vsix` de X3) :
 
 1. Réglages : onglets General, MCP et Skills ; pas d'onglet Instructions ; General ne montre que `retry.*`, `auxiliaryModel` et `compaction.enabled` ; aucun texte « restart » ; `permissions` absent.
-2. Skills > New skill `demo-y`, puis « quels skills as-tu ? ». Attendu : `Skills updated: added demo-y. Sent to the agent with this message.` au-dessus du message ; `demo-y` cité.
+2. Skills > New skill `demo-y`, puis « quels skills as-tu ? ». Attendu : `Skills updated: added demo-y. Sent to the agent.` au-dessus du message (texte de la décision C2, §9.2 ; le contrôle X3 à jour est au §9.7) ; `demo-y` cité.
 3. Éteindre `demo-y`, puis un message. Attendu : `Skills updated: removed demo-y. …`.
 4. MCP : ajouter un serveur, puis un message. Attendu : `MCP servers updated: added <nom>. …`.
 5. General : `retry.enabled` éteint, puis un message. Attendu : aucune ligne ; aucune entrée `invalidation` au journal d'usage.
@@ -594,6 +593,12 @@ Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `w
 - La relecture du disque à chaque prompt passe par `load_resources`. Un paquet configuré manquant serait installé au prompt suivant, comme à la création (`crates/pa-core/src/packages/resolve/manager.rs:129`, « installing missing configured package sources »).
 - Une annonce mise en file avant un tour lancé par l'agent (avis `[bash-done]`, `admission.rs:46`) est la première ligne de ce tour. L'origine du tour (`ya_turns::origin_of`) pourrait alors perdre son genre (`bash`). Déduit, à vérifier.
 - Une session en prompt v1 reçoit ses annonces au format et avec le filtre de l'inventaire v2.
+- Ajout du 24/11/2026 (X3, §9.3) : `_yus/mcp/set_token` n'est accessible depuis aucun écran. Le pont ne donne jamais le champ `token` d'un service (`ya_resources.rs:441-448`), donc le formulaire de jeton de l'extension ne s'ouvre pas.
+- Ajout du 24/11/2026 (écart 8 de X3, §9.3) : un prompt venu du TUI attaché au même worker, précédé d'une annonce, perd son origine `prompt`. Le pont annonce le tour d'un autre client à son premier `message_start`, ici la ligne d'annonce (`crates/pa-daemon/src/acp/ya_turns.rs:126-127`), et `origin_of` en fait un réveil sans genre (`:340-347`). Hors X3 : correction dans le pont, à faire plus tard.
+- Ajout du 24/11/2026 (contrôle de Yusuf, §9.15) :
+  - un serveur MCP HTTP déclaré sans identifiant n'est annoncé au modèle qu'une fois utilisable. `get_enabled_persistent_generic_servers` (`crates/pa-core/src/mcp/mod.rs:899-923`) ne le garde que si `is_authed` (`:487-537`) trouve un identifiant (variable de jeton remplie ou accès OAuth valide). On ne peut pas encore le rendre utilisable depuis l'extension : login et `set_token` arrivent avec le ticket du login (C4) ;
+  - l'écran MCP affiche « connected » pour un serveur stdio jamais lancé : cela veut dire « utilisable », pas « joint » ;
+  - le bouton « New skill » (`.button`, `extensions/vscode/webview/SettingsSkills.tsx:46`) garde le style provisoire du chat (`extensions/vscode/webview/styles.css:140`), non repris dans `ya-settings.css` : à traiter à la passe de design.
 
 ### 8.4 Run du push 2 (`2b1c6c668`) et option 1 (décision de Yusuf du 24/11/2026)
 
@@ -646,3 +651,314 @@ Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `w
   - 33, « invalidations à la reprise non vues par l'empreinte » ;
   - 34, « lignes du tour suivant absentes du fichier du worker ».
 - **Limites du §8.3.**
+
+## 9. X3 : écrans skills, MCP et réglages dans l'extension (24/11/2026)
+
+Branche `ya-31-x3`, depuis `main` à `2e8dfdf41`. Constat et plan présentés à Yusuf le 24/11/2026, puis ses décisions (§9.2).
+
+### 9.1 Constat
+
+**L'extension importée a déjà les écrans, aux formes du pont.**
+- Les constantes de méthode sont en `extensions/vscode/src/settings.ts:9-18`, encore en `_unharnessed/*`.
+- Les types sont en `src/protocol.ts:144-217`.
+- Les écrans : `webview/Settings.tsx` (4 onglets `:15-20`, groupes de l'onglet General `:38-141`, bloc « Some changes apply when the agent restarts » `:288-301`), `SettingsSkills.tsx` et `SettingsMcp.tsx`.
+- Le bouton Settings est masqué tant que `features().settings` est faux (`src/ya/methods.ts:38`, `webview/Status.tsx:94`).
+- Les réponses du pont ont les mêmes formes : skills `crates/pa-daemon/src/acp/ya_resources.rs:282`, MCP `:441-448`, réglages `ya_resources/settings.rs:112`. Les 13 clés de `KEYS` (`settings.rs:50-68`) sont les champs de l'onglet General, sans le groupe Images.
+
+**Ce qui change.**
+1. **Noms** : `_yus/*` dans `src/settings.ts` et `methods.ts`. Les autres noms Unharnessed restent pour le ticket 32.
+2. **Lecture à l'ouverture de l'écran.** Aujourd'hui `Settings` lit tout dès que l'agent est prêt (`src/settings.ts:50`). Une fois les méthodes servies, cela ajouterait 3 trames à l'ouverture : fixture des trames cassé (preuve 1, ticket 24 §5.4) et E7 non tenu. La lecture partira du message `screen: "settings"` de la webview (`src/view.ts:143`).
+3. **Plus rien sur le redémarrage** : calcul `pending` (`settings.ts:31-34`, `:236-257`), bloc et bouton de `Settings.tsx:288-301`, textes « …when it restarts ». L'étiquette `restart` d'un skill (`SettingsSkills.tsx:118-122`) part aussi : `active` vient de `GetResourceSnapshot`, l'état du moteur à sa création, que les annonces ne mettent pas à jour.
+4. **Journal** : la clé seule pour `mcpServers` (`settings.ts:77`, règle 9).
+
+**Notice.**
+- Forme reçue : `session_info_update` avec `_meta["_yus/notice"]` à la racine de `_meta` (`ya_notice.rs:21`), à lire dans `_meta` brut comme `_yus/bashRuns` (`src/ya/cells.ts:27-28`).
+- En direct : `turnStart(prompt)` (`daemon.rs:1621`), puis la notice, puis le contenu (capture `C-resources`, §9.5).
+- Au rejeu : la notice ouvre le tour suivant, avant son prompt (`ya_history.rs:313-318`, `:370-376`).
+- Elle devient une ligne visible au-dessus du message (`webview/Chat.tsx:270`), calculée à partir de `details`.
+
+**Sélecteur de permissions.**
+- `ConfigChange` ne connaît pas `permissions` (`protocol.ts:140`) ; `withChange` non plus (`session.ts:211-220`).
+- L'étiquette `auto · no sandbox` n'est pas cliquable (`webview/Composer.tsx:1005-1015`, `:525`).
+- Le pont n'a rien à faire (`ya_permissions.rs:369-395`).
+
+**Défauts de l'onglet General.** Le pont donne `null` sauf `compaction.enabled` (`settings.rs:105-111`). Or `retry.enabled` vaut `true` par défaut (`crates/pa-core/src/settings/manager.rs:702`) : l'interrupteur s'afficherait éteint.
+
+**Catalogue MCP.** La connexion d'un service du catalogue passe par `_unharnessed/providers/login` (`src/view.ts:355`, `providers.ts:134-153`), non servi. La capture `C-resources` montre en plus que le catalogue local n'est pas seulement `linear` et `notion` : toute la liste fournie (`mcp-services.bundled.json`), en `source: "catalog"`, `signIn: true`.
+
+**Modèle de l'agent factice.** Ses valeurs (`capture/model-a`) n'avaient pas la forme du pont (`["p","id"]`, `config_options.rs:87`). `auxiliaryModel` en aurait fait `/capture/model-a`, refusé par le pont.
+
+### 9.2 Décisions de Yusuf (24/11/2026)
+
+- **C1** : option A. Le pont donne les défauts de l'onglet General à partir des getters du cœur, dans `ya_resources/settings.rs`, avec un test Rust vu en échec au push 1. Le binaire de la branche devient celui des contrôles.
+- **C2** : un seul texte partout, sans variante : `Skills updated: added a; changed c; removed d. Sent to the agent.` et `MCP servers updated: added x; removed y. Sent to the agent.` (§3.2 mis à jour).
+- **C3** : `Changes reach the agent with your next message.` (onglets Skills et MCP).
+- **C4** : section du catalogue MCP masquée jusqu'au ticket du login dans l'extension, sans texte qui renvoie au terminal. **À reporter dans ce ticket à créer** : rouvrir la section du catalogue (connexion OAuth et jeton). `set_token` inaccessible : en limite au §8.3.
+- **C5** : libellés du menu lus dans l'option du pont ; `permissions` devient `{current, choices}`.
+- **C6** : infobulle de l'étiquette `manual` : `Permissions: manual. Each tool call asks first.`
+- **C7** : agent factice aligné sur le pont (`["capture","model-a"]`).
+- **C8** : cas `C-resources` dans `acp_frames.py`.
+- **C9** : onglet Instructions masqué seulement ; suppression du code au ticket 32 ou avec le visuel.
+
+### 9.3 Écarts acceptés et limites
+
+Écarts acceptés par Yusuf :
+1. X3 touche du Rust (C1), dans un fichier du fork.
+2. L'agent factice passe au push 1, pour que les tests échouent sur leur assertion et non sur `-32601`.
+3. Le test de `served` et `features` va dans `test/unit/meta.test.ts` (`methods.test.ts` du §5.2 n'existe pas).
+4. Un seul texte de notice, y compris sur un tour sans message (C2).
+5. Services du catalogue non connectables depuis l'extension (C4) ; `set_token` inaccessible.
+6. Chemin du journal d'usage : `~/.yusagent/sessions/<id>.usage.ndjson` (§5.4 corrigé, §9.6).
+7. Ticket 24 tenu : rien envoyé à l'ouverture (E7), aucun `set_config_option` sans action (§5.4), `permissions` hors des écrans (D1).
+
+Écart 8 (prompt du TUI attaché qui perd son origine après une annonce) : en limite au §8.3, hors X3.
+
+Limites ajoutées au contrôle de Yusuf (24/11/2026, §9.15), aussi au §8.3 :
+- Ajout du 24/11/2026 (contrôle de Yusuf, §9.15) :
+  - un serveur MCP HTTP déclaré sans identifiant n'est annoncé au modèle qu'une fois utilisable. `get_enabled_persistent_generic_servers` (`crates/pa-core/src/mcp/mod.rs:899-923`) ne le garde que si `is_authed` (`:487-537`) trouve un identifiant (variable de jeton remplie ou accès OAuth valide). On ne peut pas encore le rendre utilisable depuis l'extension : login et `set_token` arrivent avec le ticket du login (C4) ;
+  - l'écran MCP affiche « connected » pour un serveur stdio jamais lancé : cela veut dire « utilisable », pas « joint » ;
+  - le bouton « New skill » (`.button`, `extensions/vscode/webview/SettingsSkills.tsx:46`) garde le style provisoire du chat (`extensions/vscode/webview/styles.css:140`), non repris dans `ya-settings.css` : à traiter à la passe de design.
+
+**Fichiers upstream** : aucun. X3 touche du code repris d'Unharnessed (`extensions/vscode/src`, `webview`), des fichiers du fork (`src/ya/`, agent factice, `bench/tools/capture/acp_frames.py`, `compare_frames.py`, `README.md` du banc) et `crates/pa-daemon/src/acp/ya_resources/settings.rs` (fork).
+
+**Préfixe de prompt** : inchangé. Aucune trame de plus à l'ouverture ; prompt inchangé ; la notice n'est que de l'affichage ; le mode de permissions n'entre pas dans les requêtes (`prefix_stability.rs:2425`) ; C1 ne change qu'une réponse de `_yus/settings/get`.
+
+### 9.4 Plan des pushs
+
+PR ouverte prête dès le push 1. Les tests compilent sur les types actuels (casts, `permissionsOf` et `noticesOf` dans `test/helpers.ts`), pour échouer sur leur assertion et non sur `tsc`.
+
+**Push 1 : tests seuls**, plus le ticket, le fragment de changelog (exigé : le test Rust est sous `crates/`), l'agent factice et les scripts de trames.
+
+| Test | Fichier | Rouge au push 1 sur |
+|---|---|---|
+| R1 `the_view_gives_the_core_defaults` | `crates/pa-daemon/src/acp/ya_resources/settings.rs` | `defaults` à `null` au lieu des getters du cœur |
+| U1 « méthodes du ticket 31 (X3) servies, réglages affichés » | `test/unit/meta.test.ts` | `served("_yus/settings/get")` faux |
+| U2 à U5 | `test/unit/settings.test.ts` (nouveau) | méthodes `_yus/*` non envoyées ; « pas encore servie » au lieu de l'acceptation ou du texte de refus du pont |
+| U6 « sélecteur de permissions (ticket 31) » | `test/unit/agent.test.ts` | `manual` non affiché avant la réponse ; `choices` absents |
+| U7 « notice (ticket 31) » | `test/unit/agent.test.ts` | lignes visibles absentes du tour |
+| E1 à E3 | `test/e2e/suite.ts` (agent factice) | bouton Settings caché ; `_yus/skills/create` jamais reçu ; étiquette non cliquable |
+| E4, E5 | `test/e2e/suite-real.ts` (vrai binaire) | mêmes causes, sur le binaire de la branche |
+
+Restent verts : le test des trames du fixture (`agent.test.ts:64`), les 59 tests unitaires existants, `compare_frames.py`.
+
+**Push 2 : le code**, un sujet par commit :
+1. défauts dans le pont ;
+2. noms et lecture à l'ouverture de l'écran ;
+3. retrait du « restart » et textes C3 ;
+4. onglet General, Instructions masqué, catalogue masqué ;
+5. notice ;
+6. sélecteur ;
+7. journal ;
+8. doc (`docs/fork-changes.md`, ce ticket).
+
+L'agent factice prend les défauts du binaire de la branche ; `acp_frames.py` et `compare_frames.py` sont relancés dessus.
+
+### 9.5 Agent factice et trames : `acp_frames.py`, puis `compare_frames.py` (avant le push 1)
+
+Binaire `8205f0bbe` (`ya-build-macos-arm64` 45349481082). Le code sous `crates/` est identique à celui de `main` : `git diff --stat 8205f0bbe 2e8dfdf41 -- crates` est vide.
+
+```sh
+export DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short
+python3 -I bench/tools/capture/acp_frames.py --binary ~/.cache/yusagent-bin/8205f0bbe4db2d9bc1e13d3f8fdf8a99a3cb080c/yusagent --out <dossier neuf>
+python3 -I bench/tools/capture/compare_frames.py <dossier>
+```
+
+- `acp_frames.py` : `A-display-auto` (26 trames), `B-basic-manual-reject` (14), `C-resources` (44, refus de `permissions`, skill créé, `manual` après le sélecteur, une notice), aucun processus restant, `CONFORME`, exit 0.
+- Trames réelles relevées par `C-resources` :
+  - `_yus/settings/get` : `defaults` à `null` sauf `compaction.enabled: true` ;
+  - refus `-32602`, `data.details` = le texte D1 exact ;
+  - `_yus/skills/*` : `{skills, folders, problems, restart: false}` ; `problems` contient le skill fourni `factory` sans description ;
+  - `_yus/mcp/list` : le catalogue complet en `source: "catalog"` ;
+  - option `permissions` : `Ask before each tool call` et `Run tool calls without asking (no sandbox)` ;
+  - notice : `turnStart`, puis notice, puis contenu.
+- `compare_frames.py` (agent factice de la branche) : 25 comparaisons `IDENTIQUE`, `écarts : 0`, exit 0. Premier lancement : 9 écarts, tous sur `problems` vide dans l'agent factice ; corrigé (le skill `factory` du binaire).
+- **Contrôle négatif** : `--fake` sur l'agent factice de `main` (`git show 2e8dfdf41:extensions/vscode/test/fake-agent/fake-agent.mjs`) : 9 comparaisons `DIFFÉRENT` sur le cas C, `écarts : 167`, exit 1.
+
+### 9.6 Correction
+
+Contrôle TUI du §5.4, étape 7 : le journal d'usage est `~/.yusagent/sessions/<id>.usage.ndjson`, sans sous-dossier (contrôle de Yusuf ; `usage_log_path`, `crates/pa-core/src/session_engine/usage_log.rs:692-696`).
+
+### 9.7 Contrôle manuel de Yusuf (X3, dans VS Code)
+
+0. Avant de commencer :
+   - binaire de la branche : `B=~/.cache/yusagent-bin/<sha du push 2>/yusagent` ;
+   - `cp ~/.yusagent/settings.json ~/.yusagent/settings.json.avant-x3` ;
+   - `extensions/vscode/scripts/install-vsix.sh <run ya-extension>` ;
+   - dans VS Code, `"yusagent.binaryPath": "<valeur de $B>"`, puis « Reload Window » ;
+   - `mkdir -p /tmp/ya31-x3 && code /tmp/ya31-x3`.
+1. Nouvelle conversation. Attendu : étiquette `auto · no sandbox` cliquable. Envoie `bonjour` : ce premier message construit la session.
+2. Settings. Attendu :
+   - onglets General, MCP, Skills, sans Instructions ;
+   - General : Compaction, Retries, Switching providers, Usage limits, sans Images ni `permissions` ;
+   - « Retry failed requests » allumé (défaut du pont) ;
+   - aucun texte « restart » ;
+   - MCP sans section de catalogue.
+3. Skills > New skill `demo-y`, description `Demo skill.`, puis « quels skills as-tu ? ». Attendu : `Skills updated: added demo-y. Sent to the agent.` au-dessus du message, et `demo-y` cité.
+4. Éteins `demo-y`, puis envoie un message. Attendu : `Skills updated: removed demo-y. Sent to the agent.`
+5. Rallume puis éteins `demo-y`, puis envoie un message. Attendu : aucune ligne.
+6. MCP > Add a server `demo-mcp`, en Command `ya-demo-never-run` (serveur stdio ; corrigé le 24/11/2026, §9.15 : un serveur HTTP sans identifiant n'est pas annoncé), puis un message. Attendu :
+   - `MCP servers updated: added demo-mcp. Sent to the agent.` ;
+   - dans Output > yusAgent, `settings: mcpServers set`, sans valeur.
+7. General : éteins « Retry failed requests », puis un message. Attendu : aucune ligne, et `grep -c '"invalidation"' $(ls -t ~/.yusagent/sessions/*.usage.ndjson | head -1)` donne `0`.
+8. Clic sur l'étiquette, `Ask before each tool call`. Attendu : étiquette `manual`, avec l'infobulle `Permissions: manual. Each tool call asks first.` Puis « lance pwd dans une cellule » : la boîte s'ouvre, Reject. Clic sur `manual`, `Run tool calls without asking (no sandbox)`, et la même demande s'exécute sans boîte.
+9. Ferme le chat, rouvre-le depuis l'historique. Attendu : les lignes des étapes 3, 4 et 6 rejouées à leur place.
+10. Remise en état :
+    - `mv ~/.yusagent/settings.json.avant-x3 ~/.yusagent/settings.json` ;
+    - `rm -rf ~/.yusagent/skills/demo-y /tmp/ya31-x3`.
+
+### 9.8 Push 1 : tests seuls (`8ff03bf04`, PR #84)
+
+- **`ci`** run 45392710567 :
+  - **rouge attendu**, shard 3 : `the_view_gives_the_core_defaults` (`ya_resources/settings.rs:313`, `assertion left == right failed`). Défauts rendus : `null` partout sauf `compaction.enabled: true`. Défauts attendus du cœur : `retry.enabled: true`, `maxRetries: 3`, `baseDelayMs: 2000`, `provider.maxRetryDelayMs: 60000`, `failover.enabled: true`, `failover.maxRetries: 3`, `failover.baseDelayMs: 1000`, `failover.maxDelayMs: 30000`, `waitForUsage.pauseUntilReset: true`, `maxPauseMs: 86400000`, `maxParks: 8`.
+  - **rouge inattendu**, shard 2 : `the_history_lists_conversations_and_deletes_one_with_its_session` (`crates/pa-cli/tests/ya_acp_resume_e2e.rs:452`, « the window snapshot is there before the delete », seuls `<id>.info-cache.json` et `<id>.jsonl` présents). Test du ticket 28, sans lien avec ce push (aucun code du produit). Il n'est pas listé en « Instabilité probable » : **pas de relance**, signalé à Yusuf.
+  - fmt, clippy (Linux et Windows) et les autres shards : verts.
+- **`ya-extension`** run 45392710453 :
+  - tests unitaires : 66, 59 verts, **7 rouges, tous attendus et sur leur assertion** :
+    - « sélecteur de permissions » : `expected 'manual'`, `actual null` ;
+    - « notice » : lignes attendues, `actual undefined` ;
+    - « méthodes du ticket 31 (X3) servies » : `_yus/settings/get`, `false !== true` ;
+    - « écrans » : `_yus/settings/get envoyée`, `false` ;
+    - « interrupteur d'un skill » et « journal » : `accepté`, `actual '_unharnessed/… : méthode pas encore servie par yusAgent'` ;
+    - « refus de permissions » : texte du pont attendu, même message reçu.
+  - **e2e sur l'agent factice : non lancé.** L'étape est sautée parce que les tests unitaires, plus tôt dans le même job, échouent (`ya-extension.yml`, étapes en série). Les 3 cas du ticket 31 n'ont donc pas été vus rouges.
+  - e2e sur le vrai binaire : 16/18. Seuls rouges, les 2 cas du ticket 31 : « délai dépassé : clic sur « Settings » » et « délai dépassé : clic sur « auto · no sandbox » ». Aucun processus restant.
+- **`ya-build-macos-arm64`** run 45392698295 : succès (binaire du push 1, sans code du produit).
+- **Changelog fragment**, codebase-health, contribution gate : verts.
+
+### Ticket à part, ajout du 24/11/2026
+
+- **Ticket 35, « test upstream instable : `abort_and_send_queued_acks_before_the_follow_up_delivery` »**. Constat d'abord ; non traité dans le 31.
+  - **Origine** : upstream. Le test est dans `crates/pa-daemon/src/worker/turn_stream_tests/queue.rs:607`, depuis le portage en Rust (`39bc99a91`, #2524, 29/09/2026). Tous les commits qui touchent ce fichier viennent d'upstream ; aucun ne vient du fork.
+  - **Symptôme** : run `ci` 45376832870 sur `main` à `2e8dfdf41` (24/11/2026), shard 3, job 138385395316. Panique en `queue.rs:725:9` : « the follow-up's turn never settled on the bare abort ». Après un `abort` seul, `worker.core.busy` reste vrai au-delà de 10 s (`:719-727`).
+  - **Autres échecs** : aucun dans les 40 derniers runs `ci` en échec du dépôt (17/11 au 24/11/2026), recherche dans les journaux des shards en échec.
+  - **Upstream depuis notre base** : `2e8dfdf41..upstream/main` touche ce fichier (5 commits, +177/-12 lignes), sans changer cette assertion.
+
+### 9.9 Push 1 bis (`ca2e562f5`) et test du ticket 28
+
+- **Push 1 bis** : `if: ${{ !cancelled() && steps.changes.outputs.run == 'true' }}` sur l'étape e2e de l'agent factice. La condition existante est gardée pour la sortie rapide hors du périmètre. On y ajoute le compte rendu du push 1 et la note du ticket 35.
+- **`ya-extension`** run 45398633893 :
+  - tests unitaires : les mêmes 7 rouges qu'au push 1 ;
+  - e2e sur le vrai binaire : 16/18, les mêmes 2 rouges, aucun processus restant ;
+  - e2e sur l'agent factice, lancé cette fois : 9/14.
+    - **Les 3 cas du ticket 31 sont rouges sur leur assertion** :
+      - réglages : « délai dépassé : clic sur « Settings » » (bouton masqué). Le « (issue : clicked) » du message est la sonde d'avant le clic : le texte du message est calculé avant l'attente ;
+      - skills : « délai dépassé : _yus/skills/create reçu » ;
+      - permissions : « délai dépassé : clic sur « auto · no sandbox » (issue : covered) ».
+    - **2 rouges inattendus, sur des cas de la PR 3 (ticket 24)** :
+      - « boîte de permission » : « y moins d'1 s après la dernière frappe : rien » (`suite.ts:100-103`, fenêtre de calme mesurée à l'horloge du test) ;
+      - « cartes » : « délai dépassé : carte d'une cellule refusée » (`suite.ts:330-331`, clic sur le dernier « Worked » juste après le tour).
+    - Le code de l'extension n'a pas changé ; l'agent factice, si (valeurs du modèle, comparaison au prompt sans annonce quand rien ne change), sans effet attendu sur ces deux cas, non prouvé. Ils ne sont pas listés en instabilité : pas de relance, signalé à Yusuf. Le dernier run où cette étape a vraiment tourné, et réussi, est celui du ticket 30 (45152332356, 23/11/2026) ; tous ceux d'après l'ont sautée (aucun changement de l'extension).
+- **`ya_acp_resume_e2e`, `the_history_lists_conversations_and_deletes_one_with_its_session`** (point 1 de Yusuf, lecture seule) :
+  - **Écrivain réel du snapshot de fenêtre.** C'est la construction du moteur au premier prompt de « one » (`crates/pa-daemon/src/agent_engine/lifecycle.rs:455-472`, `WindowedSessionStore::open`), qui écrit le fichier par `window_cache::save` (`crates/pa-core/src/session/window.rs:587`), de façon synchrone. Ni le scan (`session_scan.rs:61-72`, info-cache seulement), ni la création du worker (conversation neuve, pas d'ouverture en mode fenêtre, `worker/create.rs:228` est pour un fichier existant), ni la reprise de `holder` (même worker vivant) ne l'écrivent.
+  - **Pourquoi il peut manquer.** L'ouverture en mode fenêtre renvoie `Ok(None)` sans rien écrire quand le fichier a changé pendant sa lecture (`window.rs:583-584`, contrôle de génération taille/mtime/ctime, `window_cache.rs:46-50`). Or le worker écrit les lignes du prompt pendant cette construction (commentaire `lifecycle.rs:480`, « The worker persisted accepted rows while this lazy session built »). Le moteur repasse alors par l'ouverture complète (`lifecycle.rs:466-471`) et le processus n'a aucun snapshot en mémoire. Ensuite, `flush` n'écrit qu'un snapshot en mémoire (`window_cache.rs:164-172`, appelé à la libération, `lease.rs:356-360`) : plus personne n'écrit le fichier pendant le test. Les autres sorties `Ok(None)` de `WindowedSessionStore::open` (`window.rs:225-559`) ont le même effet.
+  - **Option retenue : le test dépose le fichier s'il manque.** Une attente ne peut pas réussir quand la construction l'a sauté.
+  - **Aucun écrivain après la suppression.** La suppression arrête la session et attend la sortie de son worker (`ya_history.rs:793-808`) avant de retirer le fichier et ce qui porte son nom (`:826-830`). La libération du worker, seule autre écriture possible du snapshot, a donc lieu avant le retrait. Après la suppression, aucun worker ne tient « one » ; `session/list` ne lit pas un fichier retiré (le scan part des `.jsonl`) et n'écrit que l'info-cache, que le balayage couvre. Rien ne peut rendre le test instable dans l'autre sens.
+  - Le fichier n'est déposé que s'il manque. Contenu `{}` : une ouverture qui le lirait le refuserait et repasserait par la lecture complète (`window_cache.rs:121-124`). Commit séparé (`f89ac3f59`), test seul, poussé avec le push 2.
+
+### 9.10 Limite du produit notée (décision de Yusuf du 24/11/2026)
+
+- **Un snapshot de fenêtre sauté à la construction du moteur n'est réécrit par personne tant que vit le worker** (§9.9 : `window.rs:583-584`, `lifecycle.rs:466-471`, `window_cache.rs:164-172`). La prochaine ouverture de la session fait donc une lecture complète du fichier. Coût en temps seulement, non mesuré ; à mesurer plus tard si utile.
+
+### 9.11 Les deux rouges inattendus de l'e2e de l'agent factice (constat et décisions du 24/11/2026)
+
+**Constat.**
+- **L'agent factice de la branche ne change rien pour ces cas.** La même suite a été jouée contre l'agent factice de `main` (`2e8dfdf41`) et celui de la branche : initialize, session/new, `accord` (accord à 200 ms), `carte`, `refus`, en manuel. Résultat : 26 trames de chaque côté. Seule la réponse de `session/new` diffère : identifiant du fichier (pid) et valeurs du modèle (C7). Durées : main 206, 0 et 0 ms ; branche 207, 1 et 1 ms. Dans `onPrompt`, les branches `accord`, `carte` et `refus` sont intactes.
+- **Pas de lancement local.** L'e2e local n'a pas pu tourner dans la session de Claude Code. `@vscode/test-electron` cherche `Contents/MacOS/Electron`, qui s'appelle `Code` dans VS Code 1.146 sur macOS. Avec un lanceur qui appelle `Code`, le processus est tué aussitôt par SIGKILL, signature valide ; cause probable : le bac à sable de la session.
+- **Les causes sont des dépendances au temps dans nos tests** :
+  - « boîte de permission » (`test/e2e/suite.ts:84-103`, avant correction) : les fenêtres de calme sont mesurées par la webview, depuis l'ouverture de la boîte et la dernière frappe. Le test, lui, les mesurait avec sa propre horloge (`opened = Date.now()` après le sondage, `sleep(opened + 800)`, `sleep(opened + 1150)`), avec entre les deux les allers-retours de la sonde (50 ms au moins chacun) et le lot du chat ;
+  - « cartes » (`suite.ts:328-331`, avant correction) : clic sur le dernier « Worked » de la page juste après le tour. Si le lot du chat qui replie le tour `refus` n'est pas encore affiché, le clic referme le « Worked » du tour `carte`.
+
+**Décisions de Yusuf.**
+- Pas de lancements en série sur une branche jetable ; pas de liste « Instabilité probable » sans son accord.
+- Version déterministe, en commit de tests séparé (`a11e88e28`, push 2) :
+  1. **Boîte** : la sonde lit l'état de la boîte avec les fonctions de `src/ya/permission-keys.ts` (`armed`, nouvelle `readyAt`, `buttonsReady`) et agit dans le même appel.
+     - Le clic grisé sur « Allow » et `y` sont joués dans l'appel même qui ouvre la boîte (`ProbeInput.atBoxOpen`, nouveau module `webview/ya-box-state.ts`).
+     - Une frappe relance les touches mais pas les boutons : `a` puis `y` dans un seul appel (`y` toujours dans la fenêtre que `a` relance), et `keysReadyAt > buttonsReadyAt`.
+     - Les boutons sont attendus prêts sur l'état de la boîte, puis `a` puis `y` : rien.
+     - Plus aucun `sleep` sur l'horloge du test pour un « pas encore ». Les cas « Entrée » et « sans focus » sont inchangés.
+  2. **Clics sur « Worked » juste après un tour.** Le test attend que la page ait autant de « Worked » que de tours non vides dans l'état du chat (`workedCount`), puis, après le tour, un « Worked » de plus, affiché et fermé (`openNewWork`), et clique sur celui-là. Endroits touchés :
+     - `suite.ts` : boîte, étape 2 (Esc puis « Declined ») ; « diffs » ; « cartes » (tour `carte` et tour `refus`) ;
+     - `suite-real.ts` : « cellule avec bash() » (attente du « Worked » du tour, au lieu du premier de la page) ; « edit() » ; « suppression pure après un emoji ».
+  3. **Sonde réservée aux tests**, comme avant. La webview n'agit que sur les messages `probe` et `probeInput` (`webview/ya-probe.ts:136`). L'hôte ne les envoie que depuis `view.probe` et `view.probeInput` (`src/view.ts:427`, `:445`). Ces fonctions ne sont appelées que par les commandes `yusagent._test.probe` et `yusagent._test.probeInput`, déclarées seulement si `YUSAGENT_EXTENSION_TEST === "1"` (`src/extension.ts:51-74`), que pose le seul lanceur e2e.
+     - Dans le `.vsix`, la boîte pose son état dans `ya-box-state.ts` à son ouverture et note chaque touche reçue ; rien ne le lit sans sonde, et aucune action n'est enregistrée sans `probeInput`.
+- **Ces corrections ne peuvent pas être vues en échec de façon déterministe** : elles retirent une dépendance au temps. Le contrôle est qu'elles passent, au push 2 et ensuite.
+- Commits du ticket dans ce push : `69dc040ba` (§9.10) et celui-ci.
+
+### 9.12 Push 2 : le code (24/11/2026)
+
+Commits, un sujet chacun (avant celui de cette doc) :
+- `f89ac3f59` : test du ticket 28, snapshot de fenêtre déposé s'il manque (§9.9) ;
+- `a11e88e28` : e2e sans l'horloge du test (§9.11) ;
+- `6c997a53b` : défauts du cœur dans `_yus/settings/get` (C1), repris par l'agent factice ;
+- `4f759d60b` : méthodes `_yus/*` des écrans, lues à l'ouverture de l'écran ;
+- `31e1d8648` : plus rien n'attend un redémarrage, textes C3 ;
+- `910005477` : onglet General limité, Instructions et catalogue masqués (C4, C9) ;
+- `7eb03e12e` : notice en ligne visible du tour ;
+- `4b89ef00e` : sélecteur de permissions (C5, C6) ;
+- `7ea5e8d2b` : journal sans la valeur de `mcpServers` ;
+- `0a323f3b3` : `real-binary-check.mjs`, `permissions` dans sa nouvelle forme (écart : le changement de type de C5 le cassait) ;
+- doc : `docs/fork-changes.md` (section « Skills, MCP et réglages dans l'extension, PR X3 »), `extensions/vscode/README.md`, ce ticket.
+
+En local (Claude Code) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run test:unit` donne `ℹ tests 67`, `ℹ pass 67`, `ℹ fail 0`. Le test Rust est seulement formaté (`rustfmt`), compilé en CI (règle 8).
+
+### 9.13 Run du push 2 et contrôles sur le binaire de la branche (24/11/2026)
+
+- **CI** :
+  - `ci` 45404118237 : succès ;
+  - `ya-extension` 45404118247 : unitaires 67/67, e2e de l'agent factice 14/14, e2e du vrai binaire 18/18, aucun processus restant, `.vsix` 200 848 octets ;
+  - `ya-build-macos-arm64` 45404103532 : succès ;
+  - `gh pr checks 84 --required` : 16 `pass`.
+- **Binaire** `02c32497ecc32140c6bfa416ba50a51d5f6362d9`, SHA256 vérifié par `install-bin.sh`. `install-vsix.sh 45404118247` dans un dossier isolé : 200 848 octets, sha256 `90239ab4…fa41f`, installé.
+- **`acp_frames.py`** sur ce binaire : `A-display-auto` (26 trames), `B-basic-manual-reject` (14), `C-resources` (44, refus D1, skill créé, `manual`, une notice), aucun processus restant, `CONFORME`. Défauts rendus : `retry.enabled: true`, `maxRetries: 3`, `baseDelayMs: 2000`, `provider.maxRetryDelayMs: 60000`, failover `true/3/1000/30000`, `waitForUsage` `true/86400000/8`, `compaction.enabled: true`.
+- **`compare_frames.py`** contre l'agent factice : `écarts : 0`.
+- **`compare_frames.py --against`** la capture de `8205f0bbe` (`main`) : A et B `IDENTIQUE` ; `C-resources` : 22 écarts, tous attendus (C1). Ce sont les 11 défauts `retry.*`, `null` sur `main`, nombre ou booléen sur la branche, dans les réponses de `_yus/settings/get` et `set` (trames 18 et 20). `--expect` ne couvre que des clés ajoutées, pas un changement de type.
+
+### 9.14 Contrôle de Yusuf arrêté à l'étape 3 : écrans Settings non stylés (24/11/2026)
+
+**Constat de Yusuf.** Le contenu est conforme : onglets, groupes, défauts du cœur (C1), texte C3, catalogue masqué, ligne `Skills updated: added demo-y. Sent to the agent.` au-dessus du message. Mais les écrans Settings ne sont pas stylés : boutons natifs, puces, libellé et description collés (« Compact automaticallyBefore the context is full. »), interrupteurs réduits à un trait sans état visible.
+
+**Cause.**
+- La PR I (ticket 24, `:704`, `:776`) n'a pas repris le `styles.css` d'Unharnessed. Sa feuille minimale (`extensions/vscode/webview/styles.css:1-5`) ne couvre presque aucune classe de ces écrans, jamais affichés avant X3 : 29 classes sur 34 absentes dans `Settings.tsx`, 31 sur 34 dans `SettingsSkills.tsx`, 30 sur 33 dans `SettingsMcp.tsx` (`switch`, `switch-knob`, `row-main`, `setting-help`, `tabs`, `section`, `list`…).
+- Chez Unharnessed (`f8e4658dd`), ces règles existent : par exemple `.switch` en 34×20 px, avec fond et bouton déplacé à l'état allumé, et `.row-main` en colonne flex.
+
+**Correction** (décision de Yusuf : reprendre ses styles tels quels, sans passe de design) :
+- `extensions/vscode/webview/ya-settings.css` : notice MIT d'Unharnessed en tête, puis les règles de son `styles.css` pour les classes de ces écrans, ses variables de couleur et ses deux animations.
+  - Toutes les règles sont limitées à l'écran par `.ya-settings` (racine de `Settings.tsx`) : le chat garde sa feuille provisoire.
+  - Noms d'identité : `--uh-*` en `--ya-*`, `uh-rise` et `uh-pop` en `ya-rise` et `ya-pop`.
+  - Aucun `url()` ni police chargée : la CSP ne change pas.
+- **Couleurs** (pour la passe de design, rien changé) : des **valeurs fixes** d'Unharnessed, pas les variables `--vscode-*` du thème. Gris neutres et cyan en thème sombre (`--ya-bg: #1a1a1b`, `--ya-raised: #222223`, `--ya-accent: #86defc`…), une variante pour les thèmes clairs et une pour le contraste élevé, choisies d'après les classes que VS Code pose sur `body` (`vscode-light`, `vscode-high-contrast`). Aucune variable `--vscode-*` dans le fichier.
+- **Test e2e** (agent factice), « réglages stylés » : libellé et description sur deux lignes dans le texte affiché ; « Retry failed requests » allumé, d'au moins 24×14 px ; après un clic, son fond calculé et la place de son bouton changent. La sonde gagne `switches`. Push A : le test seul, attendu rouge sur son assertion ; push B : la feuille.
+
+**Le chat, comparé à `main` : pas de régression de X3.**
+- Chargement des styles inchangé (`main.tsx`, `esbuild.mjs`, `package.json` identiques à `main` jusqu'au push 2).
+- `styles.css` : rien de retiré, `.ya-auto-badge` étendu à `.ya-manual-badge`, deux ajouts.
+- `Chat.tsx` : seulement les lignes de notice.
+- `.vsix` : 200 848 octets contre 200 171 au dernier build de l'extension (ticket 30, run 45152332356 ; extension identique entre `bdf881644` et `main`).
+- C'est la feuille provisoire déjà connue (« Workedfor », espaces manquants), en attente de la passe de design.
+
+**Menu de permissions.** Il utilise `.menu` et `.menu-row` de la feuille provisoire (`styles.css:207-219`, `:381-417`) : position absolue au-dessus de l'étiquette (`.ya-permissions-picker`, relatif), fond et bordure de menu du thème, `z-index: 10`. Il est lisible et cliquable : le cas e2e « permissions » clique ses deux libellés sur l'élément réellement sous le pointeur (`elementFromPoint`, ni inerte ni recouvert). Il passe au push 2 sur l'agent factice et sur le vrai binaire (run 45404118247). Rien à ajouter.
+
+**Le `"}` en fin de réponse vient du modèle.** Il est dans le texte de la réponse elle-même, dans le fichier de session (`~/.yusagent/sessions/01a20dd1-fa58-75c4-bad6-a052acc53701.jsonl`, dossier `/tmp/ya31-x3`). Rien à corriger.
+
+**Autres écrans d'Unharnessed encore masqués**, dans le même cas : Providers (27 classes absentes sur 33), SignIn (22 sur 27), Local (19 sur 21), Kernel (34 sur 35), Instructions. À styler quand ils seront démasqués.
+
+**Pushs A et B (24/11/2026).**
+- **Push A** (`511750b49`, test seul), `ya-extension` 45410066889 : **pas rouge sur son assertion.** Le cas échoue sur « délai dépassé : onglet General » : l'app garde l'onglet ouvert, et le cas précédent finit sur MCP. Faute de « Back », l'écran restait sur Settings, et les cas « skills » et « permissions » échouaient à leur tour. Défaut du test.
+- **Push A'** (`3752ecaf2`, test corrigé seul : onglet General ouvert par un clic, retour au chat dans un `finally`), `ya-extension` 45410771373 :
+  - **seul rouge** : « réglages stylés », sur son assertion « libellé collé à sa description » ;
+  - unitaires 67/67, e2e de l'agent factice 14/15, e2e du vrai binaire 18/18, aucun processus restant.
+- **Push B** : la feuille (`ya-settings.css`) et cette doc.
+
+### 9.15 Contrôle de Yusuf repris (24/11/2026)
+
+Sur le `.vsix` du run `ya-extension` 45411474069, binaire `02c32497e`. Remise en état faite.
+
+- **Étapes 0 à 5, 7, 8 et 9 conformes.** Les écrans Settings sont stylés : libellés et descriptions séparés, interrupteurs avec état visible, onglets stylés, menu de permissions lisible et cliquable.
+- **Étape 6 telle qu'écrite** (serveur HTTP `http://127.0.0.1:9/mcp`) : aucune annonce, et c'est le comportement attendu du cœur.
+  - `get_enabled_persistent_generic_servers` (`crates/pa-core/src/mcp/mod.rs:899-923`) ne garde un serveur HTTP déclaré que si `is_authed` (`:487-537`) trouve un identifiant utilisable : variable de jeton remplie ou accès OAuth valide. L'écran le montrait `not_connected`.
+  - Le calcul est le même qu'à l'ouverture de la session : le préfixe reste cohérent.
+  - Les tests de R3 utilisaient un serveur stdio (`crates/pa-core/tests/prefix_stability.rs:2839`).
+  - Étape 6 corrigée au §9.7.
+- **Étape 6 bis** : `demo-mcp` passé en Command `ya-demo-never-run`. On voit `MCP servers updated: added demo-mcp. Sent to the agent.`, et le journal Output n'affiche que `settings: mcpServers set`, sans valeur. Conforme.
+- **Étape 7** : `grep -c '"invalidation"'` donne 0.
+- Limites relevées : §9.3 et §8.3.

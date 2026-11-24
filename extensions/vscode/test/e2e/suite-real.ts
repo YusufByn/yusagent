@@ -17,6 +17,8 @@
 //   à une conversation de fond, telle quelle ; double ouverture (un second client ACP tient la
 //   conversation) : refus affiché, agent arrêté, puis « Restart » la reprend une fois libérée ;
 //   suppression d'une conversation de fond : son agent, sa session du démon, son fichier ;
+// - ticket 31 (X3, avant ceux du ticket 28) : skill créé et éteint depuis l'écran, lignes visibles des
+//   annonces en direct et rejouées par `session/load` ; permissions changées par le menu de l'étiquette ;
 // - fin : démon arrêté, aucun processus restant.
 
 import assert from "node:assert/strict";
@@ -27,7 +29,7 @@ import { createInterface } from "node:readline";
 import * as vscode from "vscode";
 
 import type { AgentState, ChatState, HistoryState, Probe, ProbeInput, SessionState, TurnItem, WebviewMessage } from "../../src/protocol";
-import { waitFor } from "../helpers";
+import { noticesOf, permissionsOf, waitFor } from "../helpers";
 
 interface State {
   agent: AgentState;
@@ -89,6 +91,37 @@ async function ready(): Promise<void> {
 
 async function idle(timeout = SLOW): Promise<void> {
   await waitFor(async () => !(await state()).chat.busy, "tour fini", timeout);
+}
+
+/** Ticket 31 : les « Worked » de la page, un par tour qui a du contenu (aplati et masqué tant qu'il tourne). */
+async function workedToggles(): Promise<Probe["toggles"]> {
+  return (await probe())?.toggles.filter((toggle) => toggle.text.startsWith("Worked")) ?? [];
+}
+
+/**
+ * Ticket 31 : le nombre de « Worked » avant un envoi, une fois la page à jour : autant que de tours
+ * de l'état du chat qui ont du contenu (`webview/Chat.tsx`, `WorkRun` : un par tour non vide).
+ */
+async function workedCount(): Promise<number> {
+  const expected = (await state()).chat.entries.filter((entry) => entry.kind === "turn" && entry.items.length > 0).length;
+  await waitFor(async () => (await workedToggles()).length === expected, `${expected} « Worked » dans la page`, SLOW);
+  return expected;
+}
+
+/**
+ * Ticket 31 : ouvre le travail du tour qui vient de finir. Le tour fini dans l'état du chat, puis un
+ * « Worked » de plus qu'avant son envoi (`before`, de `workedCount`), affiché et fermé : c'est le
+ * sien, le dernier de la page. Sans cette attente, le lot du chat qui le replie peut arriver après le
+ * clic, qui ouvre alors (ou referme) celui d'un tour précédent.
+ */
+async function openNewWork(before: number): Promise<void> {
+  await idle();
+  await waitFor(async () => {
+    const worked = await workedToggles();
+    const last = worked.at(-1);
+    return worked.length === before + 1 && last?.visible && !last.inert && !last.expanded;
+  }, `un « Worked » de plus (${before + 1}), affiché et fermé`, SLOW);
+  await userClicks("Worked");
 }
 
 async function shows(text: string, what: string, timeout = SLOW): Promise<string> {
@@ -153,6 +186,7 @@ const tests: [string, () => Promise<void>][] = [
       ]);
       await vscode.commands.executeCommand("yusagent.open");
       await ready();
+      const workedBefore = await workedCount();
       await post({ type: "send", text: "cellule bash", images: [] });
       await waitFor(async () => (await tool("call-bash"))?.status === "pending", "carte en attente d'accord", SLOW);
       await shows(BOX, "boîte");
@@ -174,9 +208,10 @@ const tests: [string, () => Promise<void>][] = [
       // seule, la précède dans la page.
       const toggle = async (verb: string, target = "") =>
         (await probe())?.toggles.find((button) => button.text.startsWith(verb) && button.text.includes(target));
+      // Ticket 31 : le « Worked » de ce tour, replié, puis un clic dessus.
       await waitFor(async () => {
-        const worked = await toggle("Worked");
-        return worked?.visible && !worked.inert && !worked.expanded;
+        const worked = (await workedToggles()).at(-1);
+        return (await workedToggles()).length === workedBefore + 1 && worked?.visible && !worked.inert && !worked.expanded;
       }, "tour replié, « Worked » affiché", SLOW);
       assert.equal((await toggle("Ran", "echo lu"))?.expanded, false, "carte fermée au repli");
       await userClicks("Worked");
@@ -192,6 +227,7 @@ const tests: [string, () => Promise<void>][] = [
   [
     "edit() : vrai diff, Revert (fichier créé à la corbeille), texte [user-reverted] dans le message suivant",
     async () => {
+      const workedBefore = await workedCount();
       await post({ type: "send", text: "edit", images: [] });
       await answer("call-edit", "allow-once");
       await idle();
@@ -201,7 +237,8 @@ const tests: [string, () => Promise<void>][] = [
       const edit = (await tool("call-edit"))!.edits![0];
       assert.deepEqual([edit.shown, edit.created, edit.lines], ["ok.txt", true, [["+", "oui"]]]);
       // Par des clics d'utilisateur : le travail replié, la carte, puis « Revert ».
-      await userClicks("Worked", "Wrote", "Revert");
+      await openNewWork(workedBefore);
+      await userClicks("Wrote", "Revert");
       await waitFor(async () => (await tool("call-edit"))?.edits?.[0].revert?.state === "reverted", "Revert fait");
       assert.equal(existsSync(file), false, "ok.txt retiré");
     },
@@ -247,7 +284,7 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await waitFor(async () => {
         const s = (await state()).session;
-        return s?.kind === "open" && s.config.permissions === "auto";
+        return s?.kind === "open" && permissionsOf(s.config) === "auto";
       }, "permissions = auto sans réglage", SLOW);
       const shown = await shows(AUTO_BADGE, "étiquette");
       assert.ok(!shown.includes(OLD_BANNER), "plus de bandeau d'alerte");
@@ -277,7 +314,7 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await waitFor(async () => {
         const s = (await state()).session;
-        return s?.kind === "open" && s.config.permissions === "auto";
+        return s?.kind === "open" && permissionsOf(s.config) === "auto";
       }, "permissions = auto", SLOW);
       await post({ type: "send", text: "auto", images: [] });
       await idle();
@@ -314,6 +351,7 @@ const tests: [string, () => Promise<void>][] = [
       const file = join(workspace, "emoji.txt");
       const original = Buffer.from("garder\n😀 un deux\nfin\n", "utf8");
       writeFileSync(file, original);
+      const workedBefore = await workedCount();
       await post({ type: "send", text: "coupe", images: [] });
       await idle();
       await shows("coupe fini", "réponse après la coupe");
@@ -323,7 +361,8 @@ const tests: [string, () => Promise<void>][] = [
       assert.deepEqual([edit.shown, edit.created], ["emoji.txt", false]);
       // Par des clics d'utilisateur, sur l'élément réellement sous le pointeur : le travail replié,
       // la carte, puis « Revert ».
-      await userClicks("Worked", "Edited", "Revert");
+      await openNewWork(workedBefore);
+      await userClicks("Edited", "Revert");
       await waitFor(async () => (await tool("call-cut"))?.edits?.[0].revert?.state === "reverted", "Revert fait");
       assert.ok(readFileSync(file).equals(original), "emoji.txt revenu octet pour octet");
     },
@@ -651,7 +690,79 @@ const resumeTests: [string, () => Promise<void>][] = [
     },
   ],
 ];
-tests.push(...resumeTests);
+// Ticket 31 (X3) : écrans skills et réglages, notice `_yus/notice` en direct et au rejeu de
+// `session/load`, sélecteur de permissions. Avant les cas du ticket 28 (Restart réutilisé ici).
+const x3Tests: [string, () => Promise<void>][] = [
+  [
+    "skills (ticket 31) : skill créé par l'écran puis message, ligne visible au-dessus ; éteint, ligne du retrait ; lignes rejouées par session/load",
+    async () => {
+      writeFileSync(SETTINGS(), JSON.stringify({ permissions: "auto" }));
+      writeScript([{ text: "x3 un fini" }, { text: "x3 deux fini" }, { text: "x3 trois fini" }]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      // Le premier prompt construit la session : ce que le modèle sait part de là.
+      await post({ type: "send", text: "x3 un", images: [] });
+      await idle();
+      await userClicks("Settings", "Skills");
+      await post({ type: "createSkill", name: "demo-x3", description: "Demo skill." });
+      await shows("demo-x3", "skill créé dans la liste");
+      await userClicks("Back");
+      await post({ type: "send", text: "x3 deux", images: [] });
+      await idle();
+      const added = "Skills updated: added demo-x3. Sent to the agent.";
+      const text = await shows(added, "ligne de l'ajout");
+      assert.ok(text.indexOf(added) < text.indexOf("x3 deux"), "au-dessus du message");
+      await userClicks("Settings", "Skills", "Use demo-x3", "Back");
+      await post({ type: "send", text: "x3 trois", images: [] });
+      await idle();
+      const removed = "Skills updated: removed demo-x3. Sent to the agent.";
+      await shows(removed, "ligne du retrait");
+      const live = (await turns()).map((turn) => noticesOf(turn) ?? []);
+      assert.deepEqual(live.slice(-3), [[], [added], [removed]], "une ligne par changement, sur son tour");
+      await crashBridge();
+      await userClicks("Restart");
+      await loaded();
+      const back = (await turns()).map((turn) => [turn.prompt?.text, noticesOf(turn) ?? []]);
+      assert.deepEqual(back, [["x3 un", []], ["x3 deux", [added]], ["x3 trois", [removed]]], "lignes rejouées à leur place");
+      await shows(removed, "ligne rejouée affichée");
+    },
+  ],
+  [
+    "permissions (ticket 31, C5, C6) : manual par le menu de l'étiquette, la cellule suivante demande ; auto, sans demande",
+    async () => {
+      writeFileSync(SETTINGS(), JSON.stringify({ permissions: "auto" }));
+      writeScript([
+        cell("call-x3m", "open('x3m.txt', 'w').write('x')"),
+        { text: "x3 manuel fini" },
+        cell("call-x3a", "open('x3a.txt', 'w').write('x')"),
+        { text: "x3 auto fini" },
+      ]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await userClicks(AUTO_BADGE, "Ask before each tool call");
+      await waitFor(async () => {
+        const s = (await state()).session;
+        return s?.kind === "open" && permissionsOf(s.config) === "manual";
+      }, "permissions = manual", SLOW);
+      await shows("manual", "étiquette manual");
+      await post({ type: "send", text: "x3 manuel", images: [] });
+      await answer("call-x3m", "allow-once");
+      await idle();
+      assert.ok(existsSync(join(workspace, "x3m.txt")), "cellule exécutée après l'accord");
+      await userClicks("manual", "Run tool calls without asking (no sandbox)");
+      await waitFor(async () => {
+        const s = (await state()).session;
+        return s?.kind === "open" && permissionsOf(s.config) === "auto";
+      }, "permissions = auto", SLOW);
+      await post({ type: "send", text: "x3 auto", images: [] });
+      await idle();
+      assert.equal((await tool("call-x3a"))?.status, "done");
+      assert.ok(existsSync(join(workspace, "x3a.txt")), "cellule exécutée sans demande");
+      assert.equal((await state()).badge, undefined, "aucune demande");
+    },
+  ],
+];
+tests.push(...x3Tests, ...resumeTests);
 
 /** Après un échec : chaque cellule de la conversation (statut, sortie, fichiers), et le workspace. */
 async function diagnose(): Promise<void> {

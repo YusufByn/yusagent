@@ -123,10 +123,11 @@ export type SessionConfig = {
   /** The fast mode (priority tier); `null` when the model has none. */
   fast: boolean | null;
   /**
-   * yusAgent (YA-10, ticket 24) : la valeur `permissions` que l'agent annonce (`manual`, `auto`) ;
-   * `null` sans l'option. Le bandeau D4 la suit ; le panneau ne la change pas (D1).
+   * yusAgent (YA-10, ticket 24 ; ticket 31, C5) : l'option `permissions` que l'agent annonce, sa valeur
+   * (`manual`, `auto`) et ses choix avec leurs libellés ; `null` sans l'option. L'étiquette du
+   * compositeur la suit et la change pour la conversation, jamais le réglage global (D1).
    */
-  permissions: string | null;
+  permissions: { current: string; choices: { value: string; name: string }[] } | null;
 };
 
 /** The agent session (`session/new`) as the panel shows it. */
@@ -139,15 +140,17 @@ export type SessionState =
 /** The options the panel sets. */
 export type ConfigChange =
   | { configId: "model" | "thought_level"; value: string }
-  | { configId: "fast_mode"; value: boolean };
+  | { configId: "fast_mode"; value: boolean }
+  /** yusAgent (ticket 31, C5) : le sélecteur de permissions, pour la conversation. */
+  | { configId: "permissions"; value: string };
 
-/** The global settings, as `_unharnessed/settings/get` gives them. Keys are the file's dotted paths. */
+/** The global settings, as `_yus/settings/get` gives them. Keys are the file's dotted paths. */
 export type SettingsView = {
   /** Each key's value in `~/.yusagent/settings.json`; `null` when unset. */
   values: Record<string, unknown>;
   /** What the agent uses for an unset key; `null`: nothing. */
   defaults: Record<string, unknown>;
-  /** Keys read when the agent starts; the others apply on their next use. */
+  /** Keys read when the agent starts; yusAgent (ticket 31) : always empty, nothing waits for a restart. */
   restart: string[];
 };
 
@@ -157,11 +160,11 @@ export type SettingsView = {
  */
 export type ModelInstructions = { models: string[]; text: string };
 
-/** One MCP server, as the agent's `_unharnessed/mcp/list` gives it. */
+/** One MCP server, as the agent's `_yus/mcp/list` gives it. */
 export type McpServer = {
   id: string;
   label: string;
-  /** `catalog`: a service of Prime's catalog, the Marketplace; `user`: one of the `mcpServers` setting. */
+  /** `catalog`: a service of the local catalog; `user`: one of the `mcpServers` setting. */
   source: "catalog" | "user";
   /** `pending`: signed in, the connection not checked yet. */
   status: "connected" | "pending" | "not_connected" | "setup_required" | "disabled" | "error";
@@ -180,7 +183,7 @@ export type McpServer = {
   token?: string;
 };
 
-/** One skill, as the agent's `_unharnessed/skills/list` gives it. */
+/** One skill, as the agent's `_yus/skills/list` gives it. */
 export type Skill = {
   name: string;
   description: string;
@@ -202,7 +205,7 @@ export type SkillsView = {
   folders: string[];
   /** What keeps a skill from loading. */
   problems: { message: string; path?: string }[];
-  /** The next start loads other skills than the running agent has. */
+  /** yusAgent (ticket 31) : always false, a change reaches the agent with the next message. */
   restart: boolean;
 };
 
@@ -210,8 +213,6 @@ export type SkillsView = {
 export type SettingsState = {
   /** `null` until the agent has answered. */
   view: SettingsView | null;
-  /** What a restart would apply: the restart keys changed since the agent started, `skills`, `mcp`. */
-  pending: string[];
   mcp: McpServer[] | null;
   skills: SkillsView | null;
 };
@@ -350,6 +351,11 @@ export type TurnHead = {
   id: number;
   /** What the user sent; absent on a turn the agent started on its own. */
   prompt?: { text: string; images: Thumb[] };
+  /**
+   * yusAgent (ticket 31) : les lignes visibles des annonces du moteur (`_yus/notice`) parties avec ce
+   * tour, au-dessus de son message (`src/ya/notice.ts`).
+   */
+  notices?: string[];
   /** What woke the agent, on its own turns: a background command ended, a usage limit reset, a goal's pause ended, a heartbeat (yusAgent, ticket 25). */
   wake?: "bash" | "quota" | "goal" | "heartbeat";
   state: "running" | "done" | "cancelled" | "failed";
@@ -622,6 +628,26 @@ export type Probe = {
    * bloc inerte ou non, affiché (taille non nulle) ou non.
    */
   toggles: { text: string; expanded: boolean; inert: boolean; visible: boolean }[];
+  /**
+   * Ticket 31 : les interrupteurs (`role="switch"`) : nom, taille affichée, état annoncé, couleur de
+   * fond calculée et position de leur bouton (`.switch-knob`), pour vérifier qu'ils se voient et que
+   * leur état se lit.
+   */
+  switches: { label: string | null; width: number; height: number; checked: boolean; background: string; knobLeft: number | null }[];
+  /**
+   * Ticket 31 : la boîte de permission ouverte, lue avec les fonctions de `src/ya/permission-keys.ts`
+   * à l'instant de la sonde : touches et boutons prêts ou non, et quand (horloge de la webview) ;
+   * chaque touche reçue (prête ou non, issue) ; le dernier clic de la sonde sur un de ses boutons,
+   * avec son état à cet instant. `null` sans boîte.
+   */
+  box: {
+    keysReady: boolean;
+    buttonsReady: boolean;
+    keysReadyAt: number;
+    buttonsReadyAt: number;
+    keys: { key: string; armed: boolean; result: string }[];
+    click?: { name: string; disabled: boolean };
+  } | null;
 };
 
 /** yusAgent (PR 3, tests e2e) : voir `probeInput`. */
@@ -630,6 +656,11 @@ export type ProbeInput = {
   focus?: "box" | "none";
   keys?: string[];
   click?: string;
+  /**
+   * Ticket 31 : ces actions (touches, clic sur un bouton de la boîte) jouées à la prochaine ouverture
+   * d'une boîte de permission, dans le même appel que son ouverture : rien ne passe entre les deux.
+   */
+  atBoxOpen?: { keys?: string[]; click?: string };
   /**
    * Contrôle de Yusuf : un clic comme celui d'un utilisateur sur le dernier bouton dont le texte est
    * ce texte (sinon le contient ; ticket 28 : un bouton d'icône, sans texte, par son `aria-label` exact). Bouton amené à l'écran, élément réellement sous le pointeur

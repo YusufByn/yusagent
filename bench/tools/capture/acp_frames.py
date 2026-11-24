@@ -6,18 +6,24 @@ capture (modèle factice), `sandbox-exec` (réseau limité à localhost), démon
 (`--daemon-socket`), HOME et venv du kernel du banc (préparation avec réseau, une fois par
 binaire, comme `run.py`).
 
-Deux sessions ACP, chacune dans `<sortie>/<cas>/transcript.jsonl` (une ligne par trame, avec son
+Trois sessions ACP, chacune dans `<sortie>/<cas>/transcript.jsonl` (une ligne par trame, avec son
 sens), plus les corps de requête du serveur de capture dans `<cas>/cap/` :
   A-display-auto          scénario `display` en « auto » : `bash()` lu, `bash()` non lu, `edit()`
                           qui crée puis modifie ; le client attend `--linger` secondes après la
                           réponse du prompt (tour de réveil `[bash-done]`, ticket 25) ;
-  B-basic-manual-reject   scénario `basic` en « manual » : la demande d'accord est refusée.
+  B-basic-manual-reject   scénario `basic` en « manual » : la demande d'accord est refusée ;
+  C-resources             ticket 31 (X3), scénario `basic` en « auto » : prompt 1, puis les méthodes
+                          des écrans (`_yus/settings/get`, `set` accepté, `set permissions` refusé,
+                          `_yus/skills/list`, `create`, `set` éteint puis rallumé, `_yus/mcp/list`),
+                          `session/set_config_option permissions manual`, puis prompt 2 (réponse
+                          texte) : la notice `_yus/notice` du skill créé.
 
 Usage :
     DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short \\
       python3 -I bench/tools/capture/acp_frames.py --binary <yusagent> --out <dossier neuf>
 
-Code de sortie 0 si les deux prompts finissent par `end_turn` sans processus restant, 1 sinon.
+Code de sortie 0 si chaque dernier prompt finit par `end_turn` sans processus restant, et si le cas C
+a sa notice et le refus de `permissions`, 1 sinon.
 Comparaison avec l'agent factice : `compare_frames.py <dossier>`.
 macOS (sandbox-exec) requis ; bibliothèque standard uniquement.
 """
@@ -52,7 +58,7 @@ def binary_pids(binary: Path) -> set[str]:
 
 
 def session(binary: Path, cache: Path, out: Path, project: Path, name: str, scenario: str,
-            permissions: str, answer: str, linger: float) -> dict:
+            permissions: str, answer: str, linger: float, resources: bool = False) -> dict:
     case = out / name
     case.mkdir()
     agent = WORK / f"agent-{name}"
@@ -102,6 +108,7 @@ def session(binary: Path, cache: Path, out: Path, project: Path, name: str, scen
         return pump(lambda m: m.get("id") == req_id and "method" not in m, run.CASE_TIMEOUT_S)
 
     prompt = None
+    checks: dict = {}
     try:
         request(1, "initialize", {"protocolVersion": 1, "clientCapabilities": {}})
         new = request(2, "session/new", {"cwd": str(project), "mcpServers": []})
@@ -109,6 +116,8 @@ def session(binary: Path, cache: Path, out: Path, project: Path, name: str, scen
         prompt = request(3, "session/prompt", {
             "sessionId": sid, "prompt": [{"type": "text", "text": run.PROMPT}]})
         pump(None, linger)
+        if resources:
+            prompt, checks = screens(request, sid)
     finally:
         proc.stdin.close()
         try:
@@ -126,8 +135,44 @@ def session(binary: Path, cache: Path, out: Path, project: Path, name: str, scen
         "".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in transcript))
     result = (prompt or {}).get("result") or (prompt or {}).get("error")
     leftovers = sorted(binary_pids(binary) - before)
-    print(f"{name} : prompt={result} trames={len(transcript)} processus restants={leftovers}")
-    return {"prompt": result, "frames": len(transcript), "leftovers": leftovers}
+    extra = f" contrôles={checks}" if checks else ""
+    print(f"{name} : prompt={result} trames={len(transcript)} processus restants={leftovers}{extra}")
+    return {"prompt": result, "frames": len(transcript), "leftovers": leftovers, "checks": checks}
+
+
+SKILL = "ya31-frames"
+
+
+def screens(request, sid: str) -> tuple[dict | None, dict]:
+    """Cas C (ticket 31, X3) : les méthodes des écrans après le prompt 1 (le moteur est construit),
+    puis le prompt 2. Rend la réponse du prompt 2 et les contrôles du cas."""
+    ids = iter(range(10, 100))
+    answer = lambda method, params: request(next(ids), method, params) or {}
+    answer("_yus/settings/get", {})
+    answer("_yus/settings/set", {"key": "retry.enabled", "value": False})
+    refused = answer("_yus/settings/set", {"key": "permissions", "value": "manual"})
+    answer("_yus/skills/list", {})
+    created = answer("_yus/skills/create", {"name": SKILL, "description": "Skill du cas C (ticket 31)."})
+    path = (created.get("result") or {}).get("created")
+    if path:
+        answer("_yus/skills/set", {"path": path, "enabled": False})
+        answer("_yus/skills/set", {"path": path, "enabled": True})
+    answer("_yus/mcp/list", {})
+    mode = answer("session/set_config_option", {"sessionId": sid, "configId": "permissions", "value": "manual"})
+    prompt = request(next(ids), "session/prompt", {
+        "sessionId": sid, "prompt": [{"type": "text", "text": run.PROMPT_2}]})
+    return prompt, {
+        "refus_permissions": (refused.get("error") or {}).get("code") == -32602,
+        "skill_cree": bool(path),
+        "permissions_manual": any(o.get("id") == "permissions" and o.get("currentValue") == "manual"
+                                  for o in (mode.get("result") or {}).get("configOptions", [])),
+    }
+
+
+def notice_count(case: Path) -> int:
+    rows = [json.loads(line) for line in (case / "transcript.jsonl").read_text().splitlines()]
+    return sum(1 for row in rows if row["dir"] == "agent->client"
+               and "_yus/notice" in (((row["msg"].get("params") or {}).get("update") or {}).get("_meta") or {}))
 
 
 def main() -> None:
@@ -159,10 +204,16 @@ def main() -> None:
                                   "auto", "allow", args.linger),
         "B-basic-manual-reject": session(binary, cache, out, project, "B-basic-manual-reject",
                                          "basic", "manual", "reject", 2.0),
+        "C-resources": session(binary, cache, out, project, "C-resources", "basic", "auto",
+                               "allow", 2.0, resources=True),
     }
     (out / "acp-frames.json").write_text(json.dumps(
         {"binary": str(binary), "version": version, "cases": results}, indent=2) + "\n")
-    ok = all(r["prompt"] == {"stopReason": "end_turn"} and not r["leftovers"] for r in results.values())
+    ok = all(r["prompt"] == {"stopReason": "end_turn"} and not r["leftovers"]
+             and all(r["checks"].values()) for r in results.values())
+    notices = notice_count(out / "C-resources")
+    print(f"C-resources : notices _yus/notice={notices}")
+    ok = ok and notices == 1
     print("CONFORME" if ok else "NON CONFORME")
     sys.exit(0 if ok else 1)
 

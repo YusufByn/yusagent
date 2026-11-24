@@ -66,3 +66,12 @@ test("focus : la boîte le prend seulement si la zone de message est vide", () =
   assert.equal(takesFocus(" "), false);
   assert.equal(takesFocus("un message en cours"), false);
 });
+
+test("readyAt (ticket 31, sonde e2e) : l'instant où les touches comptent, repoussé par chaque frappe", () => {
+  const keys = new QuietKeys(1_000);
+  assert.equal(keys.readyAt(), 1_000 + QUIET_MS);
+  keys.key({ key: "a" }, 1_400);
+  assert.equal(keys.readyAt(), 1_400 + QUIET_MS);
+  assert.equal(keys.armed(keys.readyAt() - 1), false);
+  assert.equal(keys.armed(keys.readyAt()), true);
+});

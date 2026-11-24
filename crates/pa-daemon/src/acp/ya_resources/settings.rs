@@ -11,8 +11,11 @@
 //! keys. Listed in `docs/fork-changes.md`.
 
 use std::path::Path;
+use std::sync::Arc;
 
-use pa_core::settings::{FileSettingsStorage, SettingsScope, SettingsStorage};
+use pa_core::settings::{
+    FileSettingsStorage, InMemorySettingsStorage, SettingsManager, SettingsScope, SettingsStorage,
+};
 use serde_json::{json, Map, Value};
 
 use super::{string_param, Answer, Refusal};
@@ -90,8 +93,33 @@ fn global_document(cwd: &Path, agent_dir: &Path) -> Result<Value, Refusal> {
     })
 }
 
-/// The screen: each key's value in the global file (`null` when unset), the defaults the
-/// screen can show, and the keys waiting for a restart (none).
+/// What applies when a key is unset: the settings manager's getters on empty settings
+/// (ticket 31, X3, C1). `auxiliaryModel` (the chat model) and `mcpServers` (none) have none.
+fn defaults() -> Value {
+    let core = SettingsManager::from_storage(Arc::new(InMemorySettingsStorage::default()));
+    let retry = core.get_provider_retry_policy();
+    let failover = core.get_provider_failover_policy();
+    let park = core.get_provider_park_policy();
+    json!({
+        "compaction.enabled": core.get_compaction_enabled(),
+        "auxiliaryModel": null,
+        "retry.enabled": retry.enabled,
+        "retry.maxRetries": retry.max_retries,
+        "retry.baseDelayMs": retry.base_delay_ms,
+        "retry.provider.maxRetryDelayMs": retry.max_retry_delay_ms,
+        "retry.failover.enabled": failover.enabled,
+        "retry.failover.maxRetries": failover.max_retries,
+        "retry.failover.baseDelayMs": failover.base_delay_ms,
+        "retry.failover.maxDelayMs": failover.max_delay_ms,
+        "retry.provider.waitForUsage.pauseUntilReset": park.pause_until_reset,
+        "retry.provider.waitForUsage.maxPauseMs": park.max_pause_ms,
+        "retry.provider.waitForUsage.maxParks": park.max_parks,
+        "mcpServers": null,
+    })
+}
+
+/// The screen: each key's value in the global file (`null` when unset), the defaults that apply
+/// to an unset key, and the keys waiting for a restart (none).
 fn view(cwd: &Path, agent_dir: &Path) -> Result<Value, Refusal> {
     let document = global_document(cwd, agent_dir)?;
     let mut values = Map::new();
@@ -102,14 +130,7 @@ fn view(cwd: &Path, agent_dir: &Path) -> Result<Value, Refusal> {
             .unwrap_or(Value::Null);
         values.insert((*key).to_string(), value);
     }
-    let mut defaults = Map::new();
-    for (key, _) in KEYS {
-        defaults.insert((*key).to_string(), Value::Null);
-    }
-    // The one default the settings manager states (`get_compaction_enabled`); the others are
-    // not given here (`null`).
-    defaults.insert("compaction.enabled".to_string(), json!(true));
-    Ok(json!({ "values": values, "defaults": defaults, "restart": [] }))
+    Ok(json!({ "values": values, "defaults": defaults(), "restart": [] }))
 }
 
 fn valid_server_name(name: &str) -> bool {
@@ -291,6 +312,47 @@ mod tests {
         set_dotted(&mut document, "auxiliaryModel", Some(json!("a/b")));
         set_dotted(&mut document, "auxiliaryModel", None);
         assert_eq!(document, json!({ "theme": "dark" }));
+    }
+
+    /// Ticket 31 (X3, C1): the General tab shows what applies when a key is unset, so the bridge
+    /// gives the core's defaults (`SettingsManager` getters on empty settings), not `null`.
+    #[test]
+    fn the_view_gives_the_core_defaults() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (cwd, agent_dir) = (dir.path().join("project"), dir.path().join("agent"));
+        std::fs::create_dir_all(&cwd).expect("project dir");
+        std::fs::create_dir_all(&agent_dir).expect("agent dir");
+        let Ok(view) = view(&cwd, &agent_dir) else {
+            panic!("the view of empty settings");
+        };
+        let core = SettingsManager::from_storage(Arc::new(InMemorySettingsStorage::default()));
+        let retry = core.get_provider_retry_policy();
+        let failover = core.get_provider_failover_policy();
+        let park = core.get_provider_park_policy();
+        assert_eq!(
+            view["defaults"],
+            json!({
+                "compaction.enabled": core.get_compaction_enabled(),
+                "auxiliaryModel": null,
+                "retry.enabled": retry.enabled,
+                "retry.maxRetries": retry.max_retries,
+                "retry.baseDelayMs": retry.base_delay_ms,
+                "retry.provider.maxRetryDelayMs": retry.max_retry_delay_ms,
+                "retry.failover.enabled": failover.enabled,
+                "retry.failover.maxRetries": failover.max_retries,
+                "retry.failover.baseDelayMs": failover.base_delay_ms,
+                "retry.failover.maxDelayMs": failover.max_delay_ms,
+                "retry.provider.waitForUsage.pauseUntilReset": park.pause_until_reset,
+                "retry.provider.waitForUsage.maxPauseMs": park.max_pause_ms,
+                "retry.provider.waitForUsage.maxParks": park.max_parks,
+                "mcpServers": null,
+            })
+        );
+        assert_eq!(
+            view["defaults"]["retry.enabled"],
+            json!(true),
+            "retries are on by default"
+        );
     }
 
     #[test]

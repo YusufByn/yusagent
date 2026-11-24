@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { savedGroups } from "../src/instructions";
 import type { ModelChoice, Provider, SessionState, SettingsState, WebviewMessage } from "../src/protocol";
 import type { SettingResult } from "./App";
-import { IconBack, IconChevron, IconRestart } from "./icons";
+import { IconBack, IconChevron } from "./icons";
 import { ProviderLogo } from "./logos";
 import { isLocal, ModelList, providerName } from "./models";
 import { InstructionsTab } from "./SettingsInstructions";
@@ -12,11 +12,12 @@ import { post } from "./vscode";
 
 export type SettingsTab = "general" | "mcp" | "skills" | "instructions";
 
+// yusAgent (ticket 31, C9) : l'onglet Instructions (`modelInstructions`, ajouté au prompt système
+// chez Unharnessed) est masqué ; son code reste jusqu'au ticket 32 ou au visuel.
 const TABS: [SettingsTab, string][] = [
   ["general", "General"],
   ["mcp", "MCP"],
   ["skills", "Skills"],
-  ["instructions", "Instructions"],
 ];
 
 /** How a number is shown and typed; the file holds tokens, counts or ms. */
@@ -35,6 +36,9 @@ type Group = {
   gate?: string;
 };
 
+// yusAgent (ticket 31, décision 5) : seulement les clés appliquées au message suivant sans miss de
+// cache (`retry.*`, `auxiliaryModel`, `compaction.enabled`), celles que sert `_yus/settings/*` ; plus
+// les images, masquées (§5.4 du ticket 24).
 const GROUPS: Group[] = [
   {
     label: "Compaction",
@@ -113,31 +117,6 @@ const GROUPS: Group[] = [
       },
     ],
   },
-  {
-    label: "Images",
-    fields: [
-      {
-        kind: "model",
-        key: "imageModel",
-        label: "Image model",
-        help: "Reads the images when the chat model can't. Without one, such messages are refused.",
-        none: "None",
-        images: true,
-      },
-      {
-        kind: "switch",
-        key: "images.autoResize",
-        label: "Shrink large images",
-        help: "Large images are scaled down before they are sent.",
-      },
-      {
-        kind: "switch",
-        key: "images.blockImages",
-        label: "Block images",
-        help: "Images are never sent to a provider.",
-      },
-    ],
-  },
 ];
 
 const UNITS: Record<Unit, { label: string; scale: number }> = {
@@ -183,9 +162,8 @@ export function useSettled(key: string, { drafts, errors }: Actions, done: () =>
 
 /**
  * The agent's global settings (`~/.yusagent/settings.json`), its MCP
- * servers, its skills and its instructions per model, a tab each. A change
- * is written at once; the ones the agent reads when it starts wait for a
- * restart, which the screen offers.
+ * servers and its skills, a tab each. A change is written at once and
+ * reaches the agent with the next message (yusAgent, ticket 31).
  */
 export function Settings({
   settings,
@@ -253,7 +231,8 @@ export function Settings({
   }, [tab]);
 
   return (
-    <div className="screen">
+    // yusAgent (ticket 31) : `ya-settings`, la portée des règles d'Unharnessed (`ya-settings.css`).
+    <div className="screen ya-settings">
       <header className="topbar">
         <div className="topbar-title">
           <button
@@ -286,20 +265,6 @@ export function Settings({
         ))}
       </div>
       <main className="content">
-        {settings.pending.length > 0 && (
-          <div className="restart-notice">
-            <p className="note">Some changes apply when the agent restarts.</p>
-            <button
-              className="button"
-              type="button"
-              disabled={!ready}
-              onClick={() => post({ type: "restartAgent" })}
-            >
-              <IconRestart />
-              {ready ? "Restart agent" : "Restarting"}
-            </button>
-          </div>
-        )}
         {tab === "general" && (
           <General
             settings={settings}
@@ -334,7 +299,7 @@ export function Settings({
   );
 }
 
-/** Compaction, retries, usage limits, images. */
+/** Compaction, retries, switching providers, usage limits. */
 function General({
   settings,
   ready,

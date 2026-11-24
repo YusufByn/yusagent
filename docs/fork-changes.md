@@ -1461,6 +1461,37 @@ Décisions de Yusuf du 23/11/2026 : `docs/tickets/31-skills-mcp-reglages.md`, §
 | `docs/yusAgent-cdc.md` | modif. | Ligne du journal du 23/11/2026. | YA-10 (ticket 31) |
 | `.changes/ya-31-skills-mcp-reglages.md` | nouveau | Fragment de changelog. | YA-10 (ticket 31) |
 
+## Skills, MCP et réglages dans l'extension, PR X3 (YA-10, ticket 31)
+
+Décisions de Yusuf du 24/11/2026 : `docs/tickets/31-skills-mcp-reglages.md`, §9. Les écrans skills, MCP et réglages repris d'Unharnessed passent sur les méthodes `_yus/*` du pont, lues à l'ouverture de l'écran (rien à l'ouverture d'un chat, E7). Plus rien n'attend un redémarrage. La notice d'une annonce devient une ligne du tour, et l'étiquette des permissions ouvre un menu. Aucun fichier upstream (Prime Agent) touché.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/ya_resources/settings.rs` | modif. (fichier du fork) | `defaults` : les défauts de `_yus/settings/get` sont ceux des getters du cœur sur des réglages vides (retries, bascule de fournisseur, pauses de limite d'usage, compaction) ; test `the_view_gives_the_core_defaults` (C1). | YA-10 (ticket 31) |
+| `crates/pa-cli/tests/ya_acp_resume_e2e.rs` | modif. (test du fork) | `the_history_lists_conversations_and_deletes_one_with_its_session` dépose `<id>.window-cache.json` s'il manque avant la suppression : la construction du moteur peut sauter son écriture (§9.9). | YA-10 (ticket 31) |
+| `extensions/vscode/src/settings.ts` | modif. (repris d'Unharnessed) | Méthodes `_yus/*` ; lecture à l'ouverture de l'écran (`screen`) et non au démarrage de l'agent ; calcul « restart » retiré ; journal sans la valeur de `mcpServers` (règle 9). | YA-10 (ticket 31) |
+| `extensions/vscode/src/protocol.ts` | modif. (repris d'Unharnessed) | `SettingsState` sans `pending` ; `TurnHead.notices` ; `SessionConfig.permissions` = `{current, choices}` et `ConfigChange` `permissions` (C5) ; sonde e2e : `Probe.box`, `ProbeInput.atBoxOpen`. | YA-10 (ticket 31) |
+| `extensions/vscode/src/session.ts` | modif. (repris d'Unharnessed) | Libellés de l'option `permissions` du pont ; `withChange` pour `permissions`. | YA-10 (ticket 31) |
+| `extensions/vscode/src/chat.ts` | modif. (repris d'Unharnessed) | Notice `_yus/notice` d'un `session_info_update` : lignes ajoutées à l'en-tête du tour, en direct et au rejeu. | YA-10 (ticket 31) |
+| `extensions/vscode/src/view.ts` | modif. (repris d'Unharnessed) | `screen` : l'écran des réglages ouvert ou quitté, transmis à `Settings`. | YA-10 (ticket 31) |
+| `extensions/vscode/webview/Settings.tsx`, `SettingsSkills.tsx`, `SettingsMcp.tsx` | modif. (repris d'Unharnessed) | Onglet Instructions masqué (C9) ; groupe Images retiré de General ; bloc et bouton « Restart agent », étiquette `restart` et textes « …when it restarts » retirés, remplacés par « Changes reach the agent with your next message. » (C3) ; section du catalogue MCP masquée (`CATALOG`, C4). | YA-10 (ticket 31) |
+| `extensions/vscode/webview/App.tsx`, `Chat.tsx`, `Composer.tsx` | modif. (repris d'Unharnessed) | État initial des réglages sans `pending` ; lignes `notices` au-dessus du message d'un tour ; l'étiquette des permissions devient `PermissionsMenu` (l'ancienne `AutoBadge` retirée). | YA-10 (ticket 31) |
+| `extensions/vscode/src/ya/methods.ts` | modif. (fichier du fork) | Les 10 méthodes `_yus/*` servies ; `features().settings` sur `_yus/settings/get`. | YA-10 (ticket 31) |
+| `extensions/vscode/src/ya/notice.ts` | nouveau | Lignes visibles d'une notice, calculées de `details` (§3.2, C2). | YA-10 (ticket 31) |
+| `extensions/vscode/src/ya/permission-keys.ts` | modif. (fichier du fork) | `QuietKeys.readyAt` : l'instant où les touches compteront, pour la sonde e2e. | YA-10 (ticket 31) |
+| `extensions/vscode/webview/ya-permissions-menu.tsx` | nouveau | Étiquette `auto · no sandbox` ou `manual` et menu à deux choix aux libellés du pont, `set_config_option permissions` seulement sur un changement (C5, C6). | YA-10 (ticket 31) |
+| `extensions/vscode/webview/ya-settings.css`, `main.tsx`, `Settings.tsx` | nouveau ; modif. (repris d'Unharnessed) | Règles du `styles.css` d'Unharnessed (`f8e4658dd`, MIT, notice en tête du fichier) pour les classes des écrans Settings, reprises telles quelles, limitées à l'écran (`.ya-settings`, posé sur la racine de `Settings.tsx`) ; `--uh-*` en `--ya-*`, `uh-rise` et `uh-pop` en `ya-rise` et `ya-pop` ; importé par `main.tsx`. La feuille minimale du fork (PR I) ne couvrait pas ces écrans. | YA-10 (ticket 31) |
+| `extensions/vscode/webview/ya-box-state.ts` | nouveau | État de la boîte de permission ouverte (touches reçues), lu par la seule sonde e2e ; actions de la sonde jouées à l'ouverture de la boîte. | YA-10 (ticket 31) |
+| `extensions/vscode/webview/ya-permission.tsx`, `ya-probe.ts`, `styles.css` | modif. (fichiers du fork) | La boîte pose son état pour la sonde ; la sonde le lit et agit dans le même appel (`atBoxOpen`, `box`) ; styles de la ligne de notice et de l'étiquette `manual`. | YA-10 (ticket 31) |
+| `extensions/vscode/test/fake-agent/fake-agent.mjs` | modif. (test du fork) | Méthodes `_yus/*` aux formes du pont (défauts du cœur, refus D1, skill fourni en problème comme le binaire), notice au prompt suivant un changement, valeurs du modèle `["capture","model-a"]` (C7). | YA-10 (ticket 31) |
+| `extensions/vscode/test/unit/meta.test.ts`, `agent.test.ts`, `settings.test.ts`, `permission-keys.test.ts`, `test/helpers.ts` | modif., nouveau (tests du fork) | Méthodes servies ; sélecteur de permissions ; notice ; écrans, interrupteur d'un skill, journal, refus D1 ; `readyAt` ; `permissionsOf`, `noticesOf`. | YA-10 (ticket 31) |
+| `extensions/vscode/test/e2e/suite.ts`, `suite-real.ts` | modif. (tests du fork) | Cas du ticket 31 (réglages, skills et notice, permissions ; sur le vrai binaire, notice rejouée par `session/load`) ; boîte de permission et clics sur « Worked » sans l'horloge du test (§9.11). | YA-10 (ticket 31) |
+| `extensions/vscode/scripts/real-binary-check.mjs` | modif. (outil du fork) | `permissions` lu dans sa nouvelle forme (`current`). | YA-10 (ticket 31) |
+| `extensions/vscode/README.md` | modif. | Écrans servis, étiquette des permissions. | YA-10 (ticket 31) |
+| `bench/tools/capture/acp_frames.py`, `compare_frames.py`, `README.md` | modif. (outils du fork) | Cas `C-resources` (méthodes des écrans, refus D1, sélecteur, notice), comparé à l'agent factice ; `--against` le compare s'il est des deux côtés. | YA-10 (ticket 31) |
+| `.github/workflows/ya-extension.yml` | modif. (fichier du fork) | L'étape e2e de l'agent factice tourne même après l'échec des tests unitaires du job (`!cancelled()`). | YA-10 (ticket 31) |
+| `.changes/ya-31-x3.md` | nouveau | Fragment de changelog. | YA-10 (ticket 31) |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

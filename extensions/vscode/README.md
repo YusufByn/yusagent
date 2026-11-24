@@ -9,11 +9,12 @@ Base : l'extension d'Unharnessed (MIT, `github.com/unharnessed-agent/Unharnessed
 - **Une conversation = un processus**, lancé dans le premier dossier du workspace. Sans dossier ouvert, rien ne démarre.
 - **Connexion** : pas encore dans l'extension. Une fois, dans un terminal : `yusagent`, puis `/login`.
 - **Sélecteurs** de modèle et d'effort : rien n'est envoyé à l'ouverture, seulement quand on change une valeur.
-- **Étiquette** « auto · no sandbox » dans la barre du compositeur quand l'agent annonce `permissions` = `auto`, le défaut du binaire (ticket 30). Passer en manuel : `"permissions": "manual"` dans `~/.yusagent/settings.json`, puis une nouvelle conversation.
+- **Étiquette des permissions** dans la barre du compositeur : « auto · no sandbox » (le défaut du binaire, ticket 30) ou « manual ». Un clic ouvre un menu à deux choix, pour la conversation seulement (ticket 31) ; le réglage global reste `"permissions"` dans `~/.yusagent/settings.json`.
+- **Réglages, skills, MCP** (ticket 31) : onglets General (compaction, retries, bascule de fournisseur, limites d'usage), MCP (vos serveurs) et Skills. Lus à l'ouverture de l'écran. Un changement atteint l'agent avec le message suivant ; une ligne discrète au-dessus de ce message le dit.
 - **Plantage** : pas de relance automatique ; la fin du journal du binaire s'affiche, avec « Restart ».
 - **Arrêt** : fin de stdin, puis SIGKILL au bout de 10 s ; la session reste dans le démon, qui la met en veille après 90 min.
 
-Pas encore servi par le pont, donc masqué : historique et reprise, message pendant un tour, retour en arrière, panneau du kernel, fournisseurs et login, réglages, skills, MCP, mentions `@fichier` et images. En mode manuel, une demande d'autorisation reste en attente : « Stop » l'annule (boîte en PR 3).
+Pas encore servi par le pont, donc masqué : message pendant un tour, retour en arrière, panneau du kernel, fournisseurs et login (dont le catalogue MCP), instructions par modèle, mentions `@fichier` et images. En mode manuel, une demande d'autorisation reste en attente : « Stop » l'annule (boîte en PR 3).
 
 ## Développement
 

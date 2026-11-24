@@ -81,7 +81,9 @@ jobs:
           path: extensions/vscode/yusagent.vsix
           if-no-files-found: error
       - name: e2e (VS Code 1.146.0 + xvfb, agent factice)
-        if: steps.changes.outputs.run == 'true'
+        # yusAgent (ticket 31, X3) : lancé même si une étape précédente du job a échoué (tests
+        # unitaires rouges d'un push de tests seuls), pour voir aussi ses cas en échec.
+        if: ${{ !cancelled() && steps.changes.outputs.run == 'true' }}
         run: xvfb-run -a npm run test:e2e
 
   # yusAgent (YA-10, ticket 24, PR 3, étape 6, option D de Yusuf) : e2e de l'extension contre le vrai

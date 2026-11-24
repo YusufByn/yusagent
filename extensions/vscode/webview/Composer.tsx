@@ -46,6 +46,7 @@ import {
 import { ProviderLogo } from "./logos";
 import { findPaths, knows, MentionText, nameOf, PathsContext, type Paths } from "./mentions";
 import { useFeatures } from "./ya-features"; // yusAgent
+import { PermissionsMenu } from "./ya-permissions-menu"; // yusAgent (ticket 31)
 import { KernelTray } from "./Kernel";
 import { isLocal, ModelList, providerName } from "./models";
 import { PickMenu } from "./PickMenu";
@@ -60,7 +61,7 @@ const NOW_KEYS = /Mac/.test(navigator.userAgent) ? "⌘⏎" : "Ctrl+Enter";
 
 const set = (change: ConfigChange) => post({ type: "setConfig", ...change });
 
-type Menu = "model" | "effort" | "slash";
+type Menu = "model" | "effort" | "slash" | "permissions";
 
 /** What is being written: kept above the box, so it survives a visit to the settings. */
 export type { Draft };
@@ -522,7 +523,15 @@ export function Composer({
               />
             )}
             {pickers && pickers.fast !== null && <FastToggle on={pickers.fast} />}
-            {config?.permissions === "auto" && <AutoBadge />}
+            {/* yusAgent (ticket 31, C5, C6) : l'étiquette des permissions et son menu. */}
+            {config?.permissions && (
+              <PermissionsMenu
+                permissions={config.permissions}
+                open={menu === "permissions"}
+                onToggle={() => toggle("permissions")}
+                onClose={close}
+              />
+            )}
             <span className="composer-spacer" />
             {config && chat.usage && <UsageRing usage={chat.usage} empty={chat.entries.length === 0} />}
             {chat.goal && phase && <GoalPill goal={chat.goal} phase={phase} lit={lit} />}
@@ -996,24 +1005,6 @@ function ModelButton({
       <span className="chip-label">{current?.name ?? model.current}</span>
       <IconChevronDown className="chip-chevron" />
     </button>
-  );
-}
-
-/**
- * yusAgent (ticket 30, C1 option B): "auto" without a sandbox, a discreet badge, as the TUI's
- * (`crates/pa-tui/src/ya_permission_panel.rs`, `AUTO_BADGE`), in place of the D4 banner. Not
- * clickable in this ticket; the full text in its tip, as the TUI's `/permissions auto` note.
- */
-function AutoBadge() {
-  return (
-    <span
-      className="ya-auto-badge"
-      role="status"
-      data-tip="Permissions: auto. Tool calls run without asking, with your user's rights (no sandbox)."
-      data-tip-align="start"
-    >
-      auto · no sandbox
-    </span>
   );
 }
 

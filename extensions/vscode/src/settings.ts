@@ -4,38 +4,37 @@ import { savedGroups, withGroup } from "./instructions";
 import type { McpServer, ModelInstructions, SettingsState, SettingsView, SkillsView } from "./protocol";
 import type { ShownAgent } from "./shown";
 
-// The agent's `_unharnessed/settings/*`, `mcp/*` and `skills/*` extension
-// methods (crates/uh-daemon/src/acp/{settings,mcp_servers,skills}.rs).
-const GET = "_unharnessed/settings/get";
-const SET = "_unharnessed/settings/set";
-const MCP_LIST = "_unharnessed/mcp/list";
-const MCP_SET_TOKEN = "_unharnessed/mcp/set_token";
-const MCP_LOGOUT = "_unharnessed/mcp/logout";
-const SKILLS_LIST = "_unharnessed/skills/list";
-const SKILLS_SET = "_unharnessed/skills/set";
-const SKILLS_CREATE = "_unharnessed/skills/create";
-const SKILLS_ADD_FOLDER = "_unharnessed/skills/add_folder";
-const SKILLS_REMOVE_FOLDER = "_unharnessed/skills/remove_folder";
+// yusAgent (YA-10, ticket 31, X3) : the bridge's `_yus/settings/*`, `_yus/mcp/*` and `_yus/skills/*`
+// methods (crates/pa-daemon/src/acp/ya_resources.rs), with the answers of the code taken from
+// Unharnessed. They are read when the settings screen opens, never when the agent starts: nothing
+// is sent at the opening of a chat (E7, the frames fixture).
+const GET = "_yus/settings/get";
+const SET = "_yus/settings/set";
+const MCP_LIST = "_yus/mcp/list";
+const MCP_SET_TOKEN = "_yus/mcp/set_token";
+const MCP_LOGOUT = "_yus/mcp/logout";
+const SKILLS_LIST = "_yus/skills/list";
+const SKILLS_SET = "_yus/skills/set";
+const SKILLS_CREATE = "_yus/skills/create";
+const SKILLS_ADD_FOLDER = "_yus/skills/add_folder";
+const SKILLS_REMOVE_FOLDER = "_yus/skills/remove_folder";
 
 /**
  * The agent's global settings, its MCP servers and its skills, for the
- * settings screen. They outlive an agent restart, so the screen stays put
- * while the new process starts; they are read again once it is ready, and
- * when the panel shows another conversation. What a restart would apply is
- * each process's own: what it started with.
+ * settings screen: read when the screen opens, again once a new agent process
+ * is ready while it is open. yusAgent (ticket 31) : nothing waits for a
+ * restart; a change reaches the agent with the next message (the engine
+ * announces skills and MCP changes; the screen's settings are read at each
+ * use).
  */
 export class Settings {
   private view: SettingsView | null = null;
   private mcp: McpServer[] | null = null;
   private skills: SkillsView | null = null;
-  /** Each process's restart keys when it started, and the MCP sign-ins and sign-outs before it. */
-  private readonly started = new WeakMap<object, { values: Record<string, unknown>; mcp: number }>();
-  /** MCP sign-ins and sign-outs: an agent keeps the servers it started with. */
-  private mcpChanges = 0;
   /** Bumped per agent process, so a late answer never lands on the next one. */
   private run = 0;
-  /** What a restart would apply, as last logged. */
-  private logged = "";
+  /** yusAgent (ticket 31) : the settings screen is on display: the agent is read then, not at its start. */
+  private onScreen = false;
   private readonly listeners = new Set<() => void>();
 
   constructor(
@@ -44,15 +43,20 @@ export class Settings {
   ) {
     agent.onChange((state) => {
       this.run++;
-      // A process starting again starts with what the files hold now.
-      if (state.kind === "starting" && agent.process) this.started.delete(agent.process);
       this.changed();
-      if (state.kind === "ready") void this.refresh();
+      if (state.kind === "ready" && this.onScreen) void this.refresh();
     });
   }
 
+  /** yusAgent (ticket 31) : the panel shows the settings screen, or leaves it; opening it reads the agent. */
+  screen(open: boolean): void {
+    const opening = open && !this.onScreen;
+    this.onScreen = open;
+    if (opening && this.agent.current.kind === "ready") void this.refresh();
+  }
+
   get current(): SettingsState {
-    return { view: this.view, pending: this.pending(), mcp: this.mcp, skills: this.skills };
+    return { view: this.view, mcp: this.mcp, skills: this.skills };
   }
 
   /** The skill files on the list: the only files the panel may open. */
@@ -74,7 +78,10 @@ export class Settings {
     const run = this.run;
     try {
       const view = await this.agent.request<SettingsView>(SET, { key, value });
-      this.log.info(`settings: ${key} ${value === null ? "reset" : `set to ${JSON.stringify(value)}`}`);
+      // yusAgent (ticket 31, règle 9) : la clé seule pour `mcpServers`, dont une entrée peut porter
+      // un en-tête ou une variable d'environnement secrète.
+      const shown = key === "mcpServers" ? "set" : `set to ${JSON.stringify(value)}`;
+      this.log.info(`settings: ${key} ${value === null ? "reset" : shown}`);
       if (run !== this.run) return undefined;
       this.view = view;
       this.changed();
@@ -135,14 +142,13 @@ export class Settings {
     }
   }
 
-  /** After a sign-in to an MCP server: the list shows it, a restart applies it. */
+  /** After a sign-in to an MCP server: the list shows it. */
   signedIn(id: string): void {
     this.log.info(`mcp: signed in to ${id}`);
-    this.mcpChanges++;
     void this.refreshMcp();
   }
 
-  /** Add a Marketplace service by its token: the list shows it, a restart applies it. */
+  /** Add a catalog service by its token: the list shows it. */
   async setToken(id: string, token: string): Promise<string | undefined> {
     const run = this.run;
     try {
@@ -150,7 +156,6 @@ export class Settings {
       this.log.info(`mcp: token stored for ${id}`);
       if (run !== this.run) return undefined;
       this.mcp = servers;
-      this.mcpChanges++;
       this.changed();
       return undefined;
     } catch (error) {
@@ -166,7 +171,6 @@ export class Settings {
       this.log.info(`mcp: signed out of ${id}`);
       if (run !== this.run) return undefined;
       this.mcp = servers;
-      this.mcpChanges++;
       this.changed();
       return undefined;
     } catch (error) {
@@ -196,12 +200,10 @@ export class Settings {
 
   private async read(): Promise<void> {
     const run = this.run;
-    const process = this.agent.process;
     try {
       const view = await this.agent.request<SettingsView>(GET);
       if (run !== this.run) return;
       this.view = view;
-      if (process && !this.started.has(process)) this.started.set(process, { values: pick(view), mcp: this.mcpChanges });
       this.log.info(`settings: read, ${Object.values(view.values).filter((v) => v !== null).length} set`);
       this.changed();
     } catch (error) {
@@ -233,31 +235,7 @@ export class Settings {
     }
   }
 
-  /** What a restart of the agent in the panel would apply. */
-  private pending(): string[] {
-    const view = this.view;
-    const process = this.agent.process;
-    const started = process && this.started.get(process);
-    const keys =
-      view && started
-        ? view.restart.filter((key) => JSON.stringify(view.values[key]) !== JSON.stringify(started.values[key]))
-        : [];
-    if (this.skills?.restart) keys.push("skills");
-    if (started && this.mcpChanges > started.mcp) keys.push("mcp");
-    return keys;
-  }
-
   private changed(): void {
-    const pending = this.pending().join(", ");
-    if (pending !== this.logged) {
-      this.logged = pending;
-      this.log.info(`settings: a restart would apply ${pending || "nothing"}`);
-    }
     for (const listener of this.listeners) listener();
   }
-}
-
-/** The restart keys' values. */
-function pick(view: SettingsView): Record<string, unknown> {
-  return Object.fromEntries(view.restart.map((key) => [key, view.values[key]]));
 }

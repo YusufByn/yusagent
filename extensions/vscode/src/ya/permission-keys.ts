@@ -48,6 +48,11 @@ export class QuietKeys {
     return now - this.since >= QUIET_MS;
   }
 
+  /** Ticket 31 (sonde e2e) : l'instant où les touches compteront, si aucune frappe ne vient d'ici là. */
+  readyAt(): number {
+    return this.since + QUIET_MS;
+  }
+
   key({ key, ctrlKey, metaKey, altKey }: Key, now: number): KeyResult {
     const armed = this.armed(now);
     const plain = !ctrlKey && !metaKey && !altKey;

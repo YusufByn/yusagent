@@ -142,6 +142,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       case "screen":
         this.log.info(`panel: ${message.screen}`);
+        // yusAgent (ticket 31) : the settings are read when their screen opens (E7).
+        this.settings.screen(message.screen === "settings");
         break;
       case "crashed":
         this.log.error(`panel: crashed: ${message.error}`);

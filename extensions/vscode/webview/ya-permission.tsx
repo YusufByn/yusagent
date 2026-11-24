@@ -13,6 +13,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent }
 
 import type { ChatState, PermissionAsk, TurnItem } from "../src/protocol";
 import { BUTTONS_DELAY_MS, buttonsReady, QuietKeys, takesFocus, visibleCode } from "../src/ya/permission-keys";
+import { boxClosed, boxOpened, type BoxState } from "./ya-box-state";
 import { onHostMessage, post } from "./vscode";
 
 /** Lignes du code montrées avant « Show all ». */
@@ -52,6 +53,8 @@ function Box({ ask, count, tool }: { ask: PermissionAsk; count: number; tool: To
   // Une fenêtre de calme par demande : `key` du composant = l'appel visé.
   const keys = useRef(new QuietKeys(Date.now()));
   const box = useRef<HTMLDivElement>(null);
+  // Ticket 31 : l'état lu par la sonde des tests e2e (`ya-box-state.ts`).
+  const state = useRef<BoxState | null>(null);
   const [unfolded, setUnfolded] = useState(false);
   const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -59,6 +62,9 @@ function Box({ ask, count, tool }: { ask: PermissionAsk; count: number; tool: To
     keys.current.reset(openedAt);
     const composer = document.querySelector<HTMLTextAreaElement>("textarea.composer-input");
     if (takesFocus(composer?.value ?? "")) box.current?.focus();
+    const opened: BoxState = { keys: keys.current, openedAt, log: [] };
+    state.current = opened;
+    boxOpened(opened);
     // Un minuteur peut partir un peu avant l'échéance mesurée par `Date.now()` : il repart alors.
     let timer: ReturnType<typeof setTimeout>;
     const tick = () => {
@@ -66,13 +72,19 @@ function Box({ ask, count, tool }: { ask: PermissionAsk; count: number; tool: To
       else timer = setTimeout(tick, 20);
     };
     timer = setTimeout(tick, BUTTONS_DELAY_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      boxClosed(opened);
+    };
   }, []);
   const allow = ask.options.find((option) => option.kind === "allow_once");
   const deny = ask.options.find((option) => option.kind === "reject_once");
   const answer = (optionId: string | undefined) => optionId && post({ type: "permission", toolCallId: ask.toolCallId, optionId });
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const result = keys.current.key(event, Date.now());
+    const now = Date.now();
+    const armed = keys.current.armed(now);
+    const result = keys.current.key(event, now);
+    state.current?.log.push({ key: event.key, armed, result });
     if (result === "ignored") return;
     event.preventDefault();
     event.stopPropagation();
