@@ -594,3 +594,25 @@ Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `w
 - La relecture du disque à chaque prompt passe par `load_resources`. Un paquet configuré manquant serait installé au prompt suivant, comme à la création (`crates/pa-core/src/packages/resolve/manager.rs:129`, « installing missing configured package sources »).
 - Une annonce mise en file avant un tour lancé par l'agent (avis `[bash-done]`, `admission.rs:46`) est la première ligne de ce tour. L'origine du tour (`ya_turns::origin_of`) pourrait alors perdre son genre (`bash`). Déduit, à vérifier.
 - Une session en prompt v1 reçoit ses annonces au format et avec le filtre de l'inventaire v2.
+
+### 8.4 Run du push 2 (`2b1c6c668`) et option 1 (décision de Yusuf du 24/11/2026)
+
+- **Run `ci` 45207575832** :
+  - clippy (Linux et Windows) : `clippy::single_match_else` dans `ya_resources/settings.rs:172` ;
+  - shard 8 : tests 7 et 12 rouges (aucune notice) ;
+  - tous les autres tests du ticket verts.
+  - `ya-build-macos-arm64` 45207555254 et `ya-extension` 45207575429 verts.
+- **Cause** : l'abonné du moteur du démon (`crates/pa-daemon/src/agent_engine/turn/run_once.rs:162-245`) ne transmet au worker ni les lignes custom de la file du tour suivant, ni donc l'annonce. Celle-ci atteignait le modèle, sans être écrite dans le fichier ni envoyée au pont.
+- **Option 1, retenue** : avant les lignes d'avance d'un tour, le worker demande l'annonce au moteur (`SessionEngine::ya_resource_notice`). Le moteur la met dans sa file pour le modèle et la rend ; le worker l'émet avec les lignes d'avance, avant la ligne du prompt.
+- **Garde-fou 1, une seule annonce par changement sur tous les chemins** :
+  - **démon** (extension par le pont ACP, TUI, qui s'attache au même worker) : l'appel d'`admission.rs` ne trouve plus de différence. Test `a_skill_change_reaches_the_model_once_before_the_prompt_and_the_file_in_order` (`crates/pa-daemon/tests/ya_announce_path_e2e.rs`) : une seule ligne `[skills-changed]` dans la requête, juste avant le prompt ; test 7 pour la notice et la ligne du fichier ;
+  - **`-p` et RPC sans démon** : seul `admission.rs` annonce, et le moteur écrit lui-même la ligne dans l'ordre de la requête (`persist_event`, `crates/pa-core/src/session_engine/mod.rs:412-438`). Tests 1 à 5 (`prefix_stability.rs`, moteur sans démon) ;
+  - **TUI** : même worker que l'extension, donc mêmes tests ; l'affichage se contrôle à la main (§5.4).
+- **Garde-fou 2, historique rechargé après reconstruction du worker** :
+  - le test du démon ci-dessus vérifie que la ligne d'annonce précède la ligne du prompt dans le fichier ;
+  - le cas L5 d'`acp_live_changes.py` vérifie qu'après l'arrêt du démon et la reprise, la première requête du prompt 3 commence par les messages de la dernière requête du prompt 2, annonce comprise à sa place.
+- **Écarts au plan** : `engine.rs` (`pa-daemon`, 6 lignes), `session_engine_impl.rs` (11 lignes) et `worker/turn.rs` (3 lignes) s'ajoutent aux fichiers upstream, comme décidé. `ya_take_resource_notice` devient public dans `pa-core`. Correctifs de lints faits d'avance : `single_match_else` (`settings.rs`, `ya_resources.rs`), tableau de test sans mélange `&str` / `&String`.
+
+### Tickets à part, ajout du 24/11/2026
+
+- **Ticket 34, « lignes du tour suivant absentes du fichier du worker »** : dans le démon, les lignes custom de la file du tour suivant d'upstream (`[python-state-restored]`, suite d'objectif, `[python-skills-unavailable]`) atteignent le modèle sans être écrites dans le fichier de session ni envoyées aux clients (`run_once.rs:162-245`). À la reconstruction du worker, l'historique relu les perd : un miss non journalisé possible. Lu à `upstream/main` `798d97032` (23/11/2026) : `run_once.rs` ne les transmet toujours pas. Constat d'abord ; non traité dans le 31.
