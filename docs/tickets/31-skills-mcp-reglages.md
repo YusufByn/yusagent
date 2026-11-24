@@ -902,3 +902,32 @@ En local (Claude Code) : `cd extensions/vscode && npm run typecheck && npm run l
 - **`acp_frames.py`** sur ce binaire : `A-display-auto` (26 trames), `B-basic-manual-reject` (14), `C-resources` (44, refus D1, skill créé, `manual`, une notice), aucun processus restant, `CONFORME`. Défauts rendus : `retry.enabled: true`, `maxRetries: 3`, `baseDelayMs: 2000`, `provider.maxRetryDelayMs: 60000`, failover `true/3/1000/30000`, `waitForUsage` `true/86400000/8`, `compaction.enabled: true`.
 - **`compare_frames.py`** contre l'agent factice : `écarts : 0`.
 - **`compare_frames.py --against`** la capture de `8205f0bbe` (`main`) : A et B `IDENTIQUE` ; `C-resources` : 22 écarts, tous attendus (C1). Ce sont les 11 défauts `retry.*`, `null` sur `main`, nombre ou booléen sur la branche, dans les réponses de `_yus/settings/get` et `set` (trames 18 et 20). `--expect` ne couvre que des clés ajoutées, pas un changement de type.
+
+### 9.14 Contrôle de Yusuf arrêté à l'étape 3 : écrans Settings non stylés (24/11/2026)
+
+**Constat de Yusuf.** Le contenu est conforme : onglets, groupes, défauts du cœur (C1), texte C3, catalogue masqué, ligne `Skills updated: added demo-y. Sent to the agent.` au-dessus du message. Mais les écrans Settings ne sont pas stylés : boutons natifs, puces, libellé et description collés (« Compact automaticallyBefore the context is full. »), interrupteurs réduits à un trait sans état visible.
+
+**Cause.**
+- La PR I (ticket 24, `:704`, `:776`) n'a pas repris le `styles.css` d'Unharnessed. Sa feuille minimale (`extensions/vscode/webview/styles.css:1-5`) ne couvre presque aucune classe de ces écrans, jamais affichés avant X3 : 29 classes sur 34 absentes dans `Settings.tsx`, 31 sur 34 dans `SettingsSkills.tsx`, 30 sur 33 dans `SettingsMcp.tsx` (`switch`, `switch-knob`, `row-main`, `setting-help`, `tabs`, `section`, `list`…).
+- Chez Unharnessed (`f8e4658dd`), ces règles existent : par exemple `.switch` en 34×20 px, avec fond et bouton déplacé à l'état allumé, et `.row-main` en colonne flex.
+
+**Correction** (décision de Yusuf : reprendre ses styles tels quels, sans passe de design) :
+- `extensions/vscode/webview/ya-settings.css` : notice MIT d'Unharnessed en tête, puis les règles de son `styles.css` pour les classes de ces écrans, ses variables de couleur et ses deux animations.
+  - Toutes les règles sont limitées à l'écran par `.ya-settings` (racine de `Settings.tsx`) : le chat garde sa feuille provisoire.
+  - Noms d'identité : `--uh-*` en `--ya-*`, `uh-rise` et `uh-pop` en `ya-rise` et `ya-pop`.
+  - Aucun `url()` ni police chargée : la CSP ne change pas.
+- **Couleurs** (pour la passe de design, rien changé) : des **valeurs fixes** d'Unharnessed, pas les variables `--vscode-*` du thème. Gris neutres et cyan en thème sombre (`--ya-bg: #1a1a1b`, `--ya-raised: #222223`, `--ya-accent: #86defc`…), une variante pour les thèmes clairs et une pour le contraste élevé, choisies d'après les classes que VS Code pose sur `body` (`vscode-light`, `vscode-high-contrast`). Aucune variable `--vscode-*` dans le fichier.
+- **Test e2e** (agent factice), « réglages stylés » : libellé et description sur deux lignes dans le texte affiché ; « Retry failed requests » allumé, d'au moins 24×14 px ; après un clic, son fond calculé et la place de son bouton changent. La sonde gagne `switches`. Push A : le test seul, attendu rouge sur son assertion ; push B : la feuille.
+
+**Le chat, comparé à `main` : pas de régression de X3.**
+- Chargement des styles inchangé (`main.tsx`, `esbuild.mjs`, `package.json` identiques à `main` jusqu'au push 2).
+- `styles.css` : rien de retiré, `.ya-auto-badge` étendu à `.ya-manual-badge`, deux ajouts.
+- `Chat.tsx` : seulement les lignes de notice.
+- `.vsix` : 200 848 octets contre 200 171 au dernier build de l'extension (ticket 30, run 45152332356 ; extension identique entre `bdf881644` et `main`).
+- C'est la feuille provisoire déjà connue (« Workedfor », espaces manquants), en attente de la passe de design.
+
+**Menu de permissions.** Il utilise `.menu` et `.menu-row` de la feuille provisoire (`styles.css:207-219`, `:381-417`) : position absolue au-dessus de l'étiquette (`.ya-permissions-picker`, relatif), fond et bordure de menu du thème, `z-index: 10`. Il est lisible et cliquable : le cas e2e « permissions » clique ses deux libellés sur l'élément réellement sous le pointeur (`elementFromPoint`, ni inerte ni recouvert). Il passe au push 2 sur l'agent factice et sur le vrai binaire (run 45404118247). Rien à ajouter.
+
+**Le `"}` en fin de réponse vient du modèle.** Il est dans le texte de la réponse elle-même, dans le fichier de session (`~/.yusagent/sessions/01a20dd1-fa58-75c4-bad6-a052acc53701.jsonl`, dossier `/tmp/ya31-x3`). Rien à corriger.
+
+**Autres écrans d'Unharnessed encore masqués**, dans le même cas : Providers (27 classes absentes sur 33), SignIn (22 sur 27), Local (19 sur 21), Kernel (34 sur 35), Instructions. À styler quand ils seront démasqués.
