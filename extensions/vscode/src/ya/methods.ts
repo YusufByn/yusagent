@@ -16,6 +16,17 @@ const REQUESTS = new Set([
   "session/load",
   "session/list",
   "_unharnessed/sessions/delete",
+  // Ticket 31 (X3, `crates/pa-daemon/src/acp/ya_resources.rs`) : écrans skills, MCP et réglages.
+  "_yus/settings/get",
+  "_yus/settings/set",
+  "_yus/skills/list",
+  "_yus/skills/set",
+  "_yus/skills/create",
+  "_yus/skills/add_folder",
+  "_yus/skills/remove_folder",
+  "_yus/mcp/list",
+  "_yus/mcp/set_token",
+  "_yus/mcp/logout",
 ]);
 const NOTIFICATIONS = new Set(["session/cancel"]);
 
@@ -35,7 +46,7 @@ export function features(): Features {
     rewind: served("_unharnessed/session/rewind"),
     kernel: served("_unharnessed/kernel/tail"),
     providers: served("_unharnessed/providers/list"),
-    settings: served("_unharnessed/settings/get"),
+    settings: served("_yus/settings/get"),
     // Blocs texte seulement (§5.4) : ni liens `@fichier` ni images dans le prompt.
     attachments: false,
   };

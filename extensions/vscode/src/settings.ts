@@ -4,18 +4,20 @@ import { savedGroups, withGroup } from "./instructions";
 import type { McpServer, ModelInstructions, SettingsState, SettingsView, SkillsView } from "./protocol";
 import type { ShownAgent } from "./shown";
 
-// The agent's `_unharnessed/settings/*`, `mcp/*` and `skills/*` extension
-// methods (crates/uh-daemon/src/acp/{settings,mcp_servers,skills}.rs).
-const GET = "_unharnessed/settings/get";
-const SET = "_unharnessed/settings/set";
-const MCP_LIST = "_unharnessed/mcp/list";
-const MCP_SET_TOKEN = "_unharnessed/mcp/set_token";
-const MCP_LOGOUT = "_unharnessed/mcp/logout";
-const SKILLS_LIST = "_unharnessed/skills/list";
-const SKILLS_SET = "_unharnessed/skills/set";
-const SKILLS_CREATE = "_unharnessed/skills/create";
-const SKILLS_ADD_FOLDER = "_unharnessed/skills/add_folder";
-const SKILLS_REMOVE_FOLDER = "_unharnessed/skills/remove_folder";
+// yusAgent (YA-10, ticket 31, X3) : the bridge's `_yus/settings/*`, `_yus/mcp/*` and `_yus/skills/*`
+// methods (crates/pa-daemon/src/acp/ya_resources.rs), with the answers of the code taken from
+// Unharnessed. They are read when the settings screen opens, never when the agent starts: nothing
+// is sent at the opening of a chat (E7, the frames fixture).
+const GET = "_yus/settings/get";
+const SET = "_yus/settings/set";
+const MCP_LIST = "_yus/mcp/list";
+const MCP_SET_TOKEN = "_yus/mcp/set_token";
+const MCP_LOGOUT = "_yus/mcp/logout";
+const SKILLS_LIST = "_yus/skills/list";
+const SKILLS_SET = "_yus/skills/set";
+const SKILLS_CREATE = "_yus/skills/create";
+const SKILLS_ADD_FOLDER = "_yus/skills/add_folder";
+const SKILLS_REMOVE_FOLDER = "_yus/skills/remove_folder";
 
 /**
  * The agent's global settings, its MCP servers and its skills, for the
@@ -36,6 +38,8 @@ export class Settings {
   private run = 0;
   /** What a restart would apply, as last logged. */
   private logged = "";
+  /** yusAgent (ticket 31) : the settings screen is on display: the agent is read then, not at its start. */
+  private onScreen = false;
   private readonly listeners = new Set<() => void>();
 
   constructor(
@@ -47,8 +51,15 @@ export class Settings {
       // A process starting again starts with what the files hold now.
       if (state.kind === "starting" && agent.process) this.started.delete(agent.process);
       this.changed();
-      if (state.kind === "ready") void this.refresh();
+      if (state.kind === "ready" && this.onScreen) void this.refresh();
     });
+  }
+
+  /** yusAgent (ticket 31) : the panel shows the settings screen, or leaves it; opening it reads the agent. */
+  screen(open: boolean): void {
+    const opening = open && !this.onScreen;
+    this.onScreen = open;
+    if (opening && this.agent.current.kind === "ready") void this.refresh();
   }
 
   get current(): SettingsState {
