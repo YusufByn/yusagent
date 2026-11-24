@@ -78,7 +78,10 @@ export class Settings {
     const run = this.run;
     try {
       const view = await this.agent.request<SettingsView>(SET, { key, value });
-      this.log.info(`settings: ${key} ${value === null ? "reset" : `set to ${JSON.stringify(value)}`}`);
+      // yusAgent (ticket 31, règle 9) : la clé seule pour `mcpServers`, dont une entrée peut porter
+      // un en-tête ou une variable d'environnement secrète.
+      const shown = key === "mcpServers" ? "set" : `set to ${JSON.stringify(value)}`;
+      this.log.info(`settings: ${key} ${value === null ? "reset" : shown}`);
       if (run !== this.run) return undefined;
       this.view = view;
       this.changed();
