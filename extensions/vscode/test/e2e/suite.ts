@@ -58,6 +58,37 @@ async function wakeTurns(): Promise<Turn[]> {
   return (await state()).chat.entries.filter((entry): entry is Turn => entry.kind === "turn" && entry.wake === "bash");
 }
 
+/** Ticket 31 : les « Worked » de la page, un par tour qui a du contenu (aplati et masqué tant qu'il tourne). */
+async function workedToggles(): Promise<Probe["toggles"]> {
+  return (await probe())?.toggles.filter((toggle) => toggle.text.startsWith("Worked")) ?? [];
+}
+
+/**
+ * Ticket 31 : le nombre de « Worked » avant un envoi, une fois la page à jour : autant que de tours
+ * de l'état du chat qui ont du contenu (`webview/Chat.tsx`, `WorkRun` : un par tour non vide).
+ */
+async function workedCount(): Promise<number> {
+  const expected = (await state()).chat.entries.filter((entry) => entry.kind === "turn" && entry.items.length > 0).length;
+  await waitFor(async () => (await workedToggles()).length === expected, `${expected} « Worked » dans la page`);
+  return expected;
+}
+
+/**
+ * Ticket 31 : ouvre le travail du tour qui vient de finir. Le tour fini dans l'état du chat, puis un
+ * « Worked » de plus qu'avant son envoi (`before`, de `workedCount`), affiché et fermé : c'est le
+ * sien, le dernier de la page. Sans cette attente, le lot du chat qui le replie peut arriver après le
+ * clic, qui ouvre alors (ou referme) celui d'un tour précédent.
+ */
+async function openNewWork(before: number): Promise<void> {
+  await idle();
+  await waitFor(async () => {
+    const worked = await workedToggles();
+    const last = worked.at(-1);
+    return worked.length === before + 1 && last?.visible && !last.inert && !last.expanded;
+  }, `un « Worked » de plus (${before + 1}), affiché et fermé`);
+  await userClicks("Worked");
+}
+
 async function idle(): Promise<void> {
   await waitFor(async () => !(await state()).chat.busy, "tour fini");
 }
@@ -80,31 +111,33 @@ async function permissionsIs(value: string): Promise<void> {
 async function permissionBox(): Promise<void> {
   const answered = (id: string) => received(control, lastPid()).filter((frame) => frame.id === id).length;
   // 1. Zone de message vide : la boîte prend le focus ; boutons grisés 1 s, sans relance par les frappes.
+  // Ticket 31 : délais vérifiés sur l'état de la boîte (sonde), jamais sur l'horloge du test. Le clic
+  // sur « Allow » et `y` sont joués dans l'appel même qui ouvre la boîte : ni l'un ni l'autre ne compte.
+  await probeInput({ atBoxOpen: { click: "Allow", keys: ["y"] } });
   await post({ type: "send", text: "accord", images: [] });
   const box = await shows(BOX, "boîte de permission");
-  const opened = Date.now();
   for (const part of ["print('accord')", "Allow", "Reject"]) assert.ok(box.includes(part), `boîte : ${part}`);
   assert.equal((await state()).badge, 1, "badge sur l'icône de la vue");
   let seen = (await probe())!;
   assert.equal(seen.focused, "box", "zone de message vide : la boîte a le focus");
-  assert.deepEqual(seen.boxButtons, [
-    { name: "Allow", disabled: true },
-    { name: "Reject", disabled: true },
-  ]);
-  await probeInput({ click: "Allow" });
-  assert.equal(answered("ya-permission-2"), 0, "clic sur un bouton grisé : rien");
-  // `y` tout de suite : fenêtre de calme des touches, rien (et la fenêtre repart).
-  assert.ok((await probeInput({ keys: ["y"] }))?.text.includes(BOX), "y pendant la fenêtre de calme : rien");
-  await sleep(Math.max(0, opened + 800 - Date.now()));
-  await probeInput({ keys: ["a"] }); // relance la fenêtre des touches vers 0,8 s
-  await sleep(Math.max(0, opened + 1_150 - Date.now()));
-  seen = (await probeInput({ keys: ["y"] }))!;
-  assert.ok(seen.text.includes(BOX), "y moins d'1 s après la dernière frappe : rien");
+  assert.deepEqual(seen.box?.click, { name: "Allow", disabled: true }, "clic à l'ouverture : bouton grisé");
+  assert.deepEqual(seen.box?.keys, [{ key: "y", armed: false, result: "ignored" }], "y à l'ouverture : fenêtre de calme, rien");
+  assert.equal(answered("ya-permission-2"), 0, "ni le clic grisé ni y n'ont répondu");
+  // Une frappe relance la fenêtre des touches, pas le délai des boutons : `a` puis `y` dans le même
+  // appel, `y` tombe dans la fenêtre que `a` vient de relancer.
+  seen = (await probeInput({ keys: ["a", "y"] }))!;
+  assert.deepEqual(seen.box?.keys.slice(-1), [{ key: "y", armed: false, result: "ignored" }], "y juste après une frappe : rien");
+  assert.ok(seen.text.includes(BOX), "boîte toujours ouverte");
+  assert.ok(seen.box!.keysReadyAt > seen.box!.buttonsReadyAt, "la frappe a repoussé les touches au-delà des boutons");
+  // Les boutons deviennent actifs à leur délai, malgré les frappes ; `y` juste après une frappe, encore rien.
+  await waitFor(async () => (await probe())?.box?.buttonsReady, "boutons prêts (état de la boîte)");
+  seen = (await probeInput({ keys: ["a", "y"] }))!;
   assert.deepEqual(
     seen.boxButtons.map((button) => button.disabled),
     [false, false],
     "boutons actifs 1 s après l'ouverture, malgré les frappes",
   );
+  assert.deepEqual(seen.box?.keys.slice(-1), [{ key: "y", armed: false, result: "ignored" }], "y juste après une frappe, boutons actifs : rien");
   await sleep(1_100);
   assert.ok((await probeInput({ keys: ["Enter"] }))?.text.includes(BOX), "Entrée : jamais une réponse");
   await sleep(1_100);
@@ -121,6 +154,7 @@ async function permissionBox(): Promise<void> {
   assert.ok(!done.includes(BOX), "boîte fermée après la réponse");
   assert.equal((await state()).badge, undefined, "badge retiré");
   // 2. Esc refuse ; la carte dit « Declined » (le tour s'arrête, D7).
+  const workedBefore = await workedCount();
   await post({ type: "send", text: "accord", images: [] });
   await shows(BOX, "deuxième demande");
   await sleep(1_100);
@@ -130,7 +164,7 @@ async function permissionBox(): Promise<void> {
     outcome: { outcome: "selected", optionId: "reject-once" },
   });
   // Le travail d'un tour fini est replié : on l'ouvre comme un utilisateur.
-  await userClicks("Worked");
+  await openNewWork(workedBefore);
   await shows("Declined", "carte refusée");
   // 3. Zone de message non vide : le focus y reste ; le bouton « Reject », actif après 1 s, refuse.
   assert.equal((await probeInput({ type: "brouillon en cours" }))?.focused, "composer");
@@ -258,6 +292,7 @@ const tests: [string, () => Promise<void>][] = [
       const a = join(workspace, "a.txt");
       const created = join(workspace, "neuf.txt");
       writeFileSync(a, "un\ndeux\ntrois\n");
+      const workedBefore = await workedCount();
       await post({ type: "send", text: "diff", images: [] });
       await idle();
       const edits = async () => {
@@ -275,7 +310,8 @@ const tests: [string, () => Promise<void>][] = [
       // n'est pas affichée (« covered ») ; affichée, elle doit répondre, pas être inerte.
       assert.notEqual((await probeInput({ userClick: "Edited" }))?.clicked, "inert", "carte affichée mais inerte");
       // Puis tout par des clics d'utilisateur : le travail replié, la carte, le nom du fichier (diff).
-      await userClicks("Worked", "Edited", "a.txt");
+      await openNewWork(workedBefore);
+      await userClicks("Edited", "a.txt");
       assert.equal((await probe())?.visibleInert, 0, "aucun bloc inerte affiché, replis ouverts");
       const sheet = await shows("Revert", "carte dépliée avec Revert");
       for (const part of ["DEUX", "nouveau", "a.txt", "neuf.txt"]) assert.ok(sheet.includes(part), `carte dépliée : ${part}`);
@@ -314,20 +350,21 @@ const tests: [string, () => Promise<void>][] = [
   [
     "cartes (PR 3, étape 2) : édition réelle, code de sortie, cellule refusée",
     async () => {
+      let workedBefore = await workedCount();
       await post({ type: "send", text: "carte", images: [] });
       await idle();
       // En-tête : type et fichiers d'après les vrais diffs, lignes changées, premier `bash()` en erreur.
       // Le travail du tour est replié : « Worked » l'ouvre ; `exit 1` n'est que sur cette carte.
-      await userClicks("Worked");
+      await openNewWork(workedBefore);
       const shown = await shows("exit 1", "carte d'une cellule qui édite");
       for (const part of ["Edited", "a.py", "neuf.txt", "+3", "−1"]) assert.ok(shown.includes(part), `en-tête : ${part}`);
       // Dépliée par un clic : une ligne par bash(), séparateurs lisibles (contrôle de Yusuf : « exit 0·32 ms »).
       await userClicks("Edited");
       const sheet = await shows("$ false", "carte dépliée");
       assert.ok(sheet.includes("exit 0 · 6 ms") && sheet.includes("exit 1 · 3 ms"), "exit puis durée, séparés");
+      workedBefore = await workedCount();
       await post({ type: "send", text: "refus", images: [] });
-      await idle();
-      await userClicks("Worked");
+      await openNewWork(workedBefore);
       await shows("Declined", "carte d'une cellule refusée");
     },
   ],

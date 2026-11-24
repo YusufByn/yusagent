@@ -622,6 +622,20 @@ export type Probe = {
    * bloc inerte ou non, affiché (taille non nulle) ou non.
    */
   toggles: { text: string; expanded: boolean; inert: boolean; visible: boolean }[];
+  /**
+   * Ticket 31 : la boîte de permission ouverte, lue avec les fonctions de `src/ya/permission-keys.ts`
+   * à l'instant de la sonde : touches et boutons prêts ou non, et quand (horloge de la webview) ;
+   * chaque touche reçue (prête ou non, issue) ; le dernier clic de la sonde sur un de ses boutons,
+   * avec son état à cet instant. `null` sans boîte.
+   */
+  box: {
+    keysReady: boolean;
+    buttonsReady: boolean;
+    keysReadyAt: number;
+    buttonsReadyAt: number;
+    keys: { key: string; armed: boolean; result: string }[];
+    click?: { name: string; disabled: boolean };
+  } | null;
 };
 
 /** yusAgent (PR 3, tests e2e) : voir `probeInput`. */
@@ -630,6 +644,11 @@ export type ProbeInput = {
   focus?: "box" | "none";
   keys?: string[];
   click?: string;
+  /**
+   * Ticket 31 : ces actions (touches, clic sur un bouton de la boîte) jouées à la prochaine ouverture
+   * d'une boîte de permission, dans le même appel que son ouverture : rien ne passe entre les deux.
+   */
+  atBoxOpen?: { keys?: string[]; click?: string };
   /**
    * Contrôle de Yusuf : un clic comme celui d'un utilisateur sur le dernier bouton dont le texte est
    * ce texte (sinon le contient ; ticket 28 : un bouton d'icône, sans texte, par son `aria-label` exact). Bouton amené à l'écran, élément réellement sous le pointeur

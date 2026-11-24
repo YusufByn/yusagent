@@ -2,13 +2,50 @@
 // sélecteurs à l'hôte (`src/view.ts`). Rien ne sort de VS Code.
 // PR 3 : `probeInput` agit comme un utilisateur (texte tapé dans la zone de message, focus, touches,
 // clic sur un bouton de la boîte de permission), puis renvoie la même sonde.
+// Ticket 31 : l'état de la boîte (touches et boutons prêts, touches reçues) et des actions jouées à
+// l'ouverture de la prochaine boîte, pour vérifier ses délais sans l'horloge du test.
 import type { Probe, ProbeInput } from "../src/protocol";
+import { buttonsReady, BUTTONS_DELAY_MS } from "../src/ya/permission-keys";
+import { currentBox, onNextBoxOpen } from "./ya-box-state";
 import { onHostMessage, post } from "./vscode";
 
 const BOX = ".ya-permission";
 const COMPOSER = "textarea.composer-input";
 
 let clicked: Probe["clicked"];
+/** Ticket 31 : le dernier clic de la sonde sur un bouton de la boîte, avec son état à cet instant. */
+let boxClick: { name: string; disabled: boolean } | undefined;
+
+/** Ticket 31 : la boîte ouverte, lue avec les fonctions de `src/ya/permission-keys.ts`. */
+function boxProbe(): Probe["box"] {
+  const box = currentBox();
+  if (!box) return null;
+  const now = Date.now();
+  return {
+    keysReady: box.keys.armed(now),
+    buttonsReady: buttonsReady(box.openedAt, now),
+    keysReadyAt: box.keys.readyAt(),
+    buttonsReadyAt: box.openedAt + BUTTONS_DELAY_MS,
+    keys: [...box.log],
+    ...(boxClick && { click: boxClick }),
+  };
+}
+
+/** Un clic sur un bouton de la boîte par son nom ; `click()` sur un bouton désactivé ne fait rien, comme un vrai clic. */
+function clickBox(name: string): void {
+  const button = Array.from(document.querySelectorAll<HTMLButtonElement>(`${BOX} .ya-permission-actions button`)).find(
+    (candidate) => candidate.textContent === name,
+  );
+  if (!button) return;
+  boxClick = { name, disabled: button.disabled };
+  button.click();
+}
+
+/** Des touches envoyées à l'élément qui a le focus. */
+function press(keys: string[]): void {
+  const target = (document.activeElement as HTMLElement | null) ?? document.body;
+  for (const key of keys) target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+}
 
 function probe(): Probe {
   const active = document.activeElement;
@@ -36,6 +73,7 @@ function probe(): Probe {
     })),
     input: document.querySelector(COMPOSER)?.getAttribute("aria-label") ?? null,
     focused: active?.matches(BOX) ? "box" : active?.matches(COMPOSER) ? "composer" : "other",
+    box: boxProbe(),
     boxButtons: Array.from(document.querySelectorAll<HTMLButtonElement>(`${BOX} .ya-permission-actions button`)).map((button) => ({
       name: button.textContent ?? "",
       disabled: button.disabled,
@@ -71,7 +109,14 @@ function userClick(text: string): Probe["clicked"] {
   return "clicked";
 }
 
-function act({ type, focus, keys, click, userClick: clickText }: ProbeInput): void {
+function act({ type, focus, keys, click, userClick: clickText, atBoxOpen }: ProbeInput): void {
+  // Ticket 31 : jouées dans l'appel qui ouvre la prochaine boîte (son `useEffect`), après son focus.
+  if (atBoxOpen) {
+    onNextBoxOpen(() => {
+      if (atBoxOpen.click !== undefined) clickBox(atBoxOpen.click);
+      press(atBoxOpen.keys ?? []);
+    });
+  }
   if (clickText !== undefined) clicked = userClick(clickText);
   if (type !== undefined) {
     // Comme une frappe dans un champ contrôlé par React : la valeur, puis l'événement `input`.
@@ -84,15 +129,8 @@ function act({ type, focus, keys, click, userClick: clickText }: ProbeInput): vo
   }
   if (focus === "box") document.querySelector<HTMLElement>(BOX)?.focus();
   if (focus === "none") (document.activeElement as HTMLElement | null)?.blur();
-  const target = (document.activeElement as HTMLElement | null) ?? document.body;
-  for (const key of keys ?? []) target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
-  if (click !== undefined) {
-    // `click()` sur un bouton désactivé ne fait rien, comme un vrai clic.
-    const button = Array.from(document.querySelectorAll<HTMLButtonElement>(`${BOX} .ya-permission-actions button`)).find(
-      (candidate) => candidate.textContent === click,
-    );
-    button?.click();
-  }
+  press(keys ?? []);
+  if (click !== undefined) clickBox(click);
 }
 
 onHostMessage((message) => {

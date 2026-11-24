@@ -93,6 +93,37 @@ async function idle(timeout = SLOW): Promise<void> {
   await waitFor(async () => !(await state()).chat.busy, "tour fini", timeout);
 }
 
+/** Ticket 31 : les « Worked » de la page, un par tour qui a du contenu (aplati et masqué tant qu'il tourne). */
+async function workedToggles(): Promise<Probe["toggles"]> {
+  return (await probe())?.toggles.filter((toggle) => toggle.text.startsWith("Worked")) ?? [];
+}
+
+/**
+ * Ticket 31 : le nombre de « Worked » avant un envoi, une fois la page à jour : autant que de tours
+ * de l'état du chat qui ont du contenu (`webview/Chat.tsx`, `WorkRun` : un par tour non vide).
+ */
+async function workedCount(): Promise<number> {
+  const expected = (await state()).chat.entries.filter((entry) => entry.kind === "turn" && entry.items.length > 0).length;
+  await waitFor(async () => (await workedToggles()).length === expected, `${expected} « Worked » dans la page`, SLOW);
+  return expected;
+}
+
+/**
+ * Ticket 31 : ouvre le travail du tour qui vient de finir. Le tour fini dans l'état du chat, puis un
+ * « Worked » de plus qu'avant son envoi (`before`, de `workedCount`), affiché et fermé : c'est le
+ * sien, le dernier de la page. Sans cette attente, le lot du chat qui le replie peut arriver après le
+ * clic, qui ouvre alors (ou referme) celui d'un tour précédent.
+ */
+async function openNewWork(before: number): Promise<void> {
+  await idle();
+  await waitFor(async () => {
+    const worked = await workedToggles();
+    const last = worked.at(-1);
+    return worked.length === before + 1 && last?.visible && !last.inert && !last.expanded;
+  }, `un « Worked » de plus (${before + 1}), affiché et fermé`, SLOW);
+  await userClicks("Worked");
+}
+
 async function shows(text: string, what: string, timeout = SLOW): Promise<string> {
   return waitFor(async () => {
     const shown = (await probe())?.text;
@@ -155,6 +186,7 @@ const tests: [string, () => Promise<void>][] = [
       ]);
       await vscode.commands.executeCommand("yusagent.open");
       await ready();
+      const workedBefore = await workedCount();
       await post({ type: "send", text: "cellule bash", images: [] });
       await waitFor(async () => (await tool("call-bash"))?.status === "pending", "carte en attente d'accord", SLOW);
       await shows(BOX, "boîte");
@@ -176,9 +208,10 @@ const tests: [string, () => Promise<void>][] = [
       // seule, la précède dans la page.
       const toggle = async (verb: string, target = "") =>
         (await probe())?.toggles.find((button) => button.text.startsWith(verb) && button.text.includes(target));
+      // Ticket 31 : le « Worked » de ce tour, replié, puis un clic dessus.
       await waitFor(async () => {
-        const worked = await toggle("Worked");
-        return worked?.visible && !worked.inert && !worked.expanded;
+        const worked = (await workedToggles()).at(-1);
+        return (await workedToggles()).length === workedBefore + 1 && worked?.visible && !worked.inert && !worked.expanded;
       }, "tour replié, « Worked » affiché", SLOW);
       assert.equal((await toggle("Ran", "echo lu"))?.expanded, false, "carte fermée au repli");
       await userClicks("Worked");
@@ -194,6 +227,7 @@ const tests: [string, () => Promise<void>][] = [
   [
     "edit() : vrai diff, Revert (fichier créé à la corbeille), texte [user-reverted] dans le message suivant",
     async () => {
+      const workedBefore = await workedCount();
       await post({ type: "send", text: "edit", images: [] });
       await answer("call-edit", "allow-once");
       await idle();
@@ -203,7 +237,8 @@ const tests: [string, () => Promise<void>][] = [
       const edit = (await tool("call-edit"))!.edits![0];
       assert.deepEqual([edit.shown, edit.created, edit.lines], ["ok.txt", true, [["+", "oui"]]]);
       // Par des clics d'utilisateur : le travail replié, la carte, puis « Revert ».
-      await userClicks("Worked", "Wrote", "Revert");
+      await openNewWork(workedBefore);
+      await userClicks("Wrote", "Revert");
       await waitFor(async () => (await tool("call-edit"))?.edits?.[0].revert?.state === "reverted", "Revert fait");
       assert.equal(existsSync(file), false, "ok.txt retiré");
     },
@@ -316,6 +351,7 @@ const tests: [string, () => Promise<void>][] = [
       const file = join(workspace, "emoji.txt");
       const original = Buffer.from("garder\n😀 un deux\nfin\n", "utf8");
       writeFileSync(file, original);
+      const workedBefore = await workedCount();
       await post({ type: "send", text: "coupe", images: [] });
       await idle();
       await shows("coupe fini", "réponse après la coupe");
@@ -325,7 +361,8 @@ const tests: [string, () => Promise<void>][] = [
       assert.deepEqual([edit.shown, edit.created], ["emoji.txt", false]);
       // Par des clics d'utilisateur, sur l'élément réellement sous le pointeur : le travail replié,
       // la carte, puis « Revert ».
-      await userClicks("Worked", "Edited", "Revert");
+      await openNewWork(workedBefore);
+      await userClicks("Edited", "Revert");
       await waitFor(async () => (await tool("call-cut"))?.edits?.[0].revert?.state === "reverted", "Revert fait");
       assert.ok(readFileSync(file).equals(original), "emoji.txt revenu octet pour octet");
     },
