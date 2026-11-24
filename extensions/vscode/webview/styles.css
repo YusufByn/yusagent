@@ -91,8 +91,12 @@ pre {
 }
 
 /* yusAgent (ticket 30, C1 option B) : « auto » sans sandbox, étiquette discrète comme celle du TUI. */
-.ya-auto-badge {
+.ya-auto-badge,
+.ya-manual-badge {
   padding: 1px 6px;
+  background: none;
+  font: inherit;
+  cursor: pointer;
   border: 1px solid var(--vscode-inputValidation-warningBorder, var(--vscode-editorWarning-foreground));
   border-radius: 4px;
   color: var(--vscode-editorWarning-foreground);
@@ -430,4 +434,14 @@ button.ya-run-head {
   margin: 0 0 4px;
   color: var(--vscode-descriptionForeground);
   font-size: 0.9em;
+}
+
+/* yusAgent (ticket 31, C6) : « manual », discret ; même forme que « auto · no sandbox ». */
+.ya-manual-badge {
+  border-color: var(--vscode-input-border, var(--vscode-descriptionForeground));
+  color: var(--vscode-descriptionForeground);
+}
+
+.ya-permissions-picker {
+  position: relative;
 }

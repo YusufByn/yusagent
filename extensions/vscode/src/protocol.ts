@@ -123,10 +123,11 @@ export type SessionConfig = {
   /** The fast mode (priority tier); `null` when the model has none. */
   fast: boolean | null;
   /**
-   * yusAgent (YA-10, ticket 24) : la valeur `permissions` que l'agent annonce (`manual`, `auto`) ;
-   * `null` sans l'option. Le bandeau D4 la suit ; le panneau ne la change pas (D1).
+   * yusAgent (YA-10, ticket 24 ; ticket 31, C5) : l'option `permissions` que l'agent annonce, sa valeur
+   * (`manual`, `auto`) et ses choix avec leurs libellés ; `null` sans l'option. L'étiquette du
+   * compositeur la suit et la change pour la conversation, jamais le réglage global (D1).
    */
-  permissions: string | null;
+  permissions: { current: string; choices: { value: string; name: string }[] } | null;
 };
 
 /** The agent session (`session/new`) as the panel shows it. */
@@ -139,7 +140,9 @@ export type SessionState =
 /** The options the panel sets. */
 export type ConfigChange =
   | { configId: "model" | "thought_level"; value: string }
-  | { configId: "fast_mode"; value: boolean };
+  | { configId: "fast_mode"; value: boolean }
+  /** yusAgent (ticket 31, C5) : le sélecteur de permissions, pour la conversation. */
+  | { configId: "permissions"; value: string };
 
 /** The global settings, as `_yus/settings/get` gives them. Keys are the file's dotted paths. */
 export type SettingsView = {

@@ -171,7 +171,13 @@ function readConfig(options: ConfigOption[]): SessionConfig {
     model: model ? { current: String(model.currentValue), choices: values(model).map(choice) } : null,
     effort: effort ? { current: String(effort.currentValue), levels: values(effort).map((v) => v.value) } : null,
     fast: fast ? fast.currentValue === true : null,
-    permissions: permissions ? String(permissions.currentValue) : null,
+    // yusAgent (ticket 31, C5) : les libellés du menu, ceux du pont.
+    permissions: permissions
+      ? {
+          current: String(permissions.currentValue),
+          choices: values(permissions).map(({ value, name }) => ({ value, name })),
+        }
+      : null,
   };
 }
 
@@ -216,6 +222,8 @@ function withChange(config: SessionConfig, change: ConfigChange): SessionConfig 
       return config.effort ? { ...config, effort: { ...config.effort, current: change.value } } : config;
     case "fast_mode":
       return { ...config, fast: change.value };
+    case "permissions":
+      return config.permissions ? { ...config, permissions: { ...config.permissions, current: change.value } } : config;
   }
 }
 
