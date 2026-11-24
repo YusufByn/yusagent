@@ -10,6 +10,10 @@
 //! a loopback server that plays the model and records every request body (harness of
 //! `ya_permissions_same_requests_e2e.rs`). If this test fails, the plan of ticket 31 is reviewed
 //! before any code. Listed in `docs/fork-changes.md`.
+//!
+//! Ticket 35 (`docs/tickets/35-regression-r3-abort-queued.md`): a daemon delivery compares the
+//! disk once, at the worker's call, never again at the admission, where a read would sit in the
+//! window in which an abort is lost.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -193,10 +197,20 @@ impl Drop for Supervisor {
     }
 }
 
+fn spawn_supervisor(socket: &Path, agent_dir: &Path) -> Supervisor {
+    spawn_supervisor_with(socket, agent_dir, None)
+}
+
+/// `trace`: the file of `PA_COMPACTION_TRACE`, which the workers inherit from the supervisor.
 // The supervisor is killed and waited for by `Supervisor`'s drop (as `abort_kernel_e2e.rs`).
 #[allow(clippy::zombie_processes)]
-fn spawn_supervisor(socket: &Path, agent_dir: &Path) -> Supervisor {
-    let child = Command::new(env!("CARGO_BIN_EXE_pa-daemon"))
+fn spawn_supervisor_with(socket: &Path, agent_dir: &Path, trace: Option<&Path>) -> Supervisor {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pa-daemon"));
+    command.env_remove("PA_COMPACTION_TRACE");
+    if let Some(trace) = trace {
+        command.env("PA_COMPACTION_TRACE", trace);
+    }
+    let child = command
         .arg("supervisor")
         .arg("--socket")
         .arg(socket)
@@ -557,5 +571,68 @@ fn a_skill_change_reaches_the_model_once_before_the_prompt_and_the_file_in_order
     assert!(
         row_at[0] < prompt_at,
         "the announcement row comes before the prompt's row, as in the request"
+    );
+}
+
+/// The phase of the comparison with the disk in the compaction trace (`ya_resource_notice.rs`).
+const COMPARE_PHASE: &str = "ya.resource_notice.compare";
+
+/// The comparisons with the disk written so far to the trace file.
+fn compares(trace: &Path) -> usize {
+    std::fs::read_to_string(trace)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.strip_prefix("compaction-trace: "))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|line| line["phase"] == COMPARE_PHASE)
+        .count()
+}
+
+/// Ticket 35, option A: in the daemon, the worker's comparison (`worker/turn.rs`, before the
+/// prompt's row) is the only one of a delivery; the admission takes its token instead of reading
+/// the disk again inside the window between the abort check and the run's registration. The
+/// first turn is not counted: the session is built by its admission, so the worker has nothing
+/// to compare yet.
+#[test]
+fn a_daemon_delivery_compares_with_the_disk_once() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let agent_dir = dir.path().join("agent");
+    let session_dir = agent_dir.join("sessions");
+    let cwd = dir.path().join("project");
+    std::fs::create_dir_all(&session_dir).expect("session dir");
+    std::fs::create_dir_all(&cwd).expect("project dir");
+    let server = ModelServer::start();
+    let models = json!({ "providers": { "same": {
+        "baseUrl": format!("http://127.0.0.1:{}/v1", server.port),
+        "apiKey": "announce-dummy",
+        "api": "openai-responses",
+        "models": [{
+            "id": "same-model", "name": "Same", "reasoning": false, "input": ["text"],
+            "contextWindow": 200_000, "maxTokens": 32_000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }]
+    }}});
+    std::fs::write(agent_dir.join("models.json"), models.to_string()).expect("models.json");
+    let trace = dir.path().join("trace.log");
+    let socket = dir.path().join("ya-compare.sock");
+    let _supervisor = spawn_supervisor_with(&socket, &agent_dir, Some(&trace));
+    let mut client = Client::connect(&socket);
+
+    let session_id = client.open(&cwd, &session_dir);
+    client.turn(&session_id, PROMPT);
+    settled_bodies(&server, Duration::from_millis(1500));
+    let mut counted = Vec::new();
+    for message in [AGAIN, "And once more."] {
+        let before = compares(&trace);
+        client.turn(&session_id, message);
+        settled_bodies(&server, Duration::from_millis(1500));
+        counted.push(compares(&trace) - before);
+    }
+    assert_eq!(
+        counted,
+        [1, 1],
+        "comparisons with the disk per daemon delivery (turns 2 and 3), trace {}: {}",
+        trace.display(),
+        std::fs::read_to_string(&trace).unwrap_or_default()
     );
 }
