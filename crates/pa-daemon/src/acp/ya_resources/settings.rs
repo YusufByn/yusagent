@@ -293,6 +293,49 @@ mod tests {
         assert_eq!(document, json!({ "theme": "dark" }));
     }
 
+    /// Ticket 31 (X3, C1): the General tab shows what applies when a key is unset, so the bridge
+    /// gives the core's defaults (`SettingsManager` getters on empty settings), not `null`.
+    #[test]
+    fn the_view_gives_the_core_defaults() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (cwd, agent_dir) = (dir.path().join("project"), dir.path().join("agent"));
+        std::fs::create_dir_all(&cwd).expect("project dir");
+        std::fs::create_dir_all(&agent_dir).expect("agent dir");
+        let Ok(view) = view(&cwd, &agent_dir) else {
+            panic!("the view of empty settings");
+        };
+        let core = pa_core::settings::SettingsManager::from_storage(std::sync::Arc::new(
+            pa_core::settings::InMemorySettingsStorage::default(),
+        ));
+        let retry = core.get_provider_retry_policy();
+        let failover = core.get_provider_failover_policy();
+        let park = core.get_provider_park_policy();
+        assert_eq!(
+            view["defaults"],
+            json!({
+                "compaction.enabled": core.get_compaction_enabled(),
+                "auxiliaryModel": null,
+                "retry.enabled": retry.enabled,
+                "retry.maxRetries": retry.max_retries,
+                "retry.baseDelayMs": retry.base_delay_ms,
+                "retry.provider.maxRetryDelayMs": retry.max_retry_delay_ms,
+                "retry.failover.enabled": failover.enabled,
+                "retry.failover.maxRetries": failover.max_retries,
+                "retry.failover.baseDelayMs": failover.base_delay_ms,
+                "retry.failover.maxDelayMs": failover.max_delay_ms,
+                "retry.provider.waitForUsage.pauseUntilReset": park.pause_until_reset,
+                "retry.provider.waitForUsage.maxPauseMs": park.max_pause_ms,
+                "retry.provider.waitForUsage.maxParks": park.max_parks,
+                "mcpServers": null,
+            })
+        );
+        assert_eq!(
+            view["defaults"]["retry.enabled"],
+            json!(true),
+            "retries are on by default"
+        );
+    }
+
     #[test]
     fn values_are_checked() {
         assert!(check("retry.enabled", Kind::Bool, &json!(true)).is_ok());
