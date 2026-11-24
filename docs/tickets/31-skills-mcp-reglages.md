@@ -873,3 +873,20 @@ Contrôle TUI du §5.4, étape 7 : le journal d'usage est `~/.yusagent/sessions/
      - Dans le `.vsix`, la boîte pose son état dans `ya-box-state.ts` à son ouverture et note chaque touche reçue ; rien ne le lit sans sonde, et aucune action n'est enregistrée sans `probeInput`.
 - **Ces corrections ne peuvent pas être vues en échec de façon déterministe** : elles retirent une dépendance au temps. Le contrôle est qu'elles passent, au push 2 et ensuite.
 - Commits du ticket dans ce push : `69dc040ba` (§9.10) et celui-ci.
+
+### 9.12 Push 2 : le code (24/11/2026)
+
+Commits, un sujet chacun (avant celui de cette doc) :
+- `f89ac3f59` : test du ticket 28, snapshot de fenêtre déposé s'il manque (§9.9) ;
+- `a11e88e28` : e2e sans l'horloge du test (§9.11) ;
+- `6c997a53b` : défauts du cœur dans `_yus/settings/get` (C1), repris par l'agent factice ;
+- `4f759d60b` : méthodes `_yus/*` des écrans, lues à l'ouverture de l'écran ;
+- `31e1d8648` : plus rien n'attend un redémarrage, textes C3 ;
+- `910005477` : onglet General limité, Instructions et catalogue masqués (C4, C9) ;
+- `7eb03e12e` : notice en ligne visible du tour ;
+- `4b89ef00e` : sélecteur de permissions (C5, C6) ;
+- `7ea5e8d2b` : journal sans la valeur de `mcpServers` ;
+- `0a323f3b3` : `real-binary-check.mjs`, `permissions` dans sa nouvelle forme (écart : le changement de type de C5 le cassait) ;
+- doc : `docs/fork-changes.md` (section « Skills, MCP et réglages dans l'extension, PR X3 »), `extensions/vscode/README.md`, ce ticket.
+
+En local (Claude Code) : `cd extensions/vscode && npm run typecheck && npm run lint && npm run test:unit` donne `ℹ tests 67`, `ℹ pass 67`, `ℹ fail 0`. Le test Rust est seulement formaté (`rustfmt`), compilé en CI (règle 8).
