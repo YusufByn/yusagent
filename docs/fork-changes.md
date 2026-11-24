@@ -663,6 +663,20 @@ Lien avec le point ouvert du ticket 22 (`docs/tickets/22-carte-cellule-permissio
 
 Si ce test retombe avec le même symptôme : relancer son job une fois, seul et sans push, et noter le run ici et dans la PR.
 
+## Instabilité probable : `protocol_breadth_b6_b9` (YA-10, ticket 31)
+
+`crates/pa-daemon/tests/protocol_breadth_b6_b9.rs`, test `disconnect_mid_write_releases_the_held_input_pause` (`:527`), shard 8/8 de `ci.yml`. Test d'upstream. Notre fichier ne diffère d'`upstream/main` (`798d97032`) que par le `#[cfg(target_os = "linux")]` qu'upstream a ajouté depuis (`12a5081ac`, raison macOS) : 3 lignes.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 43492287310 | `0c9a95686` (`main`), 13/11/2026 | 1 (job 132116430031) | échec du shard 8/8 |
+| 45349487727 | `8205f0bbe` (`ya-31-skills-mcp-reglages`, PR #83), 24/11/2026 | 1 (job 138292181626) | échec du shard 8/8, même symptôme |
+| 45349487727 | `8205f0bbe` | 2 (relance du job seul, sans push, décision de Yusuf du 24/11/2026) | voir la PR #83 |
+
+Symptôme : « the disconnecting client's pause still holds the queue » à `:624`, `steering` = `["go","queued behind","second client"]` au lieu de `[]`. Le test dépend du timing : un client se déconnecte à moitié (`shutdown(Read)`) pendant une écriture, et la première réponse scriptée est lente (`delayMs: 1500`). Le ticket 31 n'y touche pas : la session prend `ScriptedEngine` (`crates/pa-daemon/src/worker.rs:420-421`), dont `ya_resource_notice` reste celui par défaut, `None` (`crates/pa-daemon/src/engine.rs:426-428`). L'appel de `worker/turn.rs:1041` est synchrone, sans attente ni écriture.
+
+Si ce test retombe avec le même symptôme : relancer son job une fois, seul et sans push, et noter le run ici et dans la PR.
+
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
 Le shard 1 de `ci.yml` téléchargeait la release `v0.9.8` depuis `${GITHUB_REPOSITORY}`. Le fork n'a pas de release, l'étape échouait et faisait échouer tout le shard.
