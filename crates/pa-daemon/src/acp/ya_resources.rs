@@ -78,17 +78,18 @@ pub(crate) async fn serve(
     params: &Value,
     tx: &super::producer::FrameSink,
 ) {
-    let answer = match pa_types::platform::dirs::agent_dir() {
-        None => Err(Refusal::Failed(
-            "the agent directory does not resolve (no home directory)".to_string(),
-        )),
-        Some(agent_dir) => match method {
+    let answer = if let Some(agent_dir) = pa_types::platform::dirs::agent_dir() {
+        match method {
             MCP_LIST | MCP_SET_TOKEN | MCP_LOGOUT => mcp(bound, &agent_dir, method, params).await,
             _ if settings::serves(method) => {
                 settings::answer(bound.cwd, &agent_dir, method, params)
             }
             _ => skills(bound, &agent_dir, method, params).await,
-        },
+        }
+    } else {
+        Err(Refusal::Failed(
+            "the agent directory does not resolve (no home directory)".to_string(),
+        ))
     };
     let response = match answer {
         Ok(result) => super::jsonrpc::response(id, &result),
@@ -124,10 +125,10 @@ fn shown(path: &Path) -> String {
 
 /// `~` and `~/…` expanded.
 fn expanded(path: &str) -> PathBuf {
-    match (path.strip_prefix('~'), pa_types::platform::home_dir()) {
-        (Some(rest), Some(home)) => home.join(rest.trim_start_matches('/')),
-        _ => PathBuf::from(path),
+    if let (Some(rest), Some(home)) = (path.strip_prefix('~'), pa_types::platform::home_dir()) {
+        return home.join(rest.trim_start_matches('/'));
     }
+    PathBuf::from(path)
 }
 
 // Skills
@@ -283,10 +284,9 @@ async fn skills_view(bound: &Bound<'_>, agent_dir: &Path) -> Answer {
 
 /// The folder a `-` / `+` entry names for a skill file: its folder for a `SKILL.md`.
 fn skill_target(file: &Path) -> PathBuf {
-    match (file.file_name(), file.parent()) {
-        (Some(name), Some(folder)) if name == "SKILL.md" => folder.to_path_buf(),
-        _ => file.to_path_buf(),
-    }
+    file.parent()
+        .filter(|_| file.file_name().is_some_and(|name| name == "SKILL.md"))
+        .map_or_else(|| file.to_path_buf(), Path::to_path_buf)
 }
 
 fn write_skill_entries(cwd: &Path, agent_dir: &Path, entries: Vec<String>) {
@@ -526,7 +526,8 @@ mod tests {
     fn skill_names_and_overrides() {
         assert!(valid_skill_name("deploy"));
         assert!(valid_skill_name("ya31-demo-2"));
-        for bad in ["", "Deploy", "a--b", "-a", "a-", "a_b", &"a".repeat(65)] {
+        let long = "a".repeat(65);
+        for bad in ["", "Deploy", "a--b", "-a", "a-", "a_b", long.as_str()] {
             assert!(!valid_skill_name(bad), "{bad}");
         }
         assert!(is_override("-/x") && is_override("+/x") && is_override("!x"));

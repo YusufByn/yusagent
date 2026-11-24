@@ -80,14 +80,14 @@ fn global_document(cwd: &Path, agent_dir: &Path) -> Result<Value, Refusal> {
     let text = FileSettingsStorage::new(cwd, agent_dir)
         .read(SettingsScope::Global)
         .map_err(|error| Refusal::Failed(format!("the settings could not be read: {error}")))?;
-    match text {
-        None => Ok(json!({})),
-        Some(text) => serde_json::from_str(&text).map_err(|error| {
-            Refusal::Failed(format!(
-                "the global settings file is not valid JSON: {error}"
-            ))
-        }),
-    }
+    let Some(text) = text else {
+        return Ok(json!({}));
+    };
+    serde_json::from_str(&text).map_err(|error| {
+        Refusal::Failed(format!(
+            "the global settings file is not valid JSON: {error}"
+        ))
+    })
 }
 
 /// The screen: each key's value in the global file (`null` when unset), the defaults the
@@ -169,49 +169,46 @@ fn set_dotted(document: &mut Value, key: &str, value: Option<Value>) {
     let Some((last, parents)) = parts.split_last() else {
         return;
     };
-    match value {
-        Some(value) => {
-            let mut node = document;
-            for part in parents {
-                let Some(map) = node.as_object_mut() else {
-                    return;
-                };
-                let child = map.entry((*part).to_string()).or_insert_with(|| json!({}));
-                if !child.is_object() {
-                    *child = json!({});
-                }
-                node = child;
+    if let Some(value) = value {
+        let mut node = document;
+        for part in parents {
+            let Some(map) = node.as_object_mut() else {
+                return;
+            };
+            let child = map.entry((*part).to_string()).or_insert_with(|| json!({}));
+            if !child.is_object() {
+                *child = json!({});
             }
-            if let Some(map) = node.as_object_mut() {
-                map.insert((*last).to_string(), value);
-            }
+            node = child;
         }
-        None => {
-            let parent = if parents.is_empty() {
+        if let Some(map) = node.as_object_mut() {
+            map.insert((*last).to_string(), value);
+        }
+    } else {
+        let parent = if parents.is_empty() {
+            Some(&mut *document)
+        } else {
+            document.pointer_mut(&pointer(&parents.join(".")))
+        };
+        if let Some(map) = parent.and_then(Value::as_object_mut) {
+            map.remove(*last);
+        }
+        for depth in (1..=parents.len()).rev() {
+            let path = parents[..depth].join(".");
+            let empty = document
+                .pointer(&pointer(&path))
+                .and_then(Value::as_object)
+                .is_some_and(Map::is_empty);
+            if !empty {
+                break;
+            }
+            let parent = if depth == 1 {
                 Some(&mut *document)
             } else {
-                document.pointer_mut(&pointer(&parents.join(".")))
+                document.pointer_mut(&pointer(&parents[..depth - 1].join(".")))
             };
             if let Some(map) = parent.and_then(Value::as_object_mut) {
-                map.remove(*last);
-            }
-            for depth in (1..=parents.len()).rev() {
-                let path = parents[..depth].join(".");
-                let empty = document
-                    .pointer(&pointer(&path))
-                    .and_then(Value::as_object)
-                    .is_some_and(Map::is_empty);
-                if !empty {
-                    break;
-                }
-                let parent = if depth == 1 {
-                    Some(&mut *document)
-                } else {
-                    document.pointer_mut(&pointer(&parents[..depth - 1].join(".")))
-                };
-                if let Some(map) = parent.and_then(Value::as_object_mut) {
-                    map.remove(parents[depth - 1]);
-                }
+                map.remove(parents[depth - 1]);
             }
         }
     }
