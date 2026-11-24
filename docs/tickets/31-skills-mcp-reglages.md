@@ -931,3 +931,10 @@ En local (Claude Code) : `cd extensions/vscode && npm run typecheck && npm run l
 **Le `"}` en fin de réponse vient du modèle.** Il est dans le texte de la réponse elle-même, dans le fichier de session (`~/.yusagent/sessions/01a20dd1-fa58-75c4-bad6-a052acc53701.jsonl`, dossier `/tmp/ya31-x3`). Rien à corriger.
 
 **Autres écrans d'Unharnessed encore masqués**, dans le même cas : Providers (27 classes absentes sur 33), SignIn (22 sur 27), Local (19 sur 21), Kernel (34 sur 35), Instructions. À styler quand ils seront démasqués.
+
+**Pushs A et B (24/11/2026).**
+- **Push A** (`511750b49`, test seul), `ya-extension` 45410066889 : **pas rouge sur son assertion.** Le cas échoue sur « délai dépassé : onglet General » : l'app garde l'onglet ouvert, et le cas précédent finit sur MCP. Faute de « Back », l'écran restait sur Settings, et les cas « skills » et « permissions » échouaient à leur tour. Défaut du test.
+- **Push A'** (`3752ecaf2`, test corrigé seul : onglet General ouvert par un clic, retour au chat dans un `finally`), `ya-extension` 45410771373 :
+  - **seul rouge** : « réglages stylés », sur son assertion « libellé collé à sa description » ;
+  - unitaires 67/67, e2e de l'agent factice 14/15, e2e du vrai binaire 18/18, aucun processus restant.
+- **Push B** : la feuille (`ya-settings.css`) et cette doc.
