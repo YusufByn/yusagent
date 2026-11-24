@@ -141,13 +141,13 @@ export type ConfigChange =
   | { configId: "model" | "thought_level"; value: string }
   | { configId: "fast_mode"; value: boolean };
 
-/** The global settings, as `_unharnessed/settings/get` gives them. Keys are the file's dotted paths. */
+/** The global settings, as `_yus/settings/get` gives them. Keys are the file's dotted paths. */
 export type SettingsView = {
   /** Each key's value in `~/.yusagent/settings.json`; `null` when unset. */
   values: Record<string, unknown>;
   /** What the agent uses for an unset key; `null`: nothing. */
   defaults: Record<string, unknown>;
-  /** Keys read when the agent starts; the others apply on their next use. */
+  /** Keys read when the agent starts; yusAgent (ticket 31) : always empty, nothing waits for a restart. */
   restart: string[];
 };
 
@@ -157,11 +157,11 @@ export type SettingsView = {
  */
 export type ModelInstructions = { models: string[]; text: string };
 
-/** One MCP server, as the agent's `_unharnessed/mcp/list` gives it. */
+/** One MCP server, as the agent's `_yus/mcp/list` gives it. */
 export type McpServer = {
   id: string;
   label: string;
-  /** `catalog`: a service of Prime's catalog, the Marketplace; `user`: one of the `mcpServers` setting. */
+  /** `catalog`: a service of the local catalog; `user`: one of the `mcpServers` setting. */
   source: "catalog" | "user";
   /** `pending`: signed in, the connection not checked yet. */
   status: "connected" | "pending" | "not_connected" | "setup_required" | "disabled" | "error";
@@ -180,7 +180,7 @@ export type McpServer = {
   token?: string;
 };
 
-/** One skill, as the agent's `_unharnessed/skills/list` gives it. */
+/** One skill, as the agent's `_yus/skills/list` gives it. */
 export type Skill = {
   name: string;
   description: string;
@@ -202,7 +202,7 @@ export type SkillsView = {
   folders: string[];
   /** What keeps a skill from loading. */
   problems: { message: string; path?: string }[];
-  /** The next start loads other skills than the running agent has. */
+  /** yusAgent (ticket 31) : always false, a change reaches the agent with the next message. */
   restart: boolean;
 };
 
@@ -210,8 +210,6 @@ export type SkillsView = {
 export type SettingsState = {
   /** `null` until the agent has answered. */
   view: SettingsView | null;
-  /** What a restart would apply: the restart keys changed since the agent started, `skills`, `mcp`. */
-  pending: string[];
   mcp: McpServer[] | null;
   skills: SkillsView | null;
 };

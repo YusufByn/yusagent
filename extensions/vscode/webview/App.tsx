@@ -39,7 +39,7 @@ export function App() {
   const [result, setResult] = useState<ProviderResult | null>(null);
   const [localScan, setLocalScan] = useState<LocalScan | null>(null);
   const [localProbe, setLocalProbe] = useState<LocalProbe | null>(null);
-  const [settings, setSettings] = useState<SettingsState>({ view: null, pending: [], mcp: null, skills: null });
+  const [settings, setSettings] = useState<SettingsState>({ view: null, mcp: null, skills: null });
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [settingResult, setSettingResult] = useState<SettingResult | null>(null);
   const [chat, setChat] = useState<ChatState>(EMPTY_CHAT);

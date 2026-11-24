@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { savedGroups } from "../src/instructions";
 import type { ModelChoice, Provider, SessionState, SettingsState, WebviewMessage } from "../src/protocol";
 import type { SettingResult } from "./App";
-import { IconBack, IconChevron, IconRestart } from "./icons";
+import { IconBack, IconChevron } from "./icons";
 import { ProviderLogo } from "./logos";
 import { isLocal, ModelList, providerName } from "./models";
 import { InstructionsTab } from "./SettingsInstructions";
@@ -183,9 +183,8 @@ export function useSettled(key: string, { drafts, errors }: Actions, done: () =>
 
 /**
  * The agent's global settings (`~/.yusagent/settings.json`), its MCP
- * servers, its skills and its instructions per model, a tab each. A change
- * is written at once; the ones the agent reads when it starts wait for a
- * restart, which the screen offers.
+ * servers and its skills, a tab each. A change is written at once and
+ * reaches the agent with the next message (yusAgent, ticket 31).
  */
 export function Settings({
   settings,
@@ -286,20 +285,6 @@ export function Settings({
         ))}
       </div>
       <main className="content">
-        {settings.pending.length > 0 && (
-          <div className="restart-notice">
-            <p className="note">Some changes apply when the agent restarts.</p>
-            <button
-              className="button"
-              type="button"
-              disabled={!ready}
-              onClick={() => post({ type: "restartAgent" })}
-            >
-              <IconRestart />
-              {ready ? "Restart agent" : "Restarting"}
-            </button>
-          </div>
-        )}
         {tab === "general" && (
           <General
             settings={settings}

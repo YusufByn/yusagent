@@ -18,7 +18,8 @@ const GROUPS: [string, (skill: Skill) => boolean][] = [
 
 /**
  * The skills the agent finds, on or off; a new one; the folders it reads
- * them from. It loads them when it starts.
+ * them from. yusAgent (ticket 31) : a change reaches the agent with the next
+ * message, announced by the engine; no restart.
  */
 export function SkillsTab({ skills, actions }: { skills: SkillsView | null; actions: Actions }) {
   const [creating, setCreating] = useState(false);
@@ -33,7 +34,7 @@ export function SkillsTab({ skills, actions }: { skills: SkillsView | null; acti
     <>
       <p className="note section-help">
         Instructions the agent follows when a task calls for them: it sees each skill's name and description, and
-        reads the rest when needed. Changes apply when it restarts.
+        reads the rest when needed. Changes reach the agent with your next message.
       </p>
       {creating ? (
         <ul className="list">
@@ -115,11 +116,6 @@ function SkillRow({ skill, actions }: { skill: Skill; actions: Actions }) {
           <span className="row-main">
             <span className="row-name">
               {skill.name}
-              {on !== skill.active && (
-                <span className="tag" data-tip="Applies when the agent restarts">
-                  restart
-                </span>
-              )}
             </span>
             <span className="skill-description">{skill.description}</span>
             {!builtin && <Location path={skill.location} />}

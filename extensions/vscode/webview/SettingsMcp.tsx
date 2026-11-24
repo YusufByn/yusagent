@@ -68,7 +68,7 @@ export function McpTab({
   return (
     <>
       <p className="note section-help">
-        The agent calls MCP servers' tools from its Python kernel. Changes apply when it restarts.
+        The agent calls MCP servers' tools from its Python kernel. Changes reach the agent with your next message.
       </p>
       <section className="section">
         <h2 className="section-label">Your servers</h2>
