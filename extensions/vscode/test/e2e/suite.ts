@@ -461,25 +461,31 @@ const tests: [string, () => Promise<void>][] = [
       setScenario(control, {});
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await ready();
-      await userClicks("Settings");
-      const general = await shows("Compaction", "onglet General");
-      // Le texte affiché (`innerText`) suit la mise en page : libellé et description sur deux lignes.
-      assert.ok(!general.includes("Compact automaticallyBefore"), "libellé collé à sa description");
-      assert.ok(general.includes("Compact automatically\nBefore the context is full."), "libellé puis description, séparés");
-      const retry = async () => (await probe())?.switches.find((item) => item.label === "Retry failed requests");
-      // Allumé : le défaut du pont (C1), dans l'agent factice comme dans le binaire.
-      const on = await waitFor(async () => {
-        const found = await retry();
-        return found?.checked ? found : undefined;
-      }, "« Retry failed requests » allumé");
-      assert.ok(on.width >= 24 && on.height >= 14, `interrupteur de taille visible : ${on.width}×${on.height}`);
-      await userClicks("Retry failed requests");
-      // Éteint : son fond et la place de son bouton changent (état lisible, pas seulement annoncé).
-      await waitFor(async () => {
-        const off = await retry();
-        return off && !off.checked && off.background !== on.background && off.knobLeft !== on.knobLeft;
-      }, `état lisible : fond ou bouton inchangés (allumé : ${on.background}, bouton à ${on.knobLeft})`);
-      await userClicks("Retry failed requests", "Back");
+      // L'onglet ouvert est gardé par l'app (le cas précédent finit sur MCP) : General, par un clic.
+      await userClicks("Settings", "General");
+      try {
+        const general = await shows("Compaction", "onglet General");
+        // Le texte affiché (`innerText`) suit la mise en page : libellé et description sur deux lignes.
+        assert.ok(!general.includes("Compact automaticallyBefore"), "libellé collé à sa description");
+        assert.ok(general.includes("Compact automatically\nBefore the context is full."), "libellé puis description, séparés");
+        const retry = async () => (await probe())?.switches.find((item) => item.label === "Retry failed requests");
+        // Allumé : le défaut du pont (C1), dans l'agent factice comme dans le binaire.
+        const on = await waitFor(async () => {
+          const found = await retry();
+          return found?.checked ? found : undefined;
+        }, "« Retry failed requests » allumé");
+        assert.ok(on.width >= 24 && on.height >= 14, `interrupteur de taille visible : ${on.width}×${on.height}`);
+        await userClicks("Retry failed requests");
+        // Éteint : son fond et la place de son bouton changent (état lisible, pas seulement annoncé).
+        await waitFor(async () => {
+          const off = await retry();
+          return off && !off.checked && off.background !== on.background && off.knobLeft !== on.knobLeft;
+        }, `état lisible : fond ou bouton inchangés (allumé : ${on.background}, bouton à ${on.knobLeft})`);
+        await userClicks("Retry failed requests");
+      } finally {
+        // Retour au chat même en cas d'échec : les cas suivants partent de lui.
+        await probeInput({ userClick: "Back" });
+      }
     },
   ],
   [
