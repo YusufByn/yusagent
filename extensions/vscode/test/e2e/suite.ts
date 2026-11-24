@@ -456,6 +456,33 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
+    "réglages stylés (ticket 31) : libellé séparé de sa description ; interrupteur de taille visible, état lisible",
+    async () => {
+      setScenario(control, {});
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await userClicks("Settings");
+      const general = await shows("Compaction", "onglet General");
+      // Le texte affiché (`innerText`) suit la mise en page : libellé et description sur deux lignes.
+      assert.ok(!general.includes("Compact automaticallyBefore"), "libellé collé à sa description");
+      assert.ok(general.includes("Compact automatically\nBefore the context is full."), "libellé puis description, séparés");
+      const retry = async () => (await probe())?.switches.find((item) => item.label === "Retry failed requests");
+      // Allumé : le défaut du pont (C1), dans l'agent factice comme dans le binaire.
+      const on = await waitFor(async () => {
+        const found = await retry();
+        return found?.checked ? found : undefined;
+      }, "« Retry failed requests » allumé");
+      assert.ok(on.width >= 24 && on.height >= 14, `interrupteur de taille visible : ${on.width}×${on.height}`);
+      await userClicks("Retry failed requests");
+      // Éteint : son fond et la place de son bouton changent (état lisible, pas seulement annoncé).
+      await waitFor(async () => {
+        const off = await retry();
+        return off && !off.checked && off.background !== on.background && off.knobLeft !== on.knobLeft;
+      }, `état lisible : fond ou bouton inchangés (allumé : ${on.background}, bouton à ${on.knobLeft})`);
+      await userClicks("Retry failed requests", "Back");
+    },
+  ],
+  [
     "skills (ticket 31) : skill créé puis message, ligne au-dessus du message ; interrupteur → _yus/skills/set, ligne du retrait",
     async () => {
       setScenario(control, {});

@@ -629,6 +629,12 @@ export type Probe = {
    */
   toggles: { text: string; expanded: boolean; inert: boolean; visible: boolean }[];
   /**
+   * Ticket 31 : les interrupteurs (`role="switch"`) : nom, taille affichée, état annoncé, couleur de
+   * fond calculée et position de leur bouton (`.switch-knob`), pour vérifier qu'ils se voient et que
+   * leur état se lit.
+   */
+  switches: { label: string | null; width: number; height: number; checked: boolean; background: string; knobLeft: number | null }[];
+  /**
    * Ticket 31 : la boîte de permission ouverte, lue avec les fonctions de `src/ya/permission-keys.ts`
    * à l'instant de la sonde : touches et boutons prêts ou non, et quand (horloge de la webview) ;
    * chaque touche reçue (prête ou non, issue) ; le dernier clic de la sonde sur un de ses boutons,

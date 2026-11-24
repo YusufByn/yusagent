@@ -74,6 +74,18 @@ function probe(): Probe {
     input: document.querySelector(COMPOSER)?.getAttribute("aria-label") ?? null,
     focused: active?.matches(BOX) ? "box" : active?.matches(COMPOSER) ? "composer" : "other",
     box: boxProbe(),
+    switches: Array.from(document.querySelectorAll<HTMLElement>('[role="switch"]')).map((element) => {
+      const rect = element.getBoundingClientRect();
+      const knob = element.querySelector<HTMLElement>(".switch-knob")?.getBoundingClientRect();
+      return {
+        label: element.getAttribute("aria-label"),
+        width: rect.width,
+        height: rect.height,
+        checked: element.getAttribute("aria-checked") === "true",
+        background: getComputedStyle(element).backgroundColor,
+        knobLeft: knob ? knob.left - rect.left : null,
+      };
+    }),
     boxButtons: Array.from(document.querySelectorAll<HTMLButtonElement>(`${BOX} .ya-permission-actions button`)).map((button) => ({
       name: button.textContent ?? "",
       disabled: button.disabled,
