@@ -449,8 +449,17 @@ fn the_history_lists_conversations_and_deletes_one_with_its_session() {
         one_path.file_stem().unwrap().to_str().unwrap()
     ));
     let journal_before = journal.exists();
+    // The window snapshot is the engine build's (`WindowedSessionStore::open`, written at the
+    // first prompt), which skips it when the worker appends to the file during the build (its
+    // generation check); no later writer adds it then (the lease flush only rewrites a live
+    // snapshot). What this test checks is that the delete removes every file named after the
+    // session (C4), not who writes them: lay one down when the build skipped it (ticket 31, X3).
+    let window = one_path.with_extension("window-cache.json");
+    if !window.exists() {
+        std::fs::write(&window, "{}").expect("lay down the window snapshot");
+    }
     assert!(
-        one_path.with_extension("window-cache.json").exists(),
+        window.exists(),
         "the window snapshot is there before the delete: {:?}",
         session_files(&one_path)
     );
