@@ -1,0 +1,1 @@
+- yusAgent: in the daemon, a prompt no longer reads the skills and MCP state from disk a second time at its admission; the worker's comparison before the prompt is the only one. A Stop pressed while a prompt was being admitted could be lost and leave the turn running until the model's first reply.

@@ -434,3 +434,17 @@ P1, au §13.
 | 2 | option A : jeton dans `ya_resource_notice.rs` (fichier du fork), variante appelée par le worker et verrou relâché avant `block_on` dans `session_engine_impl.rs` (lignes de R3) ; doc (`docs/fork-changes.md`, ce ticket) | tout vert ; puis, sur le binaire de la branche, `compare_capture_prompts.py` TOUT IDENTIQUE et `acp_live_changes.py` L1 à L6 CONFORME |
 
 Aucune ligne upstream ajoutée : `admission.rs` garde ses deux appels, et `turn.rs` reste tel quel.
+
+## 14. Réalisation (PR #85)
+
+### 14.1 Push 1 : test seul (`5c5086816`, run `ci` 45469928446)
+
+- **Seul échec, rouge sur son assertion** : `a_daemon_delivery_compares_with_the_disk_once` (shard 5/8, job 138715015410), `ya_announce_path_e2e.rs:631`, `left: [2, 2]`, `right: [1, 1]`.
+- Tous les autres jobs sont verts : fmt, clippy Linux et Windows, shards 1 à 4 et 6 à 8.
+- **Héritage de `PA_COMPACTION_TRACE` par le worker : confirmé**, la trace est remplie (§13, point 1).
+- **Mesure sur la CI Linux** : trace du test, `detail.micros`, dans le journal du job.
+  - Par livraison des tours 2 et 3, la seconde comparaison suit `daemon.before_prompt_admission`, écrite par `run_once.rs:347-357` juste après la vérification de `:337`. Elle est donc dans la fenêtre du §2.3.
+  - Durées dans la fenêtre : 10 581 µs et 10 569 µs.
+  - Comparaisons du worker : 13 136 µs et 12 253 µs.
+  - Comparaison du tour 1, faite par l'admission : 18 529 µs.
+  - Avant R3, la fenêtre ne contenait aucune entrée-sortie (§4).
