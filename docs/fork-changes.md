@@ -671,9 +671,22 @@ Si ce test retombe avec le même symptôme : relancer son job une fois, seul et 
 |---|---|---|---|
 | 43492287310 | `0c9a95686` (`main`), 13/11/2026 | 1 (job 132116430031) | échec du shard 8/8 |
 | 45349487727 | `8205f0bbe` (`ya-31-skills-mcp-reglages`, PR #83), 24/11/2026 | 1 (job 138292181626) | échec du shard 8/8, même symptôme |
-| 45349487727 | `8205f0bbe` | 2 (relance du job seul, sans push, décision de Yusuf du 24/11/2026) | voir la PR #83 |
+| 45349487727 | `8205f0bbe` | 2 (job 138302296982, relance du job seul, sans push, décision de Yusuf du 24/11/2026) | test réussi (le shard échoue sur `terminal_state_differential_e2e`, ci-dessous) |
 
 Symptôme : « the disconnecting client's pause still holds the queue » à `:624`, `steering` = `["go","queued behind","second client"]` au lieu de `[]`. Le test dépend du timing : un client se déconnecte à moitié (`shutdown(Read)`) pendant une écriture, et la première réponse scriptée est lente (`delayMs: 1500`). Le ticket 31 n'y touche pas : la session prend `ScriptedEngine` (`crates/pa-daemon/src/worker.rs:420-421`), dont `ya_resource_notice` reste celui par défaut, `None` (`crates/pa-daemon/src/engine.rs:426-428`). L'appel de `worker/turn.rs:1041` est synchrone, sans attente ni écriture.
+
+Si ce test retombe avec le même symptôme : relancer son job une fois, seul et sans push, et noter le run ici et dans la PR.
+
+## Instabilité probable : `terminal_state_differential_e2e` (YA-10, ticket 31)
+
+`crates/pa-cli/tests/terminal_state_differential_e2e/main.rs`, test `the_late_kitty_answer_inside_the_exit_window_is_stood_down` (`:676`), shard 8/8 de `ci.yml`. Test d'upstream, retouché par upstream depuis notre base (`9cff13ca5`, `12a5081ac`). Il tourne contre un superviseur factice (`MockSupervisor`, `harness.rs:342-345`) et ne tape que `/exit` (`main.rs:684`) : aucun prompt, aucun worker, donc ni la comparaison avec le disque ni `ya_resource_notice` du ticket 31.
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 45349487727 | `8205f0bbe` (`ya-31-skills-mcp-reglages`, PR #83), 24/11/2026 | 1 (job 138292181626) | test réussi (`PASS pa-cli#test:terminal_state_differential_e2e in 14.6s`) |
+| 45349487727 | `8205f0bbe` | 2 (job 138302296982) | échec du shard 8/8 |
+
+Symptôme : « timeout waiting for the exit's first teardown byte (needle [27, 91, 62, 52, 59, 48, 109]) » à `harness.rs:267`. Le test attend, dans le pseudo-terminal, le premier octet de la remise en état du terminal après `/exit`. Recherche dans les 59 runs `ci` en échec du 11/11 au 23/11/2026 (`main` et branches `ya-*`, grep de `FAIL rc=.*terminal_state_differential_e2e` dans les journaux des shards) : aucun autre échec.
 
 Si ce test retombe avec le même symptôme : relancer son job une fois, seul et sans push, et noter le run ici et dans la PR.
 
