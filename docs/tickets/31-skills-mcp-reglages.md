@@ -844,3 +844,7 @@ Contrôle TUI du §5.4, étape 7 : le journal d'usage est `~/.yusagent/sessions/
   - **Option retenue : le test dépose le fichier s'il manque.** Une attente ne peut pas réussir quand la construction l'a sauté.
   - **Aucun écrivain après la suppression.** La suppression arrête la session et attend la sortie de son worker (`ya_history.rs:793-808`) avant de retirer le fichier et ce qui porte son nom (`:826-830`). La libération du worker, seule autre écriture possible du snapshot, a donc lieu avant le retrait. Après la suppression, aucun worker ne tient « one » ; `session/list` ne lit pas un fichier retiré (le scan part des `.jsonl`) et n'écrit que l'info-cache, que le balayage couvre. Rien ne peut rendre le test instable dans l'autre sens.
   - Le fichier n'est déposé que s'il manque. Contenu `{}` : une ouverture qui le lirait le refuserait et repasserait par la lecture complète (`window_cache.rs:121-124`). Commit séparé (`f89ac3f59`), test seul, poussé avec le push 2.
+
+### 9.10 Limite du produit notée (décision de Yusuf du 24/11/2026)
+
+- **Un snapshot de fenêtre sauté à la construction du moteur n'est réécrit par personne tant que vit le worker** (§9.9 : `window.rs:583-584`, `lifecycle.rs:466-471`, `window_cache.rs:164-172`). La prochaine ouverture de la session fait donc une lecture complète du fichier. Coût en temps seulement, non mesuré ; à mesurer plus tard si utile.
