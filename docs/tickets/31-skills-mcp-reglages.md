@@ -814,3 +814,11 @@ Contrôle TUI du §5.4, étape 7 : le journal d'usage est `~/.yusagent/sessions/
   - e2e sur le vrai binaire : 16/18. Seuls rouges, les 2 cas du ticket 31 : « délai dépassé : clic sur « Settings » » et « délai dépassé : clic sur « auto · no sandbox » ». Aucun processus restant.
 - **`ya-build-macos-arm64`** run 45392698295 : succès (binaire du push 1, sans code du produit).
 - **Changelog fragment**, codebase-health, contribution gate : verts.
+
+### Ticket à part, ajout du 24/11/2026
+
+- **Ticket 35, « test upstream instable : `abort_and_send_queued_acks_before_the_follow_up_delivery` »**. Constat d'abord ; non traité dans le 31.
+  - **Origine** : upstream. Le test est dans `crates/pa-daemon/src/worker/turn_stream_tests/queue.rs:607`, depuis le portage en Rust (`39bc99a91`, #2524, 29/09/2026). Tous les commits qui touchent ce fichier viennent d'upstream ; aucun ne vient du fork.
+  - **Symptôme** : run `ci` 45376832870 sur `main` à `2e8dfdf41` (24/11/2026), shard 3, job 138385395316. Panique en `queue.rs:725:9` : « the follow-up's turn never settled on the bare abort ». Après un `abort` seul, `worker.core.busy` reste vrai au-delà de 10 s (`:719-727`).
+  - **Autres échecs** : aucun dans les 40 derniers runs `ci` en échec du dépôt (17/11 au 24/11/2026), recherche dans les journaux des shards en échec.
+  - **Upstream depuis notre base** : `2e8dfdf41..upstream/main` touche ce fichier (5 commits, +177/-12 lignes), sans changer cette assertion.
