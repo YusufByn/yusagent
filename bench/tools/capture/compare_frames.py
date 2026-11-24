@@ -9,6 +9,10 @@ seul côté, types différents, valeurs des champs constants (statuts, genres, t
 d'option, texte du refus, forme des identifiants de requête), trames de fin d'un tour de prompt.
 Ticket 28 : aussi l'ouverture, capacités de la réponse d'`initialize` (dont la valeur de
 `loadSession`) et `_meta` de la réponse de `session/new` (`saved`).
+Ticket 31 (X3) : le cas C `C-resources` (écrans skills, MCP et réglages) rejoué contre l'agent
+factice dans le même ordre : réponses de `_yus/settings/*`, `_yus/skills/*`, `_yus/mcp/list`, refus
+de `permissions` (code et texte), option `permissions` après `set_config_option`, et la notice
+`_yus/notice` (forme, place juste après `turnStart`, avant le contenu du tour).
 
 Ticket 26 : `--against <dossier acp_frames d'un autre binaire>` compare deux binaires sans l'agent
 factice : même suite de trames (sens, méthode, genre de mise à jour), puis, trame par trame, mêmes
@@ -109,6 +113,85 @@ def fake_frames(prompt: str) -> list[dict]:
 
 OPENING: dict[str, list[dict]] = {}
 
+# Ticket 31 (X3) : la suite du cas C (`acp_frames.py`, `screens`), rejouée contre l'agent factice.
+SKILL = "ya31-frames"
+
+
+def fake_resources() -> dict:
+    control = tempfile.mkdtemp(prefix="fake-acp-")
+    (Path(control) / "scenario.json").write_text("{}")
+    proc = subprocess.Popen(["node", str(fake)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                            env={**os.environ, "FAKE_ACP_DIR": control}, cwd=control)
+    lines: queue.Queue[str] = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(l) for l in proc.stdout], daemon=True).start()
+    frames: list[dict] = []
+    ids = iter(range(1, 100))
+
+    def request(method: str, params: dict) -> dict:
+        req_id = next(ids)
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}) + "\n")
+        proc.stdin.flush()
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            try:
+                message = json.loads(lines.get(timeout=0.2))
+            except queue.Empty:
+                continue
+            frames.append(message)
+            if message.get("id") == req_id and "method" not in message:
+                return message
+        return {}
+
+    out: dict = {}
+    request("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+    sid = request("session/new", {"cwd": control, "mcpServers": []})["result"]["sessionId"]
+    request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "bonjour"}]})
+    out["_yus/settings/get"] = request("_yus/settings/get", {})
+    out["_yus/settings/set"] = request("_yus/settings/set", {"key": "retry.enabled", "value": False})
+    out["refus"] = request("_yus/settings/set", {"key": "permissions", "value": "manual"})
+    out["_yus/skills/list"] = request("_yus/skills/list", {})
+    out["_yus/skills/create"] = request("_yus/skills/create", {"name": SKILL, "description": "Skill du cas C (ticket 31)."})
+    path = out["_yus/skills/create"].get("result", {}).get("created")
+    out["_yus/skills/set"] = request("_yus/skills/set", {"path": path, "enabled": False})
+    request("_yus/skills/set", {"path": path, "enabled": True})
+    out["_yus/mcp/list"] = request("_yus/mcp/list", {})
+    out["session/set_config_option"] = request("session/set_config_option",
+                                               {"sessionId": sid, "configId": "permissions", "value": "manual"})
+    start = len(frames)
+    request("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "bonjour"}]})
+    out["prompt2"] = frames[start:]
+    proc.stdin.close()
+    proc.wait(timeout=5)
+    return out
+
+
+def real_resources() -> dict | None:
+    folder = captured / "C-resources"
+    if not folder.is_dir():
+        return None
+    rows = [json.loads(line) for line in (folder / "transcript.jsonl").read_text().splitlines()]
+    asked = {row["msg"]["id"]: row["msg"] for row in rows
+             if row["dir"] == "client->agent" and "method" in row["msg"] and "id" in row["msg"]}
+    out: dict = {}
+    prompts = 0
+    for index, row in enumerate(rows):
+        msg = row["msg"]
+        if row["dir"] == "client->agent" and msg.get("method") == "session/prompt":
+            prompts += 1
+            if prompts == 2:
+                out["prompt2"] = [r["msg"] for r in rows[index + 1:] if r["dir"] == "agent->client"]
+        if row["dir"] != "agent->client" or "method" in msg or msg.get("id") not in asked:
+            continue
+        method, params = asked[msg["id"]]["method"], asked[msg["id"]].get("params") or {}
+        if method == "_yus/settings/set" and params.get("key") == "permissions":
+            out["refus"] = msg
+        elif method == "_yus/skills/set" and params.get("enabled") is True:
+            continue
+        else:
+            out.setdefault(method, msg)
+    return out
+
 
 def schema(value, path="") -> dict[str, str]:
     out: dict[str, str] = {}
@@ -201,7 +284,10 @@ def against(branch: Path, main: Path, expected: list[str]) -> int:
         return (row["dir"], msg.get("method"), u.get("sessionUpdate"), "id" in msg, "result" in msg)
 
     total, seen = 0, {key: [] for key in expected}
-    for case in ("A-display-auto", "B-basic-manual-reject"):
+    for case in ("A-display-auto", "B-basic-manual-reject", "C-resources"):
+        if case == "C-resources" and not ((main / case).is_dir() and (branch / case).is_dir()):
+            print(f"ABSENT : {case} (dossier d'un côté seulement, cas non comparé)")
+            continue
         a, b = rows(main, case), rows(branch, case)
         if [kind(r) for r in a] != [kind(r) for r in b]:
             first = next((i for i, (x, y) in enumerate(zip(a, b)) if kind(x) != kind(y)), min(len(a), len(b)))
@@ -344,5 +430,49 @@ total += compare("session/new : _meta", response(real_open, 2).get("result", {})
 # Message de l'agent.
 total += compare("agent_message_chunk", update(A, "agent_message_chunk"), update(carte, "agent_message_chunk") or update(lent, "agent_message_chunk"),
                  ignore_values={".params.update.content.type"})
+# Ticket 31 (X3) : cas C, écrans skills, MCP et réglages, et la notice.
+REAL_C = real_resources()
+if REAL_C is None:
+    print("ABSENT : C-resources (capture d'avant le ticket 31, X3) : un écart")
+    total += 1
+else:
+    MINE_C = fake_resources()
+    names = {".result.skills[].name", ".result.skills[].path", ".result.servers[].label"}
+    for method in ("_yus/settings/get", "_yus/settings/set", "_yus/skills/list", "_yus/skills/create",
+                   "_yus/skills/set", "_yus/mcp/list"):
+        total += compare(f"{method} : réponse", REAL_C.get(method, {}), MINE_C.get(method, {}), ignore_values=names)
+    total += compare("_yus/settings/set permissions : refus", REAL_C.get("refus", {}), MINE_C.get("refus", {}))
+    refusal = lambda msg: ((msg.get("error") or {}).get("code"), ((msg.get("error") or {}).get("data") or {}).get("details"))
+    same = refusal(REAL_C.get("refus", {})) == refusal(MINE_C.get("refus", {}))
+    print(f"  code et texte du refus {'identiques' if same else 'DIFFÉRENTS'} : réel {refusal(REAL_C.get('refus', {}))}")
+    total += 0 if same else 1
+    option = lambda msg: next((o for o in (msg.get("result") or {}).get("configOptions", []) if o.get("id") == "permissions"), {})
+    real_option, mine_option = option(REAL_C.get("session/set_config_option", {})), option(MINE_C.get("session/set_config_option", {}))
+    total += compare("session/set_config_option : option permissions", real_option, mine_option)
+    same = real_option == mine_option
+    print(f"  option permissions {'identique' if same else 'DIFFÉRENTE'} (valeur, noms des choix)")
+    total += 0 if same else 1
+    notice = lambda frames: next((f for f in frames if "_yus/notice" in meta((f.get("params") or {}).get("update") or {})), {})
+    total += compare("session_info_update _yus/notice", notice(REAL_C.get("prompt2", [])), notice(MINE_C.get("prompt2", [])))
+    details = lambda frames: meta((notice(frames).get("params") or {}).get("update") or {}).get("_yus/notice")
+    same = details(REAL_C.get("prompt2", [])) == details(MINE_C.get("prompt2", []))
+    print(f"  contenu de la notice {'identique' if same else 'DIFFÉRENT'} : réel {details(REAL_C.get('prompt2', []))}")
+    total += 0 if same else 1
+
+    def order(frames):
+        out = []
+        for f in frames:
+            u = (f.get("params") or {}).get("update") or {}
+            m = meta(u)
+            if "_yus/notice" in m:
+                out.append("notice")
+            elif (m.get("ai.primeintellect.prime-agent") or {}).get("turnStart"):
+                out.append("turnStart")
+            elif u.get("sessionUpdate") == "agent_message_chunk":
+                out.append("contenu")
+        return out[:3]
+    print(f"place de la notice : réel {order(REAL_C.get('prompt2', []))}, factice {order(MINE_C.get('prompt2', []))}"
+          f" ({'IDENTIQUE' if order(REAL_C.get('prompt2', [])) == order(MINE_C.get('prompt2', [])) else 'DIFFÉRENT'})")
+    total += 0 if order(REAL_C.get("prompt2", [])) == order(MINE_C.get("prompt2", [])) else 1
 print(f"\nécarts : {total}")
 sys.exit(1 if total else 0)

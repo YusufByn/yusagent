@@ -9,7 +9,7 @@
 // - `<dir>/starts.log` : une ligne par lancement (pid, cwd, arguments).
 // Le comportement d'un prompt dépend de son texte (voir `onPrompt`).
 
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -41,10 +41,11 @@ const config = [
     name: "Model",
     type: "select",
     category: "model",
-    currentValue: "capture/model-a",
+    // Ticket 31 (X3, C7) : la valeur opaque du pont, la paire sérialisée (`config_options.rs`, `model_value`).
+    currentValue: '["capture","model-a"]',
     options: [
-      { value: "capture/model-a", name: "Model A (capture)" },
-      { value: "capture/model-b", name: "Model B (capture)" },
+      { value: '["capture","model-a"]', name: "Model A (capture)" },
+      { value: '["capture","model-b"]', name: "Model B (capture)" },
     ],
   },
   {
@@ -322,6 +323,147 @@ async function onPrompt(id, text) {
   }
 }
 
+// Ticket 31 (X3) : les écrans skills, MCP et réglages, aux formes du pont
+// (`crates/pa-daemon/src/acp/ya_resources.rs`, `ya_resources/settings.rs`), relevées par
+// `bench/tools/capture/acp_frames.py` (cas C-resources) et comparées par `compare_frames.py`.
+// L'état vit dans ce processus ; les fichiers des skills sous `<FAKE_ACP_DIR>/agent/skills`.
+const SETTING_KEYS = [
+  "compaction.enabled",
+  "auxiliaryModel",
+  "retry.enabled",
+  "retry.maxRetries",
+  "retry.baseDelayMs",
+  "retry.provider.maxRetryDelayMs",
+  "retry.failover.enabled",
+  "retry.failover.maxRetries",
+  "retry.failover.baseDelayMs",
+  "retry.failover.maxDelayMs",
+  "retry.provider.waitForUsage.pauseUntilReset",
+  "retry.provider.waitForUsage.maxPauseMs",
+  "retry.provider.waitForUsage.maxParks",
+  "mcpServers",
+];
+const FROZEN = ["reasoningSummary", "bashWaitSeconds", "promptVersion", "codexSessionIdHeader", "existingTestsRule", "editTool", "shellTool"];
+const PERMISSIONS_REFUSAL =
+  "permissions is not set here: change it for this conversation with the permissions menu, or in ~/.yusagent/settings.json for every new session.";
+/** Défauts que donne le pont (`settings.rs`, `view`). */
+const SETTING_DEFAULTS = Object.fromEntries(SETTING_KEYS.map((key) => [key, null]));
+SETTING_DEFAULTS["compaction.enabled"] = true;
+const settingValues = Object.fromEntries(SETTING_KEYS.map((key) => [key, null]));
+const home = dir ?? process.cwd();
+const skillFile = (root, name) => join(home, root, name, "SKILL.md");
+const skills = [
+  { name: "edit", description: "Edit files.", root: "builtin", source: "builtin", enabled: true },
+  { name: "mcp", description: "Call MCP servers.", root: "builtin", source: "builtin", enabled: true },
+];
+/** Ce que le modèle sait (le prompt de l'ouverture et les annonces), fixé au premier prompt comme le moteur. */
+let known = null;
+const enabledSkills = () => skills.filter((skill) => skill.enabled).map((skill) => skill.name).sort();
+const enabledServers = () =>
+  Object.entries(settingValues.mcpServers ?? {})
+    .filter(([, server]) => server?.enabled !== false)
+    .map(([name]) => name)
+    .sort();
+const skillsView = () => ({
+  skills: skills.map(({ name, description, root, source, enabled }) => ({
+    name,
+    description,
+    path: skillFile(root, name),
+    location: join(home, root, name),
+    source,
+    enabled,
+    active: known ? known.skills.includes(name) : enabled,
+  })),
+  folders: [],
+  // Comme le binaire de `main` : son skill fourni `factory` sans description (capture C-resources).
+  problems: [{ message: "description is required", path: join(home, "builtin", "factory", "SKILL.md") }],
+  restart: false,
+});
+const settingsView = () => ({ values: { ...settingValues }, defaults: { ...SETTING_DEFAULTS }, restart: [] });
+const mcpView = () => ({
+  servers: [
+    ...Object.entries(settingValues.mcpServers ?? {}).map(([id, server]) => ({
+      id,
+      label: id,
+      source: "user",
+      status: server?.enabled === false ? "disabled" : "not_connected",
+      signIn: false,
+      signedIn: false,
+    })),
+    { id: "linear", label: "Linear", source: "catalog", status: "not_connected", signIn: true, signedIn: false },
+  ],
+});
+const RESOURCE_METHODS = new Set([
+  "_yus/settings/get",
+  "_yus/settings/set",
+  "_yus/skills/list",
+  "_yus/skills/set",
+  "_yus/skills/create",
+  "_yus/skills/add_folder",
+  "_yus/skills/remove_folder",
+  "_yus/mcp/list",
+  "_yus/mcp/set_token",
+  "_yus/mcp/logout",
+]);
+const invalid = (id, details) => fail(id, -32602, "Invalid params", { details });
+
+function setSetting(id, { key, value }) {
+  if (key === "permissions") return invalid(id, PERMISSIONS_REFUSAL);
+  if (FROZEN.includes(key)) return invalid(id, `${key} is fixed for each conversation when it starts: it is not set here.`);
+  if (!SETTING_KEYS.includes(key)) return invalid(id, `unknown setting: ${key}`);
+  settingValues[key] = value ?? null;
+  return respond(id, settingsView());
+}
+
+function resources(id, method, params = {}) {
+  switch (method) {
+    case "_yus/settings/get":
+      return respond(id, settingsView());
+    case "_yus/settings/set":
+      return setSetting(id, params);
+    case "_yus/skills/list":
+      return respond(id, skillsView());
+    case "_yus/skills/set": {
+      const skill = skills.find((candidate) => skillFile(candidate.root, candidate.name) === params.path);
+      if (!skill) return invalid(id, `no skill at ${params.path}`);
+      skill.enabled = params.enabled === true;
+      return respond(id, skillsView());
+    }
+    case "_yus/skills/create": {
+      if (skills.some((skill) => skill.name === params.name)) return invalid(id, `a skill named ${params.name} exists`);
+      const file = skillFile("agent/skills", params.name);
+      mkdirSync(join(home, "agent/skills", params.name), { recursive: true });
+      writeFileSync(file, `---\nname: ${params.name}\ndescription: ${params.description}\n---\n`);
+      skills.unshift({ name: params.name, description: params.description, root: "agent/skills", source: "user", enabled: true });
+      return respond(id, { ...skillsView(), created: file });
+    }
+    case "_yus/skills/add_folder":
+    case "_yus/skills/remove_folder":
+      return respond(id, skillsView());
+    case "_yus/mcp/list":
+    case "_yus/mcp/set_token":
+    case "_yus/mcp/logout":
+      return respond(id, mcpView());
+  }
+}
+
+/** Au début d'un prompt, comme le moteur (`ya_resource_notice`) : la différence avec ce que le modèle sait. */
+function announce() {
+  const now = { skills: enabledSkills(), servers: enabledServers() };
+  if (!known) {
+    known = now;
+    return;
+  }
+  const minus = (a, b) => a.filter((name) => !b.includes(name));
+  const details = {
+    skills: { added: minus(now.skills, known.skills), changed: [], removed: minus(known.skills, now.skills) },
+    mcp: { added: minus(now.servers, known.servers), removed: minus(known.servers, now.servers) },
+  };
+  known = now;
+  const any = [details.skills.added, details.skills.removed, details.mcp.added, details.mcp.removed].some((list) => list.length > 0);
+  if (any) update({ sessionUpdate: "session_info_update", _meta: { "_yus/notice": { kind: "resources", details } } });
+}
+
 function onMessage(message) {
   const { id, method, params } = message;
   if (method === undefined) {
@@ -364,6 +506,7 @@ function onMessage(message) {
       promptTurnId += 1;
       eventSequence = 0;
       turnStart({ origin: "prompt" });
+      announce();
       const text = (params?.prompt ?? []).map((block) => block.text ?? "").join("");
       void onPrompt(id, text);
       return;
@@ -386,6 +529,7 @@ function onMessage(message) {
     case "session/close":
       return respond(id, {});
     default:
+      if (RESOURCE_METHODS.has(method) && id !== undefined) return resources(id, method, params);
       if (id !== undefined) fail(id, -32601, "Method not found");
   }
 }
