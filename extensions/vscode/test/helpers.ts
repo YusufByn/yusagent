@@ -101,3 +101,19 @@ export async function waitFor<T>(
     await new Promise((resolveWait) => setTimeout(resolveWait, 25));
   }
 }
+
+/**
+ * Ticket 31 (X3, C5) : la valeur de l'option `permissions` d'une configuration de session, qu'elle
+ * soit une chaîne (avant le sélecteur) ou `{ current, choices }` (libellés lus dans l'option du pont).
+ */
+export function permissionsOf(config: unknown): string | null {
+  const value = (config as { permissions?: unknown } | null | undefined)?.permissions;
+  if (typeof value === "string") return value;
+  const current = (value as { current?: unknown } | null | undefined)?.current;
+  return typeof current === "string" ? current : null;
+}
+
+/** Ticket 31 (X3) : les lignes visibles des annonces d'un tour (`_yus/notice`), au-dessus de son message. */
+export function noticesOf(turn: unknown): string[] | undefined {
+  return (turn as { notices?: string[] } | null | undefined)?.notices;
+}

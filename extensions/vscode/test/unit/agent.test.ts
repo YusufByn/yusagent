@@ -11,13 +11,13 @@ import { Agent } from "../../src/agent";
 import { Conversations } from "../../src/conversations";
 import type { Files } from "../../src/files";
 import { History } from "../../src/history";
-import type { TurnItem } from "../../src/protocol";
+import type { ConfigChange, TurnItem } from "../../src/protocol";
 import { Providers } from "../../src/providers";
 import { Settings } from "../../src/settings";
 import { ShownAgent } from "../../src/shown";
 import { authText } from "../../src/ya/auth";
 import { yaMeta } from "../../src/ya/meta";
-import { fakeAgentPath, fixtureFrames, newControlDir, normalize, received, starts, waitFor } from "../helpers";
+import { fakeAgentPath, fixtureFrames, newControlDir, noticesOf, normalize, permissionsOf, received, starts, waitFor } from "../helpers";
 
 const log = new Proxy({} as Record<string, unknown>, { get: () => () => undefined }) as never;
 const files = { cwd: "", links: () => [], list: async () => ({ files: [], open: [] }) } as unknown as Files;
@@ -337,16 +337,16 @@ test("D4 : permissions annoncé à l'ouverture (auto par défaut, ticket 30), pu
   const auto = open();
   await ready(auto);
   const a = shown(auto).session.current;
-  assert.ok(a?.kind === "open" && a.config.permissions === "auto");
+  assert.ok(a?.kind === "open" && permissionsOf(a.config) === "auto");
 
   const manual = open({ permissions: "manual" });
   await ready(manual);
   const b = shown(manual).session.current;
-  assert.ok(b?.kind === "open" && b.config.permissions === "manual");
+  assert.ok(b?.kind === "open" && permissionsOf(b.config) === "manual");
   shown(manual).chat.send("auto", []);
   await waitFor(() => {
     const s = shown(manual).session.current;
-    return s?.kind === "open" && s.config.permissions === "auto";
+    return s?.kind === "open" && permissionsOf(s.config) === "auto";
   }, "auto annoncé");
 });
 
@@ -395,4 +395,53 @@ test("Agent seul : binaryPath = chemin résolu", async () => {
   agent.start();
   assert.equal(agent.current.kind, "failed");
   assert.equal(agent.binaryPath, "yusagent-introuvable-xyz");
+});
+
+// Ticket 31 (X3, C5) : le sélecteur de permissions, par `session/set_config_option`, libellés lus
+// dans l'option du pont (`crates/pa-daemon/src/acp/ya_permissions.rs`).
+test("sélecteur de permissions (ticket 31) : set_config_option permissions, affichage immédiat, libellés du pont", async () => {
+  const h = open();
+  await ready(h);
+  const change = { configId: "permissions", value: "manual" } as unknown as ConfigChange;
+  const sent = shown(h).session.setOption(change);
+  const before = shown(h).session.current;
+  assert.equal(before?.kind === "open" ? permissionsOf(before.config) : null, "manual", "manual affiché avant la réponse");
+  await sent;
+  const sets = received(h.dir, lastPid(h)).filter((frame) => frame.method === "session/set_config_option");
+  assert.deepEqual(sets.map((frame) => frame.params), [{ sessionId: "fake-session-1", configId: "permissions", value: "manual" }]);
+  const after = shown(h).session.current;
+  assert.equal(after?.kind === "open" ? permissionsOf(after.config) : null, "manual");
+  const choices = after?.kind === "open" ? (after.config.permissions as unknown as { choices?: unknown })?.choices : undefined;
+  assert.deepEqual(choices, [
+    { value: "manual", name: "Ask before each tool call" },
+    { value: "auto", name: "Run tool calls without asking (no sandbox)" },
+  ]);
+});
+
+// Ticket 31 (X3, §3.2, décision C2) : la notice `_yus/notice` du pont devient une ligne visible du
+// tour qu'elle accompagne, calculée de `details` : skills puis MCP, `added`, `changed`, `removed`.
+test("notice (ticket 31) : lignes visibles du tour, texte du §3.2", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("bonjour", []);
+  await idle(h);
+  const agent = shown(h).agent;
+  // Changements entre deux prompts ; refusés sur place tant que les méthodes ne sont pas servies.
+  await agent.request("_yus/skills/create", { name: "b-x3", description: "B." }).catch(() => undefined);
+  await agent.request("_yus/skills/create", { name: "a-x3", description: "A." }).catch(() => undefined);
+  await agent
+    .request("_yus/skills/set", { path: join(h.dir, "builtin", "edit", "SKILL.md"), enabled: false })
+    .catch(() => undefined);
+  await agent
+    .request("_yus/settings/set", { key: "mcpServers", value: { "srv-x3": { type: "http", url: "http://127.0.0.1:9/mcp" } } })
+    .catch(() => undefined);
+  shown(h).chat.send("bonjour", []);
+  await idle(h);
+  assert.deepEqual(noticesOf(lastTurn(h)), [
+    "Skills updated: added a-x3, b-x3; removed edit. Sent to the agent.",
+    "MCP servers updated: added srv-x3. Sent to the agent.",
+  ]);
+  // Le tour d'avant n'en a pas.
+  const turns = shown(h).chat.current.entries.filter((entry) => entry.kind === "turn");
+  assert.equal(noticesOf(turns.at(-2))?.length ?? 0, 0);
 });
