@@ -24,7 +24,9 @@ Contrôles (verdict `CONFORME` ou `NON CONFORME`) :
   - L4 : L1, puis la requête du prompt 3 prolonge celle du prompt 2 (préfixe et annonce
     identiques) ; aucune `invalidation` ;
   - L5 : **une seule** `invalidation`, de cause `resume_prefix_change` et `parts: ["system"]`, au
-    premier appel repris ; la requête du prompt 4 prolonge celle du prompt 3 ;
+    premier appel repris ; la requête du prompt 4 prolonge celle du prompt 3 ; l'annonce, une
+    seule fois juste avant le prompt 2, est relue après la reconstruction du worker à la même
+    place (les messages de la dernière requête du prompt 2 ouvrent la première du prompt 3) ;
   - L6 : refus `-32602`, fichier des réglages inchangé.
 Durée de la comparaison avec le disque : lignes `ya.resource_notice.compare` de la trace
 (`PA_COMPACTION_TRACE=<fichier>`, `detail.micros`), médiane et maximum sur tous les cas ;
@@ -214,6 +216,13 @@ def extends(before: dict, after: dict) -> bool:
     return fixed(before) == fixed(after) and new[:len(old)] == old
 
 
+def messages_extend(before: dict, after: dict) -> bool:
+    """Les messages de `after` commencent par ceux de `before`, à l'identique (hors `cache_control`)."""
+    old = probe.strip_cc(before.get("messages") or [])
+    new = probe.strip_cc(after.get("messages") or [])
+    return bool(old) and new[:len(old)] == old
+
+
 def added_user_texts(before: dict, after: dict) -> list[str]:
     """Les textes de l'utilisateur que `after` ajoute après les messages de `before`."""
     return user_texts((after.get("messages") or [])[len(before.get("messages") or []):])
@@ -281,13 +290,26 @@ def check(root: Path, infos: dict) -> dict:
 
     case, info = root / "L5", infos["L5"]
     reqs = bodies(case)
+    n1, n2 = info.get("requetes_prompt1") or 0, info.get("requetes_prompt2") or 0
     n3 = info.get("requetes_prompt3") or 0
     causes = invalidations(journal(case))
     resume = [c for c in causes if c.get("cause") == "resume_prefix_change"]
     continued = bool(info.get("load")) and 1 <= n3 < len(reqs) and extends(reqs[n3 - 1], reqs[n3])
+    # Garde-fou 2 (option 1) : l'annonce, une seule fois juste avant le prompt 2, est relue
+    # après la reconstruction du worker à la même place : la première requête du prompt 3 garde
+    # les messages de la dernière du prompt 2 (prompt système différent, attendu : le skill).
+    announced_once = False
+    if 1 <= n1 < len(reqs):
+        added = added_user_texts(reqs[n1 - 1], reqs[n1])
+        found = [text for text in added if text.startswith("[skills-changed]")]
+        announced_once = len(found) == 1 and len(added) >= 2 and added[-2] == found[0]
+    reloaded = 1 <= n2 < len(reqs) and messages_extend(reqs[n2 - 1], reqs[n2])
     checks["L5"] = {"ok": len(causes) == 1 and len(resume) == 1
-                    and resume[0].get("parts") == ["system"] and continued,
-                    "invalidations": causes, "prompt4_prolonge_prompt3": continued}
+                    and resume[0].get("parts") == ["system"] and continued
+                    and announced_once and reloaded,
+                    "invalidations": causes, "prompt4_prolonge_prompt3": continued,
+                    "annonce_une_fois_avant_le_prompt2": announced_once,
+                    "historique_relu_a_l_identique": reloaded}
 
     info = infos["L6"]
     refusal = info.get("refus") or {}

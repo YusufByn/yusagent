@@ -440,3 +440,122 @@ fn append_custom_message_does_not_reach_the_live_context() {
         );
     }
 }
+
+/// The prompt of the second turn of the announcement test.
+const AGAIN: &str = "Answer again.";
+const ROW_TYPE: &str = "ya-resources-changed";
+
+/// The texts of the user items of a Responses request, part by part, in order.
+fn user_texts(body: &[u8]) -> Vec<String> {
+    let request: Value = serde_json::from_slice(body).expect("a JSON request body");
+    let mut texts = Vec::new();
+    for item in request["input"].as_array().into_iter().flatten() {
+        if item["role"] != "user" {
+            continue;
+        }
+        match &item["content"] {
+            Value::String(text) => texts.push(text.clone()),
+            Value::Array(parts) => texts.extend(
+                parts
+                    .iter()
+                    .filter_map(|part| part["text"].as_str().map(str::to_string)),
+            ),
+            _ => {}
+        }
+    }
+    texts
+}
+
+/// Ticket 31, guard 1 of the option 1 (the daemon path, as the TUI and the extension use it): a
+/// skill added between two turns is announced once in the request to the model, right before the
+/// prompt (the worker's prefix row, then no second row from the admission), and the session file
+/// keeps the announcement row before the prompt's row, where the request had it (guard 2).
+#[test]
+fn a_skill_change_reaches_the_model_once_before_the_prompt_and_the_file_in_order() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let agent_dir = dir.path().join("agent");
+    let session_dir = agent_dir.join("sessions");
+    let cwd = dir.path().join("project");
+    std::fs::create_dir_all(&session_dir).expect("session dir");
+    std::fs::create_dir_all(&cwd).expect("project dir");
+    let server = ModelServer::start();
+    let models = json!({ "providers": { "same": {
+        "baseUrl": format!("http://127.0.0.1:{}/v1", server.port),
+        "apiKey": "announce-dummy",
+        "api": "openai-responses",
+        "models": [{
+            "id": "same-model", "name": "Same", "reasoning": false, "input": ["text"],
+            "contextWindow": 200_000, "maxTokens": 32_000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }]
+    }}});
+    std::fs::write(agent_dir.join("models.json"), models.to_string()).expect("models.json");
+    let socket = dir.path().join("ya-announce.sock");
+    let _supervisor = spawn_supervisor(&socket, &agent_dir);
+    let mut client = Client::connect(&socket);
+
+    let session_id = client.open(&cwd, &session_dir);
+    client.turn(&session_id, PROMPT);
+    let first = settled_bodies(&server, Duration::from_millis(1500)).len();
+    let skill = agent_dir.join("skills").join("ya31-daemon");
+    std::fs::create_dir_all(&skill).expect("skill dir");
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: ya31-daemon\ndescription: Daemon skill for ticket 31.\n---\n\nRien.\n",
+    )
+    .expect("SKILL.md");
+    client.turn(&session_id, AGAIN);
+    let bodies = settled_bodies(&server, Duration::from_millis(1500));
+    assert!(bodies.len() > first, "the second turn reached the model");
+    for (index, body) in bodies[first..].iter().enumerate() {
+        let texts = user_texts(body);
+        let announced: Vec<usize> = texts
+            .iter()
+            .enumerate()
+            .filter(|(_, text)| text.starts_with("[skills-changed]"))
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(
+            announced.len(),
+            1,
+            "request {}: exactly one announcement; user texts: {texts:#?}",
+            first + index + 1
+        );
+        let prompt = texts
+            .iter()
+            .position(|text| text == AGAIN)
+            .expect("the second prompt");
+        assert_eq!(
+            announced[0] + 1,
+            prompt,
+            "request {}: the announcement comes right before the prompt; user texts: {texts:#?}",
+            first + index + 1
+        );
+    }
+    let files = files_containing(&session_dir, ROW_TYPE);
+    assert_eq!(
+        files.len(),
+        1,
+        "one session file holds the announcement: {files:?}"
+    );
+    let lines: Vec<String> = std::fs::read_to_string(&files[0])
+        .expect("the session file")
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let row_at: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains(ROW_TYPE))
+        .map(|(at, _)| at)
+        .collect();
+    let prompt_at = lines
+        .iter()
+        .position(|line| line.contains(&format!("\"{AGAIN}\"")))
+        .expect("the second prompt's row");
+    assert_eq!(row_at.len(), 1, "one announcement row in the session file");
+    assert!(
+        row_at[0] < prompt_at,
+        "the announcement row comes before the prompt's row, as in the request"
+    );
+}
