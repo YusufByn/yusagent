@@ -1113,10 +1113,9 @@ impl SessionEngine for AgentSessionEngine {
     }
 
     /// yusAgent (YA-10, ticket 31): `ya_take_resource_notice` of the built core; `None` before
-    /// the build (the build reads the disk itself).
+    /// the build (the build reads the disk itself). The lock covers the clone only (ticket 35).
     fn ya_resource_notice(&self) -> Option<Value> {
-        let session = self.session.blocking_lock();
-        let core = session.as_deref()?;
+        let core = self.session.blocking_lock().clone()?;
         let row = self
             .runtime
             .block_on(core.session.ya_take_resource_notice())?;

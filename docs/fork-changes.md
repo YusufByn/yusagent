@@ -1446,7 +1446,7 @@ Décisions de Yusuf du 23/11/2026 : `docs/tickets/31-skills-mcp-reglages.md`, §
 | `crates/pa-core/src/session_engine/admission.rs` | modif. (fichier upstream, 4 lignes) | `:46-47` et `:147-148` : `ya_announce_resources` juste avant `take_next_turn_rows`, pour un message injecté et pour un prompt. | YA-10 (ticket 31) |
 | `crates/pa-core/src/session_engine/wiring.rs` | modif. (fichier upstream, 5 lignes ajoutées, 1 modifiée) | `:161-167` `auto_compaction_enabled` et `:185-186` `compaction_settings` passent par `ya_compaction_enabled`, comme `thresholdPercent` déjà relu à chaque décision. **Candidat à une PR upstream** (décision de Yusuf du 23/11/2026). | YA-10 (ticket 31) |
 | `crates/pa-daemon/src/engine.rs` | modif. (fichier upstream, 6 lignes) | `:424-429` méthode `ya_resource_notice` du trait `SessionEngine`, `None` par défaut. | YA-10 (ticket 31) |
-| `crates/pa-daemon/src/agent_engine/session_engine_impl.rs` | modif. (fichier upstream, 11 lignes) | `:1115-1125` son implémentation : `ya_take_resource_notice` du cœur construit, rendu en ligne custom ; `None` avant la construction (elle lit le disque elle-même). | YA-10 (ticket 31) |
+| `crates/pa-daemon/src/agent_engine/session_engine_impl.rs` | modif. (fichier upstream, 11 lignes ; 10 depuis le ticket 35) | `:1115-1125` son implémentation : `ya_take_resource_notice` du cœur construit, rendu en ligne custom ; `None` avant la construction (elle lit le disque elle-même). Ticket 35 : `:1115-1124`, le verrou ne couvre plus que le clone. | YA-10 (ticket 31, ticket 35) |
 | `crates/pa-daemon/src/worker/turn.rs` | modif. (fichier upstream, 2 lignes ajoutées, 1 modifiée) | `:1036` `let mut parked` ; `:1040-1041` l'annonce rejoint les lignes d'avance du tour (celles de `restore_next_turn`) : écrite dans le fichier avant la ligne du prompt, diffusée au pont, comptée à part des lignes acceptées (`emitting_prefix_rows`). L'appel de `admission.rs` ne trouve ensuite plus de différence : une seule annonce par changement. | YA-10 (ticket 31) |
 | `crates/pa-daemon/src/acp/ya_notice.rs` | nouveau | Notice d'une ligne d'annonce : `session_info_update` avec `_meta["_yus/notice"] = {kind: "resources", details}`, publiée par le producteur comme `turnStart`. | YA-10 (ticket 31) |
 | `crates/pa-daemon/src/acp/ya_resources.rs`, `ya_resources/settings.rs` | nouveaux | `_yus/skills/{list,set,create,add_folder,remove_folder}`, `_yus/mcp/{list,set_token,logout}`, `_yus/settings/{get,set}`, formes de réponse d'Unharnessed (`f8e4658dd`), noms yusAgent. Skills et réglages lus et écrits dans les réglages globaux ; MCP par les commandes du worker. `_yus/settings/set` : liste blanche (`retry.*`, `auxiliaryModel`, `compaction.enabled`, `mcpServers`), refus au texte exact de `permissions` (D1), des clés figées et des clés inconnues ; valeurs jamais journalisées. | YA-10 (ticket 31) |
@@ -1491,6 +1491,19 @@ Décisions de Yusuf du 24/11/2026 : `docs/tickets/31-skills-mcp-reglages.md`, §
 | `bench/tools/capture/acp_frames.py`, `compare_frames.py`, `README.md` | modif. (outils du fork) | Cas `C-resources` (méthodes des écrans, refus D1, sélecteur, notice), comparé à l'agent factice ; `--against` le compare s'il est des deux côtés. | YA-10 (ticket 31) |
 | `.github/workflows/ya-extension.yml` | modif. (fichier du fork) | L'étape e2e de l'agent factice tourne même après l'échec des tests unitaires du job (`!cancelled()`). | YA-10 (ticket 31) |
 | `.changes/ya-31-x3.md` | nouveau | Fragment de changelog. | YA-10 (ticket 31) |
+
+## Abandon perdu après R3 : une comparaison du disque par livraison du démon (YA-10, ticket 35)
+
+`docs/tickets/35-regression-r3-abort-queued.md`, option A (décisions de Yusuf du 24/11/2026). La relecture du disque de R3 à l'admission (`admission.rs:47`, `:148`) tombait dans la fenêtre d'upstream où un abandon est perdu : entre la vérification de `run_once.rs:337` et l'enregistrement du run (`agent.rs:606-611`). Le test d'upstream `abort_and_send_queued_acks_before_the_follow_up_delivery` a échoué à `queue.rs:725` aux runs 45376832870 et 45429516827. **Il n'est pas listé en « Instabilité probable »** : la cause est dans notre code.
+
+Dans le démon, la comparaison du worker (`worker/turn.rs:1041`) est maintenant la seule de la livraison ; l'admission prend son jeton au lieu de relire. Hors démon (`-p`, RPC) et pour les continuations autonomes du démon, l'admission compare comme avant (limite couverte par les tickets 36 et 37). **Préfixe et texte des annonces inchangés.** **Aucune ligne upstream ajoutée.**
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-core/src/session_engine/ya_resource_notice.rs` | modif. (fichier du fork) | Champ `delivery_compared` du `Tracker`, levé par `ya_take_resource_notice` (appel du worker) et pris par `ya_announce_resources` (admission), qui ne lit alors rien ; la comparaison passe dans `ya_compare_resources`. | YA-10 (ticket 35) |
+| `crates/pa-daemon/src/agent_engine/session_engine_impl.rs` | modif. (lignes de R3, fichier upstream : 3 ajoutées, 4 retirées) | `:1115-1124` : le verrou de session ne couvre que le clone de l'`Arc`, plus la lecture du disque (règle d'upstream, `run_once.rs:341-345`). | YA-10 (ticket 35) |
+| `crates/pa-daemon/tests/ya_announce_path_e2e.rs` | modif. (test du fork) | `a_daemon_delivery_compares_with_the_disk_once` : avec `PA_COMPACTION_TRACE`, une comparaison `ya.resource_notice.compare` par livraison du démon aux tours 2 et 3 (2 avant le ticket). `spawn_supervisor_with` passe le fichier de trace au démon, dont les workers héritent. | YA-10 (ticket 35) |
+| `.changes/ya-35-abort-admission.md` | nouveau | Fragment de changelog. | YA-10 (ticket 35) |
 
 ## Code repris d'Unharnessed
 

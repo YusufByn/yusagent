@@ -13,6 +13,13 @@
 //! The same tracker carries `compaction.enabled` as last read from the settings files: a saved
 //! change applies to the running session at its next decision (`ya_compaction_enabled`).
 //!
+//! In the daemon, the worker compares once per delivery, before the prompt's row
+//! ([`AgentSession::ya_take_resource_notice`]), and leaves a token that the delivery's admission
+//! takes instead of reading the disk again (ticket 35, option A): a read there would sit in the
+//! window between the abort check and the run's registration, where an abort is lost
+//! (`docs/tickets/35-regression-r3-abort-queued.md`). Elsewhere (`-p`, RPC without the daemon,
+//! and the daemon's autonomous continuations), the admission compares.
+//!
 //! The comparison's duration goes to the compaction trace (`PA_COMPACTION_TRACE`), phase
 //! [`TRACE_PHASE`], `detail.micros`. Listed in `docs/fork-changes.md`.
 
@@ -84,6 +91,9 @@ pub struct Tracker {
     known: Known,
     /// `compaction.enabled` in the settings files when last read (`ya_compaction_enabled`).
     compaction_enabled_on_disk: bool,
+    /// The daemon's worker compared the disk for the delivery whose admission comes next
+    /// (ticket 35): that admission takes it instead of reading the disk again.
+    delivery_compared: bool,
 }
 
 impl Tracker {
@@ -128,6 +138,7 @@ impl Tracker {
             inputs,
             known,
             compaction_enabled_on_disk,
+            delivery_compared: false,
         }
     }
 }
@@ -359,19 +370,39 @@ impl AgentSession {
         on_disk
     }
 
-    /// Compares what the model was told with the disk; a difference queues its announcement as
-    /// a next-turn row (module docs). Called at the admission of a prompt, before the next-turn
-    /// rows are taken; a row already queued for this change by the daemon's worker
-    /// ([`Self::ya_take_resource_notice`]) leaves nothing more to announce.
+    /// Called at the admission of a prompt, before the next-turn rows are taken. When the
+    /// daemon's worker compared for this delivery ([`Self::ya_take_resource_notice`]), takes its
+    /// token and reads nothing (ticket 35); otherwise compares what the model was told with the
+    /// disk, and a difference queues its announcement as a next-turn row (module docs).
     pub(crate) async fn ya_announce_resources(&self) {
-        let _ = self.ya_take_resource_notice().await;
+        let compared = self
+            .ya_resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+            .is_some_and(|tracker| std::mem::take(&mut tracker.delivery_compared));
+        if !compared {
+            let _ = self.ya_compare_resources().await;
+        }
     }
 
-    /// [`Self::ya_announce_resources`], returning the row it queued. The daemon's worker calls it
-    /// before a turn's prefix rows and writes the row with them, before the prompt's row, as the
-    /// model receives it (ticket 31, option 1 of the push 2): the session file then keeps the
-    /// announcement where the request had it, and the bridge sees it.
+    /// The daemon's worker's comparison for the delivery starting now, returning the row it
+    /// queued; the delivery's admission then reads nothing (ticket 35). The worker writes the row
+    /// with the turn's prefix rows, before the prompt's row, as the model receives it (ticket 31,
+    /// option 1 of the push 2): the session file then keeps the announcement where the request
+    /// had it, and the bridge sees it.
     pub async fn ya_take_resource_notice(&self) -> Option<pa_types::session::CustomMessage> {
+        self.ya_resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()?
+            .delivery_compared = true;
+        self.ya_compare_resources().await
+    }
+
+    /// Compares what the model was told with the disk; a difference queues its announcement as
+    /// a next-turn row and returns it.
+    async fn ya_compare_resources(&self) -> Option<pa_types::session::CustomMessage> {
         let inputs = self
             .ya_resources
             .lock()
