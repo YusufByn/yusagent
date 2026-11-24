@@ -122,10 +122,10 @@ async function runCase(permissions) {
     check(session?.kind === "open", `session ouverte (${session?.kind ?? conversation.agent.current.kind})`);
     if (session?.kind !== "open") return;
     const config = session.config;
-    console.log(`  modèle ${config.model?.current} (${config.model?.choices.length} choix), effort ${config.effort?.current}, permissions ${config.permissions}`);
+    console.log(`  modèle ${config.model?.current} (${config.model?.choices.length} choix), effort ${config.effort?.current}, permissions ${config.permissions?.current}`);
     check(config.model !== null, "sélecteur de modèle annoncé");
-    check(config.permissions === permissions, `permissions annoncé = ${permissions}`);
-    check((config.permissions === "auto") === (permissions === "auto"), `bandeau ${permissions === "auto" ? "affiché" : "absent"}`);
+    check(config.permissions?.current === permissions, `permissions annoncé = ${permissions}`);
+    check((config.permissions?.current === "auto") === (permissions === "auto"), `bandeau ${permissions === "auto" ? "affiché" : "absent"}`);
 
     if (config.effort) {
       const target = config.effort.levels.find((level) => level !== config.effort.current);
