@@ -421,6 +421,12 @@ pub trait SessionEngine: Send + Sync {
         Box::pin(async { empty_resource_snapshot() })
     }
 
+    /// yusAgent (YA-10, ticket 31): the announcement of skills and MCP changes for the turn
+    /// starting now, already queued for the model; the worker writes it with the prefix rows.
+    fn ya_resource_notice(&self) -> Option<Value> {
+        None
+    }
+
     /// The session's system prompt. Engines without a prompt report the
     /// empty string.
     fn system_prompt(

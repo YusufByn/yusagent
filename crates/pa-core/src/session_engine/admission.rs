@@ -43,6 +43,8 @@ impl AgentSession {
         if let Some(digest_row) = self.pending_digest_prompt_row().await? {
             prompt_messages.push(digest_row);
         }
+        // yusAgent (YA-10, ticket 31): skills and MCP changes, announced before the rows go.
+        self.ya_announce_resources().await;
         prompt_messages.extend(self.take_next_turn_rows().await);
         let custom_row = session_message_to_loop(&SessionAgentMessage::Custom(message.clone()))
             .ok_or_else(|| anyhow::anyhow!("injected custom message conversion failed"))?;
@@ -142,6 +144,8 @@ impl AgentSession {
             if let Some(digest_row) = self.pending_digest_prompt_row().await? {
                 prompt_messages.push(digest_row);
             }
+            // yusAgent (YA-10, ticket 31): skills and MCP changes, announced before the rows go.
+            self.ya_announce_resources().await;
             prompt_messages.extend(self.take_next_turn_rows().await);
             prompt_messages.push(user_prompt_message(&normalized, &images));
             // Each batched action contributes its user row after the

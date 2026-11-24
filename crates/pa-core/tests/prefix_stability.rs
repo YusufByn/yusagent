@@ -353,6 +353,10 @@ fn plan(api: Api, body: &[u8]) -> Reply {
             .filter(|item| item["type"] == "function_call_output")
             .count(),
     };
+    // yusAgent (YA-10, ticket 31): the model of test 14 runs the load steps it was announced.
+    if text.contains(YA31_LOAD_PROMPT) {
+        return ya31_load_reply(&conversation, tool_results);
+    }
     match (stage, tool_results) {
         (1, 0) => Reply::Tool("print(1)"),
         (1, 1) => Reply::Tool("x = 2\nprint(x)"),
@@ -2611,4 +2615,292 @@ async fn permissions_journal_does_not_change_the_requests_of_a_resumed_session()
         let difference = first_difference(&auto, &manual);
         assert_eq!(manual, auto, "request {}: {difference}", index + 1);
     }
+}
+
+// yusAgent (YA-10, ticket 31): skills and MCP servers changed during a session are announced at
+// the end of the history, before the next prompt; the system prompt and the tools stay those of
+// the opening (`docs/tickets/31-skills-mcp-reglages.md`, §3.2 for the texts).
+
+const YA31_FIRST: &str = "PREFIX-PROMPT-2: YA31 first message.";
+const YA31_SECOND: &str = "PREFIX-PROMPT-2: YA31 second message.";
+/// The prompt of test 14: its model runs the load steps it was announced.
+const YA31_LOAD_PROMPT: &str = "YA31-LOAD: load the announced skill.";
+/// The line before the load steps of a Python skill added during the session.
+const YA31_LOAD_STEPS: &str = "To import a Python skill added here, run in a cell:\n";
+const YA31_SKILL: &str = "ya31-demo";
+const YA31_SKILL_DESCRIPTION: &str = "Demo skill for ticket 31.";
+const YA31_PY_SKILL: &str = "ya31-py";
+const YA31_PY_DESCRIPTION: &str = "Python demo skill for ticket 31.";
+/// What the Python skill of test 14 exports.
+const YA31_MARKER: &str = "YA31-MARKER-OK";
+/// The sentence on the `mcp` object every `[mcp-changed]` carries.
+const YA31_MCP_SENTENCE: &str = "Generic MCP connections are accessed through the pre-imported Python `mcp` object in the Python REPL.";
+
+/// Writes `<agent dir>/skills/<name>/SKILL.md`; returns its path.
+fn ya31_write_skill(agent_dir: &Path, name: &str, description: &str) -> PathBuf {
+    let dir = agent_dir.join("skills").join(name);
+    std::fs::create_dir_all(&dir).expect("skill dir");
+    let file = dir.join("SKILL.md");
+    std::fs::write(
+        &file,
+        format!(
+            "---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\nUsed by the ticket 31 tests.\n"
+        ),
+    )
+    .expect("SKILL.md");
+    file
+}
+
+/// Writes the Python skill `ya31-py` (package `ya31_py`, built with hatchling like the bundled
+/// skills); returns the path of its `SKILL.md`.
+fn ya31_write_python_skill(agent_dir: &Path) -> PathBuf {
+    let file = ya31_write_skill(agent_dir, YA31_PY_SKILL, YA31_PY_DESCRIPTION);
+    let dir = file.parent().expect("skill dir").to_path_buf();
+    std::fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname = \"ya31-py\"\nversion = \"0.1.0\"\nrequires-python = \">=3.9\"\ndependencies = []\n\n[build-system]\nrequires = [\"hatchling\"]\nbuild-backend = \"hatchling.build\"\n\n[tool.hatch.build.targets.wheel]\npackages = [\"src/ya31_py\"]\n",
+    )
+    .expect("pyproject.toml");
+    let package = dir.join("src").join("ya31_py");
+    std::fs::create_dir_all(&package).expect("package dir");
+    std::fs::write(
+        package.join("__init__.py"),
+        format!("MARKER = \"{YA31_MARKER}\"\n"),
+    )
+    .expect("__init__.py");
+    file
+}
+
+/// The texts of one user turn, part by part; nothing for another role.
+fn ya31_message_texts(message: &Value) -> Vec<String> {
+    if message["role"] != "user" {
+        return Vec::new();
+    }
+    match &message["content"] {
+        Value::String(text) => vec![text.clone()],
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| part["text"].as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The texts of the user turns of a request, in order.
+fn ya31_user_texts(api: Api, request: &Map<String, Value>) -> Vec<String> {
+    let (_, messages) = split_request(api, request);
+    messages.iter().flat_map(ya31_message_texts).collect()
+}
+
+fn ya31_is_announcement(text: &str) -> bool {
+    text.starts_with("[skills-changed]") || text.starts_with("[mcp-changed]")
+}
+
+/// The reply of test 14's model: the announced load steps as a cell, the skill's marker printed;
+/// then an answer once the cell ran.
+fn ya31_load_reply(conversation: &[Value], tool_results: usize) -> Reply {
+    if tool_results > 0 {
+        return Reply::Text("The announced skill is loaded.");
+    }
+    let steps = conversation
+        .iter()
+        .flat_map(ya31_message_texts)
+        .find_map(|text| {
+            text.split_once(YA31_LOAD_STEPS)
+                .map(|(_, code)| code.trim().to_string())
+        });
+    match steps {
+        Some(code) => Reply::Tool(Box::leak(
+            format!("{code}\nprint(ya31_py.MARKER)").into_boxed_str(),
+        )),
+        None => Reply::Text("No load steps were announced."),
+    }
+}
+
+/// One session on the default settings, two prompts, `between` run on the agent dir after the
+/// first; the two request bodies (Anthropic Messages, text answers only).
+async fn ya31_two_prompts(fixture: &Fixture, between: impl FnOnce(&Path)) -> Vec<Vec<u8>> {
+    let api = Api::AnthropicMessages;
+    let server = ModelServer::start(api).await;
+    let agent_dir = fixture.agent_dir();
+    let engine = open_session(api, &server, &agent_dir, &fixture.cwd(), OTHER_FAMILY).await;
+    run_prompt(&engine, YA31_FIRST).await;
+    between(&agent_dir);
+    run_prompt(&engine, YA31_SECOND).await;
+    drop(engine);
+    let bodies = server.bodies();
+    assert_eq!(bodies.len(), 2, "one request per prompt");
+    bodies
+}
+
+/// The second request keeps the prefix of the first (system prompt, tools, parameters, messages)
+/// and carries `expected` as the one announcement, right before the second prompt.
+fn assert_ya31_announced(bodies: &[Vec<u8>], expected: &str) {
+    let api = Api::AnthropicMessages;
+    assert_prefix_stable(api, bodies);
+    let request = request_object(api, 2, &bodies[1]);
+    let texts = ya31_user_texts(api, &request);
+    let announced: Vec<usize> = texts
+        .iter()
+        .enumerate()
+        .filter(|(_, text)| ya31_is_announcement(text))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(
+        announced.len(),
+        1,
+        "one announcement in the second request; user texts: {texts:#?}"
+    );
+    assert_eq!(texts[announced[0]], expected, "the announcement text");
+    let prompt = texts
+        .iter()
+        .position(|text| text.contains(YA31_SECOND))
+        .expect("the second prompt");
+    assert_eq!(
+        announced[0] + 1,
+        prompt,
+        "the announcement comes right before the second prompt; user texts: {texts:#?}"
+    );
+}
+
+/// Test 1: a skill added during the session is announced with its inventory line.
+#[tokio::test]
+async fn skill_added_mid_session_is_announced_and_keeps_the_prefix() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let file = fixture
+        .agent_dir()
+        .join("skills")
+        .join(YA31_SKILL)
+        .join("SKILL.md");
+    let bodies = ya31_two_prompts(&fixture, |agent_dir| {
+        ya31_write_skill(agent_dir, YA31_SKILL, YA31_SKILL_DESCRIPTION);
+    })
+    .await;
+    let expected = format!(
+        "[skills-changed]\nAdded (read its SKILL.md before using it):\n- `{YA31_SKILL}`: {YA31_SKILL_DESCRIPTION} `{}`",
+        file.display()
+    );
+    assert_ya31_announced(&bodies, &expected);
+}
+
+/// Test 2: a skill removed during the session is announced as removed.
+#[tokio::test]
+async fn skill_removed_mid_session_is_announced() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let file = ya31_write_skill(&fixture.agent_dir(), YA31_SKILL, YA31_SKILL_DESCRIPTION);
+    let skill_dir = file.parent().expect("skill dir").to_path_buf();
+    let bodies = ya31_two_prompts(&fixture, |_| {
+        std::fs::remove_dir_all(&skill_dir).expect("remove the skill");
+    })
+    .await;
+    let expected =
+        format!("[skills-changed]\nRemoved (no longer available, do not use): `{YA31_SKILL}`");
+    assert_ya31_announced(&bodies, &expected);
+}
+
+/// Test 3: a Python skill added during the session is announced without its import, with the
+/// steps that load it into the running kernel (decision 4).
+#[tokio::test]
+async fn python_skill_added_mid_session_gives_the_load_steps() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let file = fixture
+        .agent_dir()
+        .join("skills")
+        .join(YA31_PY_SKILL)
+        .join("SKILL.md");
+    let dir = file.parent().expect("skill dir").to_path_buf();
+    let bodies = ya31_two_prompts(&fixture, |agent_dir| {
+        ya31_write_python_skill(agent_dir);
+    })
+    .await;
+    let expected = format!(
+        "[skills-changed]\nAdded (read its SKILL.md before using it):\n- `{YA31_PY_SKILL}` (Python package `ya31_py`, not imported in this kernel): {YA31_PY_DESCRIPTION} `{}`\n{YA31_LOAD_STEPS}import importlib, os, shutil, subprocess, sys\nsubprocess.run([shutil.which(\"uv\") or os.path.expanduser(\"~/.local/bin/uv\"), \"pip\", \"install\", \"--python\", sys.executable, os.path.expandvars(\"{}\")], check=True)\nimportlib.invalidate_caches(); import ya31_py",
+        file.display(),
+        dir.display()
+    );
+    assert_ya31_announced(&bodies, &expected);
+}
+
+/// Test 4: a generic MCP server enabled during the session is announced.
+#[tokio::test]
+async fn mcp_server_added_mid_session_is_announced() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let bodies = ya31_two_prompts(&fixture, |agent_dir| {
+        std::fs::write(
+            agent_dir.join("settings.json"),
+            json!({ "mcpServers": { "ya31srv": { "type": "stdio", "command": "ya31-mcp-never-run" } } })
+                .to_string(),
+        )
+        .expect("settings.json");
+    })
+    .await;
+    let expected = format!(
+        "[mcp-changed]\n{YA31_MCP_SENTENCE}\nEnabled generic MCP servers now: `ya31srv`.\nAdded: `ya31srv`."
+    );
+    assert_ya31_announced(&bodies, &expected);
+}
+
+/// Test 5 (non-regression): a skill added then removed before the next prompt announces nothing.
+#[tokio::test]
+async fn change_undone_before_the_prompt_announces_nothing() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let bodies = ya31_two_prompts(&fixture, |agent_dir| {
+        let file = ya31_write_skill(agent_dir, YA31_SKILL, YA31_SKILL_DESCRIPTION);
+        std::fs::remove_dir_all(file.parent().expect("skill dir")).expect("remove the skill");
+    })
+    .await;
+    let api = Api::AnthropicMessages;
+    assert_prefix_stable(api, &bodies);
+    let texts = ya31_user_texts(api, &request_object(api, 2, &bodies[1]));
+    assert!(
+        !texts.iter().any(|text| ya31_is_announcement(text)),
+        "no announcement; user texts: {texts:#?}"
+    );
+}
+
+/// Test 14: on the real kernel, a Python skill added during the session imports with the load
+/// steps of its announcement, which the model runs as they came.
+#[tokio::test]
+async fn python_skill_added_mid_session_imports_with_the_announced_steps() {
+    let Some(fixture) = Fixture::new().await else {
+        return;
+    };
+    let api = Api::AnthropicMessages;
+    let server = ModelServer::start(api).await;
+    let agent_dir = fixture.agent_dir();
+    let engine = open_session(api, &server, &agent_dir, &fixture.cwd(), OTHER_FAMILY).await;
+    run_prompt(&engine, YA31_FIRST).await;
+    ya31_write_python_skill(&agent_dir);
+    run_prompt(&engine, YA31_LOAD_PROMPT).await;
+    drop(engine);
+    let bodies = server.bodies();
+    let load_request = request_object(
+        api,
+        2,
+        bodies.get(1).expect("a request for the load prompt"),
+    );
+    let texts = ya31_user_texts(api, &load_request);
+    assert!(
+        texts
+            .iter()
+            .any(|text| ya31_is_announcement(text) && text.contains(YA31_LOAD_STEPS)),
+        "the request after the skill was added carries the load steps; user texts: {texts:#?}"
+    );
+    assert_eq!(bodies.len(), 3, "the first prompt, the cell, the answer");
+    let last = request_object(api, 3, &bodies[2]);
+    let outputs = tool_outputs(api, &last);
+    assert!(
+        outputs.iter().any(|output| output.contains(YA31_MARKER)),
+        "the announced steps imported the skill in the running kernel; cell outputs: {outputs:#?}"
+    );
 }

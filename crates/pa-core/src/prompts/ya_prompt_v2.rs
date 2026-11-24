@@ -164,34 +164,12 @@ pub fn skills_inventory(
 ) -> String {
     let mut lines = Vec::new();
     let mut bundled_shown = false;
-    for skill in skills
+    for shown in skills
         .iter()
-        .filter(|skill| !skill.disable_model_invocation)
+        .filter_map(|skill| shown_skill(skill, subagents, &location))
     {
-        let place = location(&skill.file_path);
-        let bundled = place.starts_with('$');
-        let name = skill.name.as_str();
-        if bundled
-            && (HIDDEN_BUNDLED.contains(&name) || (!subagents && SUBAGENT_BUNDLED.contains(&name)))
-        {
-            continue;
-        }
-        let description = bundled
-            .then(|| {
-                BUNDLED_DESCRIPTIONS
-                    .iter()
-                    .find(|(bundled_name, _)| *bundled_name == name)
-                    .map(|(_, description)| *description)
-            })
-            .flatten()
-            .unwrap_or(skill.description.as_str());
-        let import = skill
-            .python
-            .as_ref()
-            .map(|python| format!(" (import `{}`)", python.import_name))
-            .unwrap_or_default();
-        bundled_shown |= bundled;
-        lines.push(format!("- `{name}`{import}: {description} `{place}`"));
+        bundled_shown |= shown.is_bundled();
+        lines.push(shown.line());
     }
     if lines.is_empty() {
         return String::new();
@@ -202,6 +180,79 @@ pub fn skills_inventory(
         ""
     };
     format!("{SKILLS_HEADER}{note}\n\n{}", lines.join("\n"))
+}
+
+/// One skill as the version-2 inventory shows it (yusAgent, YA-10, ticket 31: the announcements of
+/// `session_engine::ya_resource_notice` use the same line).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownSkill {
+    pub name: String,
+    pub description: String,
+    /// Its file's location (`session_paths::skill_location`).
+    pub place: String,
+    /// Its Python import name, for a Python skill.
+    pub import: Option<String>,
+}
+
+impl ShownSkill {
+    /// Under `$PRIME_AGENT_BUNDLED_SKILLS_DIR`: a bundled skill.
+    #[must_use]
+    pub fn is_bundled(&self) -> bool {
+        self.place.starts_with('$')
+    }
+
+    /// Its inventory line.
+    #[must_use]
+    pub fn line(&self) -> String {
+        let import = self
+            .import
+            .as_ref()
+            .map(|import| format!(" (import `{import}`)"))
+            .unwrap_or_default();
+        format!(
+            "- `{}`{import}: {} `{}`",
+            self.name, self.description, self.place
+        )
+    }
+}
+
+/// `skill` as the version-2 inventory shows it; `None` when the inventory hides it (not
+/// model-invocable, or a bundled skill kept out of the list).
+#[must_use]
+pub fn shown_skill(
+    skill: &Skill,
+    subagents: bool,
+    location: &impl Fn(&Path) -> String,
+) -> Option<ShownSkill> {
+    if skill.disable_model_invocation {
+        return None;
+    }
+    let place = location(&skill.file_path);
+    let bundled = place.starts_with('$');
+    let name = skill.name.as_str();
+    if bundled
+        && (HIDDEN_BUNDLED.contains(&name) || (!subagents && SUBAGENT_BUNDLED.contains(&name)))
+    {
+        return None;
+    }
+    let description = bundled
+        .then(|| {
+            BUNDLED_DESCRIPTIONS
+                .iter()
+                .find(|(bundled_name, _)| *bundled_name == name)
+                .map(|(_, description)| *description)
+        })
+        .flatten()
+        .unwrap_or(skill.description.as_str());
+    Some(ShownSkill {
+        name: name.to_string(),
+        description: description.to_string(),
+        place,
+        import: skill
+            .python
+            .as_ref()
+            .map(|python| python.import_name.clone()),
+    })
 }
 
 /// The daemonless session-role line of version 2: the kernel-shell line without subagents

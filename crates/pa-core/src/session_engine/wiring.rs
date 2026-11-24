@@ -158,10 +158,13 @@ impl AgentSession {
     /// Whether automatic compaction is enabled for this session: the
     /// gate the automatic arms check before any trigger.
     pub fn auto_compaction_enabled(&self) -> bool {
-        self.compaction
+        let live = self
+            .compaction
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .enabled
+            .enabled;
+        // yusAgent (YA-10, ticket 31): a saved `compaction.enabled` applies (`ya_resource_notice`).
+        self.ya_compaction_enabled(live)
     }
 
     /// The resolved compaction settings: the in-run continuation consult reads the threshold
@@ -179,6 +182,8 @@ impl AgentSession {
                 crate::settings::SettingsManager::create(&context.cwd, &context.agent_dir)
                     .get_compaction_threshold_percent();
         }
+        // yusAgent (YA-10, ticket 31): and `compaction.enabled` (`ya_resource_notice`).
+        resolved.enabled = self.ya_compaction_enabled(resolved.enabled);
         resolved
     }
 

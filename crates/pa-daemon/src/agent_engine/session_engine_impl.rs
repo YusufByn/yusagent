@@ -1112,6 +1112,17 @@ impl SessionEngine for AgentSessionEngine {
         })
     }
 
+    /// yusAgent (YA-10, ticket 31): `ya_take_resource_notice` of the built core; `None` before
+    /// the build (the build reads the disk itself).
+    fn ya_resource_notice(&self) -> Option<Value> {
+        let session = self.session.blocking_lock();
+        let core = session.as_deref()?;
+        let row = self
+            .runtime
+            .block_on(core.session.ya_take_resource_notice())?;
+        serde_json::to_value(pa_types::session::AgentMessage::Custom(row)).ok()
+    }
+
     fn resource_snapshot(
         &self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send + '_>> {

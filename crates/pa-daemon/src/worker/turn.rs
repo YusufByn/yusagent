@@ -1033,10 +1033,12 @@ impl TurnRunner {
                         || core.lock().unwrap().retry_abort_requested
                 }
             };
-            let parked = {
+            let mut parked = {
                 let mut core = core.lock().unwrap();
                 std::mem::take(&mut core.pending_next_turn)
             };
+            // yusAgent (YA-10, ticket 31): a skills or MCP announcement rides as a prefix row.
+            parked.extend(engine.ya_resource_notice());
             emitting_prefix_rows.set(!parked.is_empty());
             for row in parked {
                 if !emit(EngineEvent::CustomMessage(row)) {

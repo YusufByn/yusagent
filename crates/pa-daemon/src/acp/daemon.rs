@@ -402,6 +402,8 @@ pub async fn run_daemon_attached_acp_mode(options: DaemonAcpOptions) -> anyhow::
                             )
                             .await;
                             updates.extend(ya_permissions.updates(&event));
+                            // yusAgent (YA-10, ticket 31): the notice of an announcement.
+                            updates.extend(super::ya_notice::updates(&event));
                             current
                                 .ya_turns
                                 .announce(&event, !updates.is_empty(), &current.producer)
@@ -1148,6 +1150,15 @@ async fn handle_incoming(
                 actual_cwd: &options.actual_cwd,
             };
             super::ya_history::serve(&bound, other, &id, &params, &tx).await;
+        }
+        // yusAgent (YA-10, ticket 31): skills, MCP and settings (`super::ya_resources`).
+        other if super::ya_resources::serves(other) => {
+            let bound = super::ya_resources::Bound {
+                link,
+                daemon_session_id: &binding.active_session_id,
+                cwd: &options.actual_cwd,
+            };
+            super::ya_resources::serve(&bound, other, &id, &params, &tx).await;
         }
         "session/set_config_option" => {
             handle_set_config_option(id, params, link, state, tx).await;
