@@ -757,3 +757,56 @@ Runs `ci` 45628774848 et `ya-extension` 45628774814. Compilation et clippy verts
 | `suite.ts` « Send now » | 45628774814 / 139256002771 | 1055-1068 | `covered` ≠ `clicked` ; e2e 15/16 |
 | `suite-real.ts` | 45628774814 / 139256003226 | 998-1014 | « le message suit le résultat, une réponse » ; e2e vrai binaire 18/19 |
 | `Check changelog fragment` | 45628774476 | — | Aucun fragment `.changes/` : il viendra avec le code |
+
+## 17. Décision de Yusuf : voie B (25/11/2026), vérifications avant le code
+
+Décision : **D1 rouvert, voie B** (file de l'agent dans le run en cours, comme Unharnessed). A est abandonné : après un tour en échec, la réponse au message pourrait ne pas s'afficher (§15.2), défaut visible non acceptable en limite. Arrêt avant le code si le point 1 ou le point 2 échoue, ou si B demande plus de lignes upstream que le tableau du §15.3.
+
+### 17.1 Point 1 : le superviseur transmet le champ ajouté à `Steer`
+
+**Tient.**
+- `Steer` garde les champs inconnus dans `rest` (`#[serde(flatten)]`, `crates/pa-types/src/daemon/command.rs:377-386`).
+- Il passe par la route générique du superviseur (`crates/pa-daemon/src/supervisor/routing.rs:623-624`). Le paquet envoyé au worker y est reconstruit par `client_command_payload`, qui resérialise toute la commande, `rest` compris (`crates/pa-daemon/src/supervisor/clients.rs:36-43`).
+- Le worker reçoit donc le champ dans le `payload` de `handle_queue` (`crates/pa-daemon/src/worker/input.rs:164`).
+
+### 17.2 Point 2 : verrou de session, accès direct à l'agent
+
+**Option : accès direct à l'agent par `turn_agent`, sans `try_lock` ni `blocking_lock` sur la session.**
+- Le moteur garde déjà une poignée sur l'agent vivant, « mirrored because a running turn holds the core session's mutex » (`crates/pa-daemon/src/agent_engine.rs:156-158`).
+- C'est un `std::sync::Mutex`, tenu seulement le temps d'un clone ou d'une affectation : posé à la construction (`crates/pa-daemon/src/agent_engine/lifecycle.rs:426-427`), vidé au démontage (`:770`), lu par `abort_in_flight_turn` et `set_queue_modes` (`session_engine_impl.rs:1486`, `:1505`), et par le routage d'image (`crates/pa-daemon/src/image_route.rs:246`, `:516`).
+- Aucune de ces sections ne prend un autre verrou ni n'attend : `lock()` passe en quelques microsecondes. Rien de bloquant dans le runtime asynchrone.
+- **Un message n'est jamais refusé à cause de ce verrou** : on attend sa libération, très brève, au lieu de refuser comme le ferait `try_lock`.
+- **Refus seulement si aucun run ne tourne** : poignée vide (moteur pas encore construit, ou démonté), ou worker au repos (`core.busy` faux, sous le verrou de `core`). La réponse est alors `-32603` « The turn is over: send it as a prompt. », et l'extension garde le message pour le prompt suivant (`chat.ts:470-478`).
+- Ordre des verrous : `core` (worker), puis `turn_agent`. `turn_agent` n'est jamais tenu pendant la prise de `core`, donc pas d'interblocage.
+- Le vidage au règlement (`turn.rs:1100`) prend les mêmes verrous dans le même ordre.
+
+### 17.3 Constat qui dépasse le tableau du §15.3 : la ligne du message n'atteindrait ni le fichier ni le pont
+
+En mode démon, **c'est le worker qui écrit les lignes du fichier de session**, à partir des événements du moteur (`EngineEvent::UserMessage`, `crates/pa-daemon/src/worker/turn.rs:614-620`). Le moteur ne transmet une ligne user de la boucle que si `boundary_passed` est vrai (`crates/pa-daemon/src/agent_engine/turn/run_once.rs:234-245`). Ce drapeau ne passe à vrai qu'à l'`AgentEnd` d'un run (`:269`) : il sert à ne pas écrire deux fois la ligne du prompt, que le worker écrit déjà à l'admission (`session_engine_impl.rs:1411-1433`).
+
+Conséquence : un message pris par la boucle dans **le premier run** d'une livraison serait envoyé au modèle, mais :
+- ni écrit dans le fichier de session : à la reprise, l'historique et le préfixe ne seraient plus ceux de la requête ;
+- ni transmis au pont : pas de ligne, donc pas de `turnStart` `steer`.
+
+Il faut donc transmettre, dans le premier run, les lignes user des messages envoyés pendant le tour, en continuant d'écarter celle du prompt. **C'est un 8e fichier upstream, absent du tableau.**
+
+| Fichier upstream | Où | Lignes |
+|---|---|---|
+| `crates/pa-daemon/src/agent_engine/turn/run_once.rs` | garde de `:238-241` | +1 (commentaire), 1 modifiée : la garde devient `if boundary_passed.load(…) \|\| super::super::ya_steer::is_steered(agent_message)` |
+
+Le repérage se fait comme chez Unharnessed (horodatage du message, `uh:crates/uh-daemon/src/acp/session.rs:117-123`). Notre module du moteur garde l'horodatage et le texte de chaque message qu'il passe à la file de l'agent ; la ligne du prompt a un autre horodatage. Le registre vit dans notre module, ce qui évite un champ de plus dans une structure upstream.
+
+**Coût révisé de B : +33 lignes dans 8 fichiers upstream, 1 ligne modifiée** (au lieu de +32 dans 7, 0 modifiée). Lignes prévues, à confirmer à l'écriture.
+
+**Arrêt** (décision du 25/11/2026) : B demande plus de lignes upstream que le tableau. Pas de code. Le journal du CDC et `fork-changes.md` seront mis à jour avec la décision finale.
+
+### 17.4 Tests prévus avec B (rappel, après décision)
+
+- **E1 à E5** : inchangés.
+- **E6** (Stop avec un message accepté et pas pris) : aucune ligne du message après le Stop, ni au prompt suivant.
+- **E7** (tour en échec : erreur factice avec `delayMs`, relances automatiques coupées dans les réglages du test, car une erreur factice ordinaire est relancée, `crates/pa-core/src/session_engine/auto_retry.rs:99-112`) : aucune ligne du message dans le tour en échec ; le renvoi en prompt donne une seule ligne et une seule réponse.
+- **E6 et E7 ne peuvent pas être rouges sur un squelette qui ne fait rien**, puisqu'ils vérifient que rien ne tourne. Proposition :
+  - push 1 : squelette et tests (E1 à E5, U1 à U5 rouges ; E6 et E7 verts, ce qui est attendu) ;
+  - push 2 : le code sans le vidage au règlement. E6 et E7 deviennent rouges : le message resté dans la file de l'agent part au début du run suivant (`crates/pa-agent/src/agent_loop/run.rs:31-32`) ;
+  - push 3 : le vidage. Tout passe au vert.
+- **E7 côté extension** (agent factice) : renvoi une fois, réponse affichée une fois. C'est déjà le comportement de `chat.ts`, donc pas rouge sur le code actuel. Il sert de garde.
