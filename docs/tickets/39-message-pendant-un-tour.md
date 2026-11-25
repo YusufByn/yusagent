@@ -318,3 +318,87 @@ Binaire de la branche, extension de la branche, scénario de Yusuf :
    - B touche plus de fichiers upstream (règle 2).
 2. **S1 à S6** (§6.1).
 3. **Ordre** : R4 puis X4 dans deux PR, comme au ticket 24, ou une seule.
+
+## 9. Décisions de Yusuf (25/11/2026)
+
+- **D1 : R4-A**, la file `steering` du worker. C'est un écart à Unharnessed (U1) : nous avons le démon et sa file, que l'upstream teste et que le TUI utilise. B ajouterait des lignes upstream à quatre endroits.
+  - D1 est soumis à deux conditions, à vérifier avant le code, avec `fichier:ligne` :
+    - (a) le pont garde le tour ACP ouvert jusqu'au run du message, sans toucher upstream ;
+    - (b) la relance n'ajoute rien au contexte du modèle par rapport à une injection dans le même run.
+  - Si (a) demande de toucher upstream, ou si (b) est faux : arrêt, et l'on passe à B. Réponse au §10.
+- **D2 (S1)** : forme d'Unharnessed, `{ sessionId, prompt, turn }`, réponse `{}`, refus en `-32603` et `-32602`.
+- **D3 (S2)** : pas de `rewindTo`. Il faut vérifier que l'extension ne l'envoie pas en dehors du retour en arrière (§10.3).
+- **D4 (S3)** : pas de marque `steer` pour le rejeu. **Limite** : après `session/load`, un message envoyé pendant un tour se rejoue comme un prompt.
+- **D5 (S4)** : N messages user dans un tour. Le critère de YA-19 est corrigé dans `docs/yusAgent-cdc.md` (critère et journal des décisions).
+- **D6 (S5)** : un message envoyé pendant un tour lancé par l'agent est refusé ; l'extension le garde et l'envoie en prompt après le tour. **Limite** : pendant un réveil ou un tour d'un autre client, le message attend la fin du tour.
+- **D7 (S6)** : mode `all` fixe, pas de réglage.
+- **D8** : une seule PR (R4 et X4), un seul contrôle manuel dans VS Code.
+
+## 10. Conditions de D1 : (a) et (b)
+
+Lignes de `main` à `5661bdebc`.
+
+### 10.1 (a) Le tour ACP reste ouvert jusqu'au run du message
+
+**Ce qui tient sans aucune ligne nouvelle :**
+
+- Après la réponse de `PromptAndWait`, le pont appelle `fetch_autonomous_status(…, false)` (`crates/pa-daemon/src/acp/daemon.rs:1708-1710`).
+  - Cet appel envoie `WaitForHeadlessCompletion` (`daemon.rs:1894-1906`).
+  - Le worker y répond seulement quand la session est au repos **et que ses deux files sont vides** : `wait_until_idle`, `crates/pa-daemon/src/worker/lifecycle.rs:638-653`, condition en `:645-650`, appelé par `handle_wait_for_headless_completion`, `:712-723`.
+- La boucle de fin rappelle la même attente avec `true` (`daemon.rs:1771`), puis appelle `finish_prompt` (`daemon.rs:1808`).
+- Le commentaire d'upstream le dit : les suites mises en file « run inside the waits above » (`daemon.rs:1711-1712`, `:1835-1841`).
+- **Conséquence** : un message posé dans la file `steering` du worker avant la fin de cette attente tourne **avant** la frontière et la réponse `session/prompt`.
+  - Ses événements gardent l'identifiant du tour du prompt : `AgentTurns::open` ne rouvre rien tant que `active_prompt_turn` vaut ce tour (`crates/pa-daemon/src/acp/ya_turns.rs:100-103`).
+  - La raison d'arrêt lit le dernier message de l'assistant (`daemon.rs:1835-1854`).
+- **`turnStart` `steer`** : le hook `ya_turns.announce` est appelé pour chaque événement (`daemon.rs:407-410`). On peut y publier le `turnStart`, dans notre module, sans nouvelle ligne dans `daemon.rs`. L'état des messages acceptés irait dans `AgentTurns`, notre structure, déjà présente comme champ (`daemon.rs:293`).
+
+**Ce qui demande des lignes dans `daemon.rs`, fichier upstream du pont :**
+
+1. **Servir la méthode** : une branche de dispatch à côté de celles de `ya_history` et `ya_resources` (`daemon.rs:1150-1162`). Sinon la réponse reste `-32601` (`daemon.rs:1165-1172`). B en a besoin aussi.
+2. **Fermer la fenêtre de fin de tour.** Un message accepté après la dernière attente de la boucle (`daemon.rs:1771`) et avant `finish_prompt` (`:1808`) ne serait pas attendu.
+   - Il tournerait comme un tour à part, `origin: "prompt"` (`ya_turns.rs:104-111`).
+   - L'extension remettrait le message en tête de sa file et l'enverrait de nouveau (`extensions/vscode/src/chat.ts:673-675`, `:491-498`) : **doublon**.
+   - Sans hook dans `prompt_turn`, notre module ne peut pas savoir où en est la fin du tour.
+   - **Ce que j'ai examiné** : le pont tient son verrou d'état pendant la vérification et l'envoi au worker, et refuse si le worker est au repos. Cela réduit la fenêtre sans la fermer : le worker peut passer au repos entre la lecture de son état et l'ajout en file, et `prompt_turn` aller ensuite de son dernier verrou (`daemon.rs:1783`, `:1798`) à `finish_prompt` sans nouvelle attente.
+   - **Fermeture complète** : un appel de notre module dans `prompt_turn`, avant la frontière (vers `daemon.rs:1736`). Il bloquerait de nouveaux messages sous le verrou d'état, puis attendrait encore la file si un message est arrivé depuis la dernière attente. Cet emplacement garde aussi l'ordre des trames : sans lui, un message accepté entre `:1708` et `:1729` tournerait dans l'attente de `:1771`, **après** la frontière et l'enveloppe (`:1745-1764`). L'extension ne fermerait pas le tour pour autant (`chat.ts:1051` ne ferme pas `this.sent`).
+3. **Hors fin de tour, à concevoir** : entre la publication de `turnStart` `prompt` (`daemon.rs:1621`) et l'ajout du prompt en file (`:1625-1658`), le worker peut être au repos.
+   - Un message accepté à ce moment-là entrerait dans la file `steering` **avant** le prompt : ajout en ordre d'arrivée à priorité égale (`crates/pa-daemon/src/worker/input.rs:136-139`, `crates/pa-daemon/src/worker/queue.rs:126`).
+   - L'extension peut envoyer un message dès ce `turnStart` (`chat.ts:796-802`, `steerAll`).
+   - Le pont doit attendre la ligne user du prompt avant d'envoyer le message au worker. Cela se fait dans notre module (`announce` voit cette ligne), sans ligne upstream.
+
+**Verdict sur (a).** Garder le tour ouvert ne coûte rien. Mais, au sens strict, (a) ne tient pas : un R4-A sans doublon demande **deux** ajouts dans `daemon.rs` (dispatch et un appel avant la frontière), et aucun dans le worker, le cœur ou `pa-types`. Le dispatch est commun à A et B. L'appel dans `prompt_turn` est propre à A.
+
+### 10.2 (b) La relance n'ajoute rien au contexte, comparée à une injection dans le même run
+
+Chemin de la relance :
+- le worker ajoute ses lignes de préfixe (`crates/pa-daemon/src/worker/turn.rs:1036-1047`) ;
+- puis le moteur admet le lot comme un prompt (`crates/pa-daemon/src/agent_engine/turn/run_once.rs:364-391` → `prompt_with_images`, `crates/pa-core/src/session_engine/admission.rs:79`, lignes du prompt `:144-163`).
+
+Une injection dans le même run ne passe par rien de tout cela : la boucle ajoute seulement les messages (`crates/pa-agent/src/agent_loop/run.rs:163-177`).
+
+**Cas courant**, sans rien en attente : la requête suivante contient [résultats des tools, N messages user] dans les deux voies. Identique d'après la lecture, à mesurer au banc.
+
+**Ce que seule la relance ajoute à cette requête**, quand quelque chose est en attente. Ces lignes partiraient sinon au prompt suivant ; chacune est **ajoutée en fin**, sans casser le préfixe :
+
+1. **Annonce de skills ou de MCP** (ticket 31) : à chaque admission, le worker compare le disque à ce que le modèle sait (`turn.rs:1041` ; `crates/pa-daemon/src/agent_engine/session_engine_impl.rs:1117-1123` ; `crates/pa-core/src/session_engine/ya_resource_notice.rs:377-401`, `:440`). Un changement fait pendant le tour est annoncé avec le message, et non au prompt suivant.
+2. **Lignes « tour suivant » du cœur** (`admission.rs:149`, `:243-254`) :
+   - avis de démarrage d'un kernel : restauration, skills Python indisponibles, erreurs de prompts de modèle (`crates/pa-core/src/session_engine/engine.rs:541-572`, `:768-778`). Un redémarrage du kernel pendant le tour y dépose son avis (`engine.rs:1127-1129`, `admission.rs:218-239`) ;
+   - contexte d'objectif (`crates/pa-core/src/session_engine/goal_boundary.rs:48-49`).
+3. **Lignes « tour suivant » du worker** après une reprise sur incident, `restore_next_turn` (`crates/pa-daemon/src/session_custom.rs:59`, lues en `turn.rs:1036-1039`).
+4. **Digest du harness** : seulement s'il est encore dû (`crates/pa-core/src/session_engine/harness_digest.rs:445-452`, `:460-479` ; `engine.rs:1050-1056`). Il est consommé par la première admission, donc absent après le prompt du tour, sauf si les raffinements étaient coupés puis rallumés.
+
+**En plus, hors contenu** : la fin d'un run annule l'éventuel modèle de remplacement (`engine.rs:1114-1120`). Après une bascule de modèle (failover) pendant le premier run, la relance repart sur le modèle de base, alors qu'une injection dans le même run garderait celui de remplacement. Lecture, non mesuré.
+
+**Verdict sur (b).** Faux au sens strict : les quatre cas ci-dessus, et le modèle de remplacement, font différer la requête de la relance de celle d'une injection dans le même run. Dans le cas courant, rien n'est ajouté. Aucun de ces cas ne casse le préfixe, puisque tout est ajouté en fin.
+
+### 10.3 D3 : l'extension et `rewindTo`
+
+- L'extension n'envoie `rewindTo` qu'en paramètre `to` de `_yus/session/rewind` (`extensions/vscode/src/chat.ts:646`). Cet appel vient de `rewind()` (`:640-651`), lui-même appelé seulement pour modifier un prompt déjà envoyé (`:590`).
+- `rewindTo` ne vient que d'un `turnStart` reçu (`chat.ts:782`, `:796-797`, `:832`).
+- La requête `steer` n'envoie que `{ sessionId, prompt, turn }` (`chat.ts:464`).
+- Sans `rewindTo`, le tour n'est pas modifiable (`webview/Chat.tsx:183`, `webview/App.tsx:158`) et `rewind()` s'arrête avant l'appel (`chat.ts:642-644`). `_yus/session/rewind` n'est de toute façon pas servi et est rejeté sur place (`src/ya/methods.ts:46`).
+- **D3 tient.**
+
+### 10.4 Arrêt
+
+D1 demandait de s'arrêter si (a) touche upstream ou si (b) est faux. Au sens strict, les deux conditions tombent (§10.1, §10.2). **Pas de code, pas de plan de tests** avant ta décision : A avec ces deux écarts, ou B.
