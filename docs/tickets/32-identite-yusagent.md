@@ -417,3 +417,27 @@ En local (Claude Code) : typecheck, lint et build OK. `npm run test:unit` : `ℹ
 - **`git grep -n unharnessed -- extensions/vscode/src extensions/vscode/webview extensions/vscode/test/fake-agent crates bench prime-agent-runtime`** : restent seulement les lignes des exceptions de T5 (attribution, citations de source, option du banc, tests de l'ancien nom).
 
 **Fichiers upstream** : aucun. **Préfixe de prompt** : inchangé (vérifié ci-dessus). **Merge** : attend le contrôle de Yusuf dans VS Code (§7.3), sur le `.vsix` du run `ya-extension` du dernier commit et le binaire `b591c4ff5`. Le dernier commit n'est que de la doc : le code sous `crates/` est celui de `b591c4ff5`.
+
+### 10.4 Run du commit de doc (`c2e8d1bf9`) : shard 4 rouge, sans lien avec le ticket
+
+- `ci` 45595703754, shard 4/8 (job 139141296209) : 41 réussis, 1 échec.
+  - Test upstream du TUI : `tui_close_reason_rows_survive_late_turn_status` (`crates/pa-cli/tests/interactive_daemon_e2e.rs:5794`).
+  - Message : « shutdown turn had 7 frames without the TS error row; old_info=false ».
+- Le commit ne change que ce ticket (`git diff --stat b591c4ff5 c2e8d1bf9`). `ci` 45593048712 sur le même code était vert.
+- **Pas de relance** : le test n'est pas listé en « Instabilité probable ». L'entrée de ce fichier (`docs/fork-changes.md:463-474`) vise un autre test, avec un autre symptôme. Ce n'est pas non plus une panne d'infrastructure.
+- Signalé à Yusuf. Le push suivant (§10.5) lance un run neuf, qui n'est pas une relance.
+
+### 10.5 Contrôle de Yusuf dans VS Code (§7.3), 25/11/2026
+
+Binaire `b591c4ff5`, `.vsix` du run `ya-extension` 45595701812. **Conforme, étapes 0 à 5.**
+
+1. Suppression depuis l'historique par `_yus/sessions/delete` : il ne reste que `<id>.usage.ndjson`, aucune erreur.
+2. Conversation neuve quittée vide : supprimée par son agent, rien dans l'historique.
+3. Conversation de `/tmp/ya31-x3` (`01a20e17…`), créée avant la branche :
+   - rejouée à l'identique, avec les trois lignes d'annonce à leur place ;
+   - un nouveau message reçoit une réponse ;
+   - pas d'annonce « removed » : le worker a été reconstruit, c'est la limite connue du ticket 31 (reprise après reconstruction, §8.3).
+4. Settings sans Instructions, écrans stylés.
+5. Aucune occurrence de `_unharnessed` dans Output > yusAgent.
+6. Sautée (facultative).
+7. Remise en état faite.
