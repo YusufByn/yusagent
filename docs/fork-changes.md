@@ -674,6 +674,35 @@ Symptôme : « timeout waiting for the exit's first teardown byte (needle [27, 9
 
 Si ce test retombe avec le même symptôme : relancer son job une fois, seul et sans push, et noter le run ici et dans la PR.
 
+## Instabilité probable : `interactive_daemon_e2e`, raisons de fermeture (YA-10, ticket 38)
+
+`crates/pa-cli/tests/interactive_daemon_e2e.rs`, test `tui_close_reason_rows_survive_late_turn_status` (`:5670`, assert en `:5794`), shard 4/8 de `ci.yml`. Test d'upstream. Décision D2 de Yusuf du 25/11/2026 (`docs/tickets/38-tests-arret-rouges.md`, §6).
+
+| Run | Commit | Tentative | Résultat |
+|---|---|---|---|
+| 45595703754 | `c2e8d1bf9` (`ya-32-identite`, PR #88), 25/11/2026 | 1 (job 139141296209) | échec du shard 4/8 (41 réussis, 1 échec) |
+
+Décompte du ticket 32 (commentaire de la PR #88) : 0 échec sur 76 exécutions avant la reprise de `5778afa02`, 1 sur 9 après. Donc un échec en 85.
+
+**Symptôme** : « shutdown turn had 7 frames without the TS error row; old_info=false » à `:5794`. Dans la dernière frame :
+
+- « turn failed: prompt cancelled » est rendu : le tour s'est arrêté ;
+- puis « timed out waiting for the headless render condition » : la seconde barrière WaitRender a expiré après 30 s ;
+- l'événement `SessionClosed` (ligne « The yusAgent daemon shut down… », `crates/pa-tui/src/session_ui/apply.rs:252-255`) n'est rendu sous aucune forme.
+
+**Pourquoi ce n'est pas attribué aux tickets du fork** :
+
+- le script du test n'a pas `"engine": "faux"` (`:5684-5686`), donc le worker tourne sur `ScriptedEngine` (`crates/pa-daemon/src/worker.rs:420-421`) ;
+- le Kill arrête le tour par `core.abort_requested` (`worker/commands.rs:780` → `worker/turn.rs:1032` → `engine/scripted.rs:281`) ;
+- ni `run_turn_once`, ni `model.rs` (ticket 36), ni `session_engine_impl.rs` ou `ya_resource_notice.rs` (ticket 35), ni le pont ACP (ticket 32) ne sont sur ce chemin (ticket 38, §2).
+
+**Pistes renvoyées au ticket des correctifs d'upstream depuis `c83ac68b3`** :
+
+- `f09c6538e` (#4178) : boucle headless qui ne se gare pas quand le canal du plan est fermé et qu'une barrière attend. Le chemin WaitRender de ce test y passe (ticket 38, §3.2) ;
+- #4003, #3988, #3994, #4222 : reconnexion, fermeture de session, WaitIdle.
+
+Si ce test retombe avec le même symptôme : relancer son job une fois, seul et sans push, et noter le run ici et dans la PR.
+
 ## CI : comparaison de frames avec le binaire TS (YA-01)
 
 Le shard 1 de `ci.yml` téléchargeait la release `v0.9.8` depuis `${GITHUB_REPOSITORY}`. Le fork n'a pas de release, l'étape échouait et faisait échouer tout le shard.
@@ -1538,6 +1567,22 @@ Gardé pour le cas où on l'observerait : options O1 (seul le worker compare dan
 | `extensions/vscode/test/fake-agent/fake-agent.mjs` | modif. (fork) | Suppression sous `_yus/sessions/delete`. | YA-10 (ticket 32) |
 | `bench/tools/capture/delete_files_check.py`, `empty_delete_probe.py` | modif. (fork) | Suppression sous `_yus/sessions/delete`. | YA-10 (ticket 32) |
 | `.changes/ya-32-identite.md` | ajout | Fragment de changelog. | YA-10 (ticket 32) |
+
+## Worker gelé par SIGSTOP dans les e2e d'arrêt : reprise de `7ea89013e` d'upstream (YA-10, ticket 38)
+
+`docs/tickets/38-tests-arret-rouges.md`, option E1 (décision D1 de Yusuf du 25/11/2026).
+
+- **Commit repris** : `7ea89013e` (PR #3875, sur `upstream/main` depuis le 10/11/2026, après notre base `c83ac68b3`), **tel quel**, par `git cherry-pick -x`. Même `patch-id` (`7bdff4daa8690aaa35ad68c05e328368c081e259`) ; seul le sujet du commit reçoit le préfixe `YA-10: ticket 38 :`.
+- **Tests seuls**, aucun code du produit. **Préfixe de prompt inchangé.**
+- **Ce que corrige le commit** : `kill -STOP` rend la main dès que l'arrêt est mis en file, pas quand tous les threads du worker sont arrêtés. Un thread encore actif peut donc répondre au kill par un succès. `freeze()` envoie `SIGSTOP`, puis attend que chaque `/proc/<pid>/task/<tid>/stat` soit à `T`.
+- **Échec qui a motivé la reprise** : run 45602379325, job 139164539614 (tentative 1, `167887341`), `stop_escalation_e2e.rs:293` : « the hung worker never answers: {…"success":true} ». **Pas de test vu rouge puis vert** : la course ne se déclenche pas à la main.
+
+Les deux fichiers sont identiques à `upstream/main` (`6e4b69da2`) après la reprise (`git diff --stat HEAD upstream/main -- <fichiers>` vide). Prochain merge d'`upstream/main` : aucun conflit attendu sur ces fichiers.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/tests/stop_escalation_e2e.rs` | modif. (repris d'upstream `7ea89013e`, +34 / −6) | `freeze()` et `all_threads_stopped()` ; `a_hung_worker_is_killed_within_the_escalation_window_and_its_lease_frees` gèle le worker par `freeze`. | YA-10 (ticket 38) |
+| `crates/pa-daemon/tests/registration_refusal_heal_e2e.rs` | modif. (repris d'upstream `7ea89013e`, +34 / −6) | Mêmes fonctions ; `an_owned_stop_kills_a_worker_that_missed_the_shutdown` gèle le worker par `freeze`. | YA-10 (ticket 38) |
 
 ## Code repris d'Unharnessed
 
