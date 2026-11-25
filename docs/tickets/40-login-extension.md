@@ -699,3 +699,49 @@ Run `ci` 45687309764 :
 - Le test supposait que `ya40`, avec sa seule clé de repli dans `models.json`, apparaîtrait « connecté ».
 - Or les lignes du TUI lisent le statut avec un `AuthStorage` sans résolveur de repli (`crates/pa-core/src/auth/manager.rs:249`, `:512-514`), et une clé de repli y compte comme non configurée (`configured: false`, `:521`).
 - Correction : la clé de `ya40` est rangée dans `auth.json` avant le lancement, et le test vérifie `connected` et `removable`. Le rouge du push 1 portait sur une assertion antérieure (`:508`, ligne ChatGPT absente).
+
+## 18. R5, push 2 : le code (`8991ea2a6`), relevé et captures
+
+### 18.1 CI du push 2
+
+Run `ci` 45689938071 :
+- `check + clippy (workspace)`, `windows cross-check + clippy` et `fmt` verts ; les shards 1 à 3 et 5 à 8 verts.
+- **Shard 4/8** : `ya_providers_acp_e2e`, 5 réussis, 2 en échec, **seulement 1a et 1b, comme prévu**.
+  - `:409` : « H1: the running session kept the key it was built with; requests: ["old", "old"] ».
+  - `:438` : « H1: the running session kept the token it was built with; requests: ["old", "old"] ».
+  - **H1 est confirmée par la valeur** : la 2e requête porte la clé, ou le jeton, rangé au départ, et non celui réécrit dans `auth.json`.
+- Les tests 2 (clé poussée dans la session vivante), 3 (modèles relus), 4, 5 et 8 sont verts, ainsi que les tests unitaires 4, 6, 7, 8 et 13.
+- `Changelog fragment` vert.
+
+### 18.2 Push 3
+
+- 1a et 1b passent en `#[ignore]`, avec un texte qui renvoie à E-C (`crates/pa-cli/tests/ya_providers_acp_e2e.rs:396`, `:422`).
+- Le journal du CDC note H1 confirmée : **E-C devient le ticket suivant** (décision 6).
+
+### 18.3 Captures (règle 13 : lancées par Claude Code sur les binaires, avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`)
+
+Binaires :
+- `main` : `1ece0ff04`, artefact de `ya-build-macos-arm64` 45676155249 ;
+- branche : `8991ea2a6`, artefact 45689927414, `yusagent --version` → `0.10.2-continuous.8991ea2a63c251ffc840e0ccbb4a4c983404422e`.
+
+| Contrôle | Commande | Résultat |
+|---|---|---|
+| Capture `main` | `python3 -I bench/tools/capture/run.py --binary <main>/yusagent` | `runs/20261125T195616Z` |
+| Capture branche | `python3 -I bench/tools/capture/run.py --binary <branche>/yusagent` | `runs/20261125T201240Z` ; chemins du préfixe `CONFORME` ; trames de l'extension `TOUT IDENTIQUE` |
+| Toutes les requêtes, `main` contre branche | `python3 -I bench/tools/capture/compare.py runs/20261125T195616Z runs/20261125T201240Z --all --out <md>` | **TOUT IDENTIQUE** (premier tableau : seul `prompt_cache_key` change, l'UUID de session) |
+| Trames ACP, branche | `python3 -I bench/tools/capture/acp_frames.py --binary <branche>/yusagent --out <neuf>` | `CONFORME` |
+| Trames ACP, `main` | idem sur `<main>/yusagent` | `CONFORME` |
+| Branche contre `main` | `python3 -I bench/tools/capture/compare_frames.py <branche> --against <main>` | `écarts : 1` : `.result.servers[].token`, en plus dans la branche (trame 32, `_yus/mcp/list`) |
+| Idem, écart déclaré | `… --against <main> --expect '.result.servers[].token'` | **`écarts : 0`** ; `token` présent sur 11 services du catalogue (« GitHub token », « PagerDuty token », « Zoom token »…) |
+| Branche contre l'agent factice | `python3 -I bench/tools/capture/compare_frames.py <branche>` | `écarts : 1` : le même `token`, absent de l'agent factice (à aligner avec X5) |
+
+**Préfixe** :
+- toutes les requêtes des cas du banc sont identiques entre `main` et la branche ;
+- les trames d'ouverture ne changent pas ;
+- seul `_yus/mcp/list` gagne `token`.
+
+### 18.4 Écart au §16.4
+
+- `acp_frames.py` n'a pas de session nouvelle pour `_yus/providers/*`.
+- Une telle session demanderait l'agent factice de l'extension, côté X5.
+- Les méthodes sont prouvées sur le vrai binaire par les tests e2e 2 à 5 et 8 (CI), avec un modèle intercepté et des clés factices.
