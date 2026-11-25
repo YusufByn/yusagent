@@ -991,3 +991,39 @@ cd extensions/vscode && npm run compile-tests && node --require ./out/test/unit/
 **À noter, non traité ici** :
 - `bench/smoke/tools/compare_capture_prompts.py` cherche `capture/*.body.json`, alors que `acp-resume` écrit dans `<cas>/cap/` : correctif d'outil plus tard. Le §21 a comparé des copies renommées.
 - Le cas `spawn` du banc échoue parce que `rlm.spawn` est coupé : l'hôte répond « RLM recursion depth limit reached (RLM_DEPTH=0, RLM_MAX_DEPTH=0) » (`runs/20261125T151615Z/spawn/cap/0002.body.json`). Ce n'est pas lié au ticket 39.
+
+## 23. Échec de l'e2e vrai binaire sur `85d8e91d2` : enquête (25/11/2026)
+
+**Faits**
+
+- **Première tentative** : run 45644563443, job 139311928005, 15/19 (journal 973-1029).
+  - Premier test, « cellule avec bash() : boîte, accord par le bouton… » : `délai dépassé : tour fini` (`suite-real.js:207`, l'`idle()` qui suit le clic). Diagnostic : `cellule call-bash pending : {}`. L'accord n'a jamais atteint le pont, et la cellule attendait encore sa permission.
+  - Après l'échec, le Stop du lanceur (`run()`, `suite-real.ts`) a refusé la demande (`[permission-denied]` au test suivant). Les trois tests suivants de la session 1 ont échoué en cascade.
+- **Relance par Yusuf** (tentative 2, job 139371833601) : 19/19, premier test en 3 173 ms. Les 16 checks requis sont verts sur `85d8e91d2` (`gh pr checks 90`).
+- **Le journal CI ne trace ni le clic ni les trames ACP.** Aucune ligne `permission …` de l'hôte, aucune trame. Il ne permet pas de dire si le clic a été envoyé ou si la réponse de permission est partie : impossible de conclure depuis les journaux.
+- **Comment le test donne l'accord** (`extensions/vscode/test/e2e/suite-real.ts:190-195`) :
+  1. carte `pending` ;
+  2. texte de la boîte affiché ;
+  3. `sleep(1_100)` ;
+  4. `probeInput({ click: "Allow" })`, sans vérifier l'issue.
+
+  Les boutons de la boîte ne s'arment qu'**1 s après son ouverture** (`BUTTONS_DELAY_MS = 1000`, `src/ya/permission-keys.ts:17`), par un minuteur du webview (`webview/ya-permission.tsx:69-74`). Un `click()` sur un bouton désactivé ne fait rien (`webview/ya-probe.ts:35-42`). La sonde garde l'état du bouton au clic (`box.click.disabled`, `ya-probe.ts:30`, `:40`), mais le test ne le lit pas. `suite.ts:133`, lui, attend `box.buttonsReady` avant de cliquer.
+- **`steerAll` et le chaînage ne touchent pas la boîte d'accord** (`extensions/vscode/src/chat.ts`) :
+  - `steerChain` (`:117`) ne s'allonge que dans la boucle de `steerAll` (`:463`), et seulement pour un message de `steering` pas encore dans `steered` (`:460-461`). `steering` ne reçoit que les messages « maintenant » (`now()`, `:427`).
+  - Rien n'attend `steerChain`, et il n'y a aucun drapeau d'envoi : avec une liste vide, `steerAll` (`:455`, appelé en `:430`, `:812`, `:829`) ne fait que lire `this.run`.
+  - La réponse de permission passe par `view.ts:137-141` puis `Permissions.answer` (`src/ya/permissions.ts:48`), sans lien avec `chat.ts`.
+  - Entre le push 3 (job vert 139297897753) et `85d8e91d2`, seuls le test E2 Rust et `chat.ts` (`steerAll`) changent dans `crates/` et `extensions/vscode/src` (`git diff --stat fe13a9f5a 85d8e91d2`). Le binaire a donc le même code Rust.
+- **Historique** : sur les 25 runs `ya-extension` en échec parmi les 100 derniers, ce test a échoué 4 fois avant le ticket 39 :
+  - runs 45035376564 et 45034241467 (`ya-28-x1`) ;
+  - runs 44927865325 et 44927543897 (`ya-24-extension-pr3`).
+
+  Les symptômes étaient autres : assertions sur la carte (« carte affichée, fermée, pas inerte », « carte dépliée », « aucun bloc inerte affiché », format `exit 0 · N ms`). **Un échec sur `tour fini` avec `call-bash` en `pending` n'avait jamais été vu.**
+
+**Hypothèse (non vérifiée)** : course dans le test. Le minuteur d'armement du webview a tourné plus tard que les 1 100 ms d'attente de l'hôte (charge du runner). Le clic est tombé sur un bouton encore désactivé et n'a rien fait. La relance verte et l'absence de changement sur ce chemin vont dans ce sens, sans le prouver.
+
+**Proposition pour rendre le test déterministe** (dans cette PR, si Yusuf le veut, ou en ticket à part) : dans `suite-real.ts:193-194`, remplacer `sleep(1_100)` et le clic par :
+1. une attente du bouton « Allow » activé dans le DOM (`probe().boxButtons`, `disabled: false`) ;
+2. puis `probeInput({ click: "Allow" })` ;
+3. puis l'assertion `box.click.disabled === false`.
+
+Même chose pour les autres accords de ce fichier qui passent par `answer()` (`:144-148`, `post({ type: "permission" })` direct, qui ne dépend pas de l'armement : à garder tel quel). Si le défaut revient, l'assertion dira « clic sur un bouton désactivé » au lieu d'un délai sur « tour fini ».
