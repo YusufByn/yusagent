@@ -354,3 +354,41 @@ Restent verts au push 1 : les autres unitaires, l'e2e de l'agent factice (15/15)
 8. **Contrôles du push 2** : `compare_capture_prompts.py` (préfixe inchangé) et `compare_frames.py` (0 écart). Compte rendu à chaque push. **Le merge attend le contrôle de Yusuf dans VS Code** (§7.3).
 
 **Écart au §7, signalé à Yusuf** : la branche `ya-32-identite` part de `ya-32-constat` (constat non mergé, non poussé) et non de `main` après son merge. La PR porte donc le constat, ces décisions, les tests et le code.
+
+## 10. Réalisation (PR #88)
+
+### 10.1 Push 1 : tests seuls (`ca33f9f82`)
+
+- **`ci`** run 45590734542 : **2 rouges, attendus et sur leur assertion** ; fmt, clippy (Linux et Windows), deny, runtime et les 6 autres shards verts.
+  - shard 3 : T1 `the_delete_is_served_under_the_yus_name_only` (`ya_history_tests.rs:340`, « the yusAgent name is served ») ;
+  - shard 2 : T2 `the_history_lists_conversations_and_deletes_one_with_its_session` (`ya_acp_resume_e2e.rs:430`). L'ancien nom répond `-32602` (« This is the conversation in progress ») au lieu de `-32601` : il est encore servi.
+- **`ya-extension`** run 45590734560 :
+  - unitaires : 70 tests, 65 verts, **5 rouges, attendus et sur leur assertion** :
+    - T4 `yaMeta` : `{ promptTurnId: 1 }` au lieu de `{}` ;
+    - T4 `yaResultMeta` : `{ path: '/u' }` au lieu de `{}` ;
+    - T3 méthodes servies : `_yus/sessions/delete`, `false` au lieu de `true` ;
+    - T5 identité : la liste `fichier:ligne` des noms restants (méthodes, clé `_meta.unharnessed`, `--uh-*`, onglet Instructions, sondes du banc, constante du pont, nom du test de `ya_turns.rs`) ;
+    - T5 fichiers de l'onglet Instructions : encore présents ;
+  - e2e de l'agent factice : 15/15 ;
+  - e2e du vrai binaire : 18/18, aucun processus restant.
+- Changelog fragment, codebase-health, contribution gate : verts.
+- En local (Claude Code) : `npm run typecheck && npm run lint && npm run test:unit` donne les mêmes 5 rouges.
+
+**Écart au §7.1, signalé à Yusuf** : T5 parcourt aussi `crates/`, `bench/` et le runtime Python, et pas seulement l'extension. L'exception de l'option du banc (décision 7) suppose `bench/` dans le périmètre. Limite : le job `ya-extension` ne tourne que si l'extension ou son workflow change. Un nom d'Unharnessed réintroduit par un changement Rust seul ne serait vu qu'au prochain changement de l'extension.
+
+### 10.2 Push 2 : le code
+
+Commits, un sujet chacun :
+- `37715c83c` : suppression sous `_yus/sessions/delete` seule (pont, extension, agent factice, banc) ;
+- `d247ec65a` : méthodes et notifications non servies sous `_yus/*` ;
+- `d21848449` : plus de lecture de `_meta.unharnessed`. Les commandes de l'agent sont toutes des commandes : notre pont n'envoie pas de `available_commands_update` ;
+- `e6e84afeb` : `--uh-*` passent à `--ya-*` ;
+- `62c4f5970` : commentaire `protocol.ts:5` et nom de test de `ya_turns.rs` ;
+- `9e519b296` : onglet Instructions supprimé (code, types, règles CSS `.group-body .row-end` et `.input.is-area`, propres à l'onglet) ;
+- doc : `docs/fork-changes.md` (section « Identité yusAgent »), journal du CDC, ce ticket.
+
+En local (Claude Code) : typecheck, lint et build OK. `npm run test:unit` : `ℹ tests 70`, `ℹ pass 70`, `ℹ fail 0`. Le Rust est seulement formaté (`rustfmt --check`) ; il est compilé en CI (règle 8).
+
+**Références de `main` pour les comparaisons.** Le binaire en cache `8e0ea28d4` a des `crates/` et un runtime identiques à `main` (`git diff --stat 8e0ea28d4 085d06962 -- crates prime-agent-runtime` vide). Avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short` :
+- `python3 -I bench/smoke/run.py --binary <8e0ea28d4>/yusagent --model gpt-6.1-sol --tasks py-example-001 --capture` : `resolved`, dans `bench/smoke/runs/20261125T100418Z-8e0ea28-gpt-6.1-sol` ;
+- `python3 -I bench/tools/capture/acp_frames.py --binary <8e0ea28d4>/yusagent --out <dossier>` : A 26 trames, B 14, C 44, `CONFORME`.
