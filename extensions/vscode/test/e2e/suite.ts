@@ -544,6 +544,45 @@ const tests: [string, () => Promise<void>][] = [
       await shows(AUTO_BADGE, "étiquette auto revenue");
     },
   ],
+  [
+    "ticket 39 (X4) : « Send now » pendant un tour : le message rejoint le tour, une seule trame session/prompt",
+    async () => {
+      await ready();
+      await idle();
+      const sent = (method: string) => received(control, lastPid()).filter((frame) => frame.method === method);
+      const prompts = sent("session/prompt").length;
+      try {
+        await post({ type: "send", text: "longue", images: [] });
+        await waitFor(async () => {
+          const turn = (await state()).chat.entries.filter((entry): entry is Turn => entry.kind === "turn").at(-1);
+          return turn?.items.some((item) => item.kind === "tool" && item.id === "call-l" && item.status === "running");
+        }, "cellule longue en cours");
+        await post({ type: "send", text: "ajoute ceci", images: [] });
+        await waitFor(
+          async () => (await state()).chat.queue.some((message) => message.text === "ajoute ceci" && message.state === "waiting"),
+          "message en file pendant le tour",
+        );
+        // Caché pendant un tour tant que la méthode n'est pas servie (`Composer.tsx`, `hidden={busy && !steer}`) :
+        // l'issue est alors `covered` (taille nulle).
+        let outcome: Probe["clicked"];
+        await waitFor(async () => {
+          outcome = (await probeInput({ userClick: "Send now" }))?.clicked;
+          return outcome === "clicked";
+        }, "clic sur « Send now »", 5_000).catch(() => undefined);
+        assert.equal(outcome, "clicked", "« Send now » visible pendant un tour");
+        await idle();
+        assert.equal(sent("_yus/session/steer").length, 1, "un steer");
+        assert.equal(sent("session/prompt").length, prompts + 1, "aucun doublon");
+        const last = (await state()).chat.entries.filter((entry): entry is Turn => entry.kind === "turn").at(-1);
+        assert.equal(last?.prompt?.text, "ajoute ceci");
+        assert.equal(last?.state, "done");
+      } finally {
+        // Un échec ne laisse pas la cellule longue aux tests suivants.
+        if ((await state()).chat.busy) await post({ type: "cancel" });
+        await idle();
+      }
+    },
+  ],
 ];
 
 export async function run(): Promise<void> {

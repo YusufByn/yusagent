@@ -190,8 +190,21 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "send", text: "cellule bash", images: [] });
       await waitFor(async () => (await tool("call-bash"))?.status === "pending", "carte en attente d'accord", SLOW);
       await shows(BOX, "boîte");
-      await sleep(1_100);
-      await probeInput({ click: "Allow" });
+      // Ticket 39 (§23) : les boutons ne s'arment qu'après `BUTTONS_DELAY_MS` (minuteur du webview) ; une
+      // attente fixe pouvait cliquer un bouton encore désactivé, sans effet. On attend « Allow » actif
+      // dans la page, puis on vérifie l'état du bouton au clic.
+      await waitFor(
+        async () => (await probe())?.boxButtons.some((button) => button.name === "Allow" && !button.disabled),
+        "bouton Allow actif",
+        SLOW,
+      );
+      const clicked = await probeInput({ click: "Allow" });
+      // Boîte déjà fermée (accord pris), ou clic noté sur un bouton actif ; jamais un clic sur un bouton
+      // désactivé (la boîte reste ouverte, `click.disabled` à vrai).
+      assert.ok(
+        clicked && (clicked.box === null || clicked.box.click?.disabled === false),
+        `clic sur « Allow » actif : ${JSON.stringify(clicked?.box)}`,
+      );
       await idle();
       const done = await tool("call-bash");
       assert.equal(done?.status, "done");
@@ -762,7 +775,46 @@ const x3Tests: [string, () => Promise<void>][] = [
     },
   ],
 ];
-tests.push(...x3Tests, ...resumeTests);
+// Ticket 39 (X4) : un message pendant un tour (`_yus/session/steer`), après les autres (conversation neuve).
+const steerTests: [string, () => Promise<void>][] = [
+  [
+    "message pendant un tour (ticket 39) : Cmd+Entrée pendant une cellule, le message suit son résultat dans le même tour",
+    async () => {
+      writeScript([
+        cell("call-steer", "import time\nopen('steer-started.txt', 'w').write('x')\ntime.sleep(4)\nprint('cellule finie')"),
+        { text: "message pris" },
+      ]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await post({ type: "send", text: "cellule longue", images: [] });
+      await waitFor(() => existsSync(join(workspace, "steer-started.txt")), "cellule commencée", SLOW);
+      await post({ type: "send", text: "ajoute ceci", images: [], now: true });
+      await idle();
+      await shows("message pris", "réponse au message");
+      const path = (await state()).saved?.path;
+      assert.ok(path, "fichier de la conversation");
+      const rows = readFileSync(path, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } })
+        .filter((entry) => entry.type === "message")
+        .map((entry) => {
+          const content = entry.message?.content;
+          const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((block: { text?: string }) => block.text ?? "").join("") : "";
+          return `${entry.message?.role}:${text}`;
+        });
+      const result = rows.findIndex((row) => row.startsWith("toolResult:"));
+      assert.ok(result >= 0, `résultat de la cellule : ${JSON.stringify(rows)}`);
+      assert.deepEqual(rows.slice(result + 1), ["user:ajoute ceci", "assistant:message pris"], "le message suit le résultat, une réponse");
+      assert.equal(rows.filter((row) => row === "user:ajoute ceci").length, 1, "envoyé une fois");
+      const last = (await turns()).at(-1);
+      assert.equal(last?.prompt?.text, "ajoute ceci");
+      assert.equal(last?.state, "done");
+      assert.deepEqual((await state()).chat.queue, [], "rien en file");
+    },
+  ],
+];
+tests.push(...x3Tests, ...resumeTests, ...steerTests);
 
 /** Après un échec : chaque cellule de la conversation (statut, sortie, fichiers), et le workspace. */
 async function diagnose(): Promise<void> {

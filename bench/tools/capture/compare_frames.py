@@ -13,6 +13,9 @@ Ticket 31 (X3) : le cas C `C-resources` (écrans skills, MCP et réglages) rejou
 factice dans le même ordre : réponses de `_yus/settings/*`, `_yus/skills/*`, `_yus/mcp/list`, refus
 de `permissions` (code et texte), option `permissions` après `set_config_option`, et la notice
 `_yus/notice` (forme, place juste après `turnStart`, avant le contenu du tour).
+Ticket 39 (YA-19) : le cas D `D-steer` rejoué contre l'agent factice (prompt `longue`) : réponse
+d'un `_yus/session/steer` accepté, refus d'un tour périmé (code et texte), trame `turnStart`
+`steer` (forme, même `promptTurnId` que le prompt, avant la réponse au message).
 
 Ticket 26 : `--against <dossier acp_frames d'un autre binaire>` compare deux binaires sans l'agent
 factice : même suite de trames (sens, méthode, genre de mise à jour), puis, trame par trame, mêmes
@@ -164,6 +167,78 @@ def fake_resources() -> dict:
     proc.stdin.close()
     proc.wait(timeout=5)
     return out
+
+
+def fake_steer() -> dict:
+    """Ticket 39 : le prompt `longue`, un message accepté puis un au tour périmé."""
+    control = tempfile.mkdtemp(prefix="fake-acp-")
+    (Path(control) / "scenario.json").write_text("{}")
+    proc = subprocess.Popen(["node", str(fake)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                            env={**os.environ, "FAKE_ACP_DIR": control}, cwd=control)
+    lines: queue.Queue[str] = queue.Queue()
+    threading.Thread(target=lambda: [lines.put(l) for l in proc.stdout], daemon=True).start()
+    frames: list[dict] = []
+
+    def send(message: dict) -> None:
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
+        proc.stdin.flush()
+
+    def wait(pred, seconds=5.0):
+        found = next((m for m in frames if pred(m)), None)
+        deadline = time.monotonic() + seconds
+        while found is None and time.monotonic() < deadline:
+            try:
+                message = json.loads(lines.get(timeout=0.2))
+            except queue.Empty:
+                continue
+            frames.append(message)
+            if pred(message):
+                found = message
+        return found or {}
+
+    answer = lambda req_id: (lambda m: m.get("id") == req_id and "method" not in m)
+    send({"id": 1, "method": "initialize", "params": {"protocolVersion": 1, "clientCapabilities": {}}})
+    wait(answer(1))
+    send({"id": 2, "method": "session/new", "params": {"cwd": control, "mcpServers": []}})
+    sid = wait(answer(2))["result"]["sessionId"]
+    frames.clear()
+    send({"id": 3, "method": "session/prompt", "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "longue"}]}})
+    wait(lambda m: ((m.get("params") or {}).get("update") or {}).get("sessionUpdate") == "tool_call")
+    turn = steer_turn_of(frames)
+    send({"id": 4, "method": "_yus/session/steer",
+          "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "message"}], "turn": turn}})
+    send({"id": 5, "method": "_yus/session/steer",
+          "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "tour périmé"}], "turn": (turn or 0) + 1}})
+    out = {"accepted": wait(answer(4)), "stale": wait(answer(5))}
+    wait(answer(3))
+    out["frames"] = list(frames)
+    out["turn"] = turn
+    proc.stdin.close()
+    proc.wait(timeout=5)
+    return out
+
+
+def steer_turn_of(frames: list[dict]):
+    """L'identifiant du tour du prompt, lu sur son `turnStart`."""
+    for f in frames:
+        ours = meta((f.get("params") or {}).get("update") or {}).get("ai.primeintellect.prime-agent") or {}
+        if (ours.get("turnStart") or {}).get("origin") == "prompt":
+            return ours.get("promptTurnId")
+    return None
+
+
+def real_steer() -> dict | None:
+    folder = captured / "D-steer"
+    if not folder.is_dir():
+        return None
+    rows = [json.loads(line) for line in (folder / "transcript.jsonl").read_text().splitlines()]
+    received = [row["msg"] for row in rows if row["dir"] == "agent->client"]
+    by_id = lambda req_id: next((m for m in received if m.get("id") == req_id and "method" not in m), {})
+    start = next((i for i, row in enumerate(rows) if row["dir"] == "client->agent"
+                  and row["msg"].get("method") == "session/prompt"), 0)
+    frames = [row["msg"] for row in rows[start:] if row["dir"] == "agent->client"]
+    return {"accepted": by_id(4), "stale": by_id(5), "frames": frames, "turn": steer_turn_of(frames)}
 
 
 def real_resources() -> dict | None:
@@ -474,5 +549,38 @@ else:
     print(f"place de la notice : réel {order(REAL_C.get('prompt2', []))}, factice {order(MINE_C.get('prompt2', []))}"
           f" ({'IDENTIQUE' if order(REAL_C.get('prompt2', [])) == order(MINE_C.get('prompt2', [])) else 'DIFFÉRENT'})")
     total += 0 if order(REAL_C.get("prompt2", [])) == order(MINE_C.get("prompt2", [])) else 1
+# Ticket 39 (YA-19) : cas D, message pendant un tour.
+REAL_D = real_steer()
+if REAL_D is None:
+    print("ABSENT : D-steer (capture d'avant le ticket 39) : un écart")
+    total += 1
+else:
+    MINE_D = fake_steer()
+    total += compare("_yus/session/steer : accepté", REAL_D["accepted"], MINE_D["accepted"])
+    total += compare("_yus/session/steer : tour périmé", REAL_D["stale"], MINE_D["stale"])
+    refusal = lambda msg: ((msg.get("error") or {}).get("code"), ((msg.get("error") or {}).get("data") or {}).get("details"))
+    same = refusal(REAL_D["stale"]) == refusal(MINE_D["stale"])
+    print(f"  code et texte du refus {'identiques' if same else 'DIFFÉRENTS'} : réel {refusal(REAL_D['stale'])}, factice {refusal(MINE_D['stale'])}")
+    total += 0 if same else 1
+    ours = lambda f: meta((f.get("params") or {}).get("update") or {}).get("ai.primeintellect.prime-agent") or {}
+    steer_frame = lambda frames: next((f for f in frames if (ours(f).get("turnStart") or {}).get("origin") == "steer"), {})
+    total += compare("turnStart steer", steer_frame(REAL_D["frames"]), steer_frame(MINE_D["frames"]),
+                     ignore_values={".params.update._meta.ai.primeintellect.prime-agent.promptTurnId",
+                                    ".params.update._meta.ai.primeintellect.prime-agent.eventSequence"})
+
+    def steer_order(side: dict) -> list[str]:
+        out = []
+        for f in side["frames"]:
+            start = ours(f).get("turnStart") or {}
+            if start and ours(f).get("promptTurnId") == side["turn"]:
+                out.append(f"turnStart:{start.get('origin')}")
+            elif ((f.get("params") or {}).get("update") or {}).get("sessionUpdate") == "agent_message_chunk" \
+                    and out and out[-1] != "contenu":
+                out.append("contenu")
+        return out
+    real_order, mine_order = steer_order(REAL_D), steer_order(MINE_D)
+    same = real_order[-2:] == mine_order[-2:] == ["turnStart:steer", "contenu"]
+    print(f"place du turnStart steer : réel {real_order}, factice {mine_order} ({'IDENTIQUE' if same else 'DIFFÉRENT'})")
+    total += 0 if same else 1
 print(f"\nécarts : {total}")
 sys.exit(1 if total else 0)

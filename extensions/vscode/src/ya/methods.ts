@@ -1,6 +1,6 @@
 // yusAgent (YA-10, ticket 24, PR I) : méthodes ACP que notre pont sert
 // (`crates/pa-daemon/src/acp/daemon.rs:1052-1068` ; ticket 28 : `ya_history.rs`). Le code repris d'Unharnessed en appelle
-// d'autres (ticket 32 : `_yus/session/steer`, `rewind`, `_yus/kernel/*`, `_yus/providers/*`) : elles ne partent pas, l'appel est
+// d'autres (ticket 32 : `_yus/session/rewind`, `_yus/kernel/*`, `_yus/providers/*`) : elles ne partent pas, l'appel est
 // rejeté sur place comme le ferait le pont (`-32601`), sans trame (fixture des trames, §5.4).
 
 import { METHOD_NOT_FOUND, RpcError } from "../acp/connection";
@@ -16,6 +16,8 @@ const REQUESTS = new Set([
   "session/load",
   "session/list",
   "_yus/sessions/delete", // ticket 32 : nom yusAgent, l'ancien n'est plus servi
+  // Ticket 39 (X4, `crates/pa-daemon/src/acp/ya_turns/steer.rs`) : un message pendant un tour.
+  "_yus/session/steer",
   // Ticket 31 (X3, `crates/pa-daemon/src/acp/ya_resources.rs`) : écrans skills, MCP et réglages.
   "_yus/settings/get",
   "_yus/settings/set",

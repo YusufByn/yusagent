@@ -1097,6 +1097,8 @@ impl TurnRunner {
             if !more_queued {
                 settle_engine.clear_progress_note();
             }
+            // yusAgent (YA-19, ticket 39): the messages sent into the run that it did not take.
+            settle_engine.ya_drop_steers();
             core.busy = false;
             core.active_action = None;
             core.running_admission_ids.clear();

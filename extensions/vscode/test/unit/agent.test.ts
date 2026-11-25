@@ -11,12 +11,13 @@ import { Agent } from "../../src/agent";
 import { Conversations } from "../../src/conversations";
 import type { Files } from "../../src/files";
 import { History } from "../../src/history";
-import type { ConfigChange, TurnItem } from "../../src/protocol";
+import type { ChatEntry, ConfigChange, TurnItem } from "../../src/protocol";
 import { Providers } from "../../src/providers";
 import { Settings } from "../../src/settings";
 import { ShownAgent } from "../../src/shown";
 import { authText } from "../../src/ya/auth";
 import { yaMeta } from "../../src/ya/meta";
+import { features } from "../../src/ya/methods";
 import { fakeAgentPath, fixtureFrames, newControlDir, noticesOf, normalize, permissionsOf, received, starts, waitFor } from "../helpers";
 
 const log = new Proxy({} as Record<string, unknown>, { get: () => () => undefined }) as never;
@@ -82,8 +83,8 @@ test("méthode non servie : rejet sur place, aucune trame", async () => {
   await ready(h);
   const before = received(h.dir, lastPid(h)).length;
   // Ticket 28 : `session/list` est servie ; `_yus/session/rewind` ne l'est pas encore (noms du ticket 32).
+  // Ticket 39 : `_yus/session/steer` est servie (tests « message pendant un tour » plus bas).
   await assert.rejects(shown(h).agent.request("_yus/session/rewind", {}), /pas encore servie/);
-  await assert.rejects(shown(h).agent.request("_yus/session/steer", {}), /pas encore servie/);
   shown(h).agent.notify("_yus/whatever", {});
   assert.equal(received(h.dir, lastPid(h)).length, before);
 });
@@ -446,3 +447,122 @@ test("notice (ticket 31) : lignes visibles du tour, texte du §3.2", async () =>
   const turns = shown(h).chat.current.entries.filter((entry) => entry.kind === "turn");
   assert.equal(noticesOf(turns.at(-2))?.length ?? 0, 0);
 });
+
+// Ticket 39 (X4) : un message pendant un tour (`_yus/session/steer`), contre l'agent factice, qui
+// répond comme le pont (`crates/pa-daemon/src/acp/ya_turns/steer.rs`).
+const framesOf = (h: Harness, method: string) => received(h.dir, lastPid(h)).filter((frame) => frame.method === method);
+const promptTexts = (h: Harness) =>
+  framesOf(h, "session/prompt").map((frame) =>
+    ((frame.params as { prompt: { text?: string }[] }).prompt ?? []).map((block) => block.text ?? "").join(""),
+  );
+// En file, pas « en cours d'envoi » (la file montrée commence par les messages envoyés dans le tour).
+const waitingIn = (h: Harness, text: string) =>
+  shown(h).chat.current.queue.some((message) => message.text === text && message.state === "waiting");
+// Le message est parti sur le fil, ou revenu en file (refusé) : l'assertion qui suit dit lequel.
+const placed = (h: Harness, text: string, steers: number) =>
+  waitFor(
+    () => framesOf(h, "_yus/session/steer").length >= steers || waitingIn(h, text),
+    `message « ${text} » parti ou en file`,
+  );
+const working = (h: Harness) => waitFor(() => toolStatus(h, "call-l") === "running", "cellule longue en cours");
+const turnsOf = (h: Harness) =>
+  shown(h).chat.current.entries.filter((entry): entry is Extract<ChatEntry, { kind: "turn" }> => entry.kind === "turn");
+
+test("message pendant un tour : l'option « Send now » est servie (features().steer)", () => {
+  assert.equal(features().steer, true);
+});
+
+test("message pendant un tour (Cmd+Entrée) : un steer avec l'identifiant du tour, tour rejoint, une seule trame session/prompt", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("longue", []);
+  await working(h);
+  shown(h).chat.send("ajoute ceci", [], undefined, true);
+  await placed(h, "ajoute ceci", 1);
+  const steers = framesOf(h, "_yus/session/steer");
+  assert.equal(steers.length, 1, "un steer part sur le fil");
+  await idle(h);
+  assert.deepEqual(steers[0].params, { sessionId: "fake-session-1", prompt: [{ type: "text", text: "ajoute ceci" }], turn: 1 });
+  assert.deepEqual(promptTexts(h), ["longue"], "aucun doublon : une seule trame session/prompt");
+  const turns = turnsOf(h);
+  assert.equal(turns.length, 2, "le message ouvre un tour sous le premier");
+  assert.equal(turns[1].prompt?.text, "ajoute ceci");
+  assert.equal(turns[1].state, "done");
+  assert.deepEqual(texts(h, "text").at(-1), "pris : ajoute ceci");
+  assert.deepEqual(shown(h).chat.current.queue, []);
+});
+
+test("message pendant un tour refusé par le pont : en tête de file, envoyé en prompt après le tour", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("longue", []);
+  await working(h);
+  shown(h).chat.send("refusé : plus tard", [], undefined, true);
+  await waitFor(() => waitingIn(h, "refusé : plus tard"), "en file");
+  assert.equal(framesOf(h, "_yus/session/steer").length, 1, "le steer est parti, le pont l'a refusé");
+  shown(h).chat.send("ajoute ceci", [], undefined, true);
+  await waitFor(() => promptTexts(h).length === 2, "le message refusé part en prompt");
+  await idle(h);
+  assert.equal(framesOf(h, "_yus/session/steer").length, 2, "le refusé puis l'accepté sont partis sur le fil");
+  assert.deepEqual(promptTexts(h), ["longue", "refusé : plus tard"]);
+});
+
+test("Stop avec un message envoyé et non pris : file en pause, « play » l'envoie une fois", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("longue", []);
+  await working(h);
+  shown(h).chat.send("pas encore pris", [], undefined, true);
+  await placed(h, "pas encore pris", 1);
+  assert.equal(framesOf(h, "_yus/session/steer").length, 1, "un steer part sur le fil");
+  shown(h).chat.cancel();
+  await idle(h);
+  assert.equal(shown(h).chat.current.paused, true, "file en pause");
+  assert.deepEqual(
+    shown(h).chat.current.queue.map((message) => message.text),
+    ["pas encore pris"],
+  );
+  assert.deepEqual(promptTexts(h), ["longue"]);
+  shown(h).chat.resume();
+  await waitFor(() => promptTexts(h).length === 2, "« play »");
+  await idle(h);
+  assert.deepEqual(promptTexts(h), ["longue", "pas encore pris"], "envoyé une fois");
+});
+
+test("tour en échec avec un message envoyé (E7) : renvoyé une fois en prompt, réponse affichée une fois", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("échoue", []);
+  await waitFor(() => toolStatus(h, "call-e") === "running", "cellule en cours");
+  shown(h).chat.send("note après échec", [], undefined, true);
+  await waitFor(() => promptTexts(h).length === 2, "renvoyé en prompt après l'échec");
+  await idle(h);
+  assert.deepEqual(promptTexts(h), ["échoue", "note après échec"], "renvoyé une fois");
+  assert.equal(texts(h, "text").filter((text) => text === "écho : note après échec").length, 1, "réponse affichée une fois");
+  assert.deepEqual(shown(h).chat.current.queue, []);
+});
+
+test("deux messages pendant un tour (E2) : le second ne part qu'après la réponse au premier, dans l'ordre", async () => {
+  // Le pont répond après 200 ms ; le tour prend les messages 300 ms après le premier.
+  const h = open({ steerDelayMs: 200 });
+  await ready(h);
+  shown(h).chat.send("longue", []);
+  await working(h);
+  shown(h).chat.send("un", [], undefined, true);
+  shown(h).chat.send("deux", [], undefined, true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const texts = () =>
+    framesOf(h, "_yus/session/steer").map((frame) =>
+      ((frame.params as { prompt: { text?: string }[] }).prompt ?? []).map((block) => block.text ?? "").join(""),
+    );
+  assert.deepEqual(texts(), ["un"], "avant la réponse au premier, le second n'est pas parti");
+  await idle(h);
+  assert.deepEqual(texts(), ["un", "deux"], "dans l'ordre d'envoi");
+  assert.deepEqual(
+    turnsOf(h).slice(1).map((turn) => turn.prompt?.text),
+    ["un", "deux"],
+    "les tours rejoints, dans l'ordre",
+  );
+  assert.deepEqual(promptTexts(h), ["longue"], "aucun doublon");
+});
+

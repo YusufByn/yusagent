@@ -427,6 +427,15 @@ pub trait SessionEngine: Send + Sync {
         None
     }
 
+    /// yusAgent (YA-19, ticket 39): a message into the running agent run, taken before its
+    /// next model call; `false` when no agent run takes it.
+    fn ya_steer(&self, _text: &str) -> bool {
+        false
+    }
+
+    /// yusAgent (YA-19, ticket 39): the run settled; the messages it did not take go.
+    fn ya_drop_steers(&self) {}
+
     /// The session's system prompt. Engines without a prompt report the
     /// empty string.
     fn system_prompt(

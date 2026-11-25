@@ -235,10 +235,12 @@ impl AgentSessionEngine {
                                     // `boundary_passed` gate separates it from
                                     // the admitted prompt's row, which the loop
                                     // already emitted.
+                                    // yusAgent (YA-19, ticket 39): or a message sent into the run.
                                     pa_agent::types::AgentMessage::Standard(
                                         pa_agent::types::Message::User(_),
                                     ) if boundary_passed
-                                        .load(std::sync::atomic::Ordering::SeqCst) =>
+                                        .load(std::sync::atomic::Ordering::SeqCst)
+                                        || super::super::ya_steer::is_steered(agent_message) =>
                                     {
                                         if let Some(value) = session_wire_value(agent_message) {
                                             let _ = tx.send(EngineEvent::UserMessage(value));

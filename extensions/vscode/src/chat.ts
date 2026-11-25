@@ -113,6 +113,8 @@ export class Chat {
   private steering: Queued[] = [];
   /** Those of them the agent has: the others wait for it to say the turn started. */
   private steered = new Set<Queued>();
+  /** yusAgent (ticket 39, E2) : les envois dans le tour, l'un après l'autre. */
+  private steerChain: Promise<void> = Promise.resolve();
   private commands: ChatCommand[] = PANEL_COMMANDS;
   private nextId = 1;
   /** Our prompt, sent and not answered yet. */
@@ -444,14 +446,23 @@ export class Chat {
     return undefined;
   }
 
-  /** What is for the running turn goes to the agent, once it said the turn started. */
+  /**
+   * What is for the running turn goes to the agent, once it said the turn started.
+   * yusAgent (YA-19, ticket 39, E2) : un message après l'autre, chacun après la réponse au précédent.
+   * En JSON-RPC, l'ordre de requêtes concurrentes n'est pas garanti (le pont traite chacune à part) ;
+   * la réponse dit que le message est dans la file de l'agent, donc l'ordre d'envoi est celui des lignes.
+   */
   private steerAll(): void {
     const turn = this.liveTurn;
     if (turn === undefined) return;
+    const run = this.run;
     for (const message of this.steering) {
       if (this.steered.has(message)) continue;
       this.steered.add(message);
-      void this.steer(message, turn);
+      // Ni après une relance, ni pour un message revenu en file entre-temps.
+      this.steerChain = this.steerChain.then(() =>
+        run === this.run && this.steered.has(message) ? this.steer(message, turn) : undefined,
+      );
     }
   }
 

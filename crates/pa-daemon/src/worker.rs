@@ -47,6 +47,8 @@ pub(crate) use summary::{
 use turn::TurnRunner;
 
 mod commands;
+// yusAgent (YA-19, ticket 39): a message into the running run.
+mod ya_steer;
 
 pub use env::{
     strip_inherited_worker_env, WORKER_ACTIVE_SESSION_ID_ENV, WORKER_CWD_ENV,

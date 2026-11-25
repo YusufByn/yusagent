@@ -195,6 +195,20 @@ SCENARIOS: dict[str, list[str]] = {
         "print(await edit('ya-display/a.txt', 'un', 'deux'))",
         "import shutil\nshutil.rmtree('ya-display')\nprint('NETTOYE')",
     ],
+    # YA-19 (ticket 39) : message pendant un tour. Une cellule longue, pendant laquelle le client
+    # envoie `_yus/session/steer` (`acp_frames.py`, cas D) ; la requête suivante porte le résultat
+    # de la cellule puis le message, sans rien d'autre.
+    "steer": [
+        "import time\nopen('ya-steer-started', 'w').write('x')\ntime.sleep(4)\nprint('STEER_CELL')",
+    ],
+    # Même cellule, qui crée d'abord un skill du projet (`.yusagent/skills/`, cas E) : avec la
+    # voie B, l'annonce `[skills-changed]` part au prompt suivant, pas avec le message.
+    "steer-skills": [
+        "import os, time\nos.makedirs('.yusagent/skills/ya39-steer', exist_ok=True)\n"
+        "open('.yusagent/skills/ya39-steer/SKILL.md', 'w').write("
+        "'---\\nname: ya39-steer\\ndescription: Skill du cas E (ticket 39).\\n---\\nRien.\\n')\n"
+        "open('ya-steer-started', 'w').write('x')\ntime.sleep(4)\nprint('STEER_CELL')",
+    ],
     # YA-10 (ticket 25) : Stop pendant un tour de réveil. Deux bash() non lus ; le second finit
     # avant le Stop (`-avant`, la commande d'arrêt part pendant que son avis attend en file) ou
     # après (`-apres`). Les tours de réveil jouent `WAKE_STOP_CELLS` (voir `wake_cell`).

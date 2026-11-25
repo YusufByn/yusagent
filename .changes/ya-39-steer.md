@@ -1,0 +1,1 @@
+- yusAgent: in the VS Code panel, a message sent while the agent works ("Send now", or Cmd/Ctrl+Enter) joins the running turn: the agent reads it after the running tool call, before its next model call, without stopping the tool.

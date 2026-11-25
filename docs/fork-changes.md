@@ -1584,6 +1584,44 @@ Les deux fichiers sont identiques à `upstream/main` (`6e4b69da2`) après la rep
 | `crates/pa-daemon/tests/stop_escalation_e2e.rs` | modif. (repris d'upstream `7ea89013e`, +34 / −6) | `freeze()` et `all_threads_stopped()` ; `a_hung_worker_is_killed_within_the_escalation_window_and_its_lease_frees` gèle le worker par `freeze`. | YA-10 (ticket 38) |
 | `crates/pa-daemon/tests/registration_refusal_heal_e2e.rs` | modif. (repris d'upstream `7ea89013e`, +34 / −6) | Mêmes fonctions ; `an_owned_stop_kills_a_worker_that_missed_the_shutdown` gèle le worker par `freeze`. | YA-10 (ticket 38) |
 
+## Message pendant un tour, R4 et X4 (YA-19, ticket 39)
+
+Constat, décisions et plan : `docs/tickets/39-message-pendant-un-tour.md`. Voie B (§17, §18) : le message passe dans la file de l'agent du run en cours, comme chez Unharnessed. La boucle le lit après les résultats des tools, avant son prochain appel du modèle, dans le même run. Le règlement du run vide ce qu'elle n'a pas pris, et l'extension le renvoie en prompt. **Préfixe de prompt inchangé** : prompt système et tools identiques, le message entre en fin d'historique.
+
+**Lignes upstream : +33 dans 8 fichiers, 1 modifiée** (`git diff --stat main`).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, +4) | Dispatch de `_yus/session/steer` (`:1163-1166`). | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/worker.rs` | modif. (fichier upstream, +2) | `mod ya_steer;`. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/worker/input.rs` | modif. (fichier upstream, +4) | Un `Steer` marqué `yaInRun` part vers `worker/ya_steer.rs`, après `require_created`. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/worker/turn.rs` | modif. (fichier upstream, +2) | Au règlement, sous le verrou de `core`, avant `core.busy = false` : `ya_drop_steers`. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/engine.rs` | modif. (fichier upstream, +9) | `ya_steer` et `ya_drop_steers` du trait `SessionEngine`, défauts neutres. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/agent_engine/session_engine_impl.rs` | modif. (fichier upstream, +8) | Les deux méthodes pour `AgentSessionEngine`, déléguées à `agent_engine/ya_steer.rs`. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/agent_engine.rs` | modif. (fichier upstream, +2) | `mod ya_steer;`. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/agent_engine/turn/run_once.rs` | modif. (fichier upstream, +2, 1 modifiée) | La garde des lignes user laisse passer, dès le premier run d'une livraison, la ligne d'un message envoyé dans le run (`is_steered`). Sans elle, cette ligne irait au modèle sans être écrite par le worker ni transmise au pont. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/acp/ya_turns/steer.rs` | nouveau | `_yus/session/steer` : porte (tour du pont, D6), blocs, attente du premier message de l'assistant, envoi au worker, `turnStart` `steer` par ligne. Tests U1 à U4. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/acp/ya_turns.rs` | modif. (fichier du fork) | Module `steer`, champ `steers` de `AgentTurns`, ouverture au prompt, lignes lues dans `announce`. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/worker/ya_steer.rs` | nouveau | Sous le verrou de `core` : un run tourne, sinon refus ; message passé au moteur. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/agent_engine/ya_steer.rs` | nouveau | Message passé à l'agent vivant par `turn_agent` (`Agent::steer`), registre (horodatage unique, texte) lu par la garde de `run_once.rs`, vidage au règlement. Test U5. | YA-19 (ticket 39) |
+| `crates/pa-cli/tests/ya_acp_steer_e2e.rs` | nouveau | Vrai binaire en ACP, provider factice, vrai kernel : E1 à E7 (message rattaché au tour, deux messages en un tour, livré une fois et ligne du prompt une fois, reprise, jamais avant le modèle, refus, Stop, tour en échec). | YA-19 (ticket 39) |
+| `extensions/vscode/src/ya/methods.ts` | modif. (fichier du fork) | `_yus/session/steer` servie : « Send now » et Cmd/Ctrl+Entrée pendant un tour. | YA-19 (ticket 39) |
+| `extensions/vscode/src/chat.ts` | modif. (repris d'Unharnessed) | `steerAll` : les messages envoyés dans le tour partent l'un après l'autre, chacun après la réponse au précédent (E2, option a) ; avant, ils partaient en même temps et le pont pouvait les livrer dans un autre ordre. | YA-19 (ticket 39) |
+| `extensions/vscode/test/fake-agent/fake-agent.mjs`, `test/unit/agent.test.ts`, `test/e2e/suite.ts`, `test/e2e/suite-real.ts` | modif. | Prompts `longue` et `échoue`, et `_yus/session/steer` dans l'agent factice ; tests X0 à X3, E7 côté extension, « Send now », parcours vrai binaire. | YA-19 (ticket 39) |
+| `.changes/ya-39-steer.md` | nouveau | Fragment de changelog. | YA-19 (ticket 39) |
+
+Limites (décisions de Yusuf du 25/11/2026) :
+- **TUI attaché** : un TUI attaché qui envoie aussi un message pendant le même tour décale le rattachement des `turnStart`, qui suivent l'ordre des lignes.
+- **D4** : pas de marque de rejeu. Après `session/load`, un message envoyé pendant un tour se rejoue comme un prompt.
+- **D6** : un message pendant un tour lancé par l'agent est refusé. L'extension le garde et l'envoie en prompt après le tour.
+- **Ordre des messages** : l'extension attend la réponse à un message avant d'envoyer le suivant. Un autre client ACP qui envoie sans attendre n'a pas d'ordre garanti : en JSON-RPC, l'ordre de requêtes concurrentes n'est pas garanti, et le pont traite chaque requête à part (`daemon.rs:558-568`).
+- **Message accepté trop tard** : accepté après la dernière lecture de la file par la boucle, il est vidé au règlement du run, puis renvoyé en prompt par l'extension. Ni perte ni doublon.
+
+### À revoir à chaque reprise d'upstream
+
+- `crates/pa-daemon/src/agent_engine/turn/model.rs` et `turn/run_once.rs` : `ya_abort_window` compte les appels de la sonde d'annulation. Une vérification ajoutée par upstream avant celle de l'admission ferait passer le test par l'ancien chemin (ticket 36, `docs/tickets/36-abandon-perdu.md:354`).
+- `crates/pa-daemon/src/agent_engine/turn/run_once.rs`, garde des lignes user (`boundary_passed || is_steered`, ticket 39) : si upstream change la transmission des lignes user de la boucle (`boundary_passed`), la ligne d'un message envoyé pendant un tour peut ne plus être écrite, ou celle du prompt l'être deux fois. E3 (`ya_acp_steer_e2e.rs`) le vérifie.
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

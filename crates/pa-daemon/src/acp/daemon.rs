@@ -1160,6 +1160,10 @@ async fn handle_incoming(
             };
             super::ya_resources::serve(&bound, other, &id, &params, &tx).await;
         }
+        // yusAgent (YA-19, ticket 39): a message into the running prompt turn.
+        super::ya_turns::steer::METHOD => {
+            super::ya_turns::steer::serve(&id, &params, link, state, &tx).await;
+        }
         "session/set_config_option" => {
             handle_set_config_option(id, params, link, state, tx).await;
         }
