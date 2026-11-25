@@ -371,6 +371,24 @@ fn last_authorization(home: &Home) -> String {
         .unwrap_or_else(|| panic!("the model got no request"))
 }
 
+/// The requests' `Authorization` by name, for the assertion messages: the CI log masks a
+/// `Bearer` value.
+fn labels(home: &Home) -> Vec<&'static str> {
+    home.server
+        .authorizations()
+        .iter()
+        .map(
+            |value| match value.strip_prefix("Bearer ").unwrap_or(value) {
+                "sk-ya40-old" | "tok-ya40-old" => "old",
+                "sk-ya40-renewed" | "tok-ya40-renewed" => "renewed",
+                FALLBACK => "fallback",
+                "" => "none",
+                _ => "other",
+            },
+        )
+        .collect()
+}
+
 /// Test 1a (H1): a key rewritten in `auth.json` outside the bridge, as `/login` in a terminal
 /// does, reaches the running session's next request. Red while the session keeps the key it
 /// was built with; outside the bridge, this is ticket E-C's.
@@ -392,7 +410,7 @@ fn h1_an_api_key_rewritten_on_disk_reaches_the_running_session() {
         last_authorization(&home),
         "Bearer sk-ya40-renewed",
         "H1: the running session kept the key it was built with; requests: {:?}",
-        home.server.authorizations()
+        labels(&home)
     );
 }
 
@@ -421,7 +439,7 @@ fn h1_an_oauth_token_renewed_on_disk_reaches_the_running_session() {
         last_authorization(&home),
         "Bearer tok-ya40-renewed",
         "H1: the running session kept the token it was built with; requests: {:?}",
-        home.server.authorizations()
+        labels(&home)
     );
 }
 
@@ -445,7 +463,7 @@ fn set_api_key_pushes_the_key_into_the_running_session() {
         last_authorization(&home),
         "Bearer sk-ya40-renewed",
         "the key set through the bridge serves the next request; requests: {:?}",
-        home.server.authorizations()
+        labels(&home)
     );
 }
 
@@ -487,10 +505,13 @@ fn a_new_key_lists_its_models_in_the_running_conversation() {
 }
 
 /// Test 4: the rows of the providers screen (Unharnessed's shape): the `ChatGPT` subscription by
-/// the browser, `ya40` by a key and connected (its `models.json` key), no Claude subscription.
+/// the browser, `ya40` by a key, connected and removable (its key is in `auth.json`; a
+/// `models.json` key alone does not count as connected in the TUI's rows), no Claude
+/// subscription.
 #[test]
 fn list_gives_the_providers_screen_without_the_claude_subscription() {
     let home = Home::new(false);
+    home.write_auth(&json!({ "ya40": api_key("sk-ya40-old") }));
     let mut client = Client::spawn(&home);
     let _session = client.open();
     let list = client.call("_yus/providers/list", &json!({}));
@@ -510,6 +531,7 @@ fn list_gives_the_providers_screen_without_the_claude_subscription() {
     let ya40 = row("ya40", "apiKey").unwrap_or_else(|| panic!("the ya40 row: {list}"));
     assert_eq!(ya40["login"], "apiKey", "{ya40}");
     assert_eq!(ya40["connected"], true, "{ya40}");
+    assert_eq!(ya40["removable"], true, "{ya40}");
     assert!(
         row("anthropic", "subscription").is_none(),
         "no Claude subscription row: {list}"
