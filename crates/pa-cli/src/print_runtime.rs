@@ -107,6 +107,8 @@ async fn acp_mode_main(options: &RunOptions) -> Result<i32, String> {
         .await
         .map_err(|error| format!("{error:#}"))?;
     let (actual_cwd, create) = daemon_acp_create(options)?;
+    // yusAgent (YA-10, ticket 40): the bridge's provider sign-in runs the TUI's own flows.
+    pa_daemon::acp::daemon::ya_providers::install(ya_acp_providers::sign_in(&options.config));
     pa_daemon::acp::daemon::run_daemon_attached_acp_mode(pa_daemon::acp::daemon::DaemonAcpOptions {
         socket_path,
         actual_cwd,
@@ -482,6 +484,7 @@ pub(crate) async fn build_engine(
 /// set by the product): the script env parse, the per-child queues, and
 /// the scripted engine build.
 mod faux;
+mod ya_acp_providers;
 
 pub(crate) use faux::{
     build_faux_engine_with, faux_response_steps, faux_script_env, FauxChildQueue,

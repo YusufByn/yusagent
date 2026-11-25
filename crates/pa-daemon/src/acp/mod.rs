@@ -62,6 +62,8 @@ fn turn_failure_error(id: &Value, failure: &str, details: &str) -> Value {
     } else {
         classification.category
     };
+    // yusAgent (YA-10, ticket 40): the run guard's credential texts are authentication (H2).
+    let kind = daemon::ya_providers::auth_failure_kind(failure, kind);
     jsonrpc::error_response(
         id,
         jsonrpc::INTERNAL_ERROR,

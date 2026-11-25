@@ -1629,6 +1629,29 @@ Limites (décisions de Yusuf du 25/11/2026) :
 - `crates/pa-daemon/src/agent_engine/turn/model.rs` et `turn/run_once.rs` : `ya_abort_window` compte les appels de la sonde d'annulation. Une vérification ajoutée par upstream avant celle de l'admission ferait passer le test par l'ancien chemin (ticket 36, `docs/tickets/36-abandon-perdu.md:354`).
 - `crates/pa-daemon/src/agent_engine/turn/run_once.rs`, garde des lignes user (`boundary_passed || is_steered`, ticket 39) : si upstream change la transmission des lignes user de la boucle (`boundary_passed`), la ligne d'un message envoyé pendant un tour peut ne plus être écrite, ou celle du prompt l'être deux fois. E3 (`ya_acp_steer_e2e.rs`) le vérifie.
 
+## Fournisseurs et login dans le pont, R5 (YA-10, ticket 40)
+
+Constat, décisions et plan : `docs/tickets/40-login-extension.md` (§10, §15, §16). Option P-B : les flux de login du TUI (`crates/pa-cli/src/provider_login.rs`) servis tels quels par le pont, derrière un trait du fork. Aucune ligne dans `pa-ai`, `pa-core`, `pa-tui` ni dans les fonctions de login de `pa-cli`. **Préfixe de prompt inchangé** : prompt système et tools identiques ; après un changement d'identifiant, `reload` ne change que la clé et les en-têtes.
+
+**Lignes upstream : +13 dans 3 fichiers** (`git diff --stat main`), les seules prévues au §16.1.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, +8) | `pub mod ya_providers;` (`:44-45`) ; `login_cancel` passé au module avant le filtre des requêtes (`:1120-1121`) ; aiguillage des `_yus/providers/*` (`:1167-1170`). | YA-10 (ticket 40) |
+| `crates/pa-daemon/src/acp/mod.rs` | modif. (fichier upstream, +2) | H2 : `turn_failure_error` passe `kind` par `ya_providers::auth_failure_kind` (`:65-66`). | YA-10 (ticket 40) |
+| `crates/pa-cli/src/print_runtime.rs` | modif. (fichier upstream, +3) | Branchement de l'implémentation au lancement du mode ACP (`:110-111`) ; `mod ya_acp_providers;` (`:487`). | YA-10 (ticket 40) |
+| `crates/pa-daemon/src/acp/daemon/ya_providers.rs` | nouveau | Contrat (`ProviderSignIn`, `install`), méthodes `_yus/providers/*` (sans `local_*`), un login à la fois, `login_update`, invites, `login_open`, `login_cancel`, `reload` du worker et relecture des modèles après un changement, H2. | YA-10 (ticket 40) |
+| `crates/pa-daemon/src/acp/daemon/ya_providers_tests.rs` | nouveau | Tests 6 (login) et 7 (H2). | YA-10 (ticket 40) |
+| `crates/pa-cli/src/print_runtime/ya_acp_providers.rs` | nouveau | Implémentation sur `ProviderAuth` : lignes sans la Claude par abonnement, clé, déconnexion, login par un panneau neuf, textes d'échec fixes. Tests 4 et 8 (unitaires). | YA-10 (ticket 40) |
+| `crates/pa-daemon/src/acp/ya_resources.rs` | modif. (fichier du fork) | `token` pour un service du catalogue ajouté par jeton (`pasteToken`), lu dans les `services` de `get_mcp_connections`. Test 13. | YA-10 (ticket 40) |
+| `crates/pa-cli/tests/ya_providers_acp_e2e.rs` | nouveau | Vrai binaire en ACP, modèle intercepté par un serveur local : tests 1a, 1b (H1), 2, 3, 4, 5, 8. | YA-10 (ticket 40) |
+| `bench/tools/sim40.sh` | nouveau | Simulation P-A / P-B et cherry-pick de `a05bcb695`, `dad2232cc` (§11), pour E-C. | YA-10 (ticket 40) |
+
+Limites (§16.2) :
+- un login MCP en attente du navigateur ne s'arrête qu'à sa prochaine invite ou à sa fin (`FlowCancel::mark` est `pub(crate)` dans `pa-tui`) ;
+- double onglet possible : les fonctions de login ouvrent la page elles-mêmes, et « Open » la rouvre ;
+- texte de `token` générique (`<label> token`), le pont n'ayant pas le champ du catalogue.
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

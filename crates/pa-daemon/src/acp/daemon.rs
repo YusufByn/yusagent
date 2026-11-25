@@ -41,6 +41,8 @@ use super::wire_config::{
     picker_options_from_state, refresh_wire_config, HostedConfig,
 };
 use super::wire_events::{self, WireMappingState};
+// yusAgent (YA-10, ticket 40): providers and sign-in (`docs/tickets/40-login-extension.md`).
+pub mod ya_providers;
 
 /// Response timeout for session-scoped commands.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
@@ -1115,6 +1117,8 @@ async fn handle_incoming(
     binding: &DaemonBinding,
     tx: producer::FrameSink,
 ) {
+    // yusAgent (YA-10, ticket 40): the client's `_yus/providers/login_cancel`.
+    ya_providers::notified(&incoming);
     let Incoming::Request { id, method, params } = incoming else {
         return;
     };
@@ -1159,6 +1163,10 @@ async fn handle_incoming(
                 cwd: &options.actual_cwd,
             };
             super::ya_resources::serve(&bound, other, &id, &params, &tx).await;
+        }
+        // yusAgent (YA-10, ticket 40): providers and sign-in (`ya_providers`).
+        other if ya_providers::serves(other) => {
+            ya_providers::serve(other, &id, &params, link, state, &tx).await;
         }
         // yusAgent (YA-19, ticket 39): a message into the running prompt turn.
         super::ya_turns::steer::METHOD => {
