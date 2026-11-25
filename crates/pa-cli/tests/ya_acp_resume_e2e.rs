@@ -422,11 +422,14 @@ fn the_history_lists_conversations_and_deletes_one_with_its_session() {
     let elsewhere = two.call("session/list", &json!({ "cwd": "/" }));
     assert!(listed_ids(&elsewhere).is_empty(), "{elsewhere}");
 
-    // The current conversation is refused.
-    let refused = two.call(
+    // Ticket 32 (decision A): Unharnessed's name is no longer served.
+    let old_name = two.call(
         "_unharnessed/sessions/delete",
         &json!({ "sessionId": two_id }),
     );
+    assert_eq!(old_name["error"]["code"], json!(-32601), "{old_name}");
+    // The current conversation is refused.
+    let refused = two.call("_yus/sessions/delete", &json!({ "sessionId": two_id }));
     assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
     // One open in another client is refused.
     let mut holder = Client::spawn(&home, &["--resume", one_path.to_str().unwrap()]);
@@ -436,10 +439,7 @@ fn the_history_lists_conversations_and_deletes_one_with_its_session() {
         &json!({ "sessionId": one_id, "mcpServers": [] }),
     );
     assert!(held.get("result").is_some(), "{held}");
-    let refused = two.call(
-        "_unharnessed/sessions/delete",
-        &json!({ "sessionId": one_id }),
-    );
+    let refused = two.call("_yus/sessions/delete", &json!({ "sessionId": one_id }));
     assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
     holder.close();
 
@@ -463,10 +463,7 @@ fn the_history_lists_conversations_and_deletes_one_with_its_session() {
         "the window snapshot is there before the delete: {:?}",
         session_files(&one_path)
     );
-    let deleted = two.call(
-        "_unharnessed/sessions/delete",
-        &json!({ "sessionId": one_id }),
-    );
+    let deleted = two.call("_yus/sessions/delete", &json!({ "sessionId": one_id }));
     assert_eq!(deleted["result"], json!({}), "{deleted}");
     assert!(!one_path.exists(), "the file is deleted");
     // The sidecars named after it go too (window snapshot, scan state written as the worker stops).

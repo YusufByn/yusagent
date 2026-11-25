@@ -1,0 +1,1 @@
+- yusAgent: the ACP bridge serves the conversation delete as `_yus/sessions/delete`; Unharnessed's `_unharnessed/sessions/delete` now answers "Method not found". The VS Code extension calls the new name, names the methods the bridge does not serve yet under `_yus/*`, no longer reads `_meta.unharnessed`, and drops the hidden Instructions settings tab.

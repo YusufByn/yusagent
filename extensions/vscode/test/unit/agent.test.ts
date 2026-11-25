@@ -368,7 +368,8 @@ test("yaMeta : notre espace de noms, champs du pont tels quels (ticket 25 : turn
   assert.deepEqual(yaMeta({ sessionUpdate: "agent_message_chunk", _meta: meta({ phase: "event" }) }), { promptTurnId: 3, phase: "event" });
   const boundary = { sessionUpdate: "session_info_update", _meta: meta({ phase: "responseBoundary", outcome: "result" }) };
   assert.deepEqual(yaMeta(boundary), { promptTurnId: 3, phase: "responseBoundary", outcome: "result" });
-  assert.deepEqual(yaMeta({ sessionUpdate: "x", _meta: { unharnessed: { promptTurnId: 1 } } }), { promptTurnId: 1 });
+  // Ticket 32 : l'ancienne clé d'Unharnessed, que personne n'envoie, n'est plus lue.
+  assert.deepEqual(yaMeta({ sessionUpdate: "x", _meta: { unharnessed: { promptTurnId: 1 } } }), {});
   assert.deepEqual(yaMeta({ sessionUpdate: "x" }), {});
 });
 
