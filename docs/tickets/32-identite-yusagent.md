@@ -339,3 +339,18 @@ Restent verts au push 1 : les autres unitaires, l'e2e de l'agent factice (15/15)
 3. `_yus/sessions/delete` ou `_yus/session/delete` (§3 ; proposé : `sessions`).
 4. Onglet Instructions : supprimer maintenant (proposé) ou garder pour la passe de design (§4).
 5. `--unharnessed` de `ya09-bash-count.py` : garder (proposé : il désigne le dépôt mesuré) (§1.3).
+
+## 9. Décisions de Yusuf (25/11/2026)
+
+1. **A** : coupure nette. Le pont ne sert que `_yus/sessions/delete`, sans l'ancien nom.
+2. **Option 1** : `turnStart`, `turnEnd` et `saved` gardés. Aucun fichier upstream touché.
+3. **`_yus/sessions/delete`** (pluriel). Les méthodes non servies passent aux noms `_yus/*` du §3.
+4. **Onglet Instructions supprimé maintenant**, code et tests compris.
+5. **Option `--unharnessed` de `ya09-bash-count.py` gardée.**
+6. **Ajouts** :
+   - suppression du code mort qui lit `_meta.unharnessed` (`src/ya/meta.ts:17`, `:37`, `src/chat.ts:1112`, `src/session.ts:190`) ;
+   - `--uh-accent-rgb` et `--uh-glow-angle` passent à `--ya-accent-rgb` et `--ya-glow-angle`.
+7. **T5** : liste d'exceptions explicite et commentée dans le test (attribution, `turnStart`, `turnEnd`, `saved`, l'option du banc), pour qu'une citation légitime ne le fasse pas passer au rouge.
+8. **Contrôles du push 2** : `compare_capture_prompts.py` (préfixe inchangé) et `compare_frames.py` (0 écart). Compte rendu à chaque push. **Le merge attend le contrôle de Yusuf dans VS Code** (§7.3).
+
+**Écart au §7, signalé à Yusuf** : la branche `ya-32-identite` part de `ya-32-constat` (constat non mergé, non poussé) et non de `main` après son merge. La PR porte donc le constat, ces décisions, les tests et le code.
