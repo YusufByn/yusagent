@@ -408,3 +408,12 @@ Les identifiants de runs sont à remplir après le push 2. Le texte cite des run
 
 - `a56e9ac89` : `git cherry-pick -x 5778afa02`, sans conflit. Seul le sujet reçoit le préfixe `YA-10: ticket 36 :` (règle 12). Le corps d'upstream et la ligne `cherry picked from` sont gardés, et le `patch-id` est identique (`c8f4dae47e46`, `git patch-id`).
 - `beba6631a` : `docs/fork-changes.md` (section du ticket 36 ; entrée « Instabilité probable » de `rlm_children_delete_e2e` retirée).
+- **CI** :
+  - run `ci` 45573576193 : 16 checks requis verts, aucun sauté (`gh pr checks 86 --required`) ;
+  - `ya_abort_window`, le test d'upstream et `rlm_children_delete_e2e` (3,5 s) : `ok` ;
+  - `ya-build-macos-arm64` 45573567590 vert, SHA256 vérifié.
+- **Préfixe** (`DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`, commandes dans la PR #86) : `compare_capture_prompts.py`, smoke bench en capture, `py-example-001`, `main` `75bdd0c10` contre `3765b36ca` :
+  - `resolved` des deux côtés ;
+  - 9 requêtes, **TOUT IDENTIQUE** ;
+  - rien d'écrit dans `~/.yusagent` ni `~/.prime/agent`.
+- **Préfixe de prompt : inchangé.**
