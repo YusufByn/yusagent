@@ -1027,3 +1027,14 @@ cd extensions/vscode && npm run compile-tests && node --require ./out/test/unit/
 3. puis l'assertion `box.click.disabled === false`.
 
 Même chose pour les autres accords de ce fichier qui passent par `answer()` (`:144-148`, `post({ type: "permission" })` direct, qui ne dépend pas de l'armement : à garder tel quel). Si le défaut revient, l'assertion dira « clic sur un bouton désactivé » au lieu d'un délai sur « tour fini ».
+
+**Décision de Yusuf : correction du test dans cette PR.** `suite-real.ts`, premier test :
+- attente du bouton « Allow » actif dans la page (`probe().boxButtons`, `disabled: false`) ;
+- clic ;
+- assertion « clic sur « Allow » actif » : boîte déjà fermée (accord pris), ou clic noté sur un bouton actif (`box.click.disabled === false`).
+
+Les autres accords du fichier, qui passent par `post({ type: "permission" })`, sont inchangés.
+
+**Pas de rouge puis vert pour ce correctif** : la course ne se déclenche pas à volonté. Le justificatif est le journal du job 139311928005 (lignes 973-1029, `call-bash` resté `pending`) et la relance verte (job 139371833601, 19/19).
+
+Contrôle avant le push : `git diff --stat 85d8e91d2 HEAD -- crates/ extensions/vscode/src extensions/vscode/webview` est vide. Le produit est donc identique à `85d8e91d2`.

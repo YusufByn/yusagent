@@ -190,8 +190,21 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "send", text: "cellule bash", images: [] });
       await waitFor(async () => (await tool("call-bash"))?.status === "pending", "carte en attente d'accord", SLOW);
       await shows(BOX, "boîte");
-      await sleep(1_100);
-      await probeInput({ click: "Allow" });
+      // Ticket 39 (§23) : les boutons ne s'arment qu'après `BUTTONS_DELAY_MS` (minuteur du webview) ; une
+      // attente fixe pouvait cliquer un bouton encore désactivé, sans effet. On attend « Allow » actif
+      // dans la page, puis on vérifie l'état du bouton au clic.
+      await waitFor(
+        async () => (await probe())?.boxButtons.some((button) => button.name === "Allow" && !button.disabled),
+        "bouton Allow actif",
+        SLOW,
+      );
+      const clicked = await probeInput({ click: "Allow" });
+      // Boîte déjà fermée (accord pris), ou clic noté sur un bouton actif ; jamais un clic sur un bouton
+      // désactivé (la boîte reste ouverte, `click.disabled` à vrai).
+      assert.ok(
+        clicked && (clicked.box === null || clicked.box.click?.disabled === false),
+        `clic sur « Allow » actif : ${JSON.stringify(clicked?.box)}`,
+      );
       await idle();
       const done = await tool("call-bash");
       assert.equal(done?.status, "done");
