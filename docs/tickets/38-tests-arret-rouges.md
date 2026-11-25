@@ -270,3 +270,26 @@ gh api --allow-escape-sequences repos/YusufByn/yusagent/actions/jobs/13916453961
 gh run view 45595703754 --repo YusufByn/yusagent --json headSha,headBranch,event,createdAt
 git log --oneline c83ac68b3..upstream/main -- crates/pa-tui/src/interactive/run.rs crates/pa-tui/src/interactive/render.rs
 ```
+
+## 8. Exécution
+
+**D3** : le commit du constat est amendé en local (`git commit --amend`), et son sujet devient `YA-10: ticket 38 : constat et plan, deux tests upstream rouges depuis le ticket 36`.
+
+**D1** : reprise de `7ea89013e`.
+
+```
+git cherry-pick -x 7ea89013e            # 2 files changed, 68 insertions(+), 12 deletions(-), sans conflit
+git commit --amend -F <message>          # sujet préfixé « YA-10: ticket 38 : », auteur d'upstream gardé
+git show 7ea89013e | git patch-id --stable
+# 7bdff4daa8690aaa35ad68c05e328368c081e259 7ea89013e2c537f08df05057641c941093799ee6
+git show HEAD | git patch-id --stable
+# 7bdff4daa8690aaa35ad68c05e328368c081e259 <commit de la reprise>
+git diff --stat HEAD upstream/main -- crates/pa-daemon/tests/stop_escalation_e2e.rs crates/pa-daemon/tests/registration_refusal_heal_e2e.rs
+# (vide : les deux fichiers sont identiques à upstream/main, 6e4b69da2)
+```
+
+Rien n'a été compilé en local (règle 8) : la compilation et les tests passent par `ci.yml` sur la PR #89.
+
+**D2** : entrée « Instabilité probable : `interactive_daemon_e2e`, raisons de fermeture (YA-10, ticket 38) » dans `docs/fork-changes.md`.
+
+**`docs/fork-changes.md`** : entrée « Worker gelé par SIGSTOP dans les e2e d'arrêt : reprise de `7ea89013e` d'upstream (YA-10, ticket 38) ».
