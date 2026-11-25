@@ -1598,7 +1598,8 @@ Constat, décisions (D1 à D8, voie A et ses deux écarts) et plan : `docs/ticke
 
 Limites acceptées (décision de Yusuf du 25/11/2026) :
 - **TUI attaché** : un TUI attaché qui envoie aussi un message pendant le même tour décale le rattachement des `turnStart`, qui suivent l'ordre des lignes.
-- **Stop pendant l'envoi** : un message arrivé au worker après le vidage de la file par le Stop peut tourner avant son retrait, alors que l'extension le garde en pause. Doublon possible si Yusuf le relance. Non testable.
+- **Stop pendant l'envoi** : un message arrivé au worker après le vidage de la file par le Stop peut tourner, alors que l'extension le garde en pause. Doublon possible si Yusuf le relance. Non testable. Pas de retrait par le pont (décision du 25/11/2026, option c du §14).
+- **Tour en échec avec un message accepté** : en attente. La condition de F4 ne tient pas, et la voie B est remise en question (ticket, §15).
 - **D4** : pas de marque de rejeu. Après `session/load`, un message envoyé pendant un tour se rejoue comme un prompt.
 - **D6** : un message pendant un tour lancé par l'agent est refusé. L'extension le garde et l'envoie en prompt après le tour.
 - **Routage d'image** : si le premier run est parti sur le modèle d'images, la relance repart sur le modèle de base (`crates/pa-core/src/session_engine/engine.rs:1114-1120`), avec un miss possible.

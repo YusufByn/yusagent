@@ -639,3 +639,108 @@ cd extensions/vscode && npm run compile-tests && node --require ./out/test/unit/
 - Avec la ligne de X4 appliquée le temps de l'essai, puis retirée : 5/5 verts.
 
 Les tests Rust n'ont pas été compilés en local (règle 8). La CI le fera.
+
+## 14. Écart 2 du §13.2 : identification du message et tour en échec (25/11/2026)
+
+Demande de Yusuf : (1) dire comment le module identifie le message à retirer de la file du worker, et s'arrêter avant le code si c'est par le texte ; (2) vérifier qu'après un tour en échec avec un message accepté, l'extension le garde, ni perdu ni doublé, et ajouter un test E7 si le provider factice sait faire échouer un tour. Les lignes de `daemon.rs` sont celles de la branche (`650418714`, +4 lignes après `:1162`). Les autres sont celles de `main`.
+
+### 14.1 Identification : par le texte, donc arrêt avant le code
+
+Le retrait prévu au §13.2, point 2, passe par `mutate_queued_message` `delete`, qui vise **un index et le texte attendu**. Le worker refuse si l'aperçu à cet index diffère du texte (`crates/pa-daemon/src/queue_commands.rs:168`). Un message identique d'un autre client (TUI attaché) dans la même file pourrait donc être supprimé à la place du nôtre. **Pas de code écrit pour ce retrait.**
+
+Ce que le démon offre d'autre :
+
+- **Un identifiant d'admission** :
+  - un `prompt` ou un `prompt_and_wait` qui porte `admissionId` l'enregistre dans le worker et le garde sur l'élément en file (`crates/pa-daemon/src/worker/input.rs:66-76`, `:125`) ;
+  - `cancel_prompt_admission { admissionId, cancelOwned: true }` retire de la file **les seuls éléments de cet identifiant**, ou arrête leur run s'il a commencé (`crates/pa-daemon/src/prompt_admission.rs:556-604`).
+- **Mais le superviseur oublie l'identifiant quand la route se règle** (`prompt_admission.rs:315-321`). Pour un `prompt` sans attente, c'est dès l'acceptation : une annulation ultérieure répond `unknown` sans atteindre le worker (`:377-382`). Il faut donc envoyer le message en `prompt_and_wait`, qui ne répond qu'à la fin de son run.
+- **Le lien du pont coupe ses requêtes à 30 s** (`request`, `daemon.rs:46`, `:173-175`). La variante sans délai, `request_until_close`, est privée (`daemon.rs:191-193`). Il faudrait la passer en `pub(crate)`, soit **une ligne modifiée de plus dans `daemon.rs`**, troisième touche upstream.
+- **Une connexion au démon à part**, ouverte par notre module : pas de ligne upstream, mais un client du démon à réécrire (poignée de main, enveloppes). Lourd.
+
+Options, à trancher par Yusuf :
+- **(a) Identifiant d'admission.**
+  - Le message part en `prompt_and_wait` avec `streamingBehavior: steer` et un `admissionId` à nous (UUID).
+  - `request_until_close` passe en `pub(crate)` (+1 ligne modifiée dans `daemon.rs`).
+  - `seal` attend que les `prompt_and_wait` des messages aient répondu, c'est-à-dire que leurs runs soient réglés. Le compteur « depuis la dernière attente » n'est plus nécessaire.
+  - Le retrait se fait par `cancel_prompt_admission`, qui arrête aussi le run s'il a commencé.
+  - `{}` part à l'envoi : il n'y a pas d'accusé de mise en file. Un refus du worker fait répondre le `prompt_and_wait` en échec ; l'extension renvoie le message à la fin du tour, sans perte ni doublon.
+- **(b) Texte et index.** Comme préparé, avec le risque que tu as nommé.
+- **(c) Aucun retrait.** On s'en remet au vidage de la file par le Stop (`AbortAndClearQueue`). Il reste la course déjà acceptée (« Stop pendant l'envoi »). Aucune ligne upstream, aucun texte. Le §13.2, point 2, est retiré, et U5 redevient le seul test de l'état « tour fini sans fermeture » (sans retrait).
+
+### 14.2 Tour en échec avec un message accepté
+
+Faits, lus dans le code :
+
+- **Le provider factice sait faire échouer un tour** : `{"stopReason": "error", "errorMessage": "…", "delayMs": N}` (`crates/pa-ai/src/providers/faux/script.rs:124-165`). Les relances automatiques sur une erreur scriptée ne sont pas vérifiées.
+- **Pont** : un `PromptAndWait` en échec fait sortir `prompt_turn` avant `seal` (`daemon.rs:1688-1705` sur la branche : frontière d'erreur, `finish_prompt`, réponse d'erreur).
+- **Worker** : un échec ne suspend pas la file. Seuls les abandons et la compaction la suspendent (`crates/pa-daemon/src/worker/commands.rs:335`, `:693`, `crates/pa-daemon/src/worker/lifecycle.rs:460`). Le `TurnRunner` prend la file `steering` dès le règlement du run en échec (`crates/pa-daemon/src/worker/turn.rs:62-72`). Le message part donc dans **son propre run**, presque sûrement avant tout retrait du pont, qui n'agit qu'après la réponse d'échec et `finish_prompt`. Ce run est vu comme un tour lancé par un autre client (`origin: "prompt"`, E4, `ya_turns.rs:104-111`, `:332-352`).
+- **Extension** : un tour en échec passe par `end(…, "failed")` (`extensions/vscode/src/chat.ts:618-621`), puis `requeue()` et `next()` (`:673-675`). Le message envoyé dans le tour est **renvoyé aussitôt en prompt**, sans pause.
+- **Conséquence avec la voie A** : le message tourne une fois dans le worker **et** une fois au renvoi de l'extension. C'est un doublon, quelle que soit l'identification : (a) arrête le run s'il a commencé, mais sa ligne user est déjà enregistrée au début du run.
+
+**E7 tel que demandé** (« message retiré de la file du worker, rien ne tourne, l'extension le garde ») **n'est pas atteignable avec la voie A sans changer le worker** (garder la file après un run en échec) **ou l'extension**. Je ne l'ai pas écrit : il resterait rouge.
+
+Options, à trancher par Yusuf :
+- **(F1) Extension** : après un tour en échec, les messages envoyés dans le tour reviennent en tête de file **en pause**, comme après un Stop, au lieu d'être renvoyés. La livraison du worker est alors la seule copie automatique. Doublon seulement si l'utilisateur relance, comme la limite « Stop pendant l'envoi ». Changement dans `chat.ts` (code repris d'Unharnessed), quelques lignes. E7 devient : « tour en échec : le message tourne une fois (worker), l'extension le garde en pause ». Rouge avec le squelette sur « le message tourne une fois » (rien n'est envoyé).
+- **(F2) Voie B** : Unharnessed vide la file de l'agent à la fin du tour, dans le même processus (`uh:crates/uh-daemon/src/acp/session.rs:126-132`, `prompt.rs:975`). Pas de doublon, mais retour sur D1.
+- **(F3) Limite acceptée** : doublon possible après un tour en échec.
+
+## 15. Décisions de Yusuf sur le §14 (25/11/2026) et condition de F4
+
+### 15.1 Décisions
+
+1. **Option (c)** : aucun retrait de la file du worker. Le Stop la vide déjà (`AbortAndClearQueue`). La course « Stop pendant l'envoi » reste la limite acceptée. Le code de surveillance et de retrait par texte prévu au §13.2, point 2, est abandonné : `Steers::orphaned` et la partie « orpheline » de U5, déjà poussés dans le squelette, seront retirés avec le code.
+2. **Option F4** (ni F1, ni F2, ni F3) : un message accepté par le worker est considéré comme livré. Après un tour en échec, l'extension ne renvoie pas et ne remet pas en file les messages acceptés par `_yus/session/steer` dans ce tour ; le worker les fait tourner. F1 est écarté : il remettrait en pause un message déjà lancé.
+   - **Condition à vérifier avant le code** : le run lancé par le worker après l'échec doit s'afficher dans l'extension, avec la réponse du modèle, par le chemin des tours lancés par l'agent (ticket 25). Sinon : arrêt, réouverture de D1 (voie B), avec le coût exact de B et la liste des limites d'A qu'il garde.
+   - Si la condition tient : test E7.
+
+### 15.2 La condition ne tient pas : course entre la réponse d'échec et le run suivant
+
+Lecture de `650418714` (lignes de la branche pour `daemon.rs`, de `main` ailleurs) :
+
+1. **Côté worker, deux tâches.**
+   - Le `TurnRunner` règle le run en échec, envoie son résultat au `prompt_and_wait` (`crates/pa-daemon/src/worker/turn.rs:1182-1184`), puis reprend aussitôt sa boucle et lance le message de la file `steering` (`turn.rs:62-72`).
+   - La réponse du `prompt_and_wait` part d'une autre tâche, celle de la commande, quand elle reçoit ce résultat (`crates/pa-daemon/src/worker/input.rs:155-161`).
+   - L'`agent_start` du run suivant peut donc partir avant la réponse d'échec.
+2. **Côté pont, deux tâches.**
+   - La boucle d'événements transmet la réponse à `prompt_turn` par un canal (`crates/pa-daemon/src/acp/daemon.rs:463-467`) et continue.
+   - `prompt_turn` appelle `finish_prompt` seulement après la réponse, sur son chemin d'échec (`daemon.rs:1688-1697`).
+3. **Si l'`agent_start` du run suivant passe avant `finish_prompt`**, `AgentTurns::open` le rattache au prompt en échec et n'ouvre pas de tour (`crates/pa-daemon/src/acp/ya_turns.rs:100-103`). La suite :
+   - pas de `turnStart` propre, et ses premières mises à jour portent l'identifiant du tour en échec ;
+   - après `finish_prompt`, ses mises à jour portent le tour 0 ;
+   - son `agent_end` ne ferme rien : aucun tour en cours, donc pas de frontière (`ya_turns.rs:142-153`) ;
+   - côté extension, le tour en échec est déjà fini à la réponse d'erreur (`extensions/vscode/src/chat.ts:618-621`). Une mise à jour du tour 0 sans tour vivant est ignorée (`chat.ts:725-726`). **La réponse du modèle ne s'affiche pas.**
+4. **Si `finish_prompt` passe avant**, le run s'ouvre comme un tour lancé par l'agent (`turnStart` `origin: "prompt"`, E4) et s'affiche. Rien ne garantit cet ordre.
+
+**Arrêt** (décision 2) : la condition ne tient pas. **Pas de code, pas de E7.**
+
+### 15.3 Coût exact de la voie B
+
+Principe :
+- Le pont envoie le message au worker par la commande `Steer` existante, avec un champ en plus (`rest`, par exemple `yaInRun: true`). Ni `pa-types`, ni le superviseur, ni `protocol.rs` ne sont touchés. Que le superviseur transmette bien ce champ au worker est **à vérifier**.
+- Le worker, sous le verrou de son état (`core`), vérifie qu'un run tourne. Il passe le message à la file de l'agent du run (`Agent::steer`, `crates/pa-agent/src/agent.rs:994-1001`). La boucle le prend après les résultats des tools, **dans le même run** (`crates/pa-agent/src/agent_loop/run.rs:163-177`).
+- Le moteur transmet déjà ces lignes user en cours de run au pont et au fichier (`crates/pa-daemon/src/agent_engine/turn/run_once.rs:234-245`, `EngineEvent::UserMessage`). Aucun changement là.
+- Au règlement du run, le worker vide la file de l'agent (`Agent::clear_steering_queue`, `agent.rs:1018`) **sous le même verrou** que `core.busy = false` (`turn.rs:1076-1104`). Le vidage est atomique avec la vérification du worker, comme `drop_steers` chez Unharnessed.
+
+| Fichier upstream | Où (ligne d'insertion) | Lignes | Contenu |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | `:1163-1166` (déjà sur la branche) | +4 | Dispatch, comme en A. L'appel de `seal` (+2) est retiré : le `prompt_and_wait` du prompt couvre le run. |
+| `crates/pa-daemon/src/worker.rs` | après `:49` (`mod commands;`) | +2 | `mod ya_steer;` (module du worker, à nous) |
+| `crates/pa-daemon/src/worker/input.rs` | après `:167`, dans `handle_queue`, avant `resume_queued_input` | +4 | Un `Steer` avec `yaInRun` part vers notre module |
+| `crates/pa-daemon/src/worker/turn.rs` | avant `:1100` (`core.busy = false`, verrou tenu) | +2 | `settle_engine.ya_drop_steers();` |
+| `crates/pa-daemon/src/engine.rs` | après `:428` (`ya_resource_notice`) | +10 | Deux méthodes du trait `SessionEngine` avec défaut neutre : `ya_steer` (refus) et `ya_drop_steers` |
+| `crates/pa-daemon/src/agent_engine/session_engine_impl.rs` | après `:1123` | +8 | Les deux méthodes pour `AgentSessionEngine`, qui délèguent à notre module |
+| `crates/pa-daemon/src/agent_engine.rs` | après `:78` | +2 | `mod ya_steer;` (module du moteur, à nous) |
+
+**Total B : +32 lignes dans 7 fichiers upstream, 0 modifiée.** A : +6 lignes dans 1 fichier. Lignes prévues, à confirmer à l'écriture. Couche providers, `pa-core`, `pa-types`, superviseur : non touchés.
+
+Point technique à traiter en B : `ya_resource_notice` prend le verrou de la session avec `blocking_lock` (`session_engine_impl.rs:1118`), appelé hors du runtime. Une commande du worker tourne dans le runtime : il faudra `try_lock`, ou garder une poignée sur l'agent.
+
+Limites d'A, une à une, avec B :
+- **TUI attaché** (`turnStart` rattachés dans l'ordre des lignes) : **gardée**.
+- **Stop pendant l'envoi** : **disparaît**. La vérification du worker et le vidage au règlement sont sous le même verrou, et le message ne passe jamais par la file `steering`.
+- **Tour en échec** : **plus de doublon**. Le message non pris est vidé au règlement ; l'extension le renvoie en prompt à la fin du tour, comme chez Unharnessed. F4 et le changement de `chat.ts` deviennent inutiles.
+- **Écart 2 (lignes en attente envoyées plus tôt)** et **routage d'image** : **disparaissent**, puisque c'est le même run.
+- **D4, D6** : **gardées**.
+- **Nouveau en B** (comme chez Unharnessed) : un message accepté après la dernière lecture de la file par la boucle est vidé au règlement. L'extension le renvoie en prompt après le tour. Ni perte ni doublon.
+
+Tests avec B : E1 à E5 et les tests de l'extension restent valables. E6 n'a plus de file `steering` à lire : son assertion rouge serait à revoir. U1 à U5 suivent le nouveau module (plus de `seal`). Cache : même forme de requête (§4).
