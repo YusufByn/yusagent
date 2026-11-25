@@ -321,3 +321,195 @@ Les étapes 2 à 5 font des appels réels : à ta main, pas à Claude Code (règ
 7. **Texte d'échec d'auth** : le texte d'Unharnessed (`details` tel quel), ou un texte fixe qui mène à l'écran Providers.
 8. **Jeton MCP** (`set_token`) : rouvert dans ce ticket (le pont donne `token` pour les services `authKind: "api key"`), ou laissé en limite.
 9. **Découpage** : deux PR (R5 puis X5) ou une seule.
+
+## 10. Décisions de Yusuf (25/11/2026)
+
+0. **Politique upstream** : pas de reprise régulière de Prime Agent. De temps en temps, veille dans un clone jetable ; chaque reprise (cherry-pick ou réimplémentation) passe par un ticket avec constat. Portée au journal du CDC et en tête de `docs/fork-changes.md`.
+1. **Pont** : comparer P-A (choix d'Unharnessed) et P-B, sans code : (a) lignes upstream touchées, fichier:ligne ; (b) `a05bcb695` et `dad2232cc` s'appliqueraient-ils encore après chacune (essai `git cherry-pick --no-commit` dans un worktree jetable). Règle : **P-A si elle ne gêne pas ces deux commits, sinon P-B**. Comparaison au §11 ; **choix à confirmer par Yusuf**.
+2. **Connexion expirée** : un login depuis l'extension pousse la nouvelle clé dans les sessions vivantes et relit la liste des modèles (comme Unharnessed). Le test 7 (H1) vient en premier, rouge sur son assertion si H1 est vraie. Rafraîchissement automatique d'un jeton expiré (`a05bcb695`, `dad2232cc`) : ticket à part (E-C), à prioriser si H1 est confirmée.
+3. **Identifiants dans `auth.json`** ; écart au CDC porté au journal.
+4. **Pas de `registerUriHandler`** ; écart au CDC porté au journal ; VS Code distant : collage du code (limite).
+5. **Claude par abonnement caché dans l'extension** (règle 7).
+6. **Serveurs `local_*`** : écran masqué.
+7. **Échec d'auth** : texte fixe qui mène à l'écran Providers (écart à Unharnessed : le texte brut renvoie au TUI). Le classement de l'erreur d'authentification dans le pont (H2) est traité dans ce ticket.
+8. **`set_token` rouvert** (formulaire démasqué, méthode déjà servie). Services du catalogue par OAuth MCP : inclus seulement si le pont les couvre sans coût en plus ; sinon limite (réponse au §13.2).
+9. **Une seule PR**, sauf si la partie pont est lourde : estimation au §13.3, Yusuf tranche.
+
+**Exigence de sécurité** : aucun secret ni URL de login (le `state` est le vérifieur PKCE) dans les journaux, l'Output, les trames journalisées ni les fichiers de session ; un test le vérifie (§12, test 8).
+
+## 11. Comparaison P-A / P-B (décision 1)
+
+Branche `ya-40-constat`. Worktree jetable sur `1ece0ff04` (`$CLAUDE_JOB_DIR/tmp/wt40`), script `sim40.sh` du dossier temporaire de la session, rien compilé (règle 8).
+
+### 11.1 P-A chez nous n'est pas le déplacement d'Unharnessed
+
+- Chez Unharnessed, `4f1a40f6` a déplacé `auth_panel.rs` et `provider_auth.rs` de `uh-cli` vers `uh-daemon`, en renommage simple : 11 et 6 lignes changées (`git show --stat 4f1a40f6`).
+- Chez nous, ces deux fichiers sont dans `pa-tui` et **mélangent le contrat et le rendu du TUI** :
+  - `crates/pa-tui/src/auth_panel.rs` :
+    - le contrat va de `:35` à `:368` : `PrimeTeamOption` `:35`, `PrimeTeamPick` `:44`, `PasteStyle` `:55`, `PastePromptTone` `:64`, `AuthPanelRequest` `:81-129`, `FlowCancel` `:131-180`, `AuthPanelHandle` `:182-368` ;
+    - le panneau rendu commence à `:370` (`AuthPanel`, thème `:18`, presse-papiers `:550`, `:640-647`) ;
+    - l'enum de requêtes porte `TracesSettled` (`:121-124`), qui dépend de `TraceLoginOutcome` (`crates/pa-tui/src/traces.rs:370`).
+  - `crates/pa-tui/src/provider_auth.rs` :
+    - le contrat va de `:17` à `:148` : `AuthType`, `AuthFlow`, `ProviderRow` `:56`, `ProviderAuthOutcome` `:73`, trait `ProviderAuthCommands` `:86-106`, constantes `:121-137` ;
+    - le sélecteur rendu va de `:151` à `:533` (thème `:13`, `render` `:392`).
+  - Le login MCP passe par `pa_tui::client_auth::run_mcp_auth_command` (`crates/pa-cli/src/provider_login.rs:506`), qui reste dans `pa-tui`.
+- P-A chez nous = **scinder** ces deux fichiers upstream.
+  - Déplacer le contrat, environ 330 et 130 lignes, estimation tirée des plages ci-dessus, vers un crate que `pa-tui` et `pa-daemon` voient tous les deux.
+  - Aujourd'hui, `pa-tui` ne dépend que de `pa-types` (`crates/pa-tui/Cargo.toml:9`). La cible serait donc :
+    - `pa-daemon`, comme Unharnessed, ce qui fait **une nouvelle dépendance `pa-tui` → `pa-daemon`** ;
+    - ou `pa-types`, qui a déjà `tokio` (`crates/pa-types/Cargo.toml:13`).
+  - Puis réexporter depuis `crates/pa-tui/src/lib.rs:32` et `:96`, pour que les 13 fichiers qui importent `pa_tui::auth_panel` ou `pa_tui::provider_auth` ne changent pas (`grep -rln`).
+
+### 11.2 (a) Lignes upstream touchées
+
+| | P-A | P-B |
+|---|---|---|
+| `crates/pa-tui/src/auth_panel.rs` | contrat `:35-368` sorti du fichier (environ 330 lignes, estimation) ; variante `TracesSettled` `:121-124` à traiter (déplacer `TraceLoginOutcome`, `crates/pa-tui/src/traces.rs:370`, ou couper l'enum) | aucune |
+| `crates/pa-tui/src/provider_auth.rs` | contrat `:17-148` sorti du fichier (environ 130 lignes, estimation) | aucune |
+| `crates/pa-tui/src/lib.rs` | réexports à la place de `:32` et `:96` | aucune |
+| `crates/pa-tui/Cargo.toml` | + `pa-daemon` (ou rien si la cible est `pa-types`) | aucune |
+| crate cible (`pa-daemon/src/lib.rs` ou `pa-types`) | + 2 modules | aucune |
+| `crates/pa-daemon/src/acp/daemon.rs` | aiguillage des `_yus/providers/*`, sur le modèle de `ya_resources` (`:1154-1161`) : environ 8 lignes ; `login_cancel` et annulation à la déconnexion : quelques lignes (emplacement à lire) | idem |
+| `crates/pa-cli/src/print_runtime.rs` | injection de l'implémentation au lancement du mode ACP, avant `run_daemon_attached_acp_mode` (`:109-110`) : 1 à 3 lignes | idem |
+| Nouveaux fichiers du fork | `acp/ya_providers.rs` (pont) ; l'implémentation dans `pa-cli` | `crates/pa-daemon/src/acp/ya_providers.rs` (pont, trait du fork) ; `crates/pa-cli/src/ya_acp_providers.rs` (implémentation, appelle `ProviderAuth` et traduit `AuthPanelRequest` en `login_update`) |
+
+**Fréquence des changements upstream** sur les fichiers que P-A scinde, depuis le point de fork (`git log c83ac68b3..upstream/main`) :
+- `crates/pa-tui/src/auth_panel.rs` et `provider_auth.rs` : 1 commit (`12a5081ac`, 3 lignes de `provider_auth.rs`) ;
+- `crates/pa-cli/src/print_runtime.rs` : 10 commits ;
+- `crates/pa-daemon/src/acp/daemon.rs` : 6 commits.
+
+### 11.3 (b) `a05bcb695` et `dad2232cc` après chacune
+
+- **Lecture.** Ni `a05bcb695` (40 fichiers) ni `dad2232cc` (22 fichiers) ne touchent `pa-tui`, `print_runtime.rs`, un `Cargo.toml` ou `crates/pa-daemon/src/acp/` (`git show --name-only`). Aucun des deux ne nomme `auth_panel`, `provider_auth`, `AuthPanelHandle`, `ProviderAuthCommands` ou `pa_tui` (`git show <c> | grep`, 0 ligne). Le seul fichier de `pa-cli` touché est `crates/pa-cli/src/lib.rs` (`dad2232cc`, 4 lignes dans `main_impl`).
+- **Essai** : `bash $CLAUDE_JOB_DIR/tmp/sim40.sh $CLAUDE_JOB_DIR/tmp/wt40`. Pour chaque état : `cherry-pick --no-commit a05bcb695`, résolution mécanique de ses conflits, commit, puis `cherry-pick --no-commit dad2232cc`.
+  - P-A est simulé par le déplacement des deux fichiers entiers vers `pa-daemon`, avec réexport et dépendance (pas la scission du §11.1, qui ne touche pas plus de fichiers de ces commits).
+  - P-B est simulé par deux fichiers neufs et une ligne dans `run_acp_mode`.
+
+```
+main | a05 exit=1 conflits: crates/pa-daemon/src/agent_engine/tests.rs  | dad après a05 exit=0 conflits: aucun
+P-A  | a05 exit=1 conflits: crates/pa-daemon/src/agent_engine/tests.rs  | dad après a05 exit=0 conflits: aucun
+P-B  | a05 exit=1 conflits: crates/pa-daemon/src/agent_engine/tests.rs  | dad après a05 exit=0 conflits: aucun
+```
+
+- Le conflit de `a05bcb695` est le même dans les trois cas. Il compte 2 blocs dans le fichier de tests :
+  - `mod live_auth;` à côté de nos modules de tests ;
+  - `pub(crate)` sur `write_compaction_settings`, à côté de notre commentaire YA-01.
+  - Il vient du fork, pas de P-A ni de P-B.
+- **Limite** : application textuelle seulement, rien compilé. Que ces commits compilent et passent sur notre arbre relève du ticket E-C.
+- **Après ces commits, `Reload` existe toujours** (`"reload" =>` en `crates/pa-daemon/src/worker/commands.rs:138` et `reload_live_inputs` sur `upstream/main`). Pousser la nouvelle clé par `Reload` (décision 2) reste valable après E-C.
+
+### 11.4 Ma lecture
+
+- **Selon ta règle, P-A** : elle ne gêne pas les deux commits, mesuré au §11.3.
+- **À peser avant de confirmer** :
+  - chez nous, P-A n'est pas le renommage d'Unharnessed, mais la scission de deux fichiers upstream (environ 460 lignes déplacées, estimation) ;
+  - elle demande aussi une nouvelle dépendance `pa-tui` → `pa-daemon`, ou une place dans `pa-types` ;
+  - ces fichiers changent rarement upstream (1 commit de 3 lignes en 23 jours), mais tout commit futur qui les touche deviendrait un conflit sur fichier déplacé ;
+  - P-B donne le même produit, avec seulement les lignes communes aux deux options (aiguillage, injection).
+- Je n'en tire pas de conclusion : la règle donne P-A, et ces trois points sont des coûts que la règle ne mesurait pas.
+
+## 12. Plan de tests (rouges puis verts sur leur assertion)
+
+- **Fournisseurs** : le provider factice ou des requêtes interceptées, aucun vrai fournisseur (règle 6).
+- **Flux de login** : avec un faux `ProviderAuth` (implémentation de test du trait) et, pour l'échange de jetons, un serveur local scripté.
+- **Push 1** : tests seuls, plus l'agent factice de l'extension aligné. Chaque test échoue sur son assertion, pas sur `-32601` ni sur une compilation. Pour les tests Rust : méthodes servies par un module vide qui répond `-32603`, ou appel direct du worker, selon le test.
+
+**Pont (Rust)**
+
+1. **Test 7 en premier, H1** (`crates/pa-daemon/tests/ya_auth_live_e2e.rs`, nouveau) : démon et worker réels, fournisseur intercepté par un serveur HTTP local (forme de `crates/pa-core/tests/prefix_stability.rs`).
+   - (a) Session construite avec la clé factice `sk-ya40-old`, puis `auth.json` réécrit avec `sk-ya40-new`. Prompt suivant : l'en-tête `Authorization` vaut `sk-ya40-new`. **Rouge attendu si H1 est vraie**, puisque la clé reste `old`.
+   - (b) Identifiant OAuth expiré, serveur de jetons local qui rafraîchit en `tok-new`. Prompt suivant : en-tête `tok-new`. Rouge attendu si H1 est vraie. **Ce cas reste rouge après ce ticket** (le rafraîchissement automatique est E-C) : il part en `#[ignore]` avec le numéro du ticket E-C, une fois son rouge relevé.
+2. **Clé poussée dans la session vivante** : (a) refait par `_yus/providers/set_api_key` au lieu de l'écriture directe. Rouge sur l'en-tête, vert avec le `Reload` du pont.
+3. **Liste des modèles** : après `set_api_key` sur un fournisseur de plus, `config_option_update` porte ses modèles, sans nouvelle `session/new`.
+4. **`_yus/providers/list`** : forme des lignes ; une clé d'environnement apparaît connectée et non supprimable ; **la ligne `anthropic` par abonnement est absente** (décision 5) ; aucun champ ne contient une valeur de clé.
+5. **`set_api_key`** : `auth.json` contient l'entrée, fichier en 0600 ; la réponse `{providers, outcome: "done"}` ne contient pas la clé.
+6. **Login par navigateur** (faux `ProviderAuth` qui émet `url`, `prompt`, puis règle `done`) :
+   - les `login_update` arrivent dans l'ordre ;
+   - `login_answer` est relayé ;
+   - un second `login` est refusé pendant le premier ;
+   - `login_cancel` règle en `cancelled` ;
+   - la fin de stdin annule ;
+   - `login_open` n'ouvre que l'URL du login en cours (ouvreur injecté).
+7. **H2, classement** : les deux textes de la garde (`crates/pa-daemon/src/agent_engine/turn/model.rs:60-64`, `:67-72`) donnent `kind: "authentication"` dans la réponse de `session/prompt`. Rouge sur `"other"`. Le message affiché vient de l'extension (décision 7), `details` garde le texte.
+8. **Aucun secret** :
+   - Avec la clé factice repérable `sk-ya40-secret-…` et un login dont l'URL porte `state=ya40-verifier-…`, aucune de ces deux chaînes n'apparaît dans :
+     - le stderr du pont ;
+     - le JSONL de session et le journal d'usage (`~/.yusagent/sessions/<id>.usage.ndjson`) ;
+     - les trames enregistrées par le banc de capture.
+   - Le serveur de jetons scripté rend en plus un succès malformé qui contient un jeton : la réponse `login` en échec ne doit pas le contenir (§13.1).
+
+**Extension (TypeScript, unitaires contre l'agent factice ; e2e en CI)**
+
+9. `features().providers` vrai, bouton Providers visible. Puce « Connect a provider » quand aucun fournisseur n'est connecté.
+10. SignIn : les `login_update` de l'agent factice s'affichent (URL, invite, attente) ; « Open » envoie `_yus/providers/login_open`.
+11. Écran Local masqué (décision 6). Aucune ligne Claude par abonnement, même si l'agent factice en envoie une (décision 5, défense côté extension).
+12. Échec d'auth : nouveau texte fixe et bouton qui ouvre l'écran Providers (décision 7). Les tests `extensions/vscode/test/unit/agent.test.ts:274-282` et `test/e2e/suite.ts:389-393` passent d'abord au rouge sur l'ancien texte.
+13. `set_token` : le formulaire de jeton s'ouvre pour un service qui a `token` ; `_yus/mcp/set_token` part ; l'Output ne contient pas le jeton.
+14. Output : ni la clé saisie, ni l'URL du login, ni la réponse d'une invite (le canal journalisé de l'extension est lu par le test).
+
+**Banc de capture**
+
+15. Cas `acp_frames.py` : `_yus/providers/list` et `set_api_key` avec une clé factice. Corps des requêtes N et N+1 identiques autour du `Reload` (préfixe) ; transcript sans la clé.
+
+## 13. Points ouverts pour la suite du plan
+
+### 13.1 Constat de sécurité ajouté : nos erreurs OAuth recopient le corps de la réponse
+
+- Dans notre arbre, les erreurs d'échange ou de rafraîchissement de jetons contiennent le corps de la réponse du serveur, qui peut porter un jeton :
+  - `crates/pa-ai/src/oauth/anthropic.rs:311`, `:317`, `:325-337` ;
+  - `crates/pa-ai/src/oauth/openai_codex.rs:325`, `:332-353`.
+- `dad2232cc` corrige exactement cela : « A malformed SUCCESS body can echo credentials back: the errors name the missing field, never the response body », avec un test.
+- Par le pont, ce texte deviendrait le `message` d'un login en échec. L'extension l'affiche, et le journalise dans l'Output (`extensions/vscode/src/providers.ts:144`, `:229`).
+- **Pour tenir l'exigence de sécurité sans toucher `pa-ai`** : le pont ne transmet pas le texte brut d'un échec de flux. Il envoie un texte fixe par cas (échec, annulé, port occupé), et le détail ne va nulle part. Le test 8 le vérifie.
+- `dad2232cc` installe aussi un puits de journaux `pa-ai` sur stderr hors TUI (`crates/pa-cli/src/lib.rs`, 4 lignes). Une fois E-C repris, ces journaux arriveraient dans l'Output de l'extension, à vérifier par le même test.
+
+### 13.2 Catalogue MCP par OAuth (décision 8)
+
+- Le login `mcp:<id>` passe par la même entrée que les fournisseurs : `login_on_panel` aiguille `mcp:*` vers `TerminalMcpAuth` (`crates/pa-cli/src/provider_login.rs:498-518`). Le `Reload` qui suit relit l'auth MCP et rafraîchit l'état MCP (`crates/pa-daemon/src/agent_engine/reload.rs:52-60`).
+- Coût en plus, estimation :
+  - construire une ligne pour `mcp:<id>` (Unharnessed : `mcp_login_row`, `uh:crates/uh-daemon/src/acp/providers.rs:596-607`, 12 lignes) ;
+  - lire l'issue, qui est `ProviderAuthOutcome::Status(String)` et non un succès typé (`provider_login.rs:513-517`) ;
+  - environ 20 lignes.
+- **Ma lecture : couvert pour environ 20 lignes, pas sans aucun coût.** À toi de dire si c'est « sans coût en plus ».
+- **`set_token`** : la méthode est servie, mais le formulaire ne s'ouvre que si `_yus/mcp/list` donne un champ `token` pour le service (`extensions/vscode/webview/SettingsMcp.tsx:239-263`). Le pont ne le donne pas (`crates/pa-daemon/src/acp/ya_resources.rs:441-448`, fichier du fork). Rouvrir `set_token` coûte donc quelques lignes dans le pont, en plus du démasquage.
+
+### 13.3 Taille de la partie pont (décision 9)
+
+**Estimation**, à partir des tailles d'Unharnessed (`uh:crates/uh-daemon/src/acp/providers.rs` 625 lignes, sans `local_*`, qui est dans `uh-core`) et de nos modules du pont (`ya_resources.rs`) ; non mesurée :
+- pont (`ya_providers.rs`) : 500 à 700 lignes ;
+- implémentation dans `pa-cli` : 150 à 250 ;
+- tests Rust (tests 1 à 8) : 600 à 900 ;
+- soit 1 250 à 1 850 lignes de Rust ;
+- côté extension : 100 à 200 lignes, plus 200 à 300 de tests ;
+- avec P-A, il faut ajouter la scission (environ 460 lignes déplacées).
+
+### 13.4 Ouverture du navigateur
+
+- Les fonctions de login de `pa-cli` ouvrent le navigateur **elles-mêmes**, dès que l'URL est connue (`crates/pa-cli/src/subscription_login.rs:46`, `codex_subscription_login.rs:31`, `mcp_login.rs:263`, `prime_inference_login.rs:339`).
+- Réutilisées telles quelles (P-A comme P-B), elles ouvriraient la page dès le clic sur « Sign in », sur la machine du binaire. « Open » de l'extension la rouvrirait.
+- Unharnessed a retiré ces appels (`4f1a40f6`, 5 et 7 lignes dans `subscription_login.rs` et `codex_subscription_login.rs`), pour n'ouvrir que sur clic : la boîte « ouvrir un site externe ? » de VS Code.
+- À trancher :
+  - garder l'ouverture automatique : aucune ligne upstream ;
+  - ou la couper pour le mode ACP : 4 fichiers upstream de `pa-cli`, une condition chacun.
+- En VS Code distant, l'ouverture automatique se ferait sur la machine distante, sans effet ; il reste le collage (décision 4).
+
+### 13.5 H2 : où classer
+
+- Les deux textes de la garde ne sont reconnus par aucune règle (§4.1).
+- **(i) Proposé** : une fonction du fork appelée par `turn_failure_error` (`crates/pa-daemon/src/acp/mod.rs:50-76`, upstream, 1 à 2 lignes). Elle reconnaît les deux textes et donne `kind: "authentication"`. Le classifieur de `pa-core` n'est pas touché.
+- (ii) Ajout au classifieur upstream (`crates/pa-core/src/session_engine/error_classify.rs`). Il compare des messages exacts (`:330-345`) et le nom du fournisseur varie : il faudrait une règle de préfixe.
+- Les textes de la garde sont les mêmes sur `upstream/main` (`turn/model.rs:72`, `:78`), donc E-C ne les change pas.
+
+## 14. Contrôle manuel prévu (Yusuf, VS Code, binaire de la branche)
+
+1. Sauvegarder puis déplacer `~/.yusagent/auth.json`. Ouvrir l'extension : puce « Connect a provider », écran Providers sans ligne Claude par abonnement, sans écran Local.
+2. Prompt sans identifiant : texte fixe et bouton vers l'écran Providers (pas de renvoi au terminal).
+3. **Appel réel, fait par toi** : connexion ChatGPT par abonnement depuis l'écran, avec l'ouverture du navigateur décidée au §13.4. Puis, **sans rouvrir la conversation**, le sélecteur de modèles se remplit et « Réponds seulement : bonjour » répond.
+4. Deuxième conversation ouverte avant le login : son sélecteur se met à jour et elle répond sans être rouverte.
+5. Logout depuis l'écran, puis prompt : texte fixe du point 2.
+6. Clé API d'un fournisseur (si tu en as une) : connectée, sans rouvrir la conversation.
+7. MCP : formulaire de jeton pour un service à jeton (si tu en as un) ; catalogue OAuth selon la décision sur le §13.2.
+8. Output de l'extension : rechercher la clé saisie et `state=` : aucune occurrence.
+9. Remettre `auth.json`.
+
+Les étapes 3 à 7 font des appels réels : à ta main, pas à Claude Code (règle 6). Les scripts de contrôle remis avec la PR seront d'abord lancés par Claude Code sur le binaire de la branche (règle 13).
