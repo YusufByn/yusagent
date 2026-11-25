@@ -392,3 +392,28 @@ En local (Claude Code) : typecheck, lint et build OK. `npm run test:unit` : `ℹ
 **Références de `main` pour les comparaisons.** Le binaire en cache `8e0ea28d4` a des `crates/` et un runtime identiques à `main` (`git diff --stat 8e0ea28d4 085d06962 -- crates prime-agent-runtime` vide). Avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short` :
 - `python3 -I bench/smoke/run.py --binary <8e0ea28d4>/yusagent --model gpt-6.1-sol --tasks py-example-001 --capture` : `resolved`, dans `bench/smoke/runs/20261125T100418Z-8e0ea28-gpt-6.1-sol` ;
 - `python3 -I bench/tools/capture/acp_frames.py --binary <8e0ea28d4>/yusagent --out <dossier>` : A 26 trames, B 14, C 44, `CONFORME`.
+
+### 10.3 Run du push 2 (`b591c4ff5`) et contrôles sur le binaire de la branche
+
+- **CI** :
+  - `ci` 45593048712 : succès ;
+  - `ya-extension` 45593048816 : unitaires 70/70, e2e de l'agent factice 15/15, e2e du vrai binaire 18/18, aucun processus restant, `.vsix` 201 329 octets (200 848 au ticket 31, avant la feuille `ya-settings.css` ; non comparable tel quel) ;
+  - `ya-build-macos-arm64` 45593033169 : succès ;
+  - `gh pr checks 88 --required` : 16 `pass`.
+  - Le build macOS du push 1 (45590721669) a été annulé par le push 2, comme prévu : sans code du produit, son binaire ne servait à rien.
+- **Binaire** `b591c4ff527dfe4e7e229d27ca8896d546965ef4`, installé par `bash bench/smoke/tools/install-bin.sh 45593033169` (SHA256 vérifié). Toutes les commandes ci-dessous tournent avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`.
+- **`acp_frames.py --binary <b591c4ff5>/yusagent`** : A 26 trames, B 14, C 44 (refus D1, skill créé, `manual`, une notice), aucun processus restant, `CONFORME`.
+- **`compare_frames.py <dossier>`** (agent factice) : 25 comparaisons `IDENTIQUE`, 0 `DIFFÉRENT`, `écarts : 0`, exit 0.
+- **`compare_frames.py <dossier> --against <dossier de 8e0ea28d4>`** : A, B et C `IDENTIQUE`, `écarts : 0`, exit 0. Seule la suppression change sur le fil.
+- **Préfixe** :
+  - commande : `python3 -I bench/smoke/run.py --binary <b591c4ff5>/yusagent --model gpt-6.1-sol --tasks py-example-001 --capture` (`resolved`), puis `python3 -I bench/smoke/tools/compare_capture_prompts.py bench/smoke/runs/20261125T100418Z-8e0ea28-gpt-6.1-sol bench/smoke/runs/20261125T102936Z-b591c4f-gpt-6.1-sol` ;
+  - résultat : 9 requêtes de chaque côté, mêmes noms, instructions, tools, input et autres clés identiques (5 167 caractères d'instructions des deux côtés), **TOUT IDENTIQUE**, exit 0. **Préfixe de prompt inchangé.**
+- **`delete_files_check.py`** : corbeille, suppression `{}` sous `_yus/sessions/delete`, reste `[]` ; conversation vide, fin du pont, reste `[]` ; `CONFORME`.
+- **`empty_delete_probe.py`** : `NON CONFORME`, **sans lien avec ce ticket.**
+  - Réponse `-32602` « No saved conversation … in this folder », et non `-32601` : la méthode est bien servie.
+  - La conversation vide n'existe déjà plus (`A_fichier_apres : false`, worker et kernel de A arrêtés).
+  - Même résultat sur `main` : version de `main` de la sonde (`git show origin/main:…`, copie temporaire retirée ensuite) sur le binaire `8e0ea28d4`, même réponse, `NON CONFORME`.
+  - Cause : la sonde est un « Contrôle avant X1 » (ticket 28, D2). Depuis le défaut 2 de X1, le pont supprime lui-même une conversation neuve vide à la fin de stdin (`drop_if_empty`, `src/ya/empty.ts:9-10`) : la suppression demandée ensuite ne trouve plus rien. Sonde périmée, non corrigée ici (périmètre).
+- **`git grep -n unharnessed -- extensions/vscode/src extensions/vscode/webview extensions/vscode/test/fake-agent crates bench prime-agent-runtime`** : restent seulement les lignes des exceptions de T5 (attribution, citations de source, option du banc, tests de l'ancien nom).
+
+**Fichiers upstream** : aucun. **Préfixe de prompt** : inchangé (vérifié ci-dessus). **Merge** : attend le contrôle de Yusuf dans VS Code (§7.3), sur le `.vsix` du run `ya-extension` du dernier commit et le binaire `b591c4ff5`. Le dernier commit n'est que de la doc : le code sous `crates/` est celui de `b591c4ff5`.
