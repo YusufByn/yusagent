@@ -887,3 +887,23 @@ Runs `ci` 45634791032 et `ya-extension` 45634791003. `check + clippy (workspace)
 | `suite.ts` « Send now » | idem | 1103-1112 | `covered` ≠ `clicked`, e2e 15/16 |
 | `suite-real.ts` | 45634791003 / 139277234314 | 1001-1017 | « le message suit le résultat, une réponse » ; 18/19 |
 | `Check changelog fragment` | — | — | Vert (`.changes/ya-39-steer.md`) |
+
+### 19.2 Push 2 de B (`ca6e90985`) : code sans le vidage au règlement
+
+Runs `ci` 45637924855 et `ya-extension` 45637924952. `ya-extension` vert (X4 servi). Un seul job en échec : shard 5/8, job 139288647900 (journal 1300-1338, 4 passés, 3 en échec).
+
+| Test | Ligne | Résultat |
+|---|---|---|
+| E6 `stop_with_a_steer_waiting` | `:749`, journal 1320 | **Rouge, comme prévu** : « the message never runs » `Some(4)` ≠ `None`. Le message resté dans la file de l'agent est parti au début du run du prompt suivant |
+| E7 `a_failed_turn_drops_the_message_it_did_not_take` | `:808`, journal 1312 | **Rouge, comme prévu** : « the message runs once » 2 ≠ 1 |
+| E1, E3, E4, E5 | — | Verts (E3 avec la ligne du prompt écrite une fois et la reprise) |
+| **E2 `two_steers_go_in_one_model_turn`** | `:533`, journal 1327 | **Rouge, non prévu.** Lignes : `[…, toolResult, user "second note", user "first note", assistant "both answered"]` |
+| U1 à U5, `ya_abort_window` | shard 3/8 | Verts |
+
+**Constat E2 : l'ordre de deux messages envoyés coup sur coup n'est pas garanti.**
+- Le pont traite chaque requête hors prompt, fermeture et annulation dans une tâche à part (`tokio::spawn`, `crates/pa-daemon/src/acp/daemon.rs:558-568`). Deux `_yus/session/steer` envoyés sans attendre la réponse du premier, comme le fait l'extension (`steerAll` lance chaque envoi sans l'attendre, `extensions/vscode/src/chat.ts:448-457`), atteignent le worker dans un ordre quelconque.
+- Ici l'ordre a été inversé. Le runtime exécute souvent en premier la tâche lancée le plus récemment, mais rien ne fixe l'ordre.
+- Les deux messages partent bien dans un seul tour du modèle, avec une réponse. Mais l'extension rattache les `turnStart` aux messages dans l'ordre où elle les a envoyés (`joined`, `chat.ts:822-850`). Le texte affiché sous chaque tour peut donc être inversé.
+- Notre module ne peut pas retrouver l'ordre des trames sans accroche dans la boucle de lecture du pont (`daemon.rs`). Unharnessed a la même concurrence côté client.
+
+Choix à soumettre à Yusuf (§20).
