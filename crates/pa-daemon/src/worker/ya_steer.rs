@@ -7,14 +7,11 @@
 //! (`SessionEngine::ya_steer`); the run's settle drops what it did not take
 //! (`SessionEngine::ya_drop_steers`, `turn.rs`) under the same lock, before the worker goes idle.
 //! The message never enters the `steering` lane: it cannot outlive its run, nor cut it.
-//!
-//! Ticket 39, push 1 of path B: the signatures only; the behavior comes with the next push.
-#![allow(dead_code)] // Ticket 39, push 1: the skeleton.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::Worker;
-use crate::protocol::{response_failure, DaemonResponse};
+use crate::protocol::{response_failure, response_success, DaemonResponse};
 
 /// The `Steer` field that sends the message into the running run.
 pub(crate) const IN_RUN: &str = "yaInRun";
@@ -24,15 +21,31 @@ pub(crate) const OVER: &str = "The turn is over: send it as a prompt.";
 
 /// A `Steer` for the running run.
 pub(super) fn wanted(payload: &Value) -> bool {
-    let _ = payload;
-    false
+    payload.get(IN_RUN).and_then(Value::as_bool) == Some(true)
 }
 
 impl Worker {
-    /// The message into the running run, or a refusal.
-    #[allow(clippy::unused_self)] // Ticket 39, push 1.
+    /// The message into the running run, or a refusal. The core lock is held while the engine
+    /// takes it: the settle drops the run's untaken messages under the same lock, before the
+    /// worker goes idle, so a message never outlives the run it joined.
     pub(super) fn ya_steer(&self, payload: &Value) -> DaemonResponse {
-        let _ = payload;
-        response_failure(None, "steer", OVER, None)
+        let message = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if message.is_empty() {
+            return response_failure(None, "steer", "Steer cannot be empty", None);
+        }
+        let core = self.core.lock().unwrap();
+        let running = core.busy
+            && !core.abort_requested
+            && !core.turn_cancelled
+            && !core.compacting
+            && !core.shutdown_requested;
+        if !running || !self.engine.ya_steer(message) {
+            return response_failure(None, "steer", OVER, None);
+        }
+        drop(core);
+        response_success(None, "steer", Some(json!({ "inRun": true })))
     }
 }

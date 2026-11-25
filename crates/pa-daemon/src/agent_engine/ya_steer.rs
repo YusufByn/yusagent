@@ -17,17 +17,30 @@
 //!   are past before any message is registered;
 //! - the settle drops the registered messages with the agent's queue: none survives its run.
 //!
-//! Ticket 39, push 1 of path B: the signatures only; the behavior comes with the next push.
-#![allow(dead_code)] // Ticket 39, push 1: the skeleton.
+//! Ticket 39, push 2 of path B: everything but the settle's drop, which comes with push 3.
 
-use pa_agent::types::AgentMessage;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Mutex, PoisonError};
+
+use pa_agent::types::{AgentMessage, Message, TextContent, UserContent, UserMessage, UserPart};
 
 use super::AgentSessionEngine;
 
+/// The messages passed to the agent's queue whose row did not go by: (timestamp, text).
+static REGISTRY: Mutex<Vec<(i64, String)>> = Mutex::new(Vec::new());
+
+/// The last timestamp taken by a message.
+static LAST: AtomicI64 = AtomicI64::new(0);
+
 /// The message into the live agent's queue; `false` when no agent takes it.
 pub(super) fn steer(engine: &AgentSessionEngine, text: &str) -> bool {
-    let _ = (engine, text);
-    false
+    let agent = engine.turn_agent.lock().expect("turn agent lock").clone();
+    let Some(agent) = agent else {
+        return false;
+    };
+    let now = i64::try_from(super::artifacts::now_millis()).unwrap_or(i64::MAX);
+    agent.steer(register(text, now));
+    true
 }
 
 /// The run settled: the messages it did not take leave the agent's queue and the registry.
@@ -37,24 +50,71 @@ pub(super) fn drop_steers(engine: &AgentSessionEngine) {
 
 /// The row of a message passed to the agent's queue, recognized once.
 pub(super) fn is_steered(message: &AgentMessage) -> bool {
-    let _ = message;
-    false
+    let Some((timestamp, text)) = key_of(message) else {
+        return false;
+    };
+    let mut registry = REGISTRY.lock().unwrap_or_else(PoisonError::into_inner);
+    match registry
+        .iter()
+        .position(|(at, registered)| *at == timestamp && registered == text)
+    {
+        Some(found) => {
+            registry.remove(found);
+            true
+        }
+        None => false,
+    }
+}
+
+/// A user message's key: its timestamp and its one text block.
+fn key_of(message: &AgentMessage) -> Option<(i64, &str)> {
+    let AgentMessage::Standard(Message::User(user)) = message else {
+        return None;
+    };
+    let text = match &user.content {
+        UserContent::Text(text) => text.as_str(),
+        UserContent::Parts(parts) => match parts.as_slice() {
+            [UserPart::Text(part)] => part.text.as_str(),
+            _ => return None,
+        },
+    };
+    Some((user.timestamp, text))
 }
 
 /// The registry's key of a new message: a timestamp strictly above the last one taken.
 fn next_timestamp(now: i64) -> i64 {
-    let _ = now;
-    0
+    let previous = LAST
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
+            Some(now.max(last.saturating_add(1)))
+        })
+        .unwrap_or(now);
+    now.max(previous.saturating_add(1))
 }
 
 /// The message as the loop takes it, registered.
 fn register(text: &str, now: i64) -> AgentMessage {
-    let _ = now;
-    AgentMessage::user(text)
+    let timestamp = next_timestamp(now);
+    REGISTRY
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((timestamp, text.to_string()));
+    AgentMessage::Standard(Message::User(UserMessage {
+        content: UserContent::Parts(vec![UserPart::Text(TextContent {
+            text: text.to_string(),
+            text_signature: None,
+        })]),
+        timestamp,
+    }))
 }
 
 /// The registered messages leave the registry.
-fn forget_all() {}
+#[allow(dead_code)] // Ticket 39, push 2: the settle's drop calls it in push 3.
+fn forget_all() {
+    REGISTRY
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+}
 
 #[cfg(test)]
 mod tests {

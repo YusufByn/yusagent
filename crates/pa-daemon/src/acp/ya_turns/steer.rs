@@ -19,21 +19,28 @@
 //! running prompt turn of this client, is a turn the agent started (D6), or no run takes the
 //! message; with `-32602` (`data.details`) for invalid blocks, images, or a session command.
 //!
-//! Ticket 39, push 1 of path B: the signatures only; the behavior comes with the next push.
-#![allow(dead_code)] // Ticket 39, push 1: the skeleton.
+//! Ticket 39, push 2 of path B.
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use pa_types::daemon::{DaemonCommand, PromptInput};
+use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
 
 use super::super::daemon::{DaemonAcpState, DaemonLink};
 use super::super::jsonrpc;
 use super::super::producer::FrameSink;
-use super::TurnStartMeta;
+use super::super::types::{AdmittedPrompt, PromptParams};
+use super::{TurnStartMeta, PROMPT_WAIT_POLL};
 
 /// The method (ticket 32 name).
 pub(crate) const METHOD: &str = "_yus/session/steer";
+
+/// The refusal of a message that cannot join the turn (Unharnessed's text).
+const OVER: &str = "The turn is over: send it as a prompt.";
+
+/// The `Steer` field that sends the message into the running run (`worker/ya_steer.rs`).
+const IN_RUN: &str = "yaInRun";
 
 /// The messages sent into one prompt turn of this client.
 #[derive(Debug, Default)]
@@ -57,32 +64,62 @@ pub(crate) enum Gate {
     Send,
 }
 
-#[allow(clippy::unused_self)] // Ticket 39, push 1.
 impl Steers {
     /// A prompt turn of this client starts.
     pub(crate) fn open(&mut self, turn: u64) {
-        let _ = turn;
+        *self = Steers {
+            turn,
+            ..Steers::default()
+        };
     }
 
     /// A message for `turn` (the request's `turn`), the bridge's active turn being `active`.
     pub(crate) fn gate(&self, turn: Option<u64>, active: u64, agent_turn: bool) -> Gate {
-        let _ = (turn, active, agent_turn);
-        Gate::Send
+        if self.turn == 0 || turn != Some(self.turn) || active != self.turn || agent_turn {
+            Gate::Refuse
+        } else if self.model_started {
+            Gate::Send
+        } else {
+            Gate::WaitModel
+        }
     }
 
     /// A message goes to the worker: its `turnStart` is due at its row.
-    pub(crate) fn sent(&mut self) {}
+    pub(crate) fn sent(&mut self) {
+        self.pending += 1;
+    }
 
     /// The worker refused the message sent into `turn`: no row will come for it.
     pub(crate) fn refused(&mut self, turn: u64) {
-        let _ = turn;
+        if turn == self.turn {
+            self.pending = self.pending.saturating_sub(1);
+        }
     }
 
     /// A worker event of the bridge's active turn `active`: `Some(turn)` when it is the row of a
     /// message sent into the turn, which opens its `turnStart`.
     pub(crate) fn row(&mut self, event: &Value, active: u64) -> Option<u64> {
-        let _ = (event, active);
-        None
+        if self.turn == 0
+            || active != self.turn
+            || event.get("type").and_then(Value::as_str) != Some("message_start")
+        {
+            return None;
+        }
+        match event
+            .get("message")
+            .and_then(|message| message.get("role"))
+            .and_then(Value::as_str)
+        {
+            Some("assistant") => {
+                self.model_started = true;
+                None
+            }
+            Some("user") if self.model_started && self.pending > 0 => {
+                self.pending -= 1;
+                Some(self.turn)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -91,8 +128,58 @@ pub(crate) fn steer_start() -> TurnStartMeta {
     TurnStartMeta::new("steer", None)
 }
 
+/// What the gate says now, for the session `session_id`.
+enum Now {
+    Refuse,
+    Wait,
+    /// Sent (reserved when asked): the daemon session and the turn.
+    Send(String, u64),
+}
+
+/// The gate under the session state lock; `reserve` counts the message as sent when it goes.
+async fn gate_now(
+    state: &Arc<Mutex<DaemonAcpState>>,
+    session_id: &str,
+    turn: Option<u64>,
+    reserve: bool,
+) -> Now {
+    let mut guard = state.lock().await;
+    let closing = guard.session_close_done.is_some();
+    let Some(hosted) = guard
+        .session
+        .as_mut()
+        .filter(|hosted| hosted.acp_session_id == session_id)
+    else {
+        return Now::Refuse;
+    };
+    if closing {
+        return Now::Refuse;
+    }
+    let active = hosted.producer.active_prompt_turn().await;
+    let agent_turn = hosted.ya_turns.busy();
+    match hosted.ya_turns.steers.gate(turn, active, agent_turn) {
+        Gate::Refuse => Now::Refuse,
+        Gate::WaitModel => Now::Wait,
+        Gate::Send => {
+            if reserve {
+                hosted.ya_turns.steers.sent();
+            }
+            Now::Send(hosted.daemon_active_session_id.clone(), active)
+        }
+    }
+}
+
+/// `-32602` with `data.details`, as Unharnessed.
+fn invalid(id: &Value, details: &str) -> Value {
+    jsonrpc::error_response(
+        id,
+        jsonrpc::INVALID_PARAMS,
+        "Invalid params",
+        Some(&json!({ "details": details })),
+    )
+}
+
 /// `_yus/session/steer`.
-#[allow(clippy::unused_async)] // Ticket 39, push 1.
 pub(crate) async fn serve(
     id: &Value,
     params: &Value,
@@ -100,8 +187,77 @@ pub(crate) async fn serve(
     state: &Arc<Mutex<DaemonAcpState>>,
     tx: &FrameSink,
 ) {
-    let _ = (params, link, state);
-    let _ = tx.send(jsonrpc::response(id, &json!({})));
+    let turn = params.get("turn").and_then(Value::as_u64);
+    let params = PromptParams::parse(params);
+    // The turn first, then the blocks (Unharnessed's order).
+    if matches!(
+        gate_now(state, &params.session_id, turn, false).await,
+        Now::Refuse
+    ) {
+        let _ = tx.send(super::super::internal_error(id, OVER));
+        return;
+    }
+    let prompt = match AdmittedPrompt::parse(&params.prompt) {
+        Ok(prompt) => prompt,
+        Err(error) => {
+            let _ = tx.send(invalid(id, &error.to_string()));
+            return;
+        }
+    };
+    if !prompt.images.is_empty() {
+        let _ = tx.send(invalid(
+            id,
+            "Images cannot join a running turn: send them as a prompt.",
+        ));
+        return;
+    }
+    if crate::session_commands::parse_prompt_session_command(&prompt.text).is_some() {
+        let _ = tx.send(invalid(id, "A command cannot join a running turn."));
+        return;
+    }
+    // The model started: the run's admitted rows are past (`agent_engine/ya_steer.rs`).
+    let (daemon_session_id, steer_turn) = loop {
+        match gate_now(state, &params.session_id, turn, true).await {
+            Now::Refuse => {
+                let _ = tx.send(super::super::internal_error(id, OVER));
+                return;
+            }
+            Now::Wait => tokio::time::sleep(PROMPT_WAIT_POLL).await,
+            Now::Send(daemon_session_id, steer_turn) => break (daemon_session_id, steer_turn),
+        }
+    };
+    let mut rest = Map::new();
+    rest.insert(IN_RUN.to_string(), json!(true));
+    let sent = link
+        .request(DaemonCommand::Steer {
+            id: None,
+            active_session_id: daemon_session_id,
+            message: prompt.text,
+            input: PromptInput {
+                content: None,
+                images: None,
+                streaming_behavior: None,
+                queue_if_busy: None,
+                expand_prompt_templates: None,
+                source: None,
+                agent_message_id: None,
+                custom_message: None,
+                queue_key: None,
+                prefix_messages: None,
+                admission_id: None,
+                rlm_notice_nonce: None,
+            },
+            rest,
+        })
+        .await;
+    if sent.is_ok_and(|response| response.success) {
+        let _ = tx.send(jsonrpc::response(id, &json!({})));
+        return;
+    }
+    if let Some(hosted) = state.lock().await.session.as_mut() {
+        hosted.ya_turns.steers.refused(steer_turn);
+    }
+    let _ = tx.send(super::super::internal_error(id, OVER));
 }
 
 #[cfg(test)]

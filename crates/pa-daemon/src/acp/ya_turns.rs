@@ -65,7 +65,6 @@ pub(crate) struct AgentTurns {
     /// The worker turn running outside a prompt of this client.
     running: Option<AgentTurn>,
     /// yusAgent (YA-19, ticket 39): the messages sent into the running prompt turn.
-    #[allow(dead_code)] // Ticket 39, push 1: the skeleton.
     steers: steer::Steers,
 }
 
@@ -125,6 +124,11 @@ impl AgentTurns {
         has_updates: bool,
         producer: &UpdateProducer,
     ) {
+        // yusAgent (YA-19, ticket 39): the row of a message sent into the prompt turn.
+        let active = producer.active_prompt_turn().await;
+        if let Some(turn) = self.steers.row(event, active) {
+            publish_turn_start(producer, turn, steer::steer_start()).await;
+        }
         let Some(turn) = self.running.as_mut().filter(|turn| !turn.announced) else {
             return;
         };
@@ -250,13 +254,18 @@ pub(crate) async fn begin_prompt(
 ) -> u64 {
     loop {
         {
-            let guard = state.lock().await;
+            let mut guard = state.lock().await;
             let busy = guard
                 .session
                 .as_ref()
                 .is_some_and(|hosted| hosted.ya_turns.busy());
             if !busy {
-                return producer.begin_prompt().await;
+                let turn = producer.begin_prompt().await;
+                // yusAgent (YA-19, ticket 39): the messages this turn may take.
+                if let Some(hosted) = guard.session.as_mut() {
+                    hosted.ya_turns.steers.open(turn);
+                }
+                return turn;
             }
         }
         tokio::time::sleep(PROMPT_WAIT_POLL).await;
