@@ -343,6 +343,19 @@ async function onPrompt(id, text) {
       }
       return finish(id);
     }
+    // Ticket 39 (E7) : le tour échoue après avoir accepté un message qu'il n'a pas pris, comme le pont
+    // quand le run échoue (le worker vide la file de l'agent au règlement) : réponse d'erreur, pas de
+    // `turnStart` `steer`.
+    case "échoue": {
+      update({ sessionUpdate: "tool_call", toolCallId: "call-e", title: "Python cell", kind: "execute", status: "in_progress", rawInput: { code: "1" } });
+      await new Promise((resolve) => {
+        steerable = { turn: promptTurnId, take: () => undefined, fail: resolve };
+        setTimeout(resolve, 3000);
+      });
+      steerable = null;
+      steered.length = 0;
+      return fail(id, -32603, "Internal error", { details: "yusagent turn failed: scripted provider failure" });
+    }
     default:
       chunk(`écho : ${text}`);
       return finish(id);
@@ -359,8 +372,13 @@ function onSteer(id, params) {
   if (text.startsWith("refusé")) return over();
   respond(id, {});
   steered.push(text);
-  // Le tour le prend à sa prochaine étape, sauf Stop d'ici là.
   const target = steerable;
+  // E7 : le tour échoue sans le prendre.
+  if (target.fail) {
+    setTimeout(target.fail, 100);
+    return;
+  }
+  // Le tour le prend à sa prochaine étape, sauf Stop d'ici là.
   setTimeout(() => {
     if (steerable === target) target.take(steered.splice(0));
   }, 300);

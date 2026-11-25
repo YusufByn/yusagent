@@ -1122,6 +1122,14 @@ impl SessionEngine for AgentSessionEngine {
         serde_json::to_value(pa_types::session::AgentMessage::Custom(row)).ok()
     }
 
+    fn ya_steer(&self, text: &str) -> bool {
+        super::ya_steer::steer(self, text)
+    }
+
+    fn ya_drop_steers(&self) {
+        super::ya_steer::drop_steers(self);
+    }
+
     fn resource_snapshot(
         &self,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Value> + Send + '_>> {

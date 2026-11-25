@@ -529,3 +529,15 @@ test("Stop avec un message envoyé et non pris : file en pause, « play » l'env
   assert.deepEqual(promptTexts(h), ["longue", "pas encore pris"], "envoyé une fois");
 });
 
+test("tour en échec avec un message envoyé (E7) : renvoyé une fois en prompt, réponse affichée une fois", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("échoue", []);
+  await waitFor(() => toolStatus(h, "call-e") === "running", "cellule en cours");
+  shown(h).chat.send("note après échec", [], undefined, true);
+  await waitFor(() => promptTexts(h).length === 2, "renvoyé en prompt après l'échec");
+  await idle(h);
+  assert.deepEqual(promptTexts(h), ["échoue", "note après échec"], "renvoyé une fois");
+  assert.equal(texts(h, "text").filter((text) => text === "écho : note après échec").length, 1, "réponse affichée une fois");
+  assert.deepEqual(shown(h).chat.current.queue, []);
+});

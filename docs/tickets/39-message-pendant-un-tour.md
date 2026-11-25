@@ -810,3 +810,62 @@ Le repérage se fait comme chez Unharnessed (horodatage du message, `uh:crates/u
   - push 2 : le code sans le vidage au règlement. E6 et E7 deviennent rouges : le message resté dans la file de l'agent part au début du run suivant (`crates/pa-agent/src/agent_loop/run.rs:31-32`) ;
   - push 3 : le vidage. Tout passe au vert.
 - **E7 côté extension** (agent factice) : renvoi une fois, réponse affichée une fois. C'est déjà le comportement de `chat.ts`, donc pas rouge sur le code actuel. Il sert de garde.
+
+## 18. Décisions de Yusuf (25/11/2026) : voie B, code et tests
+
+### 18.1 Décisions
+
+- **Voie B**, avec le 8e fichier : **+33 lignes dans 8 fichiers upstream, 1 ligne modifiée**, la garde de `run_once.rs`. L'agent est atteint directement par `turn_agent` (§17.2).
+- **Trois pushs** :
+  1. squelette et tests ;
+  2. le code sans le vidage : E6 et E7 rouges ;
+  3. le vidage : tout vert.
+- **E7** coupe les relances automatiques dans ses réglages.
+- **Exigences sur la garde de `run_once.rs`** :
+  - la ligne du prompt reste écrite une seule fois, assertion dans E3 ;
+  - pas de collision dans le registre (§18.2) ;
+  - `ya_abort_window` reste valide (§18.3) ;
+  - E3 vérifie aussi la reprise (`session/load`) ;
+  - captures : `compare_capture_prompts.py` sur `acp-resume`, en plus de `D-steer`, `E-steer-skills` et `compare.py --all`.
+- **Avec B, l'annonce `[skills-changed]` part au prompt suivant**, pas avec le message : l'attendu d'`E-steer-skills` est corrigé (§12.3).
+
+### 18.2 Garde de `run_once.rs` : ligne du prompt et collisions
+
+- **Ligne du prompt écrite une fois** : E3 l'affirme (« the prompt's row is written once »), dans le fichier de session et au rejeu après `session/load`.
+- **Le registre ne peut pas confondre deux lignes** (`crates/pa-daemon/src/agent_engine/ya_steer.rs`) :
+  - **Deux messages** : chacun prend un horodatage strictement supérieur au dernier pris dans le processus, même dans la même milliseconde. La clé est (horodatage, texte), donc deux messages de même texte ont deux clés. Il y a un worker par session (`WORKER_ACTIVE_SESSION_ID_ENV`, `crates/pa-daemon/src/worker/env.rs:52`). U5 couvre ce point.
+  - **Un message et la ligne du prompt** :
+    - le pont n'envoie un message qu'après le premier message de l'assistant du tour (U1) ;
+    - or la boucle émet les lignes admises du run, celle du prompt comprise, dès son entrée (`crates/pa-agent/src/agent_loop/entry.rs:29-42`), avant `run_loop` et le premier appel du modèle (`run.rs:71`) ;
+    - ces lignes sont donc passées par la garde avant qu'un message soit inscrit, et ne peuvent pas y correspondre.
+  - **Un message reconnu une fois** : l'entrée est retirée à la correspondance.
+  - **Le règlement efface le registre** avec la file de l'agent : aucune entrée ne survit à son run, donc ne peut correspondre à une ligne d'un tour suivant.
+
+### 18.3 `ya_abort_window` (ticket 36)
+
+Le test compte les appels de la sonde d'annulation : premier appel dans `turn/model.rs`, second en tête du futur d'admission de `turn/run_once.rs` (`crates/pa-daemon/src/agent_engine/tests/ya_abort_window.rs:5-29`). La garde modifiée est dans l'abonnement aux événements du run, pour les lignes `MessageEnd` user (`run_once.rs:234-246`). Elle n'appelle pas la sonde. Le compte reste donc celui du test, qui tourne dans la CI de chaque push (relevé au §19).
+
+### 18.4 Lignes upstream écrites
+
+| Fichier | Lignes | Où |
+|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | +4 | dispatch `:1163-1166` ; l'appel de `seal` du squelette A est retiré |
+| `crates/pa-daemon/src/worker.rs` | +2 | `mod ya_steer;` après `mod commands;` |
+| `crates/pa-daemon/src/worker/input.rs` | +4 | `handle_queue`, après `require_created` |
+| `crates/pa-daemon/src/worker/turn.rs` | +2 | `settle_engine.ya_drop_steers();` avant `core.busy = false`, verrou tenu |
+| `crates/pa-daemon/src/engine.rs` | +9 | `ya_steer` et `ya_drop_steers` du trait `SessionEngine`, défauts neutres |
+| `crates/pa-daemon/src/agent_engine/session_engine_impl.rs` | +8 | les deux méthodes, déléguées à notre module |
+| `crates/pa-daemon/src/agent_engine.rs` | +2 | `mod ya_steer;` |
+| `crates/pa-daemon/src/agent_engine/turn/run_once.rs` | +2, 1 modifiée | garde des lignes user : `\|\| super::super::ya_steer::is_steered(agent_message)` |
+
+Total : **+33, 1 modifiée, 8 fichiers**, mesuré par `git diff --numstat main -- <les 8 fichiers>` : 34 insertions et 1 suppression, soit 33 lignes nouvelles et la garde de `run_once.rs` réécrite. Nouveaux fichiers à nous : `acp/ya_turns/steer.rs` (réécrit pour B), `worker/ya_steer.rs`, `agent_engine/ya_steer.rs`.
+
+### 18.5 Tests et assertion rouge attendue par push
+
+- **E1 à E5** : rouges au push 1, sur les mêmes assertions qu'au §16 (`serve` répond `{}` sans rien envoyer). E3 échoue d'abord sur « one row for the message » (0 ≠ 1).
+- **E6** (Stop avec un message accepté, pas pris) et **E7** (tour en échec : réponse lente du provider factice puis `stopReason: "error"`, relances coupées) : **verts au push 1**, puisque rien n'est envoyé. **Rouges au push 2**, sans le vidage : le message resté dans la file de l'agent part au début du run suivant (`run.rs:31-32`). E6 échoue sur « the message never runs », E7 sur « the message runs once » (2 ≠ 1). **Verts au push 3.**
+- **U1 à U4** (`acp/ya_turns/steer.rs`) : attente du premier message de l'assistant ; un `turnStart` par ligne ; message refusé ; refus de la porte. **U5** (`agent_engine/ya_steer.rs`) : registre (horodatages, reconnu une fois, effacé au règlement). Tous rouges au push 1.
+- **Extension** :
+  - X0 à X3, `suite.ts` et `suite-real.ts` : rouges comme au §16 (méthode pas encore servie) ;
+  - **E7 côté extension** (« renvoyé une fois en prompt, réponse affichée une fois ») : vert sur le code actuel, car c'est déjà le comportement de `chat.ts`. C'est un test de garde.
+  - Mesuré en local : sans X4, 4 en échec (X0 à X3) et E7 vert ; avec X4 appliqué le temps de l'essai, 5/5.

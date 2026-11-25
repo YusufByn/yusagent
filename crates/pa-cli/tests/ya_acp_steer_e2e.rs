@@ -2,7 +2,7 @@
 #![allow(clippy::too_many_lines)]
 #![cfg(unix)]
 //! yusAgent (YA-19, ticket 39): `_yus/session/steer`, a message into the running prompt turn
-//! (`docs/tickets/39-message-pendant-un-tour.md`, §11 and §12). The real binary serves ACP over
+//! (`docs/tickets/39-message-pendant-un-tour.md`, §17 and §18, path B). The real binary serves ACP over
 //! stdio on its own sandboxed daemon; the worker runs the real engine on the faux provider
 //! (`"engine": "faux"`) and a real kernel, permissions in `"auto"` (as
 //! `ya_acp_wake_turn_e2e.rs`). The session file is the conversation the model is sent.
@@ -10,18 +10,23 @@
 //!     message row follows the cell's result, `turnStart { origin: "steer" }` under the prompt's
 //!     turn id (no `rewindTo`), one response, after the message's answer.
 //! E2. Two messages go in one model turn: two rows in a row, one answer.
-//! E3. A message is delivered once: one row, no turn of its own.
+//! E3. A message is delivered once: one row, no turn of its own; the prompt's row is written
+//!     once (the `run_once.rs` gate); after `session/load` in another process, the replay shows
+//!     the message once, at its place (after the cell's result, before its answer).
 //! E4. A message sent as soon as the turn starts never goes before the prompt's row.
 //! E5. Refused with `-32603` for a stale turn, after the turn, and during a wake (D6); with
 //!     `-32602` for a session command and an image.
-//! E6. Stop with a message in the worker's lane: the lane is empty after the Stop, the message
-//!     never runs, the next prompt runs without it.
+//! E6. Stop with a message accepted and not taken yet: the message never runs, the next prompt
+//!     runs without it (the run's settle dropped it from the agent's queue).
+//! E7. A failed turn with a message accepted and not taken: no row of it in the failed turn; the
+//!     client sends it again as a prompt (as the extension does): one row, one answer.
 //!
 //! Listed in `docs/fork-changes.md`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
@@ -91,6 +96,14 @@ fn answer_of(frame: &Value, turn: u64) -> bool {
         && turn_of(frame) == Some(turn)
 }
 
+/// An update of kind `kind` whose text block contains `text`.
+fn shows(frame: &Value, kind: &str, text: &str) -> bool {
+    frame["params"]["update"]["sessionUpdate"] == kind
+        && frame["params"]["update"]["content"]["text"]
+            .as_str()
+            .is_some_and(|shown| shown.contains(text))
+}
+
 /// The JSON-RPC error code of a response frame.
 fn error_code(frame: &Value) -> Option<i64> {
     frame["error"]["code"].as_i64()
@@ -135,46 +148,6 @@ fn user_row(rows: &[Row], text: &str) -> Option<usize> {
         .position(|row| row.role == "user" && row.text == text)
 }
 
-/// One command to the sandboxed daemon, as `ya_acp_resume_e2e.rs`: its response.
-fn daemon_request(socket: &Path, id: &str, command: &Value) -> Value {
-    let mut writer =
-        pa_types::platform::transport::connect_blocking(socket).expect("daemon socket");
-    let reader = writer.try_clone_box().expect("daemon socket clone");
-    let _ = reader.set_read_timeout(TIMEOUT);
-    let protocol = json!({ "name": "prime-agent.daemon", "version": pa_types::daemon::DAEMON_PROTOCOL_VERSION });
-    let frame = json!({ "type": "command", "id": id, "protocol": protocol, "command": command });
-    writeln!(writer, "{frame}").expect("daemon frame");
-    writer.flush().expect("daemon flush");
-    BufReader::new(reader)
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(&line.expect("daemon line")).expect("JSON"))
-        .find(|frame| frame["id"] == json!(id))
-        .unwrap_or_else(|| panic!("the daemon closed without answering {id}"))
-}
-
-/// The worker's `steering` lane of the only live session.
-fn steering_lane(socket: &Path) -> Vec<String> {
-    let list = daemon_request(socket, "list", &json!({ "type": "list" }));
-    let sessions = list["data"]["sessions"]
-        .as_array()
-        .unwrap_or_else(|| panic!("a session list: {list}"));
-    assert_eq!(sessions.len(), 1, "one live session: {list}");
-    let active = sessions[0]["activeSessionId"]
-        .as_str()
-        .unwrap_or_else(|| panic!("an activeSessionId: {list}"));
-    let queue = daemon_request(
-        socket,
-        "queue",
-        &json!({ "type": "get_queue", "activeSessionId": active }),
-    );
-    queue["data"]["steering"]
-        .as_array()
-        .unwrap_or_else(|| panic!("a steering lane: {queue}"))
-        .iter()
-        .filter_map(|item| item.as_str().map(str::to_string))
-        .collect()
-}
-
 /// The ACP child on its own home and daemon socket (as `ya_acp_wake_turn_e2e.rs`); every frame
 /// it wrote is kept, in order.
 struct Client {
@@ -182,20 +155,43 @@ struct Client {
     stdin: Option<std::process::ChildStdin>,
     lines: Receiver<String>,
     next_id: u64,
-    home: tempfile::TempDir,
+    home: Rc<tempfile::TempDir>,
     socket: PathBuf,
     seen: Vec<Value>,
 }
 
 impl Client {
     fn spawn(script: &Value) -> Client {
+        Client::spawn_with(script, None)
+    }
+
+    /// With the agent's `settings.json` (`~/.yusagent`).
+    fn spawn_with(script: &Value, settings: Option<&Value>) -> Client {
         let home = tempfile::TempDir::new().unwrap();
+        std::fs::write(home.path().join("worker-script.json"), script.to_string()).unwrap();
+        if let Some(settings) = settings {
+            let dir = home.path().join(".yusagent");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("settings.json"), settings.to_string()).unwrap();
+        }
+        Client::launch(Rc::new(home), &[])
+    }
+
+    /// Another ACP process on the same home and daemon: `--resume <file>`.
+    fn resume(&self, file: &Path) -> Client {
+        Client::launch(
+            Rc::clone(&self.home),
+            &["--resume", file.to_str().expect("a UTF-8 path")],
+        )
+    }
+
+    fn launch(home: Rc<tempfile::TempDir>, extra: &[&str]) -> Client {
         let socket = home.path().join("daemon.sock");
         let script_path = home.path().join("worker-script.json");
-        std::fs::write(&script_path, script.to_string()).unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_prime-agent"))
             .args(["--mode", "acp", "--daemon-socket"])
             .arg(&socket)
+            .args(extra)
             .env("HOME", home.path())
             .env("PRIME_AGENT_FAUX_SCRIPT", &script_path)
             .env("PRIME_AGENT_KERNEL_PYTHON", kernel_python())
@@ -230,6 +226,21 @@ impl Client {
             socket,
             seen: Vec::new(),
         }
+    }
+
+    /// Closes stdin and waits for the process: the bridge detaches, the session stays resident
+    /// (as `ya_acp_resume_e2e.rs`).
+    fn close(&mut self) {
+        drop(self.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 
     fn send(&mut self, frame: &Value) {
@@ -301,6 +312,11 @@ impl Client {
 
     /// `initialize` then `session/new`: the session id and the session file.
     fn open_session(&mut self) -> (String, PathBuf) {
+        let (id, _, path) = self.open_saved_session();
+        (id, path)
+    }
+
+    fn initialize(&mut self) {
         let init = self.request(
             "initialize",
             &json!({
@@ -310,6 +326,11 @@ impl Client {
             }),
         );
         let _ = self.wait_response(init);
+    }
+
+    /// `initialize` then `session/new`: the session id, the file's id and the file.
+    fn open_saved_session(&mut self) -> (String, String, PathBuf) {
+        self.initialize();
         let new = self.request("session/new", &json!({ "mcpServers": [] }));
         let at = self.wait_response(new);
         let result = &self.seen[at]["result"];
@@ -317,10 +338,15 @@ impl Client {
             .as_str()
             .unwrap_or_else(|| panic!("a session: {result}"))
             .to_string();
-        let path = result["_meta"][META]["saved"]["path"]
+        let saved = &result["_meta"][META]["saved"];
+        let file_id = saved["sessionId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("saved.sessionId: {result}"))
+            .to_string();
+        let path = saved["path"]
             .as_str()
             .unwrap_or_else(|| panic!("saved.path: {result}"));
-        (id, PathBuf::from(path))
+        (id, file_id, PathBuf::from(path))
     }
 
     fn prompt(&mut self, session_id: &str, text: &str) -> u64 {
@@ -523,7 +549,8 @@ fn two_steers_go_in_one_model_turn() {
     );
 }
 
-/// E3. A message is delivered once, the turn's or the next prompt's.
+/// E3. A message is delivered once, the turn's or the next prompt's; the prompt's row is written
+/// once; after `session/load` in another process, the replay shows the message once, at its place.
 #[test]
 fn a_steer_is_delivered_once() {
     let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
@@ -531,7 +558,7 @@ fn a_steer_is_delivered_once() {
         { "text": "steer answered" },
         { "text": "second answered" },
     ] }));
-    let (session_id, file) = client.open_session();
+    let (session_id, file_id, file) = client.open_saved_session();
     let prompt = client.prompt(&session_id, "run the slow cell");
     let turn = client.prompt_turn(0);
     let _ = wait_file(&client.path("started"));
@@ -542,12 +569,16 @@ fn a_steer_is_delivered_once() {
     let _ = client.wait_response(second);
     client.drain_for(Duration::from_secs(1));
     let rows = rows(&file);
-    assert_eq!(
+    let count = |text: &str| {
         rows.iter()
-            .filter(|row| row.role == "user" && row.text == "only once")
-            .count(),
+            .filter(|row| row.role == "user" && row.text == text)
+            .count()
+    };
+    assert_eq!(count("only once"), 1, "one row for the message: {rows:?}");
+    assert_eq!(
+        count("run the slow cell"),
         1,
-        "one row for the message: {rows:?}"
+        "the prompt's row is written once: {rows:?}"
     );
     assert_eq!(
         client.count(|frame| origin_is(frame, "prompt")),
@@ -560,6 +591,57 @@ fn a_steer_is_delivered_once() {
             .iter()
             .all(|frame| !origin_is(frame, "steer")),
         "nothing of the message after its turn"
+    );
+
+    // The resume: another process loads the file and replays it.
+    client.close();
+    let mut resumed = client.resume(&file);
+    resumed.initialize();
+    let from = resumed.seen.len();
+    let load = resumed.request(
+        "session/load",
+        &json!({ "sessionId": file_id, "mcpServers": [] }),
+    );
+    let loaded = resumed.wait_response(load);
+    assert!(
+        resumed.seen[loaded].get("result").is_some(),
+        "{}",
+        resumed.seen[loaded]
+    );
+    let replay: Vec<&Value> = resumed.seen[from..loaded]
+        .iter()
+        .filter(|frame| is_update(frame))
+        .collect();
+
+    let messages: Vec<usize> = replay
+        .iter()
+        .enumerate()
+        .filter(|(_, frame)| shows(frame, "user_message_chunk", "only once"))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(messages.len(), 1, "the message replays once: {replay:?}");
+    let result = replay
+        .iter()
+        .position(|frame| {
+            frame["params"]["update"]["sessionUpdate"] == "tool_call_update"
+                && frame["params"]["update"]["toolCallId"] == "call-1"
+        })
+        .unwrap_or_else(|| panic!("the cell's result: {replay:?}"));
+    let answer = replay
+        .iter()
+        .position(|frame| shows(frame, "agent_message_chunk", "steer answered"))
+        .unwrap_or_else(|| panic!("the message's answer: {replay:?}"));
+    assert!(
+        result < messages[0] && messages[0] < answer,
+        "at its place, after the cell's result and before its answer: {replay:?}"
+    );
+    assert_eq!(
+        replay
+            .iter()
+            .filter(|frame| shows(frame, "user_message_chunk", "run the slow cell"))
+            .count(),
+        1,
+        "the prompt replays once"
     );
 }
 
@@ -627,8 +709,8 @@ fn steer_refusals() {
     assert_eq!(client.refused(during), Some(-32603), "during a wake (D6)");
 }
 
-/// E6. Stop with a message in the worker's lane: the Stop empties the lane, the message never
-/// runs, the next prompt runs without it.
+/// E6. Stop with a message accepted and not taken yet: the message never runs, the next prompt
+/// runs without it.
 #[test]
 fn stop_with_a_steer_waiting() {
     let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
@@ -645,12 +727,6 @@ fn stop_with_a_steer_waiting() {
     let _ = wait_file(&client.path("started"));
     let steer = client.steer(&session_id, turn, "waiting note");
     client.accepted(steer);
-    let lane = steering_lane(&client.socket);
-    assert_eq!(
-        lane,
-        vec!["waiting note".to_string()],
-        "the message waits in the worker's lane"
-    );
     client.notify("session/cancel", &json!({ "sessionId": session_id }));
     let answered = client.wait_response(prompt);
     assert_eq!(
@@ -658,11 +734,6 @@ fn stop_with_a_steer_waiting() {
         "{}",
         client.seen[answered]
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !steering_lane(&client.socket).is_empty() {
-        assert!(Instant::now() < deadline, "the Stop empties the lane");
-        std::thread::sleep(Duration::from_millis(100));
-    }
     client.drain_for(Duration::from_secs(3));
     assert!(
         client.seen[answered..]
@@ -675,7 +746,11 @@ fn stop_with_a_steer_waiting() {
     let at = client.wait_response(second);
     assert_eq!(client.seen[at]["result"]["stopReason"], "end_turn");
     let rows = rows(&file);
-    assert_eq!(user_row(&rows, "waiting note"), None, "{rows:?}");
+    assert_eq!(
+        user_row(&rows, "waiting note"),
+        None,
+        "the message never runs: {rows:?}"
+    );
     assert_eq!(
         rows.last()
             .map(|row| (row.role.as_str(), row.text.as_str())),
@@ -683,4 +758,72 @@ fn stop_with_a_steer_waiting() {
         "{rows:?}"
     );
     assert!(!client.path("after").exists(), "the cell stopped");
+}
+
+/// E7. A failed turn with a message accepted and not taken: no row of it in the failed turn; the
+/// client sends it again as a prompt (as the extension does): one row, one answer. The provider
+/// fails mid-answer (paced stream, `stopReason: "error"`); automatic retries are off, or the
+/// retry would take the message.
+#[test]
+fn a_failed_turn_drops_the_message_it_did_not_take() {
+    let mut client = Client::spawn_with(
+        &json!({ "engine": "faux", "tokensPerSecond": 4, "responses": [
+            {
+                "content": [{ "type": "text", "text": "a long answer that fails half way through" }],
+                "stopReason": "error",
+                "errorMessage": "scripted provider failure",
+            },
+            { "text": "resent answered" },
+        ] }),
+        Some(&json!({ "retry": { "enabled": false } })),
+    );
+    let (session_id, file) = client.open_session();
+    let prompt = client.prompt(&session_id, "a failing turn");
+    let turn = client.prompt_turn(0);
+    let _ = client.wait_for(0, "the failing answer", |frame| answer_of(frame, turn));
+    let steer = client.steer(&session_id, turn, "failed note");
+    client.accepted(steer);
+    let failed = client.wait_response(prompt);
+    assert!(
+        client.seen[failed].get("error").is_some(),
+        "the turn failed: {}",
+        client.seen[failed]
+    );
+    assert_eq!(
+        client.count(|frame| origin_is(frame, "steer")),
+        0,
+        "the message did not join the failed turn"
+    );
+    assert_eq!(
+        user_row(&rows(&file), "failed note"),
+        None,
+        "no row of the message in the failed turn"
+    );
+    let resent = client.prompt(&session_id, "failed note");
+    let resent_turn = client.prompt_turn(failed);
+    let at = client.wait_response(resent);
+    assert_eq!(client.seen[at]["result"]["stopReason"], "end_turn");
+    client.drain_for(Duration::from_secs(1));
+    let rows = rows(&file);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.role == "user" && row.text == "failed note")
+            .count(),
+        1,
+        "the message runs once: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.role == "assistant" && row.text == "resent answered")
+            .count(),
+        1,
+        "{rows:?}"
+    );
+    let shown: String = client
+        .seen
+        .iter()
+        .filter(|frame| answer_of(frame, resent_turn))
+        .filter_map(|frame| frame["params"]["update"]["content"]["text"].as_str())
+        .collect();
+    assert_eq!(shown, "resent answered", "its answer shows once");
 }

@@ -165,6 +165,10 @@ impl Worker {
         if let Err(response) = self.require_created(lane.as_str()) {
             return response;
         }
+        // yusAgent (YA-19, ticket 39): a message into the running run (`super::ya_steer`).
+        if super::ya_steer::wanted(payload) {
+            return self.ya_steer(payload);
+        }
         // These commands are resume sites: an admitted turn with
         // `wake: "immediate"` resumes the suspension.
         self.resume_queued_input();

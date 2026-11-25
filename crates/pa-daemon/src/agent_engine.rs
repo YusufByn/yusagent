@@ -76,6 +76,8 @@ mod session_engine_impl;
 
 // yusAgent (YA-03): frozen tools in the durable session header (`docs/fork-changes.md`).
 pub(crate) mod ya_frozen_tools;
+// yusAgent (YA-19, ticket 39): a message into the running agent run.
+mod ya_steer;
 
 mod turn;
 

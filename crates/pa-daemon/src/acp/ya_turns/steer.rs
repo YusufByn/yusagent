@@ -1,21 +1,25 @@
 //! yusAgent (YA-19, ticket 39): `_yus/session/steer`, a message into the running prompt turn
-//! (`docs/tickets/39-message-pendant-un-tour.md`, §11 and §12).
+//! (`docs/tickets/39-message-pendant-un-tour.md`, §17 and §18, path B).
 //!
 //! `_yus/session/steer` `{ sessionId, prompt, turn }` (Unharnessed's form, D2): the blocks of a
-//! `session/prompt` and the running turn's `promptTurnId`. The message goes to the worker's
-//! `steering` lane (`Steer`, path A of the ticket): the worker cuts its run at the next boundary,
-//! after the tool results, and runs the message in a new run (`queued_steering_probe`,
-//! `crates/pa-daemon/src/worker.rs:332-343`). That run belongs to the prompt's turn: the bridge's
-//! wait for an idle worker with empty lanes (`fetch_autonomous_status`, `daemon.rs:1708`) holds
-//! the turn open until it ran. `seal` closes the turn to new messages and waits again for those
-//! that joined after that wait. Each message row after the prompt's own row opens a
-//! `turnStart { origin: "steer" }` under the prompt's turn id, without `rewindTo` (D3).
+//! `session/prompt` and the running turn's `promptTurnId`. The message goes to the worker as a
+//! `Steer` marked `yaInRun`: the worker passes it to the running agent's own queue, which the
+//! loop reads after the tool results, before its next model call, in the same run
+//! (`crates/pa-daemon/src/worker/ya_steer.rs`). The prompt's `prompt_and_wait` covers that run,
+//! so the turn stays open until the message is answered. The run's settle drops what it did not
+//! take; the client sends it again as a prompt.
+//!
+//! A message goes to the worker only once the turn's first assistant message went by: the run's
+//! admitted rows are then past, so a prompt row never passes for a message's
+//! (`crates/pa-daemon/src/agent_engine/ya_steer.rs`). Each user row of the turn after that opens
+//! the `turnStart { origin: "steer" }` of the next message sent, under the prompt's turn id,
+//! without `rewindTo` (D3).
 //!
 //! Refused with `-32603` ("The turn is over: send it as a prompt.") when the turn is not the
-//! running prompt turn of this client, is closed, or is a turn the agent started (D6); with
-//! `-32602` (`data.details`) for invalid blocks, images, or a session command.
+//! running prompt turn of this client, is a turn the agent started (D6), or no run takes the
+//! message; with `-32602` (`data.details`) for invalid blocks, images, or a session command.
 //!
-//! Ticket 39, push 1: the signatures only; the behavior comes with the next push.
+//! Ticket 39, push 1 of path B: the signatures only; the behavior comes with the next push.
 #![allow(dead_code)] // Ticket 39, push 1: the skeleton.
 
 use std::sync::Arc;
@@ -36,18 +40,10 @@ pub(crate) const METHOD: &str = "_yus/session/steer";
 pub(crate) struct Steers {
     /// The prompt turn the messages may join (0: none).
     turn: u64,
-    /// The prompt's own user row went by: a message may go to the worker after it.
-    prompt_row_seen: bool,
-    /// Messages sent to the worker, not acknowledged yet.
-    sending: usize,
-    /// Messages acknowledged since the last wait for an idle worker.
-    since_wait: usize,
-    /// Accepted messages whose row did not go by yet, in order (one `turnStart` each).
-    pending: std::collections::VecDeque<u64>,
-    /// The last message id of the turn.
-    next: u64,
-    /// No message joins the turn any more.
-    closed: bool,
+    /// The turn's first assistant message went by: a message may go to the worker.
+    model_started: bool,
+    /// Messages sent to the worker whose row did not go by yet: one `turnStart` each.
+    pending: usize,
 }
 
 /// Whether a message may go to the worker now.
@@ -55,21 +51,10 @@ pub(crate) struct Steers {
 pub(crate) enum Gate {
     /// Not into this turn: `-32603`.
     Refuse,
-    /// The prompt's own row has not gone by yet.
-    WaitRow,
+    /// The turn's first assistant message has not gone by yet.
+    WaitModel,
     /// It goes now.
     Send,
-}
-
-/// What `seal` does next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SealStep {
-    /// A message is on its way to the worker.
-    WaitSending,
-    /// Messages joined after the last wait: wait for an idle worker again.
-    Rewait,
-    /// No message joins any more.
-    Closed,
 }
 
 #[allow(clippy::unused_self)] // Ticket 39, push 1.
@@ -85,19 +70,12 @@ impl Steers {
         Gate::Send
     }
 
-    /// A message goes to the worker: its id.
-    pub(crate) fn begin_send(&mut self) -> u64 {
-        0
-    }
+    /// A message goes to the worker: its `turnStart` is due at its row.
+    pub(crate) fn sent(&mut self) {}
 
-    /// The worker answered for message `id`.
-    pub(crate) fn end_send(&mut self, id: u64, sent: bool) {
-        let _ = (id, sent);
-    }
-
-    /// One step of the turn's close.
-    pub(crate) fn seal_step(&mut self) -> SealStep {
-        SealStep::Closed
+    /// The worker refused the message sent into `turn`: no row will come for it.
+    pub(crate) fn refused(&mut self, turn: u64) {
+        let _ = turn;
     }
 
     /// A worker event of the bridge's active turn `active`: `Some(turn)` when it is the row of a
@@ -105,19 +83,6 @@ impl Steers {
     pub(crate) fn row(&mut self, event: &Value, active: u64) -> Option<u64> {
         let _ = (event, active);
         None
-    }
-
-    /// Message `id` is still waiting for its row.
-    pub(crate) fn waiting(&self, id: u64) -> bool {
-        let _ = id;
-        false
-    }
-
-    /// The turn `turn` ended without its close (Stop, failure): its waiting messages leave the
-    /// worker's lane.
-    pub(crate) fn orphaned(&self, turn: u64, active: u64) -> bool {
-        let _ = (turn, active);
-        false
     }
 }
 
@@ -139,108 +104,97 @@ pub(crate) async fn serve(
     let _ = tx.send(jsonrpc::response(id, &json!({})));
 }
 
-/// After the worker's first wait in the prompt turn (`daemon.rs`, before the boundary): no
-/// message joins the turn any more, and those that joined after that wait ran. Returns the
-/// status of the last wait.
-#[allow(clippy::unused_async)] // Ticket 39, push 1.
-pub(crate) async fn seal(
-    state: &Arc<Mutex<DaemonAcpState>>,
-    link: &Arc<DaemonLink>,
-    status: Option<pa_core::autonomous::AgentAutonomousStatus>,
-) -> Option<pa_core::autonomous::AgentAutonomousStatus> {
-    let _ = (state, link);
-    status
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn user_row(text: &str) -> Value {
+    fn message_start(role: &str, text: &str) -> Value {
         json!({ "type": "message_start", "message": {
-            "role": "user", "content": [{ "type": "text", "text": text }] } })
+            "role": role, "content": [{ "type": "text", "text": text }] } })
     }
 
-    /// U1: the window between the last wait and `finish_prompt`. A message the worker
-    /// acknowledged after the wait makes `seal` wait once more, then the turn closes and a later
-    /// message is refused.
+    /// U1: no message goes to the worker before the turn's first assistant message: the run's
+    /// admitted rows are not past yet.
     #[test]
-    fn seal_waits_again_for_a_message_accepted_after_the_wait() {
-        let mut steers = Steers::default();
-        steers.open(4);
-        assert_eq!(steers.row(&user_row("the prompt"), 4), None);
-        let id = steers.begin_send();
-        steers.end_send(id, true);
-        assert_eq!(steers.seal_step(), SealStep::Rewait, "{steers:?}");
-        assert_eq!(steers.seal_step(), SealStep::Closed, "{steers:?}");
-        assert_eq!(steers.gate(Some(4), 4, false), Gate::Refuse, "{steers:?}");
-    }
-
-    /// U2: no message goes to the worker before the prompt's own row.
-    #[test]
-    fn a_steer_waits_for_the_prompt_row() {
+    fn a_steer_waits_for_the_model_to_start() {
         let mut steers = Steers::default();
         steers.open(2);
-        assert_eq!(steers.gate(Some(2), 2, false), Gate::WaitRow, "{steers:?}");
-        assert_eq!(steers.row(&user_row("the prompt"), 2), None);
+        assert_eq!(
+            steers.gate(Some(2), 2, false),
+            Gate::WaitModel,
+            "{steers:?}"
+        );
+        assert_eq!(steers.row(&message_start("user", "the prompt"), 2), None);
+        assert_eq!(
+            steers.gate(Some(2), 2, false),
+            Gate::WaitModel,
+            "the prompt's row is not the model: {steers:?}"
+        );
+        assert_eq!(steers.row(&message_start("assistant", ""), 2), None);
         assert_eq!(steers.gate(Some(2), 2, false), Gate::Send, "{steers:?}");
     }
 
-    /// U3: `seal` does not close while a message is on its way to the worker.
+    /// U2: once the model started, each user row of the turn opens the `turnStart` of the next
+    /// message sent, in order; a custom row, or a user row with no message waiting, nothing.
     #[test]
-    fn seal_waits_for_a_message_in_flight() {
-        let mut steers = Steers::default();
-        steers.open(1);
-        let _ = steers.row(&user_row("the prompt"), 1);
-        let id = steers.begin_send();
-        assert_eq!(steers.seal_step(), SealStep::WaitSending, "{steers:?}");
-        assert_eq!(steers.gate(Some(1), 1, false), Gate::Send, "still open");
-        steers.end_send(id, true);
-        assert_eq!(steers.seal_step(), SealStep::Rewait);
-        assert_eq!(steers.seal_step(), SealStep::Closed);
-    }
-
-    /// U4: the prompt's own row opens nothing; each later user row of the turn opens the
-    /// `turnStart` of the next message sent, in order; a row with no message waiting, nothing.
-    #[test]
-    fn announce_maps_rows_to_steers() {
+    fn rows_after_the_model_start_open_one_turn_start_each() {
         let mut steers = Steers::default();
         steers.open(7);
-        assert_eq!(steers.row(&user_row("the prompt"), 7), None);
-        let one = steers.begin_send();
-        let two = steers.begin_send();
-        steers.end_send(one, true);
-        steers.end_send(two, true);
-        assert!(steers.waiting(one) && steers.waiting(two), "{steers:?}");
+        let _ = steers.row(&message_start("user", "the prompt"), 7);
+        let _ = steers.row(&message_start("assistant", ""), 7);
+        steers.sent();
+        steers.sent();
         let custom = json!({ "type": "message_start", "message": { "role": "custom" } });
         assert_eq!(steers.row(&custom, 7), None, "a custom row is no message");
-        assert_eq!(steers.row(&user_row("one"), 7), Some(7));
-        assert!(!steers.waiting(one) && steers.waiting(two), "{steers:?}");
-        assert_eq!(steers.row(&user_row("two"), 7), Some(7));
-        assert_eq!(steers.row(&user_row("a TUI row"), 7), None);
+        assert_eq!(steers.row(&message_start("user", "one"), 7), Some(7));
+        assert_eq!(steers.row(&message_start("user", "two"), 7), Some(7));
+        assert_eq!(steers.row(&message_start("user", "a TUI row"), 7), None);
+        let end = json!({ "type": "message_end", "message": { "role": "user" } });
+        assert_eq!(steers.row(&end, 7), None, "only a row's start counts");
+    }
+
+    /// U3: a message the worker refused frees its `turnStart`; a row of another turn opens none.
+    #[test]
+    fn a_refused_message_frees_its_turn_start() {
+        let mut steers = Steers::default();
+        steers.open(3);
+        let _ = steers.row(&message_start("assistant", ""), 3);
+        steers.sent();
+        steers.refused(3);
+        assert_eq!(steers.row(&message_start("user", "a TUI row"), 3), None);
+        steers.sent();
+        assert_eq!(
+            steers.row(&message_start("user", "a later turn's row"), 4),
+            None,
+            "not the active turn"
+        );
+        assert_eq!(
+            steers.row(&message_start("user", "the message"), 3),
+            Some(3)
+        );
+    }
+
+    /// U4: refusals (`-32603`): a stale turn, a turn over, a turn the agent started (D6), no
+    /// prompt turn; and `turnStart` without `rewindTo` (D3).
+    #[test]
+    fn the_gate_refuses_what_cannot_join_the_turn() {
+        let mut steers = Steers::default();
+        assert_eq!(
+            steers.gate(Some(1), 1, false),
+            Gate::Refuse,
+            "no prompt turn"
+        );
+        steers.open(5);
+        let _ = steers.row(&message_start("assistant", ""), 5);
+        assert_eq!(steers.gate(Some(5), 5, false), Gate::Send);
+        assert_eq!(steers.gate(Some(4), 5, false), Gate::Refuse, "stale turn");
+        assert_eq!(steers.gate(None, 5, false), Gate::Refuse, "no turn given");
+        assert_eq!(steers.gate(Some(5), 0, false), Gate::Refuse, "turn over");
+        assert_eq!(steers.gate(Some(5), 5, true), Gate::Refuse, "D6");
         assert_eq!(
             serde_json::to_value(steer_start()).unwrap(),
             json!({ "origin": "steer" }),
             "no rewindTo (D3)"
         );
-    }
-
-    /// U5: a turn that ended without its close (Stop, failure) leaves its waiting messages
-    /// orphaned, to withdraw from the worker's lane; a closed turn, a refused one and a turn the
-    /// agent started take none.
-    #[test]
-    fn a_turn_ended_without_its_close_orphans_its_messages() {
-        let mut steers = Steers::default();
-        steers.open(3);
-        let _ = steers.row(&user_row("the prompt"), 3);
-        let id = steers.begin_send();
-        steers.end_send(id, true);
-        assert!(!steers.orphaned(3, 3), "the turn runs");
-        assert!(steers.orphaned(3, 0), "the turn ended without its close");
-        assert_eq!(steers.gate(Some(3), 0, false), Gate::Refuse, "over");
-        assert_eq!(steers.gate(Some(3), 3, true), Gate::Refuse, "D6");
-        assert_eq!(steers.gate(Some(9), 3, false), Gate::Refuse, "stale turn");
-        while steers.seal_step() != SealStep::Closed {}
-        assert!(!steers.orphaned(3, 0), "closed: the messages ran");
     }
 }
