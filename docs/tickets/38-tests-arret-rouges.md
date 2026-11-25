@@ -241,7 +241,24 @@ Avec E1, une entrée est à ajouter à `fork-changes.md`, comme pour la reprise 
 - **T2** demande un workflow ou une boucle de répétition. Je n'ai pas vérifié s'il en existe un dans `.github/workflows/`. Une mesure discriminante entre H2 et H3 demanderait aussi l'heure d'arrivée de `SessionClosed` au client, que le test ne journalise pas.
 - **T1 et E1 ensemble** s'appliquent proprement (§3.3).
 
-## 6. Commandes utilisées
+## 6. Décisions de Yusuf (25/11/2026)
+
+- **D1 : E1.** Reprise de `7ea89013e` par `git cherry-pick -x` :
+  - sujet préfixé `YA-10: ticket 38 :`, `patch-id` identique ;
+  - entrée dans `docs/fork-changes.md`, comme la reprise de `5778afa02` au ticket 36.
+
+  **Pas de test vu rouge puis vert** : la course (un thread du worker pas encore arrêté répond au kill) ne se déclenche pas à la main. Le justificatif est le commit d'upstream et le journal de l'échec : run 45602379325, job 139164539614, `stop_escalation_e2e.rs:293`, kill répondu `"success":true` (§1.3).
+- **D2 : `tui_close_reason_rows_survive_late_turn_status`** (`interactive_daemon_e2e.rs:5670`, assert en `:5794`) est ajouté à « Instabilité probable » dans `docs/fork-changes.md`. Justification :
+  - chemin `ScriptedEngine`, hors des fichiers des tickets 32, 35 et 36 (§2) ;
+  - un échec en 85 exécutions ;
+  - symptôme : la frame de fermeture n'est jamais rendue (§2.4).
+
+  Options renvoyées ou écartées :
+  - **T1** (`f09c6538e`) et **T3** (#4003, #3988, #3994, #4222) : renvoyés au ticket des correctifs d'upstream depuis `c83ac68b3`, pas traités dans ce ticket ;
+  - **T2** écarté : à ce taux d'échec, le nombre de runs nécessaire n'est pas raisonnable.
+- **D3 : préfixe.** Le commit du constat est amendé en `YA-10: ticket 38 :`. Il était déjà poussé sous `YA-38:` : le push qui le remplace est un `--force-with-lease`, lancé par Yusuf.
+
+## 7. Commandes utilisées
 
 ```
 git show --stat 7ea89013e ; git show 7ea89013e
