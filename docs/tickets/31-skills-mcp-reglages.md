@@ -612,6 +612,7 @@ Total, estimé : environ 37 lignes ajoutées dans 7 fichiers upstream, 0 dans `w
 - **Garde-fou 1, une seule annonce par changement sur tous les chemins** :
   - **démon** (extension par le pont ACP, TUI, qui s'attache au même worker) : l'appel d'`admission.rs` ne trouve plus de différence. Test `a_skill_change_reaches_the_model_once_before_the_prompt_and_the_file_in_order` (`crates/pa-daemon/tests/ya_announce_path_e2e.rs`) : une seule ligne `[skills-changed]` dans la requête, juste avant le prompt ; test 7 pour la notice et la ligne du fichier ;
   - **`-p` et RPC sans démon** : seul `admission.rs` annonce, et le moteur écrit lui-même la ligne dans l'ordre de la requête (`persist_event`, `crates/pa-core/src/session_engine/mod.rs:412-438`). Tests 1 à 5 (`prefix_stability.rs`, moteur sans démon) ;
+    - précision du 25/11/2026 (ticket 37, §2.2) : l'écriture est juste, mais les tests 1 à 5 ne vérifient que les requêtes (`assert_ya31_announced`, `prefix_stability.rs:2738-2764`), pas le fichier. Elle est lue dans le code (abonnement `mod.rs:253-262`, `persist_event` `:417-436`, gestionnaire du fichier en `-p` et RPC). Le test d'upstream `prompt_injected_message_persists_one_custom_row` (`crates/pa-core/src/session_engine/tests.rs:577`) montre le mécanisme ;
   - **TUI** : même worker que l'extension, donc mêmes tests ; l'affichage se contrôle à la main (§5.4).
 - **Garde-fou 2, historique rechargé après reconstruction du worker** :
   - le test du démon ci-dessus vérifie que la ligne d'annonce précède la ligne du prompt dans le fichier ;

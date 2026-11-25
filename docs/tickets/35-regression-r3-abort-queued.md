@@ -357,7 +357,12 @@ Le ticket 34, tel qu'il est écrit, ne couvre pas ce cas. Il faudrait l'y ajoute
 
 ### 11.3 Limite qui reste avec A (couverte par le ticket 36)
 
-- **Continuations autonomes dans le démon** (objectif et pilote autonome, `run_loop.rs`, admission par `admission.rs:47`) : la lecture du disque reste dans la fenêtre d'abandon d'upstream. Un abandon tombé pendant cette lecture est perdu jusqu'au premier événement transmis. De plus, une annonce produite là atteint le modèle sans être écrite dans le fichier (§11.2).
+- **Continuations autonomes dans le démon : pas de limite (correction du 25/11/2026, tickets 36 et 37).**
+  - Ce sont des livraisons séparées, remises à la file du worker : `run_loop.rs:191-205` → `autonomous_continuation.rs:257-265` → `worker.rs:467-475` → `worker/queue.rs:428-447` ; suite d'objectif par `goal_continuation.rs:442-448`.
+  - Chacune repasse par la prise (`worker/turn.rs:62-83`), puis par la comparaison du worker (`turn.rs:1041`), qui lève son jeton. Son admission (`admission.rs:47`) ne relit donc pas le disque dans la fenêtre, et n'y produit pas d'annonce.
+  - `run_turns` ne reboucle que sur la reprise après dépassement (`run_loop.rs:98-101`). Le cas « continuation autonome admise dans le même `run_prompt` » des §11.1, §11.2 et §13.2 n'existe pas sur ce code.
+  - Les chemins réels où une annonce atteint le modèle sans être écrite sont ailleurs : cœur pas encore construit quand le worker compare, et Stop entre la prise et l'écriture des lignes d'avance (`docs/tickets/37-annonce-hors-fichier.md`, §1.3 et §1.4).
+  - Texte d'origine, erroné : « la lecture du disque reste dans la fenêtre d'abandon d'upstream […] une annonce produite là atteint le modèle sans être écrite dans le fichier ».
 - **`-p` et RPC sans démon** (`crates/pa-daemon/src/rpc/prompt_commands.rs:39`, `:197` ; `crates/pa-cli/src/print_runtime.rs:1618` ; `crates/pa-cli/src/print_goal.rs:612`, `:655`) : l'admission garde sa lecture dans la fenêtre. Que leur commande d'abandon ait la même fenêtre n'a pas été lu (§9).
 - **Couverture** : le **ticket 36** (option C) ferme la fenêtre elle-même, en relisant le drapeau d'abandon une fois le run enregistré. Après lui, une lecture dans la fenêtre ne peut plus perdre un abandon, sur aucun chemin du démon. Son constat dira aussi ce qu'il en est de `-p` et du RPC.
 
