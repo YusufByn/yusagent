@@ -744,3 +744,16 @@ Limites d'A, une à une, avec B :
 - **Nouveau en B** (comme chez Unharnessed) : un message accepté après la dernière lecture de la file par la boucle est vidé au règlement. L'extension le renvoie en prompt après le tour. Ni perte ni doublon.
 
 Tests avec B : E1 à E5 et les tests de l'extension restent valables. E6 n'a plus de file `steering` à lire : son assertion rouge serait à revoir. U1 à U5 suivent le nouveau module (plus de `seal`). Cache : même forme de requête (§4).
+
+## 16. Relevé du premier push (`650418714`)
+
+Runs `ci` 45628774848 et `ya-extension` 45628774814. Compilation et clippy verts (`check + clippy (workspace)`), donc les tests compilent. Chaque test du ticket échoue sur l'assertion prévue au §13.3. Aucun autre test ne casse.
+
+| Test | Run / job | Ligne du journal | Échec |
+|---|---|---|---|
+| E1 à E6 (`ya_acp_steer_e2e.rs`) | 45628774848 / 139256217802 (shard 5/8) | 1291-1349 | E1 `:436` « no turnStart origin steer » ; E2 `:506` « first: … » ; E3 `:545` 0 ≠ 1 ; E4 `:580` « the note: … » ; E5 `:606` `None` ≠ `Some(-32603)` ; E6 `:649` `[]` ≠ `["waiting note"]`. 0 passés, 6 en échec |
+| U1 à U5 (`steer.rs`) | 45628774848 / 139256217738 (shard 3/8) | 1562-1566, 2748-2786 | U1 `:174` `Closed` ≠ `Rewait` ; U2 `:184` `Send` ≠ `WaitRow` ; U3 `:196` `Closed` ≠ `WaitSending` ; U4 `:214` `waiting` faux ; U5 `:239` « the turn ended without its close ». 1249 passés, 5 en échec |
+| X0 à X3 (`agent.test.ts`) | 45628774814 / 139256002771 | 330-417, 722-725 | 74 tests, 70 passés, 4 en échec (les quatre du ticket) |
+| `suite.ts` « Send now » | 45628774814 / 139256002771 | 1055-1068 | `covered` ≠ `clicked` ; e2e 15/16 |
+| `suite-real.ts` | 45628774814 / 139256003226 | 998-1014 | « le message suit le résultat, une réponse » ; e2e vrai binaire 18/19 |
+| `Check changelog fragment` | 45628774476 | — | Aucun fragment `.changes/` : il viendra avec le code |
