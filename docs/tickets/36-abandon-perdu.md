@@ -311,3 +311,87 @@ fn abort_flagged_before_the_run_registers_never_reaches_the_provider() {
 3. La ligne `mod ya_abort_window;` dans `crates/pa-daemon/src/agent_engine/tests.rs:23` (1 ligne upstream).
 4. Le traitement de `rlm_children_delete_e2e` dans `docs/fork-changes.md` (§5).
 5. Commentaire ou issue chez upstream (§6), ou rien.
+
+## 9. Décisions de Yusuf (25/11/2026)
+
+1. **C-a seul** : `git cherry-pick -x 5778afa02`, avec son test, sa reprise de `rlm_children_delete_e2e` et son fragment de changelog. **C-b n'est pas retenu** : son gain (aucune requête partie après un Stop tombé dans une fenêtre de quelques ms) n'est pas mesurable, et il fait diverger `run_once.rs`. Le diff esquissé reste au §3.2, au cas où.
+2. **Test** : le §7.1 vérifiait la garantie de C-b, pas celle de C-a. Il est adapté :
+   - le provider factice garde sa réponse fermée ;
+   - l'abandon est armé juste après la vérification de `run_once.rs:337` ;
+   - le test vérifie que le tour se termine en abandon sans la réponse scriptée ;
+   - le délai ne sert que de filet ;
+   - rouge sur son assertion sur `main`, vert avec C-a.
+   Les écarts du §4 sont acceptés là où ils s'appliquent encore.
+3. **Ligne `mod ya_abort_window;`** à `crates/pa-daemon/src/agent_engine/tests.rs:23` : accord.
+4. **`rlm_children_delete_e2e`** : retiré d'« Instabilité probable » dans `docs/fork-changes.md`, dans la même PR. Cause : la fenêtre d'abandon (91,86 s et 92,28 s, signature attribuée par la PR #3872 d'upstream). L'hypothèse du kernel lent est abandonnée.
+5. **Upstream** : texte d'un commentaire pour la PR #3872 au §10.4. Rien n'est publié.
+6. **RPC** : dire si C-a le couvre ; sinon, le noter en limite, avec la lecture du disque de R3 qui y reste (§10.3).
+
+## 10. Réponses avant le code
+
+### 10.1 Le test adapté
+
+`crates/pa-daemon/src/agent_engine/tests/ya_abort_window.rs`, test `abort_armed_after_the_admission_consult_cancels_the_registered_run`.
+
+- **Provider** : `faux_engine_with_settings` (`tests.rs:100-123`), une réponse « held reply » retenue 60 s (`delayMs`).
+- **Sonde** : à état, comme au §7.1 du ticket 35.
+  - Elle rend faux au premier appel (`model.rs:93`) et au second (`run_once.rs:337`).
+  - Au second, avant de rendre faux, elle arme l'abandon comme le worker (`commands.rs:328-374`) : drapeau levé, puis `engine.abort_in_flight_turn()`, qui ne trouve aucun run.
+  - Tous les appels suivants rendent vrai.
+  - L'écart 1 du §4 (sonde d'upstream, « run enregistré ») ne s'applique donc plus : la demande est d'armer juste après `:337`.
+- **`emit`** rend toujours `true` (écart 3 du §4, toujours valable).
+- **Assertions, sans délai** :
+  - l'abandon a été armé (la sonde a bien atteint la vérification de l'admission) ;
+  - le tour se termine par `DoneAborted` ;
+  - aucun `AssistantMessage` ne porte « held reply ».
+- **Ce que veut dire « réponse non consommée » ici** : la réponse n'est jamais livrée au tour.
+  - Le provider factice retire sa réponse de la file dès l'appel (`crates/pa-ai/src/providers/faux/mod.rs:731`), avant de la retenir (`:784-799`).
+  - Avec C-a, l'appel part, puis il est annulé pendant l'attente : la réponse est retirée, mais jamais livrée.
+  - « Jamais retirée » (écart 2 du §4, preuve par le tour suivant) est la garantie de C-b. Cet écart ne s'applique plus.
+- **Sans horloge** :
+  - **Sur `main`** : rien ne relit le drapeau après `:337`. Le tour attend la fin de la retenue, reçoit « held reply » et se termine normalement : rouge sur l'assertion `DoneAborted`. La retenue fixe seulement le moment où `main` échoue, pas l'issue.
+  - **Avec C-a** : la relecture a lieu au premier `Pending` de l'admission après `AgentStart`. Ce `Pending` arrive au plus tard quand le flux du provider attend la réponse retenue (`response.rs:157-166`, `faux/mod.rs:787-799`). L'abandon annule alors la retenue (`faux/mod.rs:794-797`) : vert, quelle que soit la vitesse de la machine.
+- **Fragilité** : la sonde compte ses appels. Si upstream ajoute une vérification avant `:337`, l'abandon serait armé plus tôt, et le test passerait sur `main` par l'ancien chemin. L'assertion `armed` ne le détecte pas. À revoir à chaque reprise d'upstream qui touche `model.rs` ou `run_once.rs`.
+
+### 10.2 C-b, archivé
+
+Non retenu (§9, point 1). Le diff du §3.2 est gardé tel quel, non compilé.
+
+### 10.3 RPC : non couvert par C-a
+
+- C-a est dans `crates/pa-daemon/src/agent_engine/turn/run_once.rs`, que le RPC n'emploie pas : il appelle directement le moteur de pa-core (`rpc/prompt_commands.rs:27-49`, `rpc/commands.rs:111-180`).
+- Le RPC n'a pas de drapeau d'abandon : `abort` appelle `agent.abort()` et suspend la pompe (`rpc/commands.rs:216-220`).
+- **Limite** : un abandon RPC arrivé avant l'enregistrement du run est perdu, et le tour va à son terme (§1.3).
+- La lecture du disque de R3 reste dans cette fenêtre (`admission.rs:47`, `:148`) : le jeton du ticket 35 n'est levé que par le worker du démon (`ya_resource_notice.rs:394-400`).
+
+### 10.4 Commentaire proposé pour la PR #3872 d'upstream (non publié)
+
+```text
+The async port has merged (L1–L5, R1–R8, up to e44e9ae9d), but this fix did not re-land with it:
+on main, run_turn_once still consults the cancel flag only at the admission future's head
+(crates/pa-daemon/src/agent_engine/turn/run_once.rs:347-352), and Agent::abort is still a no-op
+before the run registers (crates/pa-agent/src/agent.rs:1209-1213). An abort landing in
+[admission consult, registration] still waits for the provider's first streamed event.
+
+Evidence from a fork that carries the same code:
+- rlm_children_delete_e2e::a_deleted_running_child_records_the_cancel_edge failed twice in CI with
+  the signature described above: "kernel cell receipt never appeared ... delete.json" at
+  finished in 92.28s and 91.86s (30 s kill timeout + 60 s receipt poll).
+- worker::turn_stream_tests::queue::abort_and_send_queued_acks_before_the_follow_up_delivery failed
+  twice at queue.rs:725 ("the follow-up's turn never settled on the bare abort") once the fork put
+  a disk read inside that window; the window itself is upstream's.
+- We cherry-picked 5778afa02 unchanged. A test that arms the flag right after the admission
+  consult (and calls abort_in_flight_turn, like the worker) is red on its assertion without the
+  fix and green with it: <runs to fill in after CI>.
+
+Would you consider re-landing 5778afa02 as is?
+```
+
+Les identifiants de runs sont à remplir après le push 2. Le texte cite des runs du dépôt du fork : à Yusuf de décider si on les donne.
+
+## 11. Réalisation
+
+| Push | Contenu | Attendu |
+|---|---|---|
+| 1 | ce ticket ; `ya_abort_window.rs` et la ligne `mod` | **rouge sur son assertion** (`DoneAborted` absent, après la retenue de 60 s) ; tous les autres checks requis verts. `changelog fragment` (non requis) rouge : `tests.rs` compte comme livré pour ce check, et le fragment arrive avec le cherry-pick |
+| 2 | `git cherry-pick -x 5778afa02` ; doc (`docs/fork-changes.md` : fichiers repris, ligne `mod`, retrait de `rlm_children_delete_e2e`) | tout vert ; `compare_capture_prompts.py` : TOUT IDENTIQUE |
