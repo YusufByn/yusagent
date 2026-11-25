@@ -395,3 +395,16 @@ Les identifiants de runs sont à remplir après le push 2. Le texte cite des run
 |---|---|---|
 | 1 | ce ticket ; `ya_abort_window.rs` et la ligne `mod` | **rouge sur son assertion** (`DoneAborted` absent, après la retenue de 60 s) ; tous les autres checks requis verts. `changelog fragment` (non requis) rouge : `tests.rs` compte comme livré pour ce check, et le fragment arrive avec le cherry-pick |
 | 2 | `git cherry-pick -x 5778afa02` ; doc (`docs/fork-changes.md` : fichiers repris, ligne `mod`, retrait de `rlm_children_delete_e2e`) | tout vert ; `compare_capture_prompts.py` : TOUT IDENTIQUE |
+
+### 11.1 Push 1 : test seul (`f270c7113`, run `ci` 45571446031)
+
+- **Seul échec, rouge sur son assertion** : `abort_armed_after_the_admission_consult_cancels_the_registered_run` (shard 3/8, job 139058948486), `ya_abort_window.rs:53`, assertion `DoneAborted`.
+  - L'assertion `armed` passe : l'abandon a bien été armé à la vérification de l'admission.
+  - D'après les événements, le tour a attendu la fin de la retenue et reçu « held reply » : 60,05 s entre la ligne de l'utilisateur (`1795593561073`) et le début de l'assistant (`1795593621122`).
+- `pa-daemon#lib` : 1 246 réussis, 1 échec. Les autres checks requis sont verts.
+- `Check changelog fragment` (non requis) : rouge, comme prévu (§11).
+
+### 11.2 Push 2 : la reprise
+
+- `a56e9ac89` : `git cherry-pick -x 5778afa02`, sans conflit. Seul le sujet reçoit le préfixe `YA-10: ticket 36 :` (règle 12). Le corps d'upstream et la ligne `cherry picked from` sont gardés, et le `patch-id` est identique (`c8f4dae47e46`, `git patch-id`).
+- `beba6631a` : `docs/fork-changes.md` (section du ticket 36 ; entrée « Instabilité probable » de `rlm_children_delete_e2e` retirée).
