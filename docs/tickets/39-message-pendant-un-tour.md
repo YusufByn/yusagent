@@ -949,3 +949,23 @@ Options :
   - Limite : un autre client qui enverrait sans attendre n'aurait pas d'ordre garanti.
 - **(b) Pont : ordre des trames.** Une accroche dans la boucle de lecture de `daemon.rs` (`frame_order_prefix`) inscrit chaque `steer` dans l'ordre des trames, avant la tâche. C'est strict pour tout client, mais ajoute quelques lignes dans un fichier upstream.
 - **(c) Limite acceptée** : quand deux messages partent au même instant, les textes des tours rejoints peuvent être inversés. Les deux messages partent dans un seul tour du modèle, chacun une fois. E2 vérifierait les deux lignes consécutives, dans un ordre quelconque.
+
+## 21. Captures (voie B, binaire `fe13a9f5a` contre `main` `5661bdebc`)
+
+Binaires :
+- branche : artefact `ya-build-macos-arm64` du run 45640610141 (`0.10.2-continuous.fe13a9f5a…`) ;
+- `main` : artefact du run 45616770418 (`17c7e3349`, même arbre que `5661bdebc` : `git diff --stat 17c7e3349 5661bdebc` est vide).
+
+SHA256 vérifiés (`shasum -a 256 -c SHA256SUMS`). Variables : `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`.
+
+| Mesure | Commande | Résultat |
+|---|---|---|
+| Banc complet, `main` | `python3 -I bench/tools/capture/run.py --binary <main>` | `runs/20261125T150324Z`, `acp-resume` et `acp-live` `CONFORME` |
+| Banc complet, branche | `python3 -I bench/tools/capture/run.py --binary <branche>` | `runs/20261125T151615Z`, `acp-resume` `CONFORME` |
+| Toutes les requêtes, `main` contre branche | `python3 -I bench/tools/capture/compare.py runs/20261125T150324Z runs/20261125T151615Z --all --out <md>` | **TOUT IDENTIQUE** |
+| Reprise ACP | `python3 -I bench/smoke/tools/compare_capture_prompts.py <main>/acp-resume <branche>/acp-resume`, sur une copie de chaque `acp-resume/<cas>/cap/` en `<cas>/capture/` (l'outil lit `capture/*.body.json`) | 25 requêtes de chaque côté, mêmes noms, **TOUT IDENTIQUE**. Pour le format Anthropic, `system` et `messages` sont comparés à l'identique dans « autres » |
+| D-steer, E-steer-skills, branche | `python3 -I bench/tools/capture/acp_frames.py --binary <branche> --out <dossier>` | **CONFORME** (§19.3). D : paire `0001 -> 0002`, messages 1 → 4, préfixe exact au déplacement de `cache_control` près, fin `[tool_result, message]`. E : paires `0001 -> 0002` et `0002 -> 0003`, même résultat ; `[skills-changed]` dans la requête 2 seulement, celle du prompt 2 |
+| D-steer, E-steer-skills, `main` (avant) | même commande, binaire `main` | `NON CONFORME`, attendu : message refusé (`-32601`), aucune requête ne porte le message (paire `0001 -> 0002`, messages 1 → 3) |
+| Agent factice | `python3 -I bench/tools/capture/compare_frames.py <dossier branche>` | **0 écart** |
+
+Le cas `spawn` du banc affiche `ok=False` sur les deux binaires. Ce n'est pas lié à ce ticket.
