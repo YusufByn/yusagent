@@ -238,7 +238,7 @@ export function useGoalLight(
       l.speed += ((on ? 40 : 0) - l.speed) * k;
       l.opacity += ((on ? 0.3 : 0) - l.opacity) * k;
       if (!still) l.angle = (l.angle + l.speed * dt) % 360;
-      el.style.setProperty("--uh-glow-angle", `${l.angle}deg`);
+      el.style.setProperty("--ya-glow-angle", `${l.angle}deg`);
       el.style.opacity = l.opacity.toFixed(3);
       // Out and still: it sleeps until something wakes it.
       if (!on && l.opacity < 0.002 && l.speed < 0.5) {
@@ -277,7 +277,7 @@ export function useGoalLight(
       wake.current = () => {};
       for (const [name, handler] of handlers) box.removeEventListener(name, handler);
       el.classList.remove("is-driven");
-      el.style.removeProperty("--uh-glow-angle");
+      el.style.removeProperty("--ya-glow-angle");
       el.style.removeProperty("opacity");
     };
   }, [driven, shell, glow]);
