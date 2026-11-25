@@ -33,10 +33,10 @@ import { Reverts } from "./ya/reverts";
 const FLUSH_MS = 40;
 /** A tool's output past this is cut for the panel; the agent has it all. */
 const OUTPUT_LIMIT = 20_000;
-/** The agent's kernel came back (crates/uh-daemon/src/acp/kernel.rs). */
-const RESTORED = "_unharnessed/kernel/restored";
-/** A message into the running turn (crates/uh-daemon/src/acp/steer.rs). */
-const STEER = "_unharnessed/session/steer";
+/** The agent's kernel came back (Unharnessed's crates/uh-daemon/src/acp/kernel.rs; not sent yet). */
+const RESTORED = "_yus/kernel/restored";
+/** A message into the running turn (Unharnessed's crates/uh-daemon/src/acp/steer.rs; R4). */
+const STEER = "_yus/session/steer";
 
 /** The panel's own commands, beside the agent's. */
 
@@ -644,7 +644,7 @@ export class Chat {
       return "it is no longer in the agent's conversation.";
     }
     try {
-      await this.agent.request("_unharnessed/session/rewind", { sessionId, to: turn.rewindTo });
+      await this.agent.request("_yus/session/rewind", { sessionId, to: turn.rewindTo });
     } catch (error) {
       this.log.warn(`chat: going back to before turn ${edited} failed: ${errorText(error)}`);
       return errorText(error);

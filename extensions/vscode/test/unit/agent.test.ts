@@ -81,10 +81,10 @@ test("méthode non servie : rejet sur place, aucune trame", async () => {
   const h = open();
   await ready(h);
   const before = received(h.dir, lastPid(h)).length;
-  // Ticket 28 : `session/list` est servie ; `_unharnessed/session/rewind` ne l'est pas encore.
-  await assert.rejects(shown(h).agent.request("_unharnessed/session/rewind", {}), /pas encore servie/);
-  await assert.rejects(shown(h).agent.request("_unharnessed/session/steer", {}), /pas encore servie/);
-  shown(h).agent.notify("_unharnessed/whatever", {});
+  // Ticket 28 : `session/list` est servie ; `_yus/session/rewind` ne l'est pas encore (noms du ticket 32).
+  await assert.rejects(shown(h).agent.request("_yus/session/rewind", {}), /pas encore servie/);
+  await assert.rejects(shown(h).agent.request("_yus/session/steer", {}), /pas encore servie/);
+  shown(h).agent.notify("_yus/whatever", {});
   assert.equal(received(h.dir, lastPid(h)).length, before);
 });
 

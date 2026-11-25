@@ -3,21 +3,21 @@ import { errorText } from "./agent";
 import type { LocalProbe, LocalSave, LocalServer, LoginAnswer, LoginState, LoginUpdate, Provider } from "./protocol";
 import type { ShownAgent } from "./shown";
 
-// The agent's `_unharnessed/providers/*` extension methods
-// (crates/uh-daemon/src/acp/providers.rs).
-const LIST = "_unharnessed/providers/list";
-const RELOAD = "_unharnessed/providers/reload";
-const SET_API_KEY = "_unharnessed/providers/set_api_key";
-const LOGOUT = "_unharnessed/providers/logout";
-const LOGIN = "_unharnessed/providers/login";
-const LOGIN_ANSWER = "_unharnessed/providers/login_answer";
-const LOGIN_OPEN = "_unharnessed/providers/login_open";
-const LOGIN_CANCEL = "_unharnessed/providers/login_cancel";
-const LOGIN_UPDATE = "_unharnessed/providers/login_update";
-const LOCAL_SCAN = "_unharnessed/providers/local_scan";
-const LOCAL_PROBE = "_unharnessed/providers/local_probe";
-const LOCAL_SAVE = "_unharnessed/providers/local_save";
-const LOCAL_REMOVE = "_unharnessed/providers/local_remove";
+// The agent's `_yus/providers/*` extension methods, not served yet: Unharnessed's
+// (crates/uh-daemon/src/acp/providers.rs) under the yusAgent prefix (ticket 32).
+const LIST = "_yus/providers/list";
+const RELOAD = "_yus/providers/reload";
+const SET_API_KEY = "_yus/providers/set_api_key";
+const LOGOUT = "_yus/providers/logout";
+const LOGIN = "_yus/providers/login";
+const LOGIN_ANSWER = "_yus/providers/login_answer";
+const LOGIN_OPEN = "_yus/providers/login_open";
+const LOGIN_CANCEL = "_yus/providers/login_cancel";
+const LOGIN_UPDATE = "_yus/providers/login_update";
+const LOCAL_SCAN = "_yus/providers/local_scan";
+const LOCAL_PROBE = "_yus/providers/local_probe";
+const LOCAL_SAVE = "_yus/providers/local_save";
+const LOCAL_REMOVE = "_yus/providers/local_remove";
 
 /** What `set_api_key`, `logout` and `login` answer. */
 type Settled = {

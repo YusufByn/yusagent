@@ -1,6 +1,6 @@
 // yusAgent (YA-10, ticket 24, PR I) : méthodes ACP que notre pont sert
 // (`crates/pa-daemon/src/acp/daemon.rs:1052-1068` ; ticket 28 : `ya_history.rs`). Le code repris d'Unharnessed en appelle
-// d'autres (`_unharnessed/*`, `session/load`, `session/list`) : elles ne partent pas, l'appel est
+// d'autres (ticket 32 : `_yus/session/steer`, `rewind`, `_yus/kernel/*`, `_yus/providers/*`) : elles ne partent pas, l'appel est
 // rejeté sur place comme le ferait le pont (`-32601`), sans trame (fixture des trames, §5.4).
 
 import { METHOD_NOT_FOUND, RpcError } from "../acp/connection";
@@ -42,10 +42,10 @@ export function notServed(method: string): RpcError {
 export function features(): Features {
   return {
     history: served("session/list"),
-    steer: served("_unharnessed/session/steer"),
-    rewind: served("_unharnessed/session/rewind"),
-    kernel: served("_unharnessed/kernel/tail"),
-    providers: served("_unharnessed/providers/list"),
+    steer: served("_yus/session/steer"),
+    rewind: served("_yus/session/rewind"),
+    kernel: served("_yus/kernel/tail"),
+    providers: served("_yus/providers/list"),
     settings: served("_yus/settings/get"),
     // Blocs texte seulement (§5.4) : ni liens `@fichier` ni images dans le prompt.
     attachments: false,

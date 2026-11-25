@@ -11,7 +11,7 @@ export type AgentState =
   /** yusAgent (ticket 28, D3) : `session`, la session n'a pas pu s'ouvrir (`error` : la raison du pont). */
   | { kind: "failed"; error: string; stderr: string[]; session?: true };
 
-/** One provider row, as the agent's `_unharnessed/providers/list` gives it. */
+/** One provider row, as the agent's `_yus/providers/list` gives it. */
 export type Provider = {
   id: string;
   name: string;
@@ -33,7 +33,7 @@ export type Provider = {
 /** A model a local server serves, with what the server tells of it. */
 export type LocalModel = { id: string; contextWindow?: number; image: boolean; reasoning: boolean };
 
-/** A local server (`_unharnessed/providers/local_probe`, `local_scan`). */
+/** A local server (`_yus/providers/local_probe`, `local_scan`). */
 export type LocalServer = {
   /** The provider id it gets, when it is not added yet. */
   id: string;
@@ -60,7 +60,7 @@ export type LocalSave = {
   models: (Pick<LocalModel, "id"> & Partial<LocalModel>)[];
 };
 
-/** One step of a running sign-in (`_unharnessed/providers/login_update`). */
+/** One step of a running sign-in (`_yus/providers/login_update`). */
 export type LoginUpdate =
   | { kind: "progress"; message: string }
   | { kind: "waiting"; message: string }
@@ -453,7 +453,7 @@ export type Goal = {
 
 /**
  * A command the agent left running in the kernel (`h = bash(cmd)`), or that
- * ended since, as the agent's `_unharnessed/kernel/changed` gives it. A
+ * ended since, as the agent's `_yus/kernel/changed` gives it. A
  * one-shot `await bash(cmd)` is never one.
  */
 export type KernelCommand = {

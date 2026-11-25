@@ -3,11 +3,12 @@ import { errorText, type Agent } from "./agent";
 import type { KernelCommand, KernelState, KernelVariable, VariablePreview } from "./protocol";
 import type { Session } from "./session";
 
-// The agent's `_unharnessed/kernel/*` (crates/uh-daemon/src/acp/kernel.rs).
-const CHANGED = "_unharnessed/kernel/changed";
-const TAIL = "_unharnessed/kernel/tail";
-const KILL = "_unharnessed/kernel/kill";
-const PREVIEW = "_unharnessed/kernel/preview";
+// The agent's `_yus/kernel/*`, not served yet: Unharnessed's methods (crates/uh-daemon/src/acp/kernel.rs)
+// under the yusAgent prefix (ticket 32).
+const CHANGED = "_yus/kernel/changed";
+const TAIL = "_yus/kernel/tail";
+const KILL = "_yus/kernel/kill";
+const PREVIEW = "_yus/kernel/preview";
 /** A command's lines the panel shows. */
 const TAIL_LINES = 7;
 
