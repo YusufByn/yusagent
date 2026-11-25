@@ -869,3 +869,21 @@ Total : **+33, 1 modifiée, 8 fichiers**, mesuré par `git diff --numstat main -
   - X0 à X3, `suite.ts` et `suite-real.ts` : rouges comme au §16 (méthode pas encore servie) ;
   - **E7 côté extension** (« renvoyé une fois en prompt, réponse affichée une fois ») : vert sur le code actuel, car c'est déjà le comportement de `chat.ts`. C'est un test de garde.
   - Mesuré en local : sans X4, 4 en échec (X0 à X3) et E7 vert ; avec X4 appliqué le temps de l'essai, 5/5.
+
+## 19. Relevés de la voie B
+
+### 19.1 Push 1 de B (`aca908a7e`) : squelette et tests
+
+Runs `ci` 45634791032 et `ya-extension` 45634791003. `check + clippy (workspace)` vert : le squelette et les tests compilent.
+
+| Test | Run / job | Ligne du journal | Résultat |
+|---|---|---|---|
+| E1 à E5 | 45634791032 / 139277947205 (shard 5/8) | 1296-1343 | Rouges : E1 `:462` « no turnStart origin steer » ; E2 `:532` « first: … » ; E3 `:577` « one row for the message » 0 ≠ 1 ; E4 `:662` « the note: … » ; E5 `:688` `None` ≠ `Some(-32603)` |
+| E6, E7 | idem | 1300 et suivantes | Verts, comme prévu (rien n'est envoyé au worker ; leur rouge vient au push 2) |
+| U1 à U4 | 45634791032 / 139277947229 (shard 3/8) | 1563-1566, 2750-2772 | Rouges : U1 `:122` `Send` ≠ `WaitModel` ; U2 `:149` `None` ≠ `Some(7)` ; U3 `:171` `None` ≠ `Some(3)` ; U4 `:182` `Send` ≠ `Refuse` |
+| U5 | idem | 1690, 2779 | Rouge `:96` (« strictly increasing ») ; 1249 autres tests passés |
+| `ya_abort_window` | idem | — | Vert |
+| X0 à X3, E7 extension | 45634791003 / 139277235160 | 728-731 | 75 tests, 71 passés, 4 en échec (X0 à X3) ; E7 côté extension vert (garde) |
+| `suite.ts` « Send now » | idem | 1103-1112 | `covered` ≠ `clicked`, e2e 15/16 |
+| `suite-real.ts` | 45634791003 / 139277234314 | 1001-1017 | « le message suit le résultat, une réponse » ; 18/19 |
+| `Check changelog fragment` | — | — | Vert (`.changes/ya-39-steer.md`) |
