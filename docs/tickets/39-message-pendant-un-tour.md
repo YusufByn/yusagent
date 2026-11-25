@@ -1077,3 +1077,10 @@ Contrôle avant le push : `git diff --stat 85d8e91d2 HEAD -- crates/ extensions/
   - **Fichier de session** (`~/.yusagent/sessions/01a213d7-…jsonl`) : « Message à ne pas perdre. » apparaît **une seule fois** en ligne user, juste après le résultat `Tool execution aborted` de la cellule arrêtée. Le vidage en fin de run a bien retiré le message de la file de l'agent.
   - La carte de la cellule interrompue affiche « Failed » : comportement existant, pas du ticket 39. L'abandon d'un tool donne `AgentToolResult::error("Tool execution aborted")` (`crates/pa-agent/src/agent_loop/tool_call.rs:311`). L'extension passe la carte en `failed` sur ce statut (`extensions/vscode/src/chat.ts:939`).
   - Après « Resume », le modèle a relancé la cellule et repris la date, l'heure et le « OK » des tours précédents (comportement du modèle).
+- **Étape 8, message pendant un tour lancé par l'agent (D6) : conforme au second essai** (19:24, conversation [3]).
+  - Premier essai (tour 15) : message 16 refusé ; renvoyé par « Send now », refusé de nouveau, puis supprimé par la croix. Comportement cohérent (erreur de compréhension de Yusuf).
+  - Second essai (tour 18) :
+    - message refusé pendant le réveil (`message 19 not sent into the turn: The turn is over: send it as a prompt.`, 19:24:31.396), resté en file ;
+    - réveil allé au bout (« réveil fini », `turn 18 done` à 19:24:52.601) ;
+    - message parti seul une fois à la fin (`turn 19 sent`, 19:24:52.602), réponse « Bien reçu. ».
+  - **Remarque, sans correction ici** : pendant un réveil, le refus dit « The turn is over » alors que le tour tourne encore. Le texte est inexact pour le cas D6. C'est celui d'Unharnessed, que le pont renvoie pour tous les refus de la porte (`crates/pa-daemon/src/acp/ya_turns/steer.rs`, `OVER`).
