@@ -337,6 +337,7 @@ En attendant la décision : le test reste hors de la liste « Instabilité proba
   - la prochaine admission de la session appartient à la livraison suivante, qui repasse d'abord par `turn.rs:1041` : comparaison faite, jeton relevé ;
   - aucune admission ne saute donc une lecture sur la foi d'une comparaison plus ancienne que sa propre livraison.
   - Ce qui reste, déjà vrai depuis R3 et inchangé par A : si la livraison abandonnée portait une annonce, celle-ci est déjà écrite dans le fichier avant la ligne du prompt abandonnée (`turn.rs:1043-1047`). Elle reste dans la boîte et atteint le modèle à la livraison suivante. Le modèle la reçoit une fois.
+    - Note du 25/11/2026 (ticket 37) : vrai pour un Stop arrivé après `turn.rs:1044`. Un Stop arrivé entre la prise de la livraison et `turn.rs:1044` fait refuser l'écriture de l'annonce par la porte d'abandon, alors qu'elle est déjà dans la boîte : voir le cas B, `docs/tickets/37-annonce-hors-fichier.md`, §1.4 et §9.
 - **Un seul cas où une admission saute sa lecture sans être la première de sa livraison** :
   - quand la première itération de `run_turns` n'admet pas, c'est-à-dire la reprise après dépassement de fenêtre (`continue_run`, `run_once.rs:391`), et qu'une continuation autonome admet ensuite dans le même `run_prompt` ;
   - effet : un changement du disque survenu entre-temps est annoncé à l'admission suivante, pas à celle-là ; rien n'est perdu ni annoncé deux fois ;

@@ -1480,7 +1480,7 @@ Décisions de Yusuf du 24/11/2026 : `docs/tickets/31-skills-mcp-reglages.md`, §
 
 `docs/tickets/35-regression-r3-abort-queued.md`, option A (décisions de Yusuf du 24/11/2026). La relecture du disque de R3 à l'admission (`admission.rs:47`, `:148`) tombait dans la fenêtre d'upstream où un abandon est perdu : entre la vérification de `run_once.rs:337` et l'enregistrement du run (`agent.rs:606-611`). Le test d'upstream `abort_and_send_queued_acks_before_the_follow_up_delivery` a échoué à `queue.rs:725` aux runs 45376832870 et 45429516827. **Il n'est pas listé en « Instabilité probable »** : la cause est dans notre code.
 
-Dans le démon, la comparaison du worker (`worker/turn.rs:1041`) est maintenant la seule de la livraison ; l'admission prend son jeton au lieu de relire. Hors démon (`-p`, RPC) et pour les continuations autonomes du démon, l'admission compare comme avant (limite couverte par les tickets 36 et 37). **Préfixe et texte des annonces inchangés.** **Aucune ligne upstream ajoutée.**
+Dans le démon, la comparaison du worker (`worker/turn.rs:1041`) est maintenant la seule de la livraison ; l'admission prend son jeton au lieu de relire. Hors démon (`-p`, RPC), l'admission compare comme avant et le moteur écrit lui-même la ligne. Les continuations autonomes du démon sont des livraisons séparées, avec leur propre comparaison du worker (correction du ticket 37 ; limites restantes : section du ticket 37). **Préfixe et texte des annonces inchangés.** **Aucune ligne upstream ajoutée.**
 
 | Fichier | Type | Raison | Ticket |
 |---|---|---|---|
@@ -1506,6 +1506,17 @@ Conflit attendu au prochain merge d'`upstream/main` : 1 bloc trivial dans `run_o
 | `.changes/abort-before-run-registration.md` | nouveau (repris d'upstream `5778afa02`) | Fragment de changelog d'upstream. | YA-10 (ticket 36) |
 | `crates/pa-daemon/src/agent_engine/tests.rs` | modif. (1 ligne) | `:23` : `mod ya_abort_window;`. | YA-10 (ticket 36) |
 | `crates/pa-daemon/src/agent_engine/tests/ya_abort_window.rs` | nouveau (test du fork) | `abort_armed_after_the_admission_consult_cancels_the_registered_run` : abandon armé juste après la vérification de l'admission, comme le worker ; le tour se termine en abandon sans la réponse retenue. Rouge sur `main`, vert avec la reprise. | YA-10 (ticket 36) |
+
+## Annonce de skills ou de MCP hors fichier : limites (YA-10, ticket 37)
+
+`docs/tickets/37-annonce-hors-fichier.md`, fermé sans correction (décision de Yusuf du 25/11/2026). **Aucun fichier modifié.** Dans le démon, deux chemins étroits laissent une annonce `ya-resources-changed` atteindre le modèle sans être écrite dans le fichier de session :
+
+- **A. Cœur pas encore construit quand le worker compare** (`worker/turn.rs:1041` → `session_engine_impl.rs:1118` rend `None`, pas de jeton). L'admission compare (`admission.rs:47`, `:148`) ; si le disque a changé depuis la lecture de la construction, l'annonce part au modèle, et l'abonné de `run_once` ne la transmet pas au worker (`run_once.rs:247`). Fenêtre non mesurée (ticket, §1.3).
+- **B. Stop entre la prise de la livraison et l'écriture des lignes d'avance** (`turn.rs:69` ou `:80`, puis `:1044`), comparaison du worker comprise (médiane d'environ 1,8 ms, tickets 31 et 35). L'annonce est déjà dans la boîte du tour suivant ; la porte d'abandon refuse de l'écrire (`turn.rs:513-519`) ; l'admission de la livraison suivante l'envoie au modèle (`admission.rs:149`) (ticket, §1.4).
+
+Effet : la ligne « Skills updated » ou « MCP servers updated » est absente de l'extension et du TUI, et n'est pas rejouée à `session/load` ; le modèle, lui, est bien informé. Un worker reconstruit relit l'historique sans l'annonce : en général sans coût de plus (miss total déjà journalisé par `resume_prefix_change`, prompt système reconstruit) ; **un miss non journalisé possible** sur l'historique, de la ligne manquante à la fin, si l'état du disque est revenu à celui de l'ouverture (estimé, non mesuré ; ticket, §3.2). `-p` et RPC ne sont pas concernés : le moteur écrit la ligne (ticket, §2.2).
+
+Gardé pour le cas où on l'observerait : options O1 (seul le worker compare dans le démon, 2 lignes upstream dans `lifecycle.rs`) et O2 (annonce refusée retirée de la boîte et réannoncée), tests T1 (moteur du démon) et T2 (e2e, FIFO `skills/.ignore`), sans horloge (ticket, §4 et §5).
 
 ## Code repris d'Unharnessed
 

@@ -318,3 +318,13 @@ Réécrit. Dans le démon, les continuations autonomes et d'objectif sont des li
    - **T1** : la ligne `mod ya_announce_admission;` dans `agent_engine/tests.rs:24`, ou le test dans `ya_abort_window.rs` ;
    - **T2** : la FIFO dans l'e2e, `#[cfg(unix)]`.
 3. Le §11.1 du ticket 35 : note de renvoi ou rien (§6.2).
+
+## 9. Décision de Yusuf (25/11/2026) : fermé sans correction
+
+**A et B sont des limites connues**, notées aussi dans `docs/fork-changes.md` (section « Annonce de skills ou de MCP hors fichier : limites »).
+
+- **Effet** : ligne d'annonce absente de l'écran (extension, TUI) et du rejeu à `session/load` ; le modèle est bien informé.
+- **Cache** : un miss non journalisé possible, dans un seul cas (état du disque revenu à celui de l'ouverture), estimé, non mesuré (§3.2). Sinon aucun coût de plus.
+- **Gardé pour le cas où on l'observerait** : O1 et O2 (§5), T1 et T2 (§4).
+- **Ticket 35, §11.1** : note de renvoi ajoutée (vrai pour un Stop après `turn.rs:1044`, voir le cas B).
+- **`docs/fork-changes.md`, section du ticket 35** : la phrase « pour les continuations autonomes du démon, l'admission compare comme avant » est corrigée comme le §11.3 du ticket 35.
