@@ -513,3 +513,150 @@ P-B  | a05 exit=1 conflits: crates/pa-daemon/src/agent_engine/tests.rs  | dad ap
 9. Remettre `auth.json`.
 
 Les étapes 3 à 7 font des appels réels : à ta main, pas à Claude Code (règle 6). Les scripts de contrôle remis avec la PR seront d'abord lancés par Claude Code sur le binaire de la branche (règle 13).
+
+## 15. Décisions de Yusuf (25/11/2026, suite)
+
+1. **P-B.**
+   - **Écart à Unharnessed, justifié** : chez nous, P-A découpe deux fichiers upstream (environ 460 lignes) et ajoute une dépendance entre crates, pour le même résultat (§11).
+   - Lignes upstream : aiguillage dans `acp/daemon.rs` (environ 8), branchement dans `print_runtime.rs` (1 à 3), H2 dans `turn_failure_error` (1 à 2). Lignes exactes au §16.1 ; au-delà, arrêt.
+2. **Navigateur** : comportement des fonctions de login conservé.
+   - La page s'ouvre au clic sur « Sign in », et aucun des 4 fichiers de `pa-cli` n'est touché.
+   - Le bouton « Open » est gardé pour VS Code distant.
+   - Limite : double onglet possible.
+3. **Catalogue MCP par OAuth inclus** (environ 20 lignes). **`set_token` inclus**, avec le champ `token` dans le pont.
+4. **Deux PR** : R5 (pont), puis X5 (extension, avec le contrôle manuel de Yusuf). Dire si R5 seul change un comportement visible dans l'extension actuelle, et si oui prévoir un contrôle court (réponse au §16.6).
+5. **Sécurité** :
+   - un texte fixe remplace la réponse du serveur de jetons dans les erreurs OAuth (test 8) ;
+   - H2 est réglé par une fonction à nous.
+6. **Test 1 (H1)** : le cas « jeton expiré » est relevé rouge sur son assertion, puis ignoré avec renvoi au ticket E-C. **Si H1 est confirmée, E-C devient le ticket suivant** (noté aussi au journal du CDC).
+7. **`sim40.sh`** est gardé dans `bench/tools/` (`bench/tools/sim40.sh`, servira pour E-C).
+
+Merge seulement sur le « merge » de Yusuf.
+
+## 16. R5 : plan de code
+
+R5 se fait sur la branche `ya-40-constat` (PR #91), comme le ticket 39 (constat et code dans la même PR). X5 aura sa propre branche.
+
+### 16.1 Lignes upstream, exactes (les seules)
+
+| Fichier | Où (lignes de `main` à `1ece0ff04`) | Lignes ajoutées | Contenu |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | après `:43` (fin des `use`) | 2 | commentaire + `pub mod ya_providers;` (fichier `acp/daemon/ya_providers.rs`) |
+| `crates/pa-daemon/src/acp/daemon.rs` | avant `:1118` (`let Incoming::Request … else`) | 2 | commentaire + `ya_providers::notified(&incoming);` (`login_cancel`) |
+| `crates/pa-daemon/src/acp/daemon.rs` | après `:1161` (bras `ya_resources`) | 4 | commentaire + bras `other if ya_providers::serves(other) => { ya_providers::serve(other, &id, &params, link, state, &tx).await; }` |
+| `crates/pa-cli/src/print_runtime.rs` | après `:109` (`daemon_acp_create`) | 2 | commentaire + `pa_daemon::acp::daemon::ya_providers::install(ya_acp_providers::sign_in(&options.config));` |
+| `crates/pa-cli/src/print_runtime.rs` | après `:484` (`mod faux;`) | 1 | `mod ya_acp_providers;` (fichier `print_runtime/ya_acp_providers.rs`) |
+| `crates/pa-daemon/src/acp/mod.rs` | dans `turn_failure_error`, après le calcul de `kind` (`:53-59`) | 2 | commentaire + `let kind = daemon::ya_providers::auth_failure_kind(failure, kind);` (H2) |
+
+- **Total : 8 lignes dans `daemon.rs`, 3 dans `print_runtime.rs`, 2 dans `acp/mod.rs`.**
+- Module du pont déclaré comme enfant de `daemon.rs` :
+  - aucune ligne dans `acp/mod.rs` pour la déclaration ;
+  - le module est public pour `pa-cli` (`pa_daemon::acp::daemon::ya_providers`) ;
+  - il voit les fonctions de `acp/wire_config.rs`, qui sont `pub(super)` (`:264`, `:283`, `:335`).
+- Aucune ligne dans `pa-ai`, `pa-core`, `pa-tui`, ni dans les fonctions de login de `pa-cli`.
+
+### 16.2 Nouveaux fichiers
+
+**`crates/pa-daemon/src/acp/daemon/ya_providers.rs`** (pont)
+
+- **Contrat public**, sans type de `pa-tui` :
+  - trait `ProviderSignIn` : `rows`, `set_api_key`, `logout`, `login(provider_id, events)` ;
+  - types `ProviderView`, `SignInOutcome { Done, Failed(String), Cancelled }`, `SignInEvents`, `SignInEvent { Progress, Waiting, Url, Prompt { …, reply }, Team { …, reply } }` ;
+  - `install` (une seule fois, `OnceLock`).
+- **Méthodes servies** :
+  - `_yus/providers/list`, `reload`, `set_api_key`, `logout`, `login`, `login_answer`, `login_open` ;
+  - la notification `login_cancel` ;
+  - les notifications `login_update` vers le client.
+  - **`local_*` non servies** (décision 6).
+  - Formes d'Unharnessed (`uh:crates/uh-daemon/src/acp/providers.rs:1-39`, `:137-165`, `:332-388`, `:415-479`, `:491-505`).
+- **Login** :
+  - un seul à la fois ;
+  - lancé dans sa propre tâche avec un émetteur **faible** (`downgrade`), pour que la fin de stdin n'attende pas un login en cours ;
+  - invites numérotées ; `login_cancel` lève le drapeau du flux et lâche les invites en attente.
+- **Après un `done`** (clé, déconnexion, login) et sur `reload` : `Reload` au worker de la session (`DaemonCommand::Reload`), relecture de `get_available_models` dans `HostedConfig.models`, puis `refresh_wire_config`, qui publie `config_option_update` si les options changent. Tout se fait sous `config.queue`, comme `set_config_option`.
+- **Messages d'échec** : textes fixes du pont, jamais le texte d'un flux.
+- **`auth_failure_kind`** (H2) : un `failure` qui contient `No API key found for ` ou `Authentication failed for "` donne `authentication`. Les autres valeurs de `kind` ne changent pas.
+
+**`crates/pa-cli/src/print_runtime/ya_acp_providers.rs`** (implémentation, au-dessus de `ProviderAuth` de `crates/pa-cli/src/provider_login.rs:189`)
+
+- **Lignes** : `login_options` et `logout_options`, traduites en `ProviderView` :
+  - `method` = `subscription` si `AuthType::Oauth` ;
+  - `login` = `browser` si `AuthFlow::TerminalFlow` ;
+  - `connected` = `configured` ;
+  - `removable` = l'identifiant figure dans les lignes de déconnexion ;
+  - `note` = l'étiquette de statut d'une source hors `auth.json`.
+  - **La ligne `anthropic` par abonnement est retirée** (décision 5).
+- **Clé** : la ligne `ApiKeyPrompt` de l'identifiant, puis `login(row, Some(key))`.
+- **Login** : la ligne `TerminalFlow` de l'identifiant, ou une ligne `mcp:<id>` (comme `uh:…/providers.rs:596-607`), puis `login_on_panel`.
+  - Le panneau est un `AuthPanelHandle` neuf ; une tâche traduit ses `AuthPanelRequest` en `SignInEvent`.
+  - Le flux tourne dans un fil à lui, avec son propre runtime, pour ne pas bloquer l'arrêt du runtime du pont.
+  - La Claude par abonnement est refusée (ligne cachée).
+- **Issue** :
+  - `Status` → `Done` ; pour `mcp:<id>`, `Done` seulement si `auth.json` contient `mcp:<id>` ensuite (`Status` porte aussi les échecs MCP, `provider_login.rs:513-517`) ;
+  - `Error(_)` → `Failed` avec un **texte fixe** (décision 5 : jamais le corps d'une réponse de jetons, §13.1) ;
+  - `Cancelled` → `Cancelled`.
+- **Annulation** : `cancel_flag()` du panneau, lu par les flux Claude et Codex (`subscription_login.rs:102-104`, `codex_subscription_login.rs:57-59`).
+  - `FlowCancel::mark` est `pub(crate)` dans `pa-tui` (`crates/pa-tui/src/auth_panel.rs:161`), donc inaccessible à `pa-cli`.
+  - **Limite** : un login MCP en attente du navigateur ne s'arrête qu'à sa prochaine invite ou à sa fin.
+
+**`crates/pa-daemon/src/acp/ya_resources.rs`** (fichier du fork, décision 3)
+
+- `server_row` reçoit aussi les `services` de `get_mcp_connections` (`crates/pa-daemon/src/mcp_connections.rs:73-84`).
+- Un service du catalogue avec `pasteToken: true` (`crates/pa-core/src/mcp/catalog_plugin_views.rs:44`) reçoit `token: "<label> token"`.
+- **Écart à Unharnessed** : son texte vient du champ du catalogue (`uh:crates/uh-core/src/mcp/manager_catalog.rs:194-203`, fonction que notre cœur n'a pas) ; le pont n'a que le nom du service.
+
+**Tests** :
+- `crates/pa-daemon/src/acp/daemon/ya_providers_tests.rs` ;
+- `crates/pa-cli/tests/ya_providers_acp_e2e.rs` ;
+- tests unitaires dans `ya_acp_providers.rs` et `ya_resources.rs`.
+
+### 16.3 Tests, dans l'ordre du push 1
+
+Fournisseur intercepté :
+- un serveur HTTP local qui relève l'en-tête `Authorization` et répond 400, ce qui ne relance pas (forme de `crates/pa-cli/tests/ya_permissions_e2e.rs:33-90`) ;
+- un fournisseur `ya40` en `openai-responses` dans `models.json`, avec la clé de repli `sk-ya40-fallback`. Un identifiant rangé passe avant elle (`crates/pa-core/src/models/registry.rs:818-833`).
+
+| # | Test | Où | Rouge attendu au push 1 |
+|---|---|---|---|
+| 1a | H1, clé API réécrite dans `auth.json` hors du pont | e2e | 2e requête : `Bearer sk-ya40-old` au lieu de `sk-ya40-new` (si H1) |
+| 1b | H1, jeton OAuth (fournisseur `ya40`) remplacé dans `auth.json` par un jeton neuf, comme le ferait un rafraîchissement par un autre processus | e2e | `Bearer tok-ya40-old` au lieu de `tok-ya40-new` (si H1) |
+| 2 | clé poussée dans la session vivante par `_yus/providers/set_api_key` | e2e | `Bearer sk-ya40-old` après `done` (le squelette répond `done` sans rien faire) |
+| 3 | liste des modèles : `openai` avec un modèle `ya40-extra` dans `models.json` (fournisseur intégré, pas de clé de repli), puis `set_api_key` | e2e | aucun `config_option_update` avec `["openai","ya40-extra"]` |
+| 4 | `_yus/providers/list` : `openai-codex` par abonnement et navigateur, `ya40` par clé, aucune ligne `anthropic` par abonnement | e2e + unitaire `pa-cli` | `providers` vide / ligne Claude présente |
+| 5 | `set_api_key` : `auth.json` en 0600 contient la clé ; la réponse ne la contient pas | e2e | entrée absente |
+| 6 | login : `login_update` dans l'ordre (`url`, `prompt`), `login_answer` relayé, second `login` refusé, `login_cancel` → `cancelled`, `login_open` sur l'URL du login seulement | unitaire `pa-daemon` (faux `ProviderSignIn`) | aucune trame `login_update` |
+| 7 | H2 : les deux textes de la garde donnent `kind: "authentication"` | unitaire `pa-daemon` (`turn_failure_error`) | `"other"` |
+| 8 | secrets : `sk-ya40-secret-…` absente du stderr du pont, des fichiers de session et du journal d'usage ; présente dans `auth.json` et dans l'en-tête reçu par le serveur. Échec de flux avec un corps qui contient un jeton : texte fixe | e2e + unitaire `pa-cli` | précondition `auth.json` ; texte brut recopié |
+| 13 | `_yus/mcp/list` : `token` pour un service `pasteToken` | unitaire `ya_resources` | champ absent |
+
+- **Cas 1a et 1b** : ils restent rouges après R5, puisque l'écriture se fait hors du pont et relève de E-C.
+  - Une fois leur rouge relevé, ils passent en `#[ignore = "E-C : …"]` (décision 6).
+  - **Écart à la décision 6** : elle ne nommait que le cas « jeton expiré ».
+  - Un vrai jeton expiré que l'agent rafraîchit lui-même ne se teste pas hors ligne : les URL de jetons sont en dur (`crates/pa-ai/src/oauth/openai_codex.rs:21`, `anthropic.rs:20`) et seuls les quatre abonnements se rafraîchissent (`crates/pa-core/src/auth/provider_oauth.rs:190-198`). 1b teste ce qui est observable : un jeton renouvelé sur disque n'atteint pas la session vivante.
+  - Les tests d'upstream injectent une intégration OAuth (`dad2232cc`), ce qui relève de E-C.
+- **Squelette du push 1** :
+  - `serve` répond des formes neutres : `{providers: []}`, `{providers: [], outcome: "done"}`, `{}` ;
+  - `auth_failure_kind` rend `kind` tel quel ;
+  - l'implémentation de `pa-cli` rend des listes vides et recopie le texte d'échec ;
+  - `server_row` ignore `services`.
+  - Chaque test compile et échoue sur son assertion.
+
+### 16.4 Captures (après le code)
+
+- `python3 bench/tools/capture/compare.py --all` sur le binaire de la branche.
+- `acp_frames.py` puis `compare_frames.py` : trames d'ouverture inchangées (rien de plus envoyé à l'ouverture), et cas des nouvelles méthodes avec une clé factice.
+
+### 16.5 Préfixe
+
+- Prompt système et tools : inchangés.
+- `Reload` après un login ne change que la clé et les en-têtes ; le corps reste le même, à vérifier par les captures (§16.4).
+
+### 16.6 R5 seul : comportement visible dans l'extension actuelle
+
+**Aucun changement visible attendu.**
+- L'extension rejette sur place les `_yus/providers/*` (`extensions/vscode/src/ya/methods.ts:10-33`, `agent.ts:97`) et n'envoie jamais `login_cancel`.
+- Le champ `token` ne sert qu'à la section du catalogue, masquée (`webview/SettingsMcp.tsx:15`, `:137`, `:262`).
+- H2 change `kind` pour les deux textes de la garde :
+  - « No API key found for » donne déjà le message fixe de l'extension, qui le reconnaît dans `details` (`src/ya/auth.ts:15`) ;
+  - « Authentication failed for » ne sort que pour un identifiant OAuth sans source utilisable (`crates/pa-daemon/src/agent_engine/turn/model.rs:46-64`). `has_auth` ne regarde pas l'expiration (`crates/pa-core/src/auth/manager.rs:595-603`, `:623-625`) ; seules les marques « périmé » l'écartent, et elles ne sont posées qu'en test (`crates/pa-daemon/src/model_switch.rs:500`).
+- **Pas de contrôle manuel pour R5.** Les scripts de contrôle (captures) sont lancés par Claude Code sur le binaire de la branche.
