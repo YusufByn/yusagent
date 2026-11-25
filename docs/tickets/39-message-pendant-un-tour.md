@@ -1084,3 +1084,9 @@ Contrôle avant le push : `git diff --stat 85d8e91d2 HEAD -- crates/ extensions/
     - réveil allé au bout (« réveil fini », `turn 18 done` à 19:24:52.601) ;
     - message parti seul une fois à la fin (`turn 19 sent`, 19:24:52.602), réponse « Bien reçu. ».
   - **Remarque, sans correction ici** : pendant un réveil, le refus dit « The turn is over » alors que le tour tourne encore. Le texte est inexact pour le cas D6. C'est celui d'Unharnessed, que le pont renvoie pour tous les refus de la porte (`crates/pa-daemon/src/acp/ya_turns/steer.rs`, `OVER`).
+- **Étape 9, reprise après « Reload Window » (`--resume` et `session/load`) : conforme.** Nouvel agent `85d8e91d2`, `chat: loaded 18 turns; 12 tools, 13 texts`, aucune ligne `sent` après le chargement. Chaque message envoyé pendant un tour apparaît une fois, dans l'ordre, avec son texte complet. Le message 16 supprimé est absent.
+- **Contrôle du §12.4 conforme sur toutes les étapes.** Décision de Yusuf : merge.
+- **Remarques de Yusuf, sans correction ici** :
+  1. l'historique est trop étroit : le titre d'une conversation ne se lit qu'en élargissant beaucoup le panneau (passe de design) ;
+  2. au rejeu, le tour arrêté par Stop s'affiche « Worked·1 cell », sans trace de l'arrêt ;
+  3. le « joute » de 19:00 se rejoue tel quel (envoyé ainsi).
