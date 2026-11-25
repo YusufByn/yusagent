@@ -660,3 +660,42 @@ Fournisseur intercepté :
   - « No API key found for » donne déjà le message fixe de l'extension, qui le reconnaît dans `details` (`src/ya/auth.ts:15`) ;
   - « Authentication failed for » ne sort que pour un identifiant OAuth sans source utilisable (`crates/pa-daemon/src/agent_engine/turn/model.rs:46-64`). `has_auth` ne regarde pas l'expiration (`crates/pa-core/src/auth/manager.rs:595-603`, `:623-625`) ; seules les marques « périmé » l'écartent, et elles ne sont posées qu'en test (`crates/pa-daemon/src/model_switch.rs:500`).
 - **Pas de contrôle manuel pour R5.** Les scripts de contrôle (captures) sont lancés par Claude Code sur le binaire de la branche.
+
+## 17. R5, push 1 : relevé des rouges (`101c74157`)
+
+Run `ci` 45687309764 :
+- `check + clippy (workspace)` et `windows cross-check + clippy` en échec sur un seul lint, `clippy::unused_async_trait_impl`, sur le `run` neutre du squelette (`crates/pa-daemon/src/acp/daemon/ya_providers.rs:255`). Le code du push 2 l'enlève, puisque `run` y attend le flux.
+- Les shards de tests ont compilé et tourné. **Seuls les tests du ticket échouent, chacun sur son assertion** :
+
+| Test | Job (run 45687309764) | Ligne | Assertion rouge |
+|---|---|---|---|
+| 1a `h1_an_api_key_rewritten_on_disk_reaches_the_running_session` | shard 4/8 | `crates/pa-cli/tests/ya_providers_acp_e2e.rs:391` | « H1: the running session kept the key it was built with » (précondition `:384` passée) |
+| 1b `h1_an_oauth_token_renewed_on_disk_reaches_the_running_session` | shard 4/8 | `:420` | « H1: the running session kept the token it was built with » (précondition `:413` passée) |
+| 2 `set_api_key_pushes_the_key_into_the_running_session` | shard 4/8 | `:444` | « the key set through the bridge serves the next request » |
+| 3 `a_new_key_lists_its_models_in_the_running_conversation` | shard 4/8 | `:482` | « the picker lists ["openai","ya40-extra"] once its key is stored » (seule trame : la réponse du squelette) |
+| 4 `list_gives_the_providers_screen_without_the_claude_subscription` | shard 4/8 | `:508` | « the ChatGPT subscription row » : `providers: []` |
+| 5 `set_api_key_stores_the_key_and_never_answers_it` | shard 4/8 | `:531` | « the key in auth.json » : `Null` |
+| 8 `a_key_set_through_the_bridge_is_nowhere_but_auth_json` | shard 4/8 | `:584` | précondition « the key is stored » : `Null` |
+| 4 (unitaire) `the_rows_leave_out_the_claude_subscription` | shard 8/8 | `crates/pa-cli/src/print_runtime/ya_acp_providers.rs:117` | « the ChatGPT subscription row » |
+| 8 (unitaire) `a_failed_flow_answers_a_fixed_text` | shard 8/8 | `:145` | « the token leaked: OpenAI Codex token exchange response missing fields: {"access_token":"sk-ya40-echoed"} » |
+| 6 `a_sign_in_streams_its_steps_and_takes_the_answer` | shard 3/8 | `crates/pa-daemon/src/acp/daemon/ya_providers_tests.rs:74` | « a login_update frame within 5 s: Elapsed » |
+| 6 `login_cancel_settles_the_sign_in_cancelled` | shard 3/8 | `:74` | idem |
+| 7 `the_guard_texts_are_authentication_failures` | shard 3/8 | `:174` | « missing credential » : `"other"` au lieu de `"authentication"` |
+| 13 `a_pasted_token_service_says_what_to_paste` | shard 3/8 | `crates/pa-daemon/src/acp/ya_resources.rs:596` | `token` : `Null` |
+
+- Shards 3/8 : 1 254 réussis, 4 en échec ; 8/8 : 318 réussis, 2 en échec ; 4/8 : 7 en échec, les 7 du fichier. Les autres shards sont verts.
+- `Changelog fragment` en échec : fragment ajouté au push 2 (`.changes/ya-40-constat.md`).
+
+### 17.1 H1 confirmée
+
+- 1a et 1b échouent sur l'assertion H1, après une précondition passée : la 1re requête porte bien la clé, ou le jeton, rangé au départ.
+- La 2e requête ne porte pas la valeur réécrite dans `auth.json`.
+- GitHub masque les valeurs `Bearer …` dans le journal (`left: "***"`). Au push 2, les messages donnent une étiquette non secrète par requête (`old`, `renewed`, `fallback`), pour montrer la valeur sans la clé.
+- **Selon la décision 6, E-C devient le ticket suivant** (noté au journal du CDC).
+- 1a et 1b restent rouges au push 2 (écriture hors du pont, relève de E-C). Ils passent en `#[ignore = "E-C"]` au push suivant, une fois l'étiquette relevée.
+
+### 17.2 Écart au push 1, corrigé au push 2 : test 4
+
+- Le test supposait que `ya40`, avec sa seule clé de repli dans `models.json`, apparaîtrait « connecté ».
+- Or les lignes du TUI lisent le statut avec un `AuthStorage` sans résolveur de repli (`crates/pa-core/src/auth/manager.rs:249`, `:512-514`), et une clé de repli y compte comme non configurée (`configured: false`, `:521`).
+- Correction : la clé de `ya40` est rangée dans `auth.json` avant le lancement, et le test vérifie `connected` et `removable`. Le rouge du push 1 portait sur une assertion antérieure (`:508`, ligne ChatGPT absente).
