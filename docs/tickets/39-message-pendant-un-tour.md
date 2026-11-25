@@ -907,3 +907,45 @@ Runs `ci` 45637924855 et `ya-extension` 45637924952. `ya-extension` vert (X4 ser
 - Notre module ne peut pas retrouver l'ordre des trames sans accroche dans la boucle de lecture du pont (`daemon.rs`). Unharnessed a la même concurrence côté client.
 
 Choix à soumettre à Yusuf (§20).
+
+### 19.3 Push 3 de B (`fe13a9f5a`) : vidage au règlement
+
+Runs `ci` 45640624529, `ya-extension` 45640624456 et `ya-build-macos-arm64` 45640610141.
+
+| Test | Résultat |
+|---|---|
+| E1, E3, E4, E5 | Verts |
+| **E6, E7** | **Verts** : le vidage au règlement les fait passer (rouges au push 2) |
+| **E2** | **Rouge**, même cause qu'au §19.2 (job 139298202139, shard 5/8, `:533`, journal 1301-1318) : `second note` avant `first note` |
+| U1 à U5, `ya_abort_window` | Verts |
+| Autres shards, clippy, fmt, Windows | Verts |
+| `ya-extension` : unitaires, `suite.ts`, e2e vrai binaire (job 139297897753) | **Verts** |
+
+**Captures sur le binaire `fe13a9f5a`** (artefact du run 45640610141, SHA256 vérifié). Commande :
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/acp_frames.py --binary <yusagent> --out <dossier>
+```
+Résultat `CONFORME` (sortie complète au §21) :
+- **D-steer** :
+  - message accepté (`{}`), tour périmé refusé (`-32603`), `turnStart` `steer` sous le tour du prompt ;
+  - préfixe N → N+1 (`0001 -> 0002`) : prompt système, tools et paramètres identiques ; messages 1 → 4, identiques au déplacement de `cache_control` près ;
+  - la requête du message finit par `[tool_result, texte du message]`.
+- **E-steer-skills** :
+  - mêmes contrôles ;
+  - deux paires, chacune préfixe exact au déplacement de `cache_control` près ;
+  - la requête du message (n° 1) ne porte pas `[skills-changed]` ; l'annonce est dans la requête 2, celle du prompt 2.
+- **`compare_frames.py`** (agent factice) : **0 écart**. Réponse d'un message accepté, refus d'un tour périmé (code et texte identiques), forme et place du `turnStart` `steer`.
+
+## 20. Ordre de deux messages envoyés coup sur coup (E2) : choix à soumettre
+
+Constat au §19.2 : deux `_yus/session/steer` envoyés sans attendre la réponse du premier atteignent le worker dans un ordre quelconque. Le pont traite chaque requête dans sa propre tâche (`daemon.rs:558-568`). L'extension les envoie ainsi (`chat.ts:448-457`) et rattache les tours aux messages dans son ordre d'envoi (`chat.ts:822-850`).
+
+Options :
+- **(a) Extension : un message après l'autre.**
+  - `steerAll` n'envoie le message suivant qu'après la réponse du précédent, quelques lignes dans `chat.ts`.
+  - Le pont ne répond `{}` qu'après l'accusé du worker, qui a mis le message dans la file de l'agent. L'ordre de la file est donc l'ordre d'envoi, et le rattachement des `turnStart` suit.
+  - Aucune ligne upstream.
+  - E2 enverrait le second message après la réponse du premier, comme l'extension.
+  - Limite : un autre client qui enverrait sans attendre n'aurait pas d'ordre garanti.
+- **(b) Pont : ordre des trames.** Une accroche dans la boucle de lecture de `daemon.rs` (`frame_order_prefix`) inscrit chaque `steer` dans l'ordre des trames, avant la tâche. C'est strict pour tout client, mais ajoute quelques lignes dans un fichier upstream.
+- **(c) Limite acceptée** : quand deux messages partent au même instant, les textes des tours rejoints peuvent être inversés. Les deux messages partent dans un seul tour du modèle, chacun une fois. E2 vérifierait les deux lignes consécutives, dans un ordre quelconque.
