@@ -762,7 +762,46 @@ const x3Tests: [string, () => Promise<void>][] = [
     },
   ],
 ];
-tests.push(...x3Tests, ...resumeTests);
+// Ticket 39 (X4) : un message pendant un tour (`_yus/session/steer`), après les autres (conversation neuve).
+const steerTests: [string, () => Promise<void>][] = [
+  [
+    "message pendant un tour (ticket 39) : Cmd+Entrée pendant une cellule, le message suit son résultat dans le même tour",
+    async () => {
+      writeScript([
+        cell("call-steer", "import time\nopen('steer-started.txt', 'w').write('x')\ntime.sleep(4)\nprint('cellule finie')"),
+        { text: "message pris" },
+      ]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await post({ type: "send", text: "cellule longue", images: [] });
+      await waitFor(() => existsSync(join(workspace, "steer-started.txt")), "cellule commencée", SLOW);
+      await post({ type: "send", text: "ajoute ceci", images: [], now: true });
+      await idle();
+      await shows("message pris", "réponse au message");
+      const path = (await state()).saved?.path;
+      assert.ok(path, "fichier de la conversation");
+      const rows = readFileSync(path, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } })
+        .filter((entry) => entry.type === "message")
+        .map((entry) => {
+          const content = entry.message?.content;
+          const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((block: { text?: string }) => block.text ?? "").join("") : "";
+          return `${entry.message?.role}:${text}`;
+        });
+      const result = rows.findIndex((row) => row.startsWith("toolResult:"));
+      assert.ok(result >= 0, `résultat de la cellule : ${JSON.stringify(rows)}`);
+      assert.deepEqual(rows.slice(result + 1), ["user:ajoute ceci", "assistant:message pris"], "le message suit le résultat, une réponse");
+      assert.equal(rows.filter((row) => row === "user:ajoute ceci").length, 1, "envoyé une fois");
+      const last = (await turns()).at(-1);
+      assert.equal(last?.prompt?.text, "ajoute ceci");
+      assert.equal(last?.state, "done");
+      assert.deepEqual((await state()).chat.queue, [], "rien en file");
+    },
+  ],
+];
+tests.push(...x3Tests, ...resumeTests, ...steerTests);
 
 /** Après un échec : chaque cellule de la conversation (statut, sortie, fichiers), et le workspace. */
 async function diagnose(): Promise<void> {

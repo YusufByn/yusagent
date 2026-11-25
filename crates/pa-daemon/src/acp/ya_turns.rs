@@ -28,6 +28,9 @@ use super::meta::{self, PrimeAgentEventPhase, PrimeAgentOutcome, PrimeAgentSessi
 use super::producer::UpdateProducer;
 use super::types::AcpSessionUpdate;
 
+// yusAgent (YA-19, ticket 39): `_yus/session/steer`, a message into the running prompt turn.
+pub(super) mod steer;
+
 /// How often a prompt of this client checks whether a turn it did not start ended (the
 /// Unharnessed admission retry, `prompt.rs:38-61`).
 const PROMPT_WAIT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -61,6 +64,9 @@ impl TurnStartMeta {
 pub(crate) struct AgentTurns {
     /// The worker turn running outside a prompt of this client.
     running: Option<AgentTurn>,
+    /// yusAgent (YA-19, ticket 39): the messages sent into the running prompt turn.
+    #[allow(dead_code)] // Ticket 39, push 1: the skeleton.
+    steers: steer::Steers,
 }
 
 #[derive(Debug)]

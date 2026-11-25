@@ -1160,6 +1160,10 @@ async fn handle_incoming(
             };
             super::ya_resources::serve(&bound, other, &id, &params, &tx).await;
         }
+        // yusAgent (YA-19, ticket 39): a message into the running prompt turn.
+        super::ya_turns::steer::METHOD => {
+            super::ya_turns::steer::serve(&id, &params, link, state, &tx).await;
+        }
         "session/set_config_option" => {
             handle_set_config_option(id, params, link, state, tx).await;
         }
@@ -1714,6 +1718,8 @@ async fn prompt_turn(
         producer.finish_prompt(turn_id).await;
         return cancelled_response(&id);
     }
+    // yusAgent (YA-19, ticket 39): the messages sent into the turn ran; no other joins it.
+    let autonomous_status = super::ya_turns::steer::seal(state, link, autonomous_status).await;
     // The completion observation's roster read (TS `getRlmChildSnapshots`
     // throws): a failed read errors the prompt before the boundary, never
     // publishes a wrong count — with the same typed data as every other

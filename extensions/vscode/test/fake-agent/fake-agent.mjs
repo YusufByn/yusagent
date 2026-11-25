@@ -131,6 +131,10 @@ const settle = () => {
 const waiting = new Map();
 let cancelled = null;
 let nextRequest = 0;
+// Ticket 39 : le tour qui prend les messages envoyés pendant lui (`_yus/session/steer`,
+// `crates/pa-daemon/src/acp/ya_turns/steer.rs`) : son identifiant, et ce qu'il fait des messages.
+let steerable = null;
+const steered = [];
 
 function askPermission(toolCallId) {
   // Préfixe des identifiants du pont (`ID_PREFIX`, `crates/pa-daemon/src/acp/ya_permissions.rs`).
@@ -317,10 +321,49 @@ async function onPrompt(id, text) {
       update({ sessionUpdate: "config_option_update", configOptions: config });
       return finish(id);
     }
+    // Ticket 39 : une cellule longue, jusqu'à un message envoyé pendant le tour ou un Stop. Comme le
+    // pont : le message rejoint le tour (`turnStart` `steer`, même `promptTurnId`), sa réponse
+    // suit, puis la fin du tour ; un Stop arrête le tour sans le prendre.
+    case "longue": {
+      update({ sessionUpdate: "tool_call", toolCallId: "call-l", title: "Python cell", kind: "execute", status: "in_progress", rawInput: { code: "await asyncio.sleep(20)" } });
+      const taken = await new Promise((resolve) => {
+        cancelled = () => resolve(null);
+        steerable = { turn: promptTurnId, take: resolve };
+      });
+      steerable = null;
+      cancelled = null;
+      if (taken === null) {
+        steered.length = 0;
+        return respond(id, { stopReason: "cancelled" });
+      }
+      update({ sessionUpdate: "tool_call_update", toolCallId: "call-l", status: "completed" });
+      for (const message of taken) {
+        turnStart({ origin: "steer" });
+        chunk(`pris : ${message}`);
+      }
+      return finish(id);
+    }
     default:
       chunk(`écho : ${text}`);
       return finish(id);
   }
+}
+
+/** Ticket 39 : `_yus/session/steer`, refus et réponses du pont (D2). */
+function onSteer(id, params) {
+  const text = (params?.prompt ?? []).map((block) => block.text ?? "").join("");
+  const over = () => fail(id, -32603, "Internal error", { details: "The turn is over: send it as a prompt." });
+  if (!steerable || params?.turn !== steerable.turn) return over();
+  if (text.startsWith("/")) return fail(id, -32602, "Invalid params", { details: "A command cannot join a running turn." });
+  // Un texte « refusé… » : le pont le refuse comme un tour fini (la fenêtre de fin de tour).
+  if (text.startsWith("refusé")) return over();
+  respond(id, {});
+  steered.push(text);
+  // Le tour le prend à sa prochaine étape, sauf Stop d'ici là.
+  const target = steerable;
+  setTimeout(() => {
+    if (steerable === target) target.take(steered.splice(0));
+  }, 300);
 }
 
 // Ticket 31 (X3) : les écrans skills, MCP et réglages, aux formes du pont
@@ -528,6 +571,8 @@ function onMessage(message) {
       void onPrompt(id, text);
       return;
     }
+    case "_yus/session/steer":
+      return onSteer(id, params);
     case "session/cancel":
       if (cancelled) {
         const resolve = cancelled;

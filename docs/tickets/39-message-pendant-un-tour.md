@@ -570,3 +570,72 @@ Binaire de la branche (artefact `ya-build-macos-arm64`) dans `yusagent.binaryPat
    - « play » l'envoie **une fois**, comme un prompt.
 8. Pendant un tour lancé par l'agent (`bash()` non lu, réveil `[bash-done]`), Cmd+Entrée sur un message. Attendu : le message reste en file et part en prompt après le tour (D6).
 9. Fermer et rouvrir la conversation (`session/load`) : les messages des étapes 3 et 5 sont rejoués comme des prompts (limite D4).
+
+## 13. Premier push : tests et squelette (préparé, pas encore poussé)
+
+Décision de Yusuf du 25/11/2026 : plan du §12 validé. Le premier push contient les tests et un squelette (branche de dispatch dans `daemon.rs`, module `ya_turns/steer.rs` avec ses signatures, sans comportement). Chaque test doit compiler et échouer sur son assertion, ni sur la compilation ni sur `-32601`. Limites acceptées : TUI attaché, Stop pendant l'envoi, D4, D6 (§12.1 et `docs/fork-changes.md`).
+
+### 13.1 Le squelette
+
+- **`crates/pa-daemon/src/acp/ya_turns/steer.rs`** (nouveau) :
+  - `METHOD` ;
+  - l'état `Steers` et ses méthodes, qui rendent une valeur neutre : `gate` → `Send`, `seal_step` → `Closed`, `row` → `None`, `waiting` et `orphaned` → `false` ;
+  - `steer_start()` ;
+  - `serve`, qui répond `{}` sans rien envoyer au worker ;
+  - `seal`, qui rend le statut reçu.
+  - `#![allow(dead_code)]` et des `allow` clippy marqués « push 1 », retirés avec le code.
+- **`ya_turns.rs`** : `pub(super) mod steer;` et le champ `steers` de `AgentTurns`.
+- **`daemon.rs`** (+6 lignes) :
+  - dispatch en `:1163-1166` ;
+  - appel de `seal` en `:1721-1722`.
+
+### 13.2 Écarts au plan du §12, faits en préparant le push
+
+1. **Place de `seal`.** Le plan disait `daemon.rs:1710`. L'appel est **après** la vérification d'annulation qui suit l'attente (`:1713-1716` de `main`), soit `:1721` sur la branche, toujours avant la frontière. Raison : après un « close puis new », la session de l'état est une autre ; cette vérification renvoie déjà le tour en `cancelled` avant que `seal` puisse toucher l'état d'une autre session. Toujours deux lignes.
+2. **Stop pendant l'envoi.** Les champs `cancelling` et `turn` de `HostedSession` sont privés à `daemon.rs` (`:276`, `:283`). Les lire demanderait une troisième modification upstream. Le module ne peut donc ni refuser un message pendant un Stop armé, ni envoyer `AbortAndClearQueue` après l'accusé de réception (plan §12.1, point 5).
+   - Il surveille plutôt chaque message accepté (relecture toutes les 50 ms). Si le tour finit **sans `seal`** (Stop, échec), soit `active_prompt_turn` différent du tour alors que la fermeture n'a pas eu lieu, il retire le message de la file `steering` du worker :
+     - `get_queue` ;
+     - puis `mutate_queued_message` avec `delete`, sur l'index et le texte attendu (`crates/pa-daemon/src/queue_commands.rs:25-120`, `:172-177`).
+   - Le retrait est ciblé : il ne touche ni aux avis `[bash-done]` ni aux messages d'un autre client.
+   - S'il a déjà commencé, c'est la limite acceptée « Stop pendant l'envoi ».
+   - Le même chemin couvre un tour **en échec** avec un message accepté.
+   - U5 devient `a_turn_ended_without_its_close_orphans_its_messages`.
+3. **E6 lit la file du worker** par le socket du démon (`list`, puis `get_queue`, comme `ya_acp_resume_e2e.rs:575-600`). Sans cela, E6 passerait avec le squelette : rien n'est envoyé, donc rien ne tourne après le Stop.
+4. **Tests de l'extension.**
+   - Le gros des tests va dans `test/unit/agent.test.ts` (vrai processus de l'agent factice, sans VS Code), qui tourne en local.
+   - `suite.ts` garde le test du bouton « Send now » (webview).
+   - `suite-real.ts` reçoit un test en fin de liste.
+5. **`serve`** prend `&id`, `&params` et `&tx`.
+
+### 13.3 Assertion sur laquelle chaque test doit échouer au premier push
+
+| Test | Assertion rouge attendue | Cause |
+|---|---|---|
+| E1 `a_steer_joins_the_running_prompt_turn` | `no turnStart origin steer` (`unwrap_or_else` sur la position du `turnStart` `steer`). Avant : réponse `{}`, `end_turn` et `ended` passent | `serve` n'envoie rien |
+| E2 `two_steers_go_in_one_model_turn` | `first: …` : la ligne `first note` absente du fichier de session | idem |
+| E3 `a_steer_is_delivered_once` | `one row for the message` : 0 au lieu de 1 | idem |
+| E4 `a_steer_never_goes_before_the_prompt_row` | `the note: …` : la ligne `early note` absente (l'ordre est vérifié ensuite) | idem |
+| E5 `steer_refusals` | `a stale turn` : `None` (réponse `{}`) au lieu de `Some(-32603)` | `serve` répond `{}` à tout |
+| E6 `stop_with_a_steer_waiting` | `the message waits in the worker's lane` : `[]` au lieu de `["waiting note"]` | rien dans la file |
+| U1 `seal_waits_again_for_a_message_accepted_after_the_wait` | `seal_step` vaut `Closed` au lieu de `Rewait` | squelette neutre |
+| U2 `a_steer_waits_for_the_prompt_row` | `gate` vaut `Send` au lieu de `WaitRow` | idem |
+| U3 `seal_waits_for_a_message_in_flight` | `seal_step` vaut `Closed` au lieu de `WaitSending` | idem |
+| U4 `announce_maps_rows_to_steers` | `waiting(one) && waiting(two)` faux | idem |
+| U5 `a_turn_ended_without_its_close_orphans_its_messages` | `the turn ended without its close` : `orphaned` faux | idem |
+| X0 `agent.test.ts`, « l'option Send now est servie » | `features().steer` : `false` au lieu de `true` | **liste des méthodes servies** |
+| X1 `agent.test.ts`, « Cmd+Entrée : un steer… » | `un steer part sur le fil` : 0 au lieu de 1 | **méthode refusée sur place** (`-32601` local, `methods.ts`) |
+| X2 `agent.test.ts`, « refusé par le pont » | `le steer est parti, le pont l'a refusé` : 0 au lieu de 1 | idem |
+| X3 `agent.test.ts`, « Stop avec un message envoyé » | `un steer part sur le fil` : 0 au lieu de 1 | idem |
+| `suite.ts`, « Send now pendant un tour » | `« Send now » visible pendant un tour` : `covered` au lieu de `clicked` | bouton caché tant que la méthode n'est pas servie (`Composer.tsx:901`) |
+| `suite-real.ts`, « message pendant un tour (ticket 39) » | `le message suit le résultat, une réponse` : le message part en prompt après le tour | méthode refusée sur place |
+
+Les sept tests de l'extension **ne peuvent échouer que parce que l'extension ne sert pas encore la méthode**. X4 consiste justement à l'ajouter à la liste servie (`src/ya/methods.ts`, une ligne). Tout le reste du côté client existe déjà (§3.2). Ils échouent bien sur une assertion, pas sur une erreur levée.
+
+**Mesuré en local** (règle 10), commande :
+```
+cd extensions/vscode && npm run compile-tests && node --require ./out/test/unit/setup.js --test --test-timeout=60000 --test-name-pattern="message pendant un tour|Stop avec un message|méthode non servie" out/test/unit/agent.test.js
+```
+- Sur le code actuel : X0 à X3 en échec sur les assertions du tableau ; « méthode non servie » (rewind seul) passe.
+- Avec la ligne de X4 appliquée le temps de l'essai, puis retirée : 5/5 verts.
+
+Les tests Rust n'ont pas été compilés en local (règle 8). La CI le fera.

@@ -1584,6 +1584,25 @@ Les deux fichiers sont identiques à `upstream/main` (`6e4b69da2`) après la rep
 | `crates/pa-daemon/tests/stop_escalation_e2e.rs` | modif. (repris d'upstream `7ea89013e`, +34 / −6) | `freeze()` et `all_threads_stopped()` ; `a_hung_worker_is_killed_within_the_escalation_window_and_its_lease_frees` gèle le worker par `freeze`. | YA-10 (ticket 38) |
 | `crates/pa-daemon/tests/registration_refusal_heal_e2e.rs` | modif. (repris d'upstream `7ea89013e`, +34 / −6) | Mêmes fonctions ; `an_owned_stop_kills_a_worker_that_missed_the_shutdown` gèle le worker par `freeze`. | YA-10 (ticket 38) |
 
+## Message pendant un tour, R4 et X4 (YA-19, ticket 39)
+
+Constat, décisions (D1 à D8, voie A et ses deux écarts) et plan : `docs/tickets/39-message-pendant-un-tour.md` (§9 à §13). Le message passe par la file `steering` du worker. Il entre en fin d'historique, après les résultats des tools. Prompt système et tools inchangés.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/ya_turns/steer.rs` | nouveau | `_yus/session/steer` : contrôles, attente de la ligne du prompt, envoi `Steer` au worker, `turnStart` `steer`, fermeture du tour (`seal`), retrait d'un message accepté quand le tour finit sans fermeture. Tests unitaires. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/acp/ya_turns.rs` | modif. (fichier du fork) | Déclaration du module `steer` et champ `steers` de `AgentTurns`. | YA-19 (ticket 39) |
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, +6 lignes, écart 1 de la décision) | Branche de dispatch de `_yus/session/steer` (+4, `:1163-1166`) ; appel de `seal` dans `prompt_turn`, après l'attente du worker et sa vérification d'annulation, avant la frontière (+2, `:1721-1722`). | YA-19 (ticket 39) |
+| `crates/pa-cli/tests/ya_acp_steer_e2e.rs` | nouveau | Vrai binaire en ACP, provider factice, vrai kernel : message rattaché au tour du prompt, deux messages en un tour, livré une fois, jamais avant la ligne du prompt, refus, Stop avec un message dans la file du worker. | YA-19 (ticket 39) |
+| `extensions/vscode/test/fake-agent/fake-agent.mjs`, `test/unit/agent.test.ts`, `test/e2e/suite.ts`, `test/e2e/suite-real.ts` | modif. | Prompt `longue` et `_yus/session/steer` dans l'agent factice ; tests X4 (« Send now », message rejoint, refus, Stop). | YA-19 (ticket 39) |
+
+Limites acceptées (décision de Yusuf du 25/11/2026) :
+- **TUI attaché** : un TUI attaché qui envoie aussi un message pendant le même tour décale le rattachement des `turnStart`, qui suivent l'ordre des lignes.
+- **Stop pendant l'envoi** : un message arrivé au worker après le vidage de la file par le Stop peut tourner avant son retrait, alors que l'extension le garde en pause. Doublon possible si Yusuf le relance. Non testable.
+- **D4** : pas de marque de rejeu. Après `session/load`, un message envoyé pendant un tour se rejoue comme un prompt.
+- **D6** : un message pendant un tour lancé par l'agent est refusé. L'extension le garde et l'envoie en prompt après le tour.
+- **Routage d'image** : si le premier run est parti sur le modèle d'images, la relance repart sur le modèle de base (`crates/pa-core/src/session_engine/engine.rs:1114-1120`), avec un miss possible.
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :
