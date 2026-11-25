@@ -1,19 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { savedGroups } from "../src/instructions";
 import type { ModelChoice, Provider, SessionState, SettingsState, WebviewMessage } from "../src/protocol";
 import type { SettingResult } from "./App";
 import { IconBack, IconChevron } from "./icons";
 import { ProviderLogo } from "./logos";
 import { isLocal, ModelList, providerName } from "./models";
-import { InstructionsTab } from "./SettingsInstructions";
 import { McpTab } from "./SettingsMcp";
 import { SkillsTab } from "./SettingsSkills";
 import { post } from "./vscode";
 
-export type SettingsTab = "general" | "mcp" | "skills" | "instructions";
+export type SettingsTab = "general" | "mcp" | "skills";
 
-// yusAgent (ticket 31, C9) : l'onglet Instructions (`modelInstructions`, ajouté au prompt système
-// chez Unharnessed) est masqué ; son code reste jusqu'au ticket 32 ou au visuel.
+// yusAgent (ticket 31, C9 ; ticket 32, décision 4) : l'onglet Instructions d'Unharnessed (texte ajouté
+// au prompt système selon le modèle, clé inconnue du cœur et refusée par le pont) est supprimé.
 const TABS: [SettingsTab, string][] = [
   ["general", "General"],
   ["mcp", "MCP"],
@@ -212,7 +210,6 @@ export function Settings({
     const stored = next !== null && JSON.stringify(next) === JSON.stringify(view?.defaults[key]) ? null : next;
     act(key, next ?? view?.defaults[key] ?? null, { type: "setSetting", key, value: stored });
   };
-  const choices = session?.kind === "open" ? (session.config.model?.choices ?? null) : null;
   // The light under the current tab: tabs are as wide as their label.
   const track = useRef<HTMLDivElement>(null);
   const [light, setLight] = useState<{ left: number; width: number } | null>(null);
@@ -286,14 +283,6 @@ export function Settings({
           />
         )}
         {tab === "skills" && <SkillsTab skills={settings.skills} actions={actions} />}
-        {tab === "instructions" && (
-          <InstructionsTab
-            groups={view ? savedGroups(view) : null}
-            choices={choices}
-            providers={providers}
-            actions={actions}
-          />
-        )}
       </main>
     </div>
   );

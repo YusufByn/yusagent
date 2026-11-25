@@ -33,10 +33,10 @@ import { Reverts } from "./ya/reverts";
 const FLUSH_MS = 40;
 /** A tool's output past this is cut for the panel; the agent has it all. */
 const OUTPUT_LIMIT = 20_000;
-/** The agent's kernel came back (crates/uh-daemon/src/acp/kernel.rs). */
-const RESTORED = "_unharnessed/kernel/restored";
-/** A message into the running turn (crates/uh-daemon/src/acp/steer.rs). */
-const STEER = "_unharnessed/session/steer";
+/** The agent's kernel came back (Unharnessed's crates/uh-daemon/src/acp/kernel.rs; not sent yet). */
+const RESTORED = "_yus/kernel/restored";
+/** A message into the running turn (Unharnessed's crates/uh-daemon/src/acp/steer.rs; R4). */
+const STEER = "_yus/session/steer";
 
 /** The panel's own commands, beside the agent's. */
 
@@ -58,7 +58,7 @@ type Compaction = Extract<TurnItem, { kind: "compaction" }>;
 type Mark = { turn: Turn; at: number };
 export type ChatMessage = Extract<HostMessage, { type: "chat" | "chatPatch" | "chatEdit" }>;
 
-/** `_meta.unharnessed` on an update (crates/uh-daemon/src/acp/meta.rs), the parts read here. */
+/** The bridge's `_meta` on an update (`src/ya/meta.ts`; Unharnessed's shape, crates/uh-daemon/src/acp/meta.rs), the parts read here. */
 type Meta = {
   promptTurnId?: number;
   phase?: "event" | "responseBoundary" | "terminalQuiescence";
@@ -90,9 +90,8 @@ type Update = {
     name: string;
     description: string;
     input?: { hint?: string } | null;
-    _meta?: { unharnessed?: { kind?: string; source?: string } };
   }[];
-  _meta?: { unharnessed?: Meta };
+  _meta?: Record<string, unknown>;
 };
 
 /**
@@ -644,7 +643,7 @@ export class Chat {
       return "it is no longer in the agent's conversation.";
     }
     try {
-      await this.agent.request("_unharnessed/session/rewind", { sessionId, to: turn.rewindTo });
+      await this.agent.request("_yus/session/rewind", { sessionId, to: turn.rewindTo });
     } catch (error) {
       this.log.warn(`chat: going back to before turn ${edited} failed: ${errorText(error)}`);
       return errorText(error);
@@ -1106,20 +1105,17 @@ export class Chat {
     this.post({ type: "chat", chat: this.current });
   }
 
-  /** The agent's commands, prompts and skills; its built-in skills are its own business. */
+  /**
+   * The agent's commands. yusAgent (ticket 32) : sans le genre ni la source qu'Unharnessed mettait dans
+   * son `_meta` (notre pont n'envoie pas de `available_commands_update`), chacune est une commande.
+   */
   private setCommands(commands: NonNullable<Update["availableCommands"]>): void {
-    const kinds = ["command", "prompt", "skill"] as const;
-    const builtin = commands.filter(({ _meta }) => _meta?.unharnessed?.source === "builtin");
-    const agent = commands
-      .filter((command) => !builtin.includes(command))
-      .map(({ name, description, input, _meta }): ChatCommand => {
-        const kind = kinds.find((k) => k === _meta?.unharnessed?.kind) ?? "command";
-        return { name, description, hint: input?.hint || undefined, kind };
-      });
+    const agent = commands.map(({ name, description, input }): ChatCommand => {
+      return { name, description, hint: input?.hint || undefined, kind: "command" };
+    });
     this.commands = [...PANEL_COMMANDS, ...agent.filter((command) => command.name !== "new")];
     this.commandsChanged = true;
-    const left = builtin.length > 0 ? `; ${count(builtin.length, "built-in skill")} left out` : "";
-    this.log.info(`chat: ${agent.length} commands: ${agent.map((command) => command.name).join(", ")}${left}`);
+    this.log.info(`chat: ${agent.length} commands: ${agent.map((command) => command.name).join(", ")}`);
     this.changed();
   }
 

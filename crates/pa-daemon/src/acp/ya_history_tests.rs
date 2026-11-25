@@ -333,6 +333,21 @@ fn a_title_is_folded_and_cut_at_80_characters() {
     assert_eq!(list_rows(&[named], None)[0]["title"], json!("Mon nom"));
 }
 
+/// Ticket 32 (decision A of 25/11/2026): the delete is served as `_yus/sessions/delete` only;
+/// Unharnessed's name is no longer served (`-32601`, like any unknown method).
+#[test]
+fn the_delete_is_served_under_the_yus_name_only() {
+    assert!(
+        serves("_yus/sessions/delete"),
+        "the yusAgent name is served"
+    );
+    assert!(
+        !serves("_unharnessed/sessions/delete"),
+        "Unharnessed's name is no longer served"
+    );
+    assert!(serves("session/list"));
+}
+
 #[test]
 fn the_file_rides_the_response_meta() {
     let file = SessionFile::from_summary(Some(&json!({

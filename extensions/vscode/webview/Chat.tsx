@@ -515,7 +515,7 @@ function useInk(): { accent: string; light: boolean } {
 }
 
 function readInk(): { accent: string; light: boolean } {
-  const rgb = getComputedStyle(document.body).getPropertyValue("--uh-accent-rgb").trim().split(/\s+/);
+  const rgb = getComputedStyle(document.body).getPropertyValue("--ya-accent-rgb").trim().split(/\s+/);
   const classes = document.body.classList;
   return {
     accent: `rgb(${rgb.join(", ")})`,

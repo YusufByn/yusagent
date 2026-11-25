@@ -1518,6 +1518,27 @@ Effet : la ligne « Skills updated » ou « MCP servers updated » est absente d
 
 Gardé pour le cas où on l'observerait : options O1 (seul le worker compare dans le démon, 2 lignes upstream dans `lifecycle.rs`) et O2 (annonce refusée retirée de la boîte et réannoncée), tests T1 (moteur du démon) et T2 (e2e, FIFO `skills/.ignore`), sans horloge (ticket, §4 et §5).
 
+## Identité yusAgent (YA-10, ticket 32)
+
+`docs/tickets/32-identite-yusagent.md`, décisions de Yusuf du 25/11/2026 (§9). Les noms d'identité d'Unharnessed repris dans le code passent à yusAgent. **Aucun fichier upstream.** La notice MIT, l'attribution et les commentaires qui citent la source restent. `turnStart`, `turnEnd` et `saved` sont gardés (décision 2).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/ya_history.rs` | modif. (fichier du fork) | Suppression servie sous `_yus/sessions/delete` seule ; l'ancien nom `_unharnessed/sessions/delete` répond `-32601` comme toute méthode inconnue (décision A). | YA-10 (ticket 32) |
+| `crates/pa-daemon/src/acp/ya_history_tests.rs`, `crates/pa-cli/tests/ya_acp_resume_e2e.rs` | modif. (tests du fork) | `the_delete_is_served_under_the_yus_name_only` ; l'e2e de l'historique supprime sous le nouveau nom et attend `-32601` pour l'ancien. | YA-10 (ticket 32) |
+| `crates/pa-daemon/src/acp/ya_turns.rs` | modif. (fichier du fork) | Test renommé `turn_start_serializes_with_its_wire_names`. | YA-10 (ticket 32) |
+| `extensions/vscode/src/history.ts`, `src/ya/empty.ts`, `src/ya/methods.ts` | modif. (repris d'Unharnessed, fork) | Suppression sous `_yus/sessions/delete`. Méthodes non servies sous `_yus/*` : `_yus/session/steer`, `rewind`, `_yus/kernel/*`, `_yus/providers/*`. | YA-10 (ticket 32) |
+| `extensions/vscode/src/chat.ts`, `src/kernel.ts`, `src/providers.ts`, `src/protocol.ts` | modif. (repris d'Unharnessed) | Méthodes et notifications non servies sous `_yus/*`. Plus de lecture de `_meta.unharnessed` : les commandes de l'agent sont toutes des commandes, sans genre ni source. Commentaires qui nommaient le binaire ou les méthodes d'Unharnessed. | YA-10 (ticket 32) |
+| `extensions/vscode/src/session.ts`, `src/ya/meta.ts` | modif. (repris d'Unharnessed, fork) | Plus de lecture de `_meta.unharnessed`, que personne n'envoie : modèle lu dans la paire `["provider", "id"]`, `_meta` du pont seul lu. | YA-10 (ticket 32) |
+| `extensions/vscode/webview/Chat.tsx`, `webview/Goal.tsx` | modif. (repris d'Unharnessed) | `--uh-accent-rgb` et `--uh-glow-angle` passent à `--ya-accent-rgb` et `--ya-glow-angle`. | YA-10 (ticket 32) |
+| `extensions/vscode/webview/SettingsInstructions.tsx`, `src/instructions.ts` | supprimés (repris d'Unharnessed) | Onglet Instructions (décision 4) : clé `modelInstructions` inconnue du cœur et refusée par le pont ; elle aurait ajouté du texte au prompt système. | YA-10 (ticket 32) |
+| `extensions/vscode/webview/Settings.tsx`, `src/settings.ts`, `src/view.ts`, `webview/ya-settings.css` | modif. (repris d'Unharnessed, fork) | Tout ce qui servait l'onglet Instructions : onglet, méthode `setInstructions`, message, type `ModelInstructions`, règles `.group-body .row-end` et `.input.is-area`. | YA-10 (ticket 32) |
+| `extensions/vscode/test/unit/identity.test.ts` | nouveau | T5 : aucun nom d'identité d'Unharnessed dans le code suivi par git (extension, `crates/`, `bench/`, runtime). Exceptions explicites et commentées : attribution, citations de source, option du banc, tests de l'ancien nom. Les noms gardés `turnStart`, `turnEnd` et `saved` ne sont pas cherchés. | YA-10 (ticket 32) |
+| `extensions/vscode/test/unit/meta.test.ts`, `test/unit/agent.test.ts` | modif. | `_yus/sessions/delete` servie, ancien nom non servi ; `_meta.unharnessed` plus lu ; noms `_yus/*` du rejet sur place. | YA-10 (ticket 32) |
+| `extensions/vscode/test/fake-agent/fake-agent.mjs` | modif. (fork) | Suppression sous `_yus/sessions/delete`. | YA-10 (ticket 32) |
+| `bench/tools/capture/delete_files_check.py`, `empty_delete_probe.py` | modif. (fork) | Suppression sous `_yus/sessions/delete`. | YA-10 (ticket 32) |
+| `.changes/ya-32-identite.md` | ajout | Fragment de changelog. | YA-10 (ticket 32) |
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

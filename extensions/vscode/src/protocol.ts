@@ -2,7 +2,7 @@
 // both bundles import this file.
 
 /**
- * The `unharnessed --mode acp` process as the panel shows it. Versions, pid
+ * The `yusagent --mode acp` process as the panel shows it. Versions, pid
  * and binary path stay in the log: the panel only says whether it runs.
  */
 export type AgentState =
@@ -11,7 +11,7 @@ export type AgentState =
   /** yusAgent (ticket 28, D3) : `session`, la session n'a pas pu s'ouvrir (`error` : la raison du pont). */
   | { kind: "failed"; error: string; stderr: string[]; session?: true };
 
-/** One provider row, as the agent's `_unharnessed/providers/list` gives it. */
+/** One provider row, as the agent's `_yus/providers/list` gives it. */
 export type Provider = {
   id: string;
   name: string;
@@ -33,7 +33,7 @@ export type Provider = {
 /** A model a local server serves, with what the server tells of it. */
 export type LocalModel = { id: string; contextWindow?: number; image: boolean; reasoning: boolean };
 
-/** A local server (`_unharnessed/providers/local_probe`, `local_scan`). */
+/** A local server (`_yus/providers/local_probe`, `local_scan`). */
 export type LocalServer = {
   /** The provider id it gets, when it is not added yet. */
   id: string;
@@ -60,7 +60,7 @@ export type LocalSave = {
   models: (Pick<LocalModel, "id"> & Partial<LocalModel>)[];
 };
 
-/** One step of a running sign-in (`_unharnessed/providers/login_update`). */
+/** One step of a running sign-in (`_yus/providers/login_update`). */
 export type LoginUpdate =
   | { kind: "progress"; message: string }
   | { kind: "waiting"; message: string }
@@ -153,12 +153,6 @@ export type SettingsView = {
   /** Keys read when the agent starts; yusAgent (ticket 31) : always empty, nothing waits for a restart. */
   restart: string[];
 };
-
-/**
- * One group of the `modelInstructions` setting: its text joins the agent's
- * system prompt when it runs on one of its models (`provider/model-id`).
- */
-export type ModelInstructions = { models: string[]; text: string };
 
 /** One MCP server, as the agent's `_yus/mcp/list` gives it. */
 export type McpServer = {
@@ -414,7 +408,7 @@ export type QueuedMessage = { id: number; text: string; images: Thumb[]; state: 
 
 /**
  * What the conversation has used, as the agent reports it after each
- * message (`_meta.unharnessed.usage`): its context against the model's
+ * message (`usage` in the bridge's `_meta`): its context against the model's
  * window and the automatic compaction's threshold, and what it cost.
  */
 export type Usage = {
@@ -453,7 +447,7 @@ export type Goal = {
 
 /**
  * A command the agent left running in the kernel (`h = bash(cmd)`), or that
- * ended since, as the agent's `_unharnessed/kernel/changed` gives it. A
+ * ended since, as the agent's `_yus/kernel/changed` gives it. A
  * one-shot `await bash(cmd)` is never one.
  */
 export type KernelCommand = {
@@ -703,12 +697,6 @@ export type WebviewMessage =
   | ({ type: "setConfig" } & ConfigChange)
   /** `null` removes the key: its default applies again. */
   | { type: "setSetting"; key: string; value: unknown }
-  /**
-   * Save a group of instructions (`index` null: a new one), or delete it
-   * (`group` null). `models` are the ones checked among the connected
-   * providers' models; the group's others stay as they are.
-   */
-  | { type: "setInstructions"; index: number | null; group: ModelInstructions | null }
   | { type: "mcpSignIn"; id: string; label: string }
   /** Add a Marketplace service connected by a pasted token. */
   | { type: "mcpSetToken"; id: string; token: string }

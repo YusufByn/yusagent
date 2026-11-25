@@ -1,6 +1,6 @@
 // yusAgent (ticket 28, C2) : `saved`, `path` et `current` lus dans le `_meta` du pont
-// (`ai.primeintellect.prime-agent`, `crates/pa-daemon/src/acp/ya_history.rs`), ou dans
-// `_meta.unharnessed` s'il est là ; méthodes servies.
+// (`ai.primeintellect.prime-agent`, `crates/pa-daemon/src/acp/ya_history.rs`), et nulle part
+// ailleurs (ticket 32) ; méthodes servies.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -22,14 +22,16 @@ test("yaResultMeta : path et current d'une ligne de session/list", () => {
   assert.deepEqual(yaResultMeta({ sessionId: "file-2", _meta: { "ai.primeintellect.prime-agent": { path: "/p" } } }).current, undefined);
 });
 
-test("yaResultMeta : _meta.unharnessed lu tel quel, rien sans _meta", () => {
-  assert.deepEqual(yaResultMeta({ _meta: { unharnessed: { path: "/u" } } }), { path: "/u" });
+test("yaResultMeta (ticket 32) : seul le _meta du pont est lu, rien sans _meta", () => {
+  // L'ancienne clé d'Unharnessed, que personne n'envoie, n'est plus lue.
+  assert.deepEqual(yaResultMeta({ _meta: { unharnessed: { path: "/u" } } }), {});
   assert.deepEqual(yaResultMeta({}), {});
   assert.deepEqual(yaResultMeta(undefined), {});
 });
 
-test("méthodes du ticket 28 servies, historique affiché", () => {
-  for (const method of ["session/load", "session/list", "_unharnessed/sessions/delete"]) assert.equal(served(method), true, method);
+test("méthodes du ticket 28 servies, historique affiché ; suppression sous `_yus/sessions/delete` seule (ticket 32)", () => {
+  for (const method of ["session/load", "session/list", "_yus/sessions/delete"]) assert.equal(served(method), true, method);
+  assert.equal(served("_unharnessed/sessions/delete"), false, "l'ancien nom n'est plus servi (décision A)");
   assert.equal(features().history, true);
 });
 

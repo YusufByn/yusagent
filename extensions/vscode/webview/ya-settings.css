@@ -608,18 +608,6 @@ body.vscode-high-contrast:not(.vscode-high-contrast-light) .ya-settings {
   outline-offset: -1px;
 }
 
-.ya-settings .group-body .row-end {
-  margin-top: 4px;
-}
-
-.ya-settings .input.is-area {
-  height: auto;
-  min-height: 96px;
-  padding: 9px 13px;
-  line-height: 1.5;
-  resize: vertical;
-}
-
 .ya-settings .form-field {
   display: flex;
   flex-direction: column;

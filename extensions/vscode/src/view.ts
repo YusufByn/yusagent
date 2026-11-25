@@ -4,7 +4,6 @@ import * as vscode from "vscode";
 import type { Conversation, Conversations } from "./conversations";
 import type { Files } from "./files";
 import type { History } from "./history";
-import { connectedModels } from "./instructions";
 import type { HostMessage, Probe, ProbeInput, WebviewMessage } from "./protocol";
 import type { Providers } from "./providers";
 import type { Settings } from "./settings";
@@ -219,15 +218,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void this.settings.set(key, message.value).then((error) => {
           this.post({ type: "settingResult", key, error });
         });
-        break;
-      }
-      case "setInstructions": {
-        const session = this.shown.session.current;
-        const choices = session?.kind === "open" ? session.config.model?.choices : undefined;
-        const connected = choices ? new Set(connectedModels(choices, this.providers.providers ?? []).keys()) : null;
-        void this.settings
-          .setInstructions(message.index, message.group, connected)
-          .then((error) => this.post({ type: "settingResult", key: "modelInstructions", error }));
         break;
       }
       case "mcpSignIn":
