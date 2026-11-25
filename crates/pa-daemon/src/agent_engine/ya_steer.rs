@@ -17,8 +17,6 @@
 //!   are past before any message is registered;
 //! - the settle drops the registered messages with the agent's queue: none survives its run.
 //!
-//! Ticket 39, push 2 of path B: everything but the settle's drop, which comes with push 3.
-
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
@@ -45,7 +43,24 @@ pub(super) fn steer(engine: &AgentSessionEngine, text: &str) -> bool {
 
 /// The run settled: the messages it did not take leave the agent's queue and the registry.
 pub(super) fn drop_steers(engine: &AgentSessionEngine) {
-    let _ = engine;
+    let registered: Vec<(i64, String)> = REGISTRY
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if !registered.is_empty() {
+        let agent = engine.turn_agent.lock().expect("turn agent lock").clone();
+        if let Some(agent) = agent {
+            // Only these messages: the queue may hold others, never dropped here.
+            let _ = agent.remove_queued_messages(|message| {
+                key_of(message).is_some_and(|(timestamp, text)| {
+                    registered
+                        .iter()
+                        .any(|(at, known)| *at == timestamp && known == text)
+                })
+            });
+        }
+    }
+    forget_all();
 }
 
 /// The row of a message passed to the agent's queue, recognized once.
@@ -108,7 +123,6 @@ fn register(text: &str, now: i64) -> AgentMessage {
 }
 
 /// The registered messages leave the registry.
-#[allow(dead_code)] // Ticket 39, push 2: the settle's drop calls it in push 3.
 fn forget_all() {
     REGISTRY
         .lock()
