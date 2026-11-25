@@ -13,30 +13,22 @@
 //! A failed flow answers a fixed text, never the flow's own text, which can carry the body of
 //! a token response (decision 5). Nothing here logs.
 //!
-//! Push 1 of R5: the contract and neutral bodies; the tests fail on their assertions.
 //! Listed in `docs/fork-changes.md`.
-
-// Push 1 of R5 (tests and skeleton): the bodies are neutral, removed with the code.
-#![allow(
-    dead_code,
-    unused_variables,
-    clippy::unused_async,
-    clippy::unused_self,
-    clippy::unnecessary_wraps
-)]
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, MutexGuard, OnceLock, PoisonError};
 
-use serde_json::{json, Value};
+use pa_types::daemon::DaemonCommand;
+use serde_json::{json, Map, Value};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use super::{DaemonAcpState, DaemonLink};
 use crate::acp::jsonrpc::{self, Incoming};
 use crate::acp::producer::FrameSink;
+use crate::acp::wire_config::{fetch_available_models, refresh_wire_config};
 
 const LIST: &str = "_yus/providers/list";
 const RELOAD: &str = "_yus/providers/reload";
@@ -183,6 +175,11 @@ pub(super) fn notified(incoming: &Incoming) {
     }
 }
 
+/// The bridge's answer when no flows were installed (a build without `pa-cli`).
+const NOT_AVAILABLE: &str = "Provider sign-in is not available in this build.";
+/// One sign-in at a time.
+const RUNNING: &str = "a sign-in is already running";
+
 /// Answers one request.
 pub(super) async fn serve(
     method: &str,
@@ -192,13 +189,66 @@ pub(super) async fn serve(
     state: &Arc<Mutex<DaemonAcpState>>,
     tx: &FrameSink,
 ) {
-    let answer = match method {
-        LIST | RELOAD => json!({ "providers": [] }),
-        SET_API_KEY | LOGOUT => json!({ "providers": [], "outcome": "done" }),
-        LOGIN => json!({ "providers": [], "outcome": "cancelled" }),
-        _ => json!({}),
+    let Some(sign_in) = SIGN_IN.get().cloned() else {
+        let _ = tx.send(crate::acp::internal_error(id, NOT_AVAILABLE));
+        return;
     };
-    let _ = tx.send(jsonrpc::response(id, &answer));
+    if method == LOGIN {
+        // A sign-in can wait on the browser for long: it answers from its own task, through a
+        // weak sender, so the end of stdin never waits for it.
+        let sink = tx.downgrade();
+        let (id, params) = (id.clone(), params.clone());
+        let (link, state) = (Arc::clone(link), Arc::clone(state));
+        tokio::spawn(async move {
+            let response = login(sign_in.as_ref(), &id, &params, &link, &state, &sink).await;
+            if let Some(tx) = sink.upgrade() {
+                let _ = tx.send(response);
+            }
+        });
+        return;
+    }
+    let sign_in = sign_in.as_ref();
+    let response = match method {
+        RELOAD => {
+            refresh_session(link, state).await;
+            jsonrpc::response(id, &json!({ "providers": rows_value(sign_in).await }))
+        }
+        SET_API_KEY => match (
+            text_param(params, "providerId"),
+            text_param(params, "apiKey"),
+        ) {
+            (Some(provider_id), Some(api_key)) => {
+                let outcome = sign_in
+                    .set_api_key(provider_id.to_string(), api_key.to_string())
+                    .await;
+                settled(sign_in, id, outcome, link, state).await
+            }
+            _ => invalid(id, "providerId and apiKey must be non-empty strings"),
+        },
+        LOGOUT => match text_param(params, "providerId") {
+            Some(provider_id) => {
+                let outcome = sign_in.logout(provider_id.to_string()).await;
+                settled(sign_in, id, outcome, link, state).await
+            }
+            None => invalid(id, "providerId must be a non-empty string"),
+        },
+        LOGIN_ANSWER => match params.get("promptId").and_then(Value::as_u64) {
+            Some(prompt_id) => {
+                let answer = params.get("answer").unwrap_or(&Value::Null);
+                match logins().answer(prompt_id, answer) {
+                    Ok(()) => jsonrpc::response(id, &json!({})),
+                    Err(refusal) => invalid(id, refusal),
+                }
+            }
+            None => invalid(id, "promptId must be a number"),
+        },
+        LOGIN_OPEN => match logins().open() {
+            Ok(()) => jsonrpc::response(id, &json!({})),
+            Err(refusal) => invalid(id, refusal),
+        },
+        _ => jsonrpc::response(id, &json!({ "providers": rows_value(sign_in).await })),
+    };
+    let _ = tx.send(response);
 }
 
 /// H2 (`docs/tickets/40-login-extension.md`, §4.1): the run guard's texts for a missing or
@@ -206,7 +256,130 @@ pub(super) async fn serve(
 /// classifier rule recognizes. Every other `kind` stays.
 #[must_use]
 pub(crate) fn auth_failure_kind(failure: &str, kind: &'static str) -> &'static str {
-    kind
+    if failure.contains("No API key found for ") || failure.contains("Authentication failed for \"")
+    {
+        "authentication"
+    } else {
+        kind
+    }
+}
+
+/// `login`: the sign-in, then its outcome like a key's.
+async fn login(
+    sign_in: &dyn ProviderSignIn,
+    id: &Value,
+    params: &Value,
+    link: &Arc<DaemonLink>,
+    state: &Arc<Mutex<DaemonAcpState>>,
+    sink: &mpsc::WeakUnboundedSender<Value>,
+) -> Value {
+    let Some(provider_id) = text_param(params, "providerId") else {
+        return invalid(id, "providerId must be a non-empty string");
+    };
+    match logins().run(sign_in, provider_id, sink).await {
+        Ok(outcome) => settled(sign_in, id, outcome, link, state).await,
+        Err(refusal) => crate::acp::internal_error(id, refusal),
+    }
+}
+
+/// The answer to a credential change (Unharnessed's `{providers, outcome, message?}`), after
+/// the running session took a done change.
+async fn settled(
+    sign_in: &dyn ProviderSignIn,
+    id: &Value,
+    outcome: SignInOutcome,
+    link: &Arc<DaemonLink>,
+    state: &Arc<Mutex<DaemonAcpState>>,
+) -> Value {
+    if outcome == SignInOutcome::Done {
+        refresh_session(link, state).await;
+    }
+    let mut answer = json!({ "providers": rows_value(sign_in).await });
+    match outcome {
+        SignInOutcome::Done => answer["outcome"] = json!("done"),
+        SignInOutcome::Failed(message) => {
+            answer["outcome"] = json!("failed");
+            answer["message"] = json!(message);
+        }
+        SignInOutcome::Cancelled => answer["outcome"] = json!("cancelled"),
+    }
+    jsonrpc::response(id, &answer)
+}
+
+/// The running session takes the stored credentials (the worker's `reload`: request auth and
+/// MCP auth), and its model picker lists what they open (`config_option_update` when it
+/// changes), one config operation at a time like `session/set_config_option`. Before
+/// `session/new`, nothing runs yet.
+async fn refresh_session(link: &Arc<DaemonLink>, state: &Arc<Mutex<DaemonAcpState>>) {
+    let hosted = {
+        let guard = state.lock().await;
+        guard.session.as_ref().map(|hosted| {
+            (
+                hosted.daemon_active_session_id.clone(),
+                Arc::clone(&hosted.config),
+                Arc::clone(&hosted.producer),
+            )
+        })
+    };
+    let Some((session_id, config, producer)) = hosted else {
+        return;
+    };
+    let _queue = config.queue.lock().await;
+    let _ = link
+        .request(DaemonCommand::Reload {
+            id: None,
+            active_session_id: session_id.clone(),
+            rest: Map::new(),
+        })
+        .await;
+    if let Ok(models) = fetch_available_models(link, &session_id).await {
+        *config.models.lock().await = models;
+    }
+    let _ = refresh_wire_config(link, &session_id, &config, &producer).await;
+}
+
+/// The rows of the providers screen.
+async fn rows_value(sign_in: &dyn ProviderSignIn) -> Value {
+    Value::Array(sign_in.rows().await.iter().map(row_value).collect())
+}
+
+fn row_value(view: &ProviderView) -> Value {
+    let method = if view.subscription {
+        "subscription"
+    } else {
+        "apiKey"
+    };
+    let login = if view.browser { "browser" } else { "apiKey" };
+    let mut row = json!({
+        "id": view.id,
+        "name": view.name,
+        "method": method,
+        "login": login,
+        "connected": view.connected,
+        "removable": view.removable,
+    });
+    if let Some(note) = &view.note {
+        row["note"] = json!(note);
+    }
+    row
+}
+
+/// A non-empty string parameter, trimmed.
+fn text_param<'a>(params: &'a Value, name: &str) -> Option<&'a str> {
+    params
+        .get(name)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn invalid(id: &Value, details: &str) -> Value {
+    jsonrpc::error_response(
+        id,
+        jsonrpc::INVALID_PARAMS,
+        "Invalid params",
+        Some(&json!({ "details": details })),
+    )
 }
 
 /// The sign-in of this bridge process.
@@ -250,6 +423,10 @@ impl Logins {
         }
     }
 
+    fn lock(&self) -> MutexGuard<'_, Option<Run>> {
+        self.run.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Runs the sign-in of `provider_id`, its steps sent on `sink` as `login_update`
     /// notifications, until the flow settles. `Err` when a sign-in already runs.
     async fn run(
@@ -258,24 +435,151 @@ impl Logins {
         provider_id: &str,
         sink: &mpsc::WeakUnboundedSender<Value>,
     ) -> Result<SignInOutcome, &'static str> {
-        Ok(SignInOutcome::Cancelled)
+        let (cancel, cancelled) = watch::channel(false);
+        {
+            let mut run = self.lock();
+            if run.is_some() {
+                return Err(RUNNING);
+            }
+            *run = Some(Run {
+                url: None,
+                prompts: HashMap::new(),
+                cancel,
+            });
+        }
+        let (events, mut steps) = mpsc::unbounded_channel();
+        let mut flow = sign_in.login(provider_id.to_string(), SignInEvents { events, cancelled });
+        let outcome = loop {
+            tokio::select! {
+                outcome = &mut flow => break outcome,
+                Some(step) = steps.recv() => self.forward(provider_id, step, sink),
+            }
+        };
+        // What the flow said before it settled still reaches the screen; a prompt no longer
+        // answers.
+        while let Ok(step) = steps.try_recv() {
+            if !matches!(step, SignInEvent::Prompt { .. } | SignInEvent::Team { .. }) {
+                self.forward(provider_id, step, sink);
+            }
+        }
+        *self.lock() = None;
+        Ok(outcome)
     }
 
-    /// Answers prompt `prompt_id` with the screen's `answer`.
+    /// One step to the screen; a prompt is kept until its answer.
+    fn forward(
+        &self,
+        provider_id: &str,
+        step: SignInEvent,
+        sink: &mpsc::WeakUnboundedSender<Value>,
+    ) {
+        let update = match step {
+            SignInEvent::Progress(message) => json!({ "kind": "progress", "message": message }),
+            SignInEvent::Waiting(message) => json!({ "kind": "waiting", "message": message }),
+            SignInEvent::Url { url, instructions } => {
+                if let Some(run) = self.lock().as_mut() {
+                    run.url = Some(url.clone());
+                }
+                json!({ "kind": "url", "url": url, "instructions": instructions })
+            }
+            SignInEvent::Prompt {
+                message,
+                secret,
+                allow_empty,
+                optional,
+                reply,
+            } => {
+                let prompt_id = self.keep(Pending::Text { allow_empty, reply });
+                json!({
+                    "kind": "prompt", "promptId": prompt_id, "message": message, "secret": secret,
+                    "allowEmpty": allow_empty, "optional": optional,
+                })
+            }
+            SignInEvent::Team {
+                teams,
+                current,
+                reply,
+            } => {
+                let prompt_id = self.keep(Pending::Team(reply));
+                let teams: Vec<Value> = teams
+                    .iter()
+                    .map(|team| json!({ "id": team.id, "name": team.name, "role": team.role }))
+                    .collect();
+                json!({ "kind": "team", "promptId": prompt_id, "teams": teams, "current": current })
+            }
+        };
+        if let Some(tx) = sink.upgrade() {
+            let params = json!({ "providerId": provider_id, "update": update });
+            let _ = tx.send(jsonrpc::notification(LOGIN_UPDATE, &params));
+        }
+    }
+
+    /// Keeps a prompt of the running sign-in under a new number.
+    fn keep(&self, pending: Pending) -> u64 {
+        let prompt_id = self.next_prompt.fetch_add(1, Ordering::Relaxed);
+        if let Some(run) = self.lock().as_mut() {
+            run.prompts.insert(prompt_id, pending);
+        }
+        prompt_id
+    }
+
+    /// Answers prompt `prompt_id` with the screen's `answer` (Unharnessed's `text`, `team`,
+    /// `dismiss`).
     fn answer(&self, prompt_id: u64, answer: &Value) -> Result<(), &'static str> {
+        let mut guard = self.lock();
+        let run = guard.as_mut().ok_or("no sign-in is running")?;
+        let pending = run.prompts.remove(&prompt_id).ok_or("no such prompt")?;
+        match (pending, answer.get("kind").and_then(Value::as_str)) {
+            (Pending::Text { allow_empty, reply }, Some("text")) => {
+                let value = answer
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if value.trim().is_empty() && !allow_empty {
+                    run.prompts
+                        .insert(prompt_id, Pending::Text { allow_empty, reply });
+                    return Err("the answer is empty");
+                }
+                let _ = reply.send(Some(value.to_string()));
+            }
+            (Pending::Text { reply, .. }, Some("dismiss")) => {
+                let _ = reply.send(None);
+            }
+            (Pending::Team(reply), Some("team")) => {
+                let team = answer
+                    .get("teamId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let _ = reply.send(TeamAnswer::Pick(team));
+            }
+            (Pending::Team(reply), Some("dismiss")) => {
+                let _ = reply.send(TeamAnswer::Keep);
+            }
+            (pending, _) => {
+                run.prompts.insert(prompt_id, pending);
+                return Err("the answer does not fit the prompt");
+            }
+        }
         Ok(())
     }
 
     /// Opens the running sign-in's page, never a page the client names.
     fn open(&self) -> Result<(), &'static str> {
+        let url = self
+            .lock()
+            .as_ref()
+            .and_then(|run| run.url.clone())
+            .ok_or("no sign-in page to open")?;
+        (self.opener)(&url);
         Ok(())
     }
 
     /// Cancels the running sign-in: its flow sees the signal, its prompts answer `None`.
-    fn cancel(&self) {}
-
-    fn next_prompt_id(&self) -> u64 {
-        self.next_prompt.fetch_add(1, Ordering::Relaxed)
+    fn cancel(&self) {
+        if let Some(run) = self.lock().as_mut() {
+            let _ = run.cancel.send(true);
+            run.prompts.clear();
+        }
     }
 }
 
