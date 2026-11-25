@@ -14,8 +14,9 @@
 //!   of the same session is refused (C12);
 //! - `session/list` lists the saved sessions of the session's folder, without subagents nor
 //!   drafts, newest first (C10, C11);
-//! - `_unharnessed/sessions/delete` stops the session in the daemon, then deletes its file and its
-//!   artifacts folder; the usage journal stays (C3, C4).
+//! - `_yus/sessions/delete` (ticket 32; Unharnessed's name is no longer served) stops the
+//!   session in the daemon, then deletes its file and its artifacts folder; the usage journal
+//!   stays (C3, C4).
 //!
 //! Nothing here reaches the model's requests: ACP frames only.
 
@@ -33,8 +34,9 @@ use super::types::AcpSessionUpdate;
 use super::wire_events::{self, WireMappingState};
 use super::ya_turns::{self, TurnStartMeta};
 
-/// The delete method, Unharnessed's name, which the extension calls (decision C3).
-pub(super) const DELETE_METHOD: &str = "_unharnessed/sessions/delete";
+/// The delete method, which the extension calls: Unharnessed's form under the yusAgent prefix
+/// (ticket 32, decisions 1 and 3 of 25/11/2026; decision C3 of ticket 28 kept their name).
+pub(super) const DELETE_METHOD: &str = "_yus/sessions/delete";
 
 /// Transcript rows read per `get_session_messages` page.
 const PAGE: u64 = 200;
@@ -727,7 +729,7 @@ async fn list(
     Ok(json!({ "sessions": list_rows(&rows, file.id.as_deref()) }))
 }
 
-// _unharnessed/sessions/delete
+// _yus/sessions/delete
 
 /// How a delete ended: `Ok` (`{}`), or the refusal shown to the user.
 enum DeleteRefusal {

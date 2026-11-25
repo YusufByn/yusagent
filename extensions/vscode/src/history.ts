@@ -7,7 +7,7 @@ import type { ShownAgent } from "./shown";
 import { yaResultMeta } from "./ya/meta"; // yusAgent (ticket 28)
 
 // Deletes a saved conversation (crates/uh-daemon/src/acp/history.rs).
-const DELETE = "_unharnessed/sessions/delete";
+const DELETE = "_yus/sessions/delete";
 
 /** A `session/list` row, the parts read here. */
 type Listed = {

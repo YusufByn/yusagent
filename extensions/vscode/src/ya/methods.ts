@@ -15,7 +15,7 @@ const REQUESTS = new Set([
   "session/close",
   "session/load",
   "session/list",
-  "_unharnessed/sessions/delete",
+  "_yus/sessions/delete", // ticket 32 : nom yusAgent, l'ancien n'est plus servi
   // Ticket 31 (X3, `crates/pa-daemon/src/acp/ya_resources.rs`) : écrans skills, MCP et réglages.
   "_yus/settings/get",
   "_yus/settings/set",

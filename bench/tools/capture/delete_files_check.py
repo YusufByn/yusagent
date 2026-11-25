@@ -6,7 +6,7 @@ Sur le vrai binaire, démon isolé, serveur de capture (modèle factice), `sandb
 du banc (fonctions de `run.py` et `resume_probe.py`, sans les modifier). Deux suppressions :
 
   1. corbeille de l'historique : une conversation avec un tour, fermée, puis
-     `_unharnessed/sessions/delete` depuis un autre pont (C4) ;
+     `_yus/sessions/delete` depuis un autre pont (C4) ;
   2. conversation neuve vide : son pont finit (fin de stdin, O1).
 
 Après chacune : dans le dossier des sessions, plus aucun `<id>.*` hors `<id>.usage.ndjson` (fichier,
@@ -112,7 +112,7 @@ def main() -> None:
         path_a = Path(sa["path"])
         before = named_after(path_a)
         b, _, _ = bridge("B")
-        deleted = b.request("_unharnessed/sessions/delete", {"sessionId": sa["sessionId"]})
+        deleted = b.request("_yus/sessions/delete", {"sessionId": sa["sessionId"]})
         time.sleep(1)
         info["cas"]["1. corbeille"] = {
             "avant": before,

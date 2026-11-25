@@ -517,7 +517,7 @@ function onMessage(message) {
       return fail(id, -32602, "Invalid params", { details: "The fake agent loads no conversation." });
     case "session/list":
       return respond(id, { sessions: [] });
-    case "_unharnessed/sessions/delete":
+    case "_yus/sessions/delete":
       return respond(id, {});
     case "session/prompt": {
       promptTurnId += 1;

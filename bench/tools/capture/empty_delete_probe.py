@@ -8,7 +8,7 @@ du banc (fonctions de `run.py` et `resume_probe.py`, sans les modifier) :
   2. pont B : `session/new` (la conversation qu'on vient d'ouvrir) ;
   3. fin de stdin de A (l'extension arrête son pont en la quittant) ;
   4. B : `session/list` (A, brouillon, ne doit pas y être), puis
-     `_unharnessed/sessions/delete { sessionId: <saved.sessionId de A> }` ;
+     `_yus/sessions/delete { sessionId: <saved.sessionId de A> }` ;
   5. relevé : réponse, fichier de A, dossier `session-artifacts/<id>`, workers du démon.
 
 Usage :
@@ -102,7 +102,7 @@ def main() -> None:
         info["liste_ids"] = [row.get("sessionId") for row in
                              ((listed or {}).get("result") or {}).get("sessions", [])]
         started = time.monotonic()
-        deleted = b.request("_unharnessed/sessions/delete", {"sessionId": saved_a.get("sessionId")})
+        deleted = b.request("_yus/sessions/delete", {"sessionId": saved_a.get("sessionId")})
         info["suppression_ms"] = round((time.monotonic() - started) * 1000)
         info["suppression"] = {k: v for k, v in (deleted or {}).items() if k in ("result", "error")}
         time.sleep(1)
