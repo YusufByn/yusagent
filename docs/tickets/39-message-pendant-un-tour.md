@@ -1047,3 +1047,24 @@ Contrôle avant le push : `git diff --stat 85d8e91d2 HEAD -- crates/ extensions/
   - Le tour 1 était fini à 18:57:03. Le message est parti après, en prompt (tour 2), pas dans le tour. La fin de la commande a lancé un tour de l'agent (tour 3, `[bash-done]`).
   - Ce n'est pas `bashWaitSeconds`. L'étape est reprise avec une cellule Python qui bloque vraiment (`time.sleep(20)`).
 - **À noter, hors ticket 39** : au tour 1, le modèle a répondu « La commande a affiché fini » alors que la commande tournait encore en arrière-plan. Le résultat de la cellule était vide. C'est une affirmation non fondée du modèle sur une commande détachée.
+- **Étape 1, second essai (conversation [3], cellule Python bloquante) : NON CONFORME sur le raccourci.**
+  - Cmd+Entrée pendant la cellule a mis le message **en file** (`19:00:13.668 chat: queued (1 waiting)`), sans état « Sending ».
+  - La flèche « Send now », cliquée 11 s plus tard, l'a envoyé dans le tour : `message 5 sent into the running turn`, `turn 5 joined the running turn`, réponse « fini » et date, aucun doublon. Le parcours de l'étape 6 est donc **conforme**.
+  - Autre point : le message affiché commence par « joute » (51 caractères au lieu de 52, le « A » manque).
+
+**Enquête (lecture du code, sans push)**
+
+- **Chemin de Cmd+Entrée, juste dans le code** :
+  - `webview/Composer.tsx:341-344` : `Enter` sans Shift donne `submit(event.metaKey || event.ctrlKey)`.
+  - `:277-289` : `post({ type: "send", …, now: now || undefined })`.
+  - `src/view.ts:266-267` : `chat.send(text, images, edit, now)`.
+  - `src/chat.ts:281-284` : `now` et pas d'`edit` donnent `now(message)`, puis tour en cours (`:427-431`), puis `steering` et `steerAll`.
+  - Ce code est celui d'Unharnessed (`uh:vscode/webview/Composer.tsx:336-339`). Ni l'une ni l'autre extension ne déclare de raccourci clavier (`contributes.keybindings` absent).
+- **La ligne `chat: queued (N waiting)` ne sort que de `send` sans `now`, ou avec un `edit`** (`chat.ts:285-289`). Ici, aucune modification de prompt n'était ouverte. Le webview a donc posté le message sans `now` : soit `Enter` est arrivé avec `metaKey` et `ctrlKey` à faux, soit c'est le bouton d'envoi (`Composer.tsx:565`, `submit()`).
+- **Cause non établie.** Le journal ne trace pas les touches du webview. Hypothèses :
+  - (H1) VS Code ne transmet pas Cmd+Entrée au webview avec `metaKey` (gestion des raccourcis du workbench, ou un raccourci `cmd+enter` de l'utilisateur) ;
+  - (H2) Cmd relâché avant Entrée.
+- **Caractère perdu** : rien dans l'extension ne retire une touche imprimable.
+  - `onKeyDown` ne traite qu'Entrée, Tab, flèches, Échap et Retour arrière (`Composer.tsx:305-349`). `Popover.tsx:37-39` ne traite qu'Échap. `onPaste` n'intercepte que les images (`Composer.tsx:351-357`).
+  - Le brouillon est un état React du webview (`App.tsx:49`). L'hôte ne l'écrase qu'au changement de conversation (`App.tsx:83-90`) ou au début d'une modification de prompt (`:109-110`), aucun des deux ici.
+  - Hypothèse : la première touche est partie ailleurs, car le focus n'était pas encore dans la zone de message. Non vérifié.
