@@ -486,22 +486,6 @@ Symptôme : `connect the supervisor` avec `ConnectionRefused` (os error 111) à 
 
 Si ce test retombe : relancer le shard une fois, et noter le run ici.
 
-## Instabilité probable : `rlm_children_delete_e2e` (YA-03)
-
-`crates/pa-daemon/tests/rlm_children_delete_e2e.rs`, test `a_deleted_running_child_records_the_cancel_edge` (`:313`), shard 6/8 de `ci.yml`. Fichier identique à `upstream/main` (`git diff --stat upstream/main -- crates/pa-daemon/tests/rlm_children_delete_e2e.rs` vide au 13/11/2026, `upstream/main` à `ad1613303`).
-
-| Run | Commit | Tentative | Résultat |
-|---|---|---|---|
-| 43499374052 | `bd9cccd18` (`ya-03-outils`) | 1 | échec du shard 6/8 |
-| 43501970149 | `25c56570c` (`ya-03-outils`) | 1 | réussi, aucun changement du daemon ni du test |
-| 43504367477 | `58f2542e4` (`ya-03-outils`) | 1 | réussi |
-| 44080414273 | `ac8315ba7` (`ya-14-session-id`, PR #50) | 1 (job 134029453827) | échec du shard 6/8, même symptôme (`rlm_children_delete_e2e.rs:195`) |
-| 44080414273 | `ac8315ba7` (`ya-14-session-id`, PR #50) | 2 (job 134044803529, relance du job seul, sans push, autorisée par Yusuf le 17/11) | réussi, aucun changement de code ; relance notée dans un commentaire de la PR #50 |
-
-Symptôme : `kernel cell receipt never appeared at /tmp/.../receipts/delete.json` à `rlm_children_delete_e2e.rs:195` : `await_receipt` (`:186-199`) attend une minute le reçu écrit par une cellule du kernel de l'enfant. Hypothèse : démarrage du kernel de l'enfant trop lent sur un runner chargé (le même shard échouait aussi sur `prefix_stability`). Les commits de la PR 2 de YA-03 ne touchent ni le daemon, ni les sous-agents, ni ce test.
-
-Si ce test retombe : relancer le shard une fois, et noter le run ici.
-
 ## Instabilité probable : `login_panel_pty_e2e` (YA-09)
 
 `crates/pa-cli/tests/login_panel_pty_e2e.rs`, test `prime_login_renders_the_team_picker_without_a_terminal_takeover` (`:633`), shard 1/8 de `ci.yml`, sélectionné quand une PR touche `pa-cli`. Fichier identique à `upstream/main` (`git diff --stat upstream/main -- crates/pa-cli/tests/login_panel_pty_e2e.rs` vide au 15/11/2026).
@@ -1504,6 +1488,24 @@ Dans le démon, la comparaison du worker (`worker/turn.rs:1041`) est maintenant 
 | `crates/pa-daemon/src/agent_engine/session_engine_impl.rs` | modif. (lignes de R3, fichier upstream : 3 ajoutées, 4 retirées) | `:1115-1124` : le verrou de session ne couvre que le clone de l'`Arc`, plus la lecture du disque (règle d'upstream, `run_once.rs:341-345`). | YA-10 (ticket 35) |
 | `crates/pa-daemon/tests/ya_announce_path_e2e.rs` | modif. (test du fork) | `a_daemon_delivery_compares_with_the_disk_once` : avec `PA_COMPACTION_TRACE`, une comparaison `ya.resource_notice.compare` par livraison du démon aux tours 2 et 3 (2 avant le ticket). `spawn_supervisor_with` passe le fichier de trace au démon, dont les workers héritent. | YA-10 (ticket 35) |
 | `.changes/ya-35-abort-admission.md` | nouveau | Fragment de changelog. | YA-10 (ticket 35) |
+
+## Abandon perdu avant l'enregistrement du run : reprise de `5778afa02` d'upstream (YA-10, ticket 36)
+
+`docs/tickets/36-abandon-perdu.md`, option C-a (décisions de Yusuf du 25/11/2026). Un abandon arrivé entre la vérification du drapeau en tête de l'admission (`run_once.rs:337`) et l'enregistrement du run (`agent.rs:608`) était perdu : `Agent::abort` ne fait rien sans run. Le tour attendait alors le premier événement du provider. Reprise **telle quelle** du commit d'upstream `5778afa02` (PR #3872, fermée sans merge le 12/11/2026, absente d'`upstream/main` à `e44e9ae9d`), par `git cherry-pick -x` : même `patch-id`, seul le sujet du commit reçoit le préfixe `YA-10: ticket 36 :`. À l'`AgentStart` du run, la boucle de transfert relit le drapeau. **Préfixe de prompt inchangé.** Non couvert : le RPC sans démon, qui n'a pas de drapeau (ticket, §10.3).
+
+Conflit attendu au prochain merge d'`upstream/main` : 1 bloc trivial dans `run_once.rs` (leurs `let live` contre les 3 lignes du `Notify`, garder les deux ; ticket, §3.3). Si upstream remerge `5778afa02` tel quel : aucun conflit.
+
+**`rlm_children_delete_e2e` n'est plus listé en « Instabilité probable »** (entrée YA-03 retirée). Ses deux échecs (run 43499374052, job 132140999318 : `finished in 92.28s` ; run 44080414273, job 134029453827 : `finished in 91.86s`) ont la signature que la PR #3872 attribue à cette fenêtre : kill de l'enfant tenu jusqu'au délai de 30 s, puis sondage du reçu pendant 60 s. L'hypothèse d'un démarrage lent du kernel est abandonnée. La reprise change aussi l'e2e : il lit le reçu une fois le tour terminé, et donne la trace de la cellule en cas d'échec.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/agent_engine/turn/run_once.rs` | modif. (repris d'upstream `5778afa02`, +20 / −5) | `Notify` levé à `AgentStart` ; branche du `select!` qui relit le drapeau une fois le run enregistré ; paramètre `aborted` renommé `cancel_requested`. | YA-10 (ticket 36) |
+| `crates/pa-daemon/src/agent_engine/turn/model.rs` | modif. (repris d'upstream `5778afa02`, +2 / −4) | Commentaire de la vérification avant le run. | YA-10 (ticket 36) |
+| `crates/pa-daemon/src/agent_engine/tests/abort.rs` | modif. (repris d'upstream `5778afa02`, +59) | Test d'upstream `abort_flagged_before_the_run_registers_cancels_the_registered_run`. | YA-10 (ticket 36) |
+| `crates/pa-daemon/tests/rlm_children_delete_e2e.rs` | modif. (repris d'upstream `5778afa02`, +14 / −31) | Reçu lu une fois le tour terminé, trace de la cellule en cas d'échec. | YA-10 (ticket 36) |
+| `.changes/abort-before-run-registration.md` | nouveau (repris d'upstream `5778afa02`) | Fragment de changelog d'upstream. | YA-10 (ticket 36) |
+| `crates/pa-daemon/src/agent_engine/tests.rs` | modif. (1 ligne) | `:23` : `mod ya_abort_window;`. | YA-10 (ticket 36) |
+| `crates/pa-daemon/src/agent_engine/tests/ya_abort_window.rs` | nouveau (test du fork) | `abort_armed_after_the_admission_consult_cancels_the_registered_run` : abandon armé juste après la vérification de l'admission, comme le worker ; le tour se termine en abandon sans la réponse retenue. Rouge sur `main`, vert avec la reprise. | YA-10 (ticket 36) |
 
 ## Code repris d'Unharnessed
 
