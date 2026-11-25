@@ -370,7 +370,10 @@ function onSteer(id, params) {
   if (text.startsWith("/")) return fail(id, -32602, "Invalid params", { details: "A command cannot join a running turn." });
   // Un texte « refusé… » : le pont le refuse comme un tour fini (la fenêtre de fin de tour).
   if (text.startsWith("refusé")) return over();
-  respond(id, {});
+  // Ticket 39 (E2) : `steerDelayMs` du scénario retarde la réponse ; le message est déjà dans la file.
+  const delay = scenario.steerDelayMs ?? 0;
+  if (delay > 0) setTimeout(() => respond(id, {}), delay);
+  else respond(id, {});
   steered.push(text);
   const target = steerable;
   // E7 : le tour échoue sans le prendre.

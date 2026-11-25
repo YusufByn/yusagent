@@ -1606,6 +1606,7 @@ Constat, décisions et plan : `docs/tickets/39-message-pendant-un-tour.md`. Voie
 | `crates/pa-daemon/src/agent_engine/ya_steer.rs` | nouveau | Message passé à l'agent vivant par `turn_agent` (`Agent::steer`), registre (horodatage unique, texte) lu par la garde de `run_once.rs`, vidage au règlement. Test U5. | YA-19 (ticket 39) |
 | `crates/pa-cli/tests/ya_acp_steer_e2e.rs` | nouveau | Vrai binaire en ACP, provider factice, vrai kernel : E1 à E7 (message rattaché au tour, deux messages en un tour, livré une fois et ligne du prompt une fois, reprise, jamais avant le modèle, refus, Stop, tour en échec). | YA-19 (ticket 39) |
 | `extensions/vscode/src/ya/methods.ts` | modif. (fichier du fork) | `_yus/session/steer` servie : « Send now » et Cmd/Ctrl+Entrée pendant un tour. | YA-19 (ticket 39) |
+| `extensions/vscode/src/chat.ts` | modif. (repris d'Unharnessed) | `steerAll` : les messages envoyés dans le tour partent l'un après l'autre, chacun après la réponse au précédent (E2, option a) ; avant, ils partaient en même temps et le pont pouvait les livrer dans un autre ordre. | YA-19 (ticket 39) |
 | `extensions/vscode/test/fake-agent/fake-agent.mjs`, `test/unit/agent.test.ts`, `test/e2e/suite.ts`, `test/e2e/suite-real.ts` | modif. | Prompts `longue` et `échoue`, et `_yus/session/steer` dans l'agent factice ; tests X0 à X3, E7 côté extension, « Send now », parcours vrai binaire. | YA-19 (ticket 39) |
 | `.changes/ya-39-steer.md` | nouveau | Fragment de changelog. | YA-19 (ticket 39) |
 
@@ -1613,6 +1614,7 @@ Limites (décisions de Yusuf du 25/11/2026) :
 - **TUI attaché** : un TUI attaché qui envoie aussi un message pendant le même tour décale le rattachement des `turnStart`, qui suivent l'ordre des lignes.
 - **D4** : pas de marque de rejeu. Après `session/load`, un message envoyé pendant un tour se rejoue comme un prompt.
 - **D6** : un message pendant un tour lancé par l'agent est refusé. L'extension le garde et l'envoie en prompt après le tour.
+- **Ordre des messages** : l'extension attend la réponse à un message avant d'envoyer le suivant. Un autre client ACP qui envoie sans attendre n'a pas d'ordre garanti : en JSON-RPC, l'ordre de requêtes concurrentes n'est pas garanti, et le pont traite chaque requête à part (`daemon.rs:558-568`).
 - **Message accepté trop tard** : accepté après la dernière lecture de la file par la boucle, il est vidé au règlement du run, puis renvoyé en prompt par l'extension. Ni perte ni doublon.
 
 ### À revoir à chaque reprise d'upstream

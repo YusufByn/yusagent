@@ -969,3 +969,25 @@ SHA256 vérifiés (`shasum -a 256 -c SHA256SUMS`). Variables : `DO_NOT_TRACK=1 P
 | Agent factice | `python3 -I bench/tools/capture/compare_frames.py <dossier branche>` | **0 écart** |
 
 Le cas `spawn` du banc affiche `ok=False` sur les deux binaires. Ce n'est pas lié à ce ticket.
+
+## 22. Décision de Yusuf sur E2 (25/11/2026) : option (a)
+
+**L'extension envoie un message dans le tour après l'autre, chacun après la réponse au précédent.**
+- **Raison** : en JSON-RPC, l'ordre de requêtes concurrentes n'est pas garanti ; un client qui veut l'ordre attend la réponse. Le pont ne répond `{}` qu'après l'accusé du worker, qui a mis le message dans la file de l'agent. L'ordre d'envoi est donc celui des lignes et des `turnStart`.
+- **Limite** (`docs/fork-changes.md`) : un autre client ACP qui envoie sans attendre n'a pas d'ordre garanti.
+- **E2** garde son assertion d'ordre strict, et envoie le second message après la réponse au premier.
+
+**Correctif** :
+- `extensions/vscode/src/chat.ts`, `steerAll` : les envois sont chaînés (`steerChain`). Un envoi en attente ne part plus après une relance (`run`), ni pour un message revenu en file entre-temps (absent de `steered`).
+- Agent factice : `steerDelayMs` du scénario retarde la réponse à un message.
+
+**Test unitaire, rouge puis vert en local** (un seul push, décision de Yusuf) : « deux messages pendant un tour (E2) : le second ne part qu'après la réponse au premier, dans l'ordre » (`test/unit/agent.test.ts`). Commande :
+```
+cd extensions/vscode && npm run compile-tests && node --require ./out/test/unit/setup.js --test --test-timeout=60000 --test-name-pattern="E2" out/test/unit/agent.test.js
+```
+- Avec le `chat.ts` d'avant : `✖ … (186 ms)`, `AssertionError: avant la réponse au premier, le second n'est pas parti`, `actual: [ 'un', 'deux' ]`, `expected: [ 'un' ]`.
+- Avec le correctif : `✔ … (403 ms)`. Suite complète `npm run test:unit` : 76 tests, 76 passés.
+
+**À noter, non traité ici** :
+- `bench/smoke/tools/compare_capture_prompts.py` cherche `capture/*.body.json`, alors que `acp-resume` écrit dans `<cas>/cap/` : correctif d'outil plus tard. Le §21 a comparé des copies renommées.
+- Le cas `spawn` du banc échoue parce que `rlm.spawn` est coupé : l'hôte répond « RLM recursion depth limit reached (RLM_DEPTH=0, RLM_MAX_DEPTH=0) » (`runs/20261125T151615Z/spawn/cap/0002.body.json`). Ce n'est pas lié au ticket 39.

@@ -9,7 +9,8 @@
 //! E1. A message sent during a cell joins the prompt's turn: the cell runs to its end, the
 //!     message row follows the cell's result, `turnStart { origin: "steer" }` under the prompt's
 //!     turn id (no `rewindTo`), one response, after the message's answer.
-//! E2. Two messages go in one model turn: two rows in a row, one answer.
+//! E2. Two messages, the second sent once the first is answered (as the extension does), go in
+//!     one model turn: two rows in a row, in that order, one answer.
 //! E3. A message is delivered once: one row, no turn of its own; the prompt's row is written
 //!     once (the `run_once.rs` gate); after `session/load` in another process, the replay shows
 //!     the message once, at its place (after the cell's result, before its answer).
@@ -523,9 +524,11 @@ fn two_steers_go_in_one_model_turn() {
     let prompt = client.prompt(&session_id, "run the slow cell");
     let turn = client.prompt_turn(0);
     let _ = wait_file(&client.path("started"));
+    // One after the other, as the extension sends them: in JSON-RPC, concurrent requests have no
+    // order (decision E2, option a, ticket §22).
     let one = client.steer(&session_id, turn, "first note");
-    let two = client.steer(&session_id, turn, "second note");
     client.accepted(one);
+    let two = client.steer(&session_id, turn, "second note");
     client.accepted(two);
     let _ = client.wait_response(prompt);
     let rows = rows(&file);

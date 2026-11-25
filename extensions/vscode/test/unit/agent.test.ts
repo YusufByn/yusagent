@@ -541,3 +541,28 @@ test("tour en échec avec un message envoyé (E7) : renvoyé une fois en prompt,
   assert.equal(texts(h, "text").filter((text) => text === "écho : note après échec").length, 1, "réponse affichée une fois");
   assert.deepEqual(shown(h).chat.current.queue, []);
 });
+
+test("deux messages pendant un tour (E2) : le second ne part qu'après la réponse au premier, dans l'ordre", async () => {
+  // Le pont répond après 200 ms ; le tour prend les messages 300 ms après le premier.
+  const h = open({ steerDelayMs: 200 });
+  await ready(h);
+  shown(h).chat.send("longue", []);
+  await working(h);
+  shown(h).chat.send("un", [], undefined, true);
+  shown(h).chat.send("deux", [], undefined, true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const texts = () =>
+    framesOf(h, "_yus/session/steer").map((frame) =>
+      ((frame.params as { prompt: { text?: string }[] }).prompt ?? []).map((block) => block.text ?? "").join(""),
+    );
+  assert.deepEqual(texts(), ["un"], "avant la réponse au premier, le second n'est pas parti");
+  await idle(h);
+  assert.deepEqual(texts(), ["un", "deux"], "dans l'ordre d'envoi");
+  assert.deepEqual(
+    turnsOf(h).slice(1).map((turn) => turn.prompt?.text),
+    ["un", "deux"],
+    "les tours rejoints, dans l'ordre",
+  );
+  assert.deepEqual(promptTexts(h), ["longue"], "aucun doublon");
+});
+
