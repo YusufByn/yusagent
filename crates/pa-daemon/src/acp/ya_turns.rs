@@ -408,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_start_serializes_with_unharnessed_names() {
+    fn turn_start_serializes_with_its_wire_names() {
         let wrapped = meta::prime_agent_meta(&PrimeAgentSessionMeta {
             turn_start: Some(TurnStartMeta::new("wake", Some("bash"))),
             ..Default::default()

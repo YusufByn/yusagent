@@ -2,7 +2,7 @@
 // both bundles import this file.
 
 /**
- * The `unharnessed --mode acp` process as the panel shows it. Versions, pid
+ * The `yusagent --mode acp` process as the panel shows it. Versions, pid
  * and binary path stay in the log: the panel only says whether it runs.
  */
 export type AgentState =
