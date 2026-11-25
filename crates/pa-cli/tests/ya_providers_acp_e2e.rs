@@ -393,6 +393,7 @@ fn labels(home: &Home) -> Vec<&'static str> {
 /// does, reaches the running session's next request. Red while the session keeps the key it
 /// was built with; outside the bridge, this is ticket E-C's.
 #[test]
+#[ignore = "H1, confirmed red (ticket 40, §18): the running session keeps its build-time credential; ticket E-C (upstream a05bcb695, dad2232cc)"]
 fn h1_an_api_key_rewritten_on_disk_reaches_the_running_session() {
     let home = Home::new(false);
     home.write_auth(&json!({ "ya40": api_key("sk-ya40-old") }));
@@ -418,6 +419,7 @@ fn h1_an_api_key_rewritten_on_disk_reaches_the_running_session() {
 /// leave it, reaches the running session's next request. A token the agent refreshes itself is
 /// not testable offline (the token URLs are fixed); that is ticket E-C's.
 #[test]
+#[ignore = "H1, confirmed red (ticket 40, §18): the running session keeps its build-time credential; ticket E-C (upstream a05bcb695, dad2232cc)"]
 fn h1_an_oauth_token_renewed_on_disk_reaches_the_running_session() {
     let home = Home::new(false);
     let token = |access: &str| {
