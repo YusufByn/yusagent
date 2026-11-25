@@ -387,9 +387,9 @@ Une injection dans le même run ne passe par rien de tout cela : la boucle ajout
 3. **Lignes « tour suivant » du worker** après une reprise sur incident, `restore_next_turn` (`crates/pa-daemon/src/session_custom.rs:59`, lues en `turn.rs:1036-1039`).
 4. **Digest du harness** : seulement s'il est encore dû (`crates/pa-core/src/session_engine/harness_digest.rs:445-452`, `:460-479` ; `engine.rs:1050-1056`). Il est consommé par la première admission, donc absent après le prompt du tour, sauf si les raffinements étaient coupés puis rallumés.
 
-**En plus, hors contenu** : la fin d'un run annule l'éventuel modèle de remplacement (`engine.rs:1114-1120`). Après une bascule de modèle (failover) pendant le premier run, la relance repart sur le modèle de base, alors qu'une injection dans le même run garderait celui de remplacement. Lecture, non mesuré.
+**En plus, hors contenu** : la fin d'un run annule le modèle de remplacement (`engine.rs:1114-1120`). **Corrigé le 25/11/2026 (§11)** : ce remplacement vient du **routage d'image**, pas d'une bascule de fournisseur. Un tour dont le prompt porte des images part sur le modèle d'images configuré quand le modèle de la session ne lit pas les images (`crates/pa-core/src/session_engine/wiring.rs:34-62`, `crates/pa-daemon/src/image_route.rs:180-196`). Dans ce cas, la relance repart sur le modèle de base (le message ne porte pas d'images), alors qu'une injection dans le même run garderait le modèle d'images.
 
-**Verdict sur (b).** Faux au sens strict : les quatre cas ci-dessus, et le modèle de remplacement, font différer la requête de la relance de celle d'une injection dans le même run. Dans le cas courant, rien n'est ajouté. Aucun de ces cas ne casse le préfixe, puisque tout est ajouté en fin.
+**Verdict sur (b).** Faux au sens strict : les quatre cas ci-dessus, et le routage d'image, font différer la requête de la relance de celle d'une injection dans le même run. Dans le cas courant, rien n'est ajouté. Aucun de ces cas ne casse le préfixe, puisque tout est ajouté en fin.
 
 ### 10.3 D3 : l'extension et `rewindTo`
 
@@ -402,3 +402,171 @@ Une injection dans le même run ne passe par rien de tout cela : la boucle ajout
 ### 10.4 Arrêt
 
 D1 demandait de s'arrêter si (a) touche upstream ou si (b) est faux. Au sens strict, les deux conditions tombent (§10.1, §10.2). **Pas de code, pas de plan de tests** avant ta décision : A avec ces deux écarts, ou B.
+
+## 11. Décision de Yusuf (25/11/2026) : R4-A avec les deux écarts
+
+- **Voie A** : le message passe par la file `steering` du worker.
+- **Écart 1** : deux ajouts dans `crates/pa-daemon/src/acp/daemon.rs`, détaillés au §12.1 : la branche de dispatch, et un appel de notre module dans `prompt_turn` avant la frontière. Rien dans le worker, le cœur ni `pa-types`.
+- **Écart 2** : la relance peut envoyer plus tôt des lignes en attente (annonce du ticket 31, avis du kernel, lignes de reprise, digest). Le steer du TUI se comporte déjà ainsi. Ces lignes sont ajoutées en fin de contexte, préfixe intact (§10.2).
+- **Limite** : si le premier run est parti sur le modèle d'images (routage d'image), la relance repart sur le modèle de base (`engine.rs:1114-1120`), avec un miss de cache possible.
+  - Ce qui déclenche ce remplacement : un prompt qui porte des images quand le modèle de la session ne les lit pas (`wiring.rs:34-62`).
+  - L'extension n'envoie que du texte (`features().attachments` vaut `false`, `extensions/vscode/src/ya/methods.ts:51`). Le cas ne vient donc aujourd'hui que d'un TUI attaché.
+- **Notre module attend la ligne user du prompt** avant d'envoyer un message dans la file (§10.1, point 3).
+- **Correction du §10.2** : j'avais écrit « bascule de modèle (failover) ». C'est le routage d'image (§10.2 corrigé).
+
+## 12. Plan (avant tout code)
+
+### 12.1 Code
+
+**Notre module** : nouveau fichier `crates/pa-daemon/src/acp/ya_turns/steer.rs`, déclaré dans `ya_turns.rs` par `pub(super) mod steer;`. C'est un fichier à nous : la déclaration ne touche pas `acp/mod.rs`. L'état d'un tour vit dans `AgentTurns` (ya_turns.rs, déjà un champ de l'état de session, `daemon.rs:293`) :
+- tour du pont en cours ;
+- ligne user du prompt vue ou non ;
+- messages en envoi ;
+- messages acceptés depuis la dernière attente ;
+- file des messages acceptés, pour `turnStart` ;
+- acceptation fermée ou non.
+
+Remise à zéro dans `ya_turns::begin_prompt` (`ya_turns.rs:241`), appelé pour chaque prompt (`daemon.rs:1614`).
+
+**Écart 1, les deux ajouts dans `daemon.rs`** (lignes de `main` à `5661bdebc`) :
+
+| Ajout | Où | Lignes | Contenu |
+|---|---|---|---|
+| Dispatch | `daemon.rs:1163`, avant `"session/set_config_option" =>`, dans `handle_incoming` (`:1110`) | **+4** (un commentaire et une branche de 3 lignes après rustfmt) | `super::ya_turns::steer::METHOD => { super::ya_turns::steer::serve(id, params, link, state, tx).await; }` |
+| Fermeture | `daemon.rs:1710`, juste après `fetch_autonomous_status(…, false)…ok();` (`:1708-1710`), donc avant la frontière (`:1736-1752`) | **+2** (un commentaire et un appel) | `let autonomous_status = super::ya_turns::steer::seal(state, link, autonomous_status).await;` |
+
+Le `METHOD` vaut `"_yus/session/steer"`. Au total, **+6 lignes et 0 modifiée** dans un fichier upstream. Ces ajouts sont listés dans `docs/fork-changes.md`.
+
+**`serve`** (requête `_yus/session/steer`, D2) :
+
+1. **Contrôles sous le verrou d'état**, refus en `-32603` « The turn is over: send it as a prompt. » si l'un échoue :
+   - session connue ;
+   - pas de fermeture ;
+   - pas d'arrêt en cours ;
+   - tour du pont présent ;
+   - `turn` égal à `active_prompt_turn` ;
+   - acceptation pas fermée ;
+   - aucun tour lancé par l'agent en cours (D6).
+2. **Blocs** analysés comme un prompt (`types::AdmittedPrompt::parse`). Refus en `-32602` avec `data.details` dans trois cas :
+   - bloc invalide ;
+   - image : l'extension n'en envoie pas, §5.4 ;
+   - commande de session (`crate::session_commands::parse_prompt_session_command`).
+3. **Attente de la ligne user du prompt** :
+   - le module relit l'état toutes les 50 ms, comme `ya_turns::begin_prompt` (`ya_turns.rs:31-32`) ;
+   - il refuse si le tour finit entre-temps : prompt de commande de session sans ligne user, échec, arrêt.
+4. **Envoi** :
+   - le message est marqué « en envoi » sous le verrou ;
+   - **le verrou est relâché avant l'envoi**. Les réponses du démon passent par la boucle d'événements (`daemon.rs:131`, `:463`), qui prend ce verrou pour chaque événement (`:368`). Les garder ensemble bloquerait tout ;
+   - envoi de `DaemonCommand::Steer`.
+5. **Après l'accusé de réception** :
+   - si un arrêt a été armé entre-temps, le module envoie `AbortAndClearQueue`, la commande du Stop. Rien du message ne tourne après le Stop. Réponse `-32603` ;
+   - sinon, il compte le message comme accepté et le met dans la file `turnStart`. Réponse `{}`.
+
+**`seal`** (appelé une fois par prompt, après l'attente du worker) :
+- s'il reste des messages en envoi, il attend ;
+- si des messages ont été acceptés depuis l'attente précédente, il remet le compteur à zéro et relance `fetch_autonomous_status(…, false)` (`daemon.rs:1894`) ;
+- sinon, il ferme l'acceptation et rend le dernier statut.
+
+Les messages tournent donc avant la frontière, et le statut de l'enveloppe est à jour. Quand aucun message n'a été envoyé, aucune requête n'est ajoutée.
+
+**`turnStart` `steer`** : dans `AgentTurns::announce`, appelé pour chaque événement (`daemon.rs:407-410`) :
+- la première ligne user du tour du pont est celle du prompt (marquée « vue ») ;
+- chaque ligne user suivante prend la tête de la file des messages acceptés et publie `turnStart { origin: "steer" }` sous le même `promptTurnId`, sans `rewindTo` (D3), avant les mises à jour de l'événement ;
+- un lot de N messages donne N `turnStart`, comme chez Unharnessed.
+
+Les lignes user ne donnent aucune trame (`wire_events.rs:585`) : l'extension affiche le texte qu'elle a envoyé (`chat.ts:822-850`).
+
+**Limites** (notées au ticket et dans `docs/fork-changes.md`) :
+- un message d'un TUI attaché pendant le même tour décalerait l'appariement de la file, qui suit l'ordre d'arrivée ;
+- un `Steer` arrivé au worker après le `AbortAndClearQueue` du Stop pourrait commencer à tourner avant l'abandon envoyé par le module. Cela suppose un envoi bloqué pendant tout un aller-retour du Stop ; aucun test ne peut le provoquer ;
+- D4 (pas de marque de rejeu) et D6 (refus pendant un tour lancé par l'agent).
+
+**Extension (X4)** :
+- `"_yus/session/steer"` passe dans `REQUESTS` (`extensions/vscode/src/ya/methods.ts:10-30`), donc `features().steer` devient vrai (`:45`) ;
+- rien d'autre dans `chat.ts`.
+- Agent factice : sert `steer` (réponse `{}` et refus), publie `turnStart` `steer` sur la ligne suivante.
+
+**Préfixe** : prompt système et tools inchangés. Le message entre en fin d'historique (§4). Les trames ACP gagnent `turnStart` `origin: "steer"`.
+
+### 12.2 Tests vus rouges puis verts
+
+Ordre des pushes :
+- **push 1, tests seuls** : CI rouge sur les assertions ci-dessous. Je relève le run, le job et la ligne de chaque assertion en échec ;
+- **puis le code** : CI verte.
+
+Aucun modèle n'est appelé : provider factice (`"engine": "faux"`) et vrai kernel, comme `crates/pa-cli/tests/ya_acp_wake_turn_e2e.rs:7`.
+
+**Rust, e2e du pont** : nouveau fichier `crates/pa-cli/tests/ya_acp_steer_e2e.rs`, harnais copié de `ya_acp_wake_turn_e2e.rs` (`Client`, `wait_for`, `turn_start`, `phase`). Toutes ces assertions sont rouges sur `main`, où `steer` répond `-32601`, sauf indication contraire.
+
+| # | Test | Assertion (rouge sur `main`, sauf indication) |
+|---|---|---|
+| E1 | `a_steer_joins_the_running_prompt_turn` | Le prompt lance une cellule qui écrit `started`, dort 3 s, puis écrit `ended`. Au fichier `started`, `steer` avec le `promptTurnId`. Attendu : réponse `{}` ; `ended` écrit, donc la cellule n'est pas interrompue ; dans le fichier de session, la ligne user du message suit le résultat de la cellule ; `turnStart` `{origin:"steer"}` sous le même `promptTurnId`, sans `rewindTo` ; la frontière et la réponse `session/prompt` arrivent après la réponse au message ; **une seule** réponse `session/prompt` |
+| E2 | `two_steers_go_in_one_model_turn` | Deux messages pendant la cellule : les deux lignes user se suivent dans le fichier de session, avec une seule réponse de l'assistant après elles ; deux `turnStart` `steer` |
+| E3 | `a_steer_is_delivered_once` | Après E1, un second prompt : le texte du message apparaît une seule fois en ligne user dans le fichier de session ; aucun `turnStart` `origin:"prompt"` hors des deux prompts envoyés |
+| E4 | `a_steer_never_goes_before_the_prompt_row` | `steer` envoyé dès la trame `turnStart` `prompt`, avant que le worker ait le prompt. La ligne du prompt précède celle du message dans le fichier de session. Sans l'attente de la ligne, le rouge n'est pas garanti : c'est une course. Le rouge déterministe est U2 |
+| E5 | `steer_refusals` | `-32603` pour un `turn` périmé, après la réponse `session/prompt`, et pendant un tour de réveil (un `bash()` non lu, comme l'e2e des réveils). `-32602` pour `/compact` et pour un bloc image |
+| E6 | `stop_with_a_steer_waiting` | `steer` accepté pendant la cellule, puis `session/cancel`. Attendu : `stopReason` `cancelled` ; aucune ligne user du message dans le fichier de session ; aucun tour dans les 5 s qui suivent ; le prompt suivant tourne sans le message. Le vidage de la file vient du Stop (`AbortAndClearQueue`) : sur `main`, le refus `-32601` de `steer` fait déjà échouer l'assertion « réponse `{}` » |
+
+**Rust, tests unitaires** dans `ya_turns/steer.rs`. `seal` et `serve` prennent l'attente et l'envoi en paramètres, ce qui permet de les remplacer par des faux dans ces tests. Rouge avec un `seal` ou un `serve` vides, vert ensuite :
+
+| # | Test | Assertion |
+|---|---|---|
+| U1 | `seal_waits_again_for_a_message_accepted_after_the_wait` | **La fenêtre entre la dernière attente et `finish_prompt`** : un message est accepté après le retour de l'attente. `seal` relance l'attente une fois, puis ferme. Un `steer` suivant est refusé en `-32603` |
+| U2 | `a_steer_waits_for_the_prompt_row` | Avant la ligne user du prompt, aucun envoi. Après `announce` de cette ligne, un envoi |
+| U3 | `seal_waits_for_a_message_in_flight` | Un message en envoi : `seal` ne ferme pas avant son accusé de réception |
+| U4 | `announce_maps_rows_to_steers` | La première ligne user ne publie rien. Les deux suivantes publient chacune `turnStart` `steer`, même tour, sans `rewindTo` |
+| U5 | `a_stop_during_the_send_aborts_the_message` | Arrêt armé pendant l'envoi : le faux reçoit `AbortAndClearQueue`. Réponse `-32603` |
+
+**Extension** :
+- `test/unit/agent.test.ts:86` : `_yus/session/steer` part sur le fil au lieu d'être rejeté sur place. Rouge sur l'assertion actuelle inversée ;
+- `test/e2e/suite.ts` (agent factice) :
+  - « Send now » visible pendant un tour ;
+  - Cmd+Entrée pendant un tour envoie un `steer` avec l'identifiant du tour ;
+  - tour rejoint affiché ;
+  - **une seule** trame `session/prompt` pour tout le parcours ;
+  - refus : le message revient en tête de file, puis part en prompt après le tour ;
+  - Stop avec un message envoyé et non pris : file en pause, puis « play » l'envoie une fois ;
+- `test/e2e/suite-real.ts` (vrai binaire) : même parcours que E1, avec une seule trame `session/prompt` pour le message.
+
+**Agent factice aligné** :
+- `bench/tools/capture/acp_frames.py` reçoit la session `D-steer` : scénario `steer`, `steer` envoyé au début de la cellule, puis un second `steer` avec un `turn` périmé. `CONFORME` exige :
+  - `{}` puis `-32603` ;
+  - un `turnStart` `steer` sous le tour du prompt ;
+  - une seule réponse `session/prompt`.
+- `compare_frames.py` rejoue `D-steer` contre l'agent factice et compare réponses, refus, forme et place de `turnStart`.
+
+### 12.3 Banc de capture, préfixe N → N+1
+
+- Deux scénarios dans `bench/tools/capture/server.py` :
+  - **`steer`** : le modèle lance une cellule qui écrit `started` puis dort 4 s ; la réponse suivante est du texte ;
+  - **`steer-skills`** : la même cellule crée d'abord un skill sur le disque du projet, ce qui change les skills pendant le tour.
+- `acp_frames.py` envoie le `steer` à l'apparition de `started` (sessions `D-steer` et `E-steer-skills`). Il passe les requêtes capturées dans `analyze.compare_pair` (`analyze.py:124-150`) et écrit la section « Préfixe N → N+1 ».
+- `CONFORME` exige, pour chaque paire, prompt système, tools et paramètres identiques, et messages de N en préfixe exact de N+1. Il exige aussi :
+  - `D-steer` : la requête après la cellule finit par [résultat de la cellule, ligne user du message] ;
+  - `E-steer-skills` : la même requête finit par [résultat de la cellule, annonce `[skills-changed]` du ticket 31, ligne user du message]. C'est l'écart 2, vu au banc.
+- **Avant et après** :
+  - binaire de `main` : `D-steer` et `E-steer-skills` relèvent le refus `-32601` ;
+  - binaire de la branche : sections ci-dessus ;
+  - `compare.py --all` entre `main` et la branche donne `TOUT IDENTIQUE` sur les cas existants.
+- Commandes notées dans le rapport, avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`.
+
+### 12.4 Contrôle manuel (Yusuf, VS Code, D8)
+
+Binaire de la branche (artefact `ya-build-macos-arm64`) dans `yusagent.binaryPath`, extension de la branche, ton modèle habituel.
+
+1. Ouvrir un chat, passer en « auto ».
+2. Prompt : « Lance `await bash("sleep 20; echo fini")` puis dis-moi ce que tu as vu. »
+3. Pendant le `sleep`, taper « Ajoute aussi la date du jour à la fin » et faire **Cmd+Entrée**. Attendu :
+   - le message passe en « Sending » au-dessus du compositeur ;
+   - la cellule va au bout (« fini ») ;
+   - un nouveau tour s'ouvre sous le premier, avec ton texte ;
+   - l'agent y répond sans nouveau prompt.
+4. Après la fin : le message **n'apparaît pas une seconde fois**, ni en file ni en tour.
+5. Relancer le prompt 2. Pendant le `sleep`, envoyer deux messages (Cmd+Entrée deux fois). Attendu : deux tours rejoints, une seule réponse de l'agent qui traite les deux.
+6. Relancer le prompt 2. Pendant le `sleep`, taper un message, **Entrée** (sans Cmd), puis cliquer « Send now » sur le message en file. Attendu : même effet qu'à l'étape 3.
+7. Relancer le prompt 2. Pendant le `sleep`, Cmd+Entrée sur un message, puis **Stop** aussitôt. Attendu :
+   - le tour s'arrête ;
+   - le message revient en tête de file, file en pause ;
+   - « play » l'envoie **une fois**, comme un prompt.
+8. Pendant un tour lancé par l'agent (`bash()` non lu, réveil `[bash-done]`), Cmd+Entrée sur un message. Attendu : le message reste en file et part en prompt après le tour (D6).
+9. Fermer et rouvrir la conversation (`session/load`) : les messages des étapes 3 et 5 sont rejoués comme des prompts (limite D4).
