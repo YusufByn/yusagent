@@ -58,7 +58,7 @@ type Compaction = Extract<TurnItem, { kind: "compaction" }>;
 type Mark = { turn: Turn; at: number };
 export type ChatMessage = Extract<HostMessage, { type: "chat" | "chatPatch" | "chatEdit" }>;
 
-/** `_meta.unharnessed` on an update (crates/uh-daemon/src/acp/meta.rs), the parts read here. */
+/** The bridge's `_meta` on an update (`src/ya/meta.ts`; Unharnessed's shape, crates/uh-daemon/src/acp/meta.rs), the parts read here. */
 type Meta = {
   promptTurnId?: number;
   phase?: "event" | "responseBoundary" | "terminalQuiescence";
@@ -90,9 +90,8 @@ type Update = {
     name: string;
     description: string;
     input?: { hint?: string } | null;
-    _meta?: { unharnessed?: { kind?: string; source?: string } };
   }[];
-  _meta?: { unharnessed?: Meta };
+  _meta?: Record<string, unknown>;
 };
 
 /**
@@ -1106,20 +1105,17 @@ export class Chat {
     this.post({ type: "chat", chat: this.current });
   }
 
-  /** The agent's commands, prompts and skills; its built-in skills are its own business. */
+  /**
+   * The agent's commands. yusAgent (ticket 32) : sans le genre ni la source qu'Unharnessed mettait dans
+   * son `_meta` (notre pont n'envoie pas de `available_commands_update`), chacune est une commande.
+   */
   private setCommands(commands: NonNullable<Update["availableCommands"]>): void {
-    const kinds = ["command", "prompt", "skill"] as const;
-    const builtin = commands.filter(({ _meta }) => _meta?.unharnessed?.source === "builtin");
-    const agent = commands
-      .filter((command) => !builtin.includes(command))
-      .map(({ name, description, input, _meta }): ChatCommand => {
-        const kind = kinds.find((k) => k === _meta?.unharnessed?.kind) ?? "command";
-        return { name, description, hint: input?.hint || undefined, kind };
-      });
+    const agent = commands.map(({ name, description, input }): ChatCommand => {
+      return { name, description, hint: input?.hint || undefined, kind: "command" };
+    });
     this.commands = [...PANEL_COMMANDS, ...agent.filter((command) => command.name !== "new")];
     this.commandsChanged = true;
-    const left = builtin.length > 0 ? `; ${count(builtin.length, "built-in skill")} left out` : "";
-    this.log.info(`chat: ${agent.length} commands: ${agent.map((command) => command.name).join(", ")}${left}`);
+    this.log.info(`chat: ${agent.length} commands: ${agent.map((command) => command.name).join(", ")}`);
     this.changed();
   }
 

@@ -14,17 +14,6 @@ type ConfigOption = {
 type SelectValue = {
   value: string;
   name: string;
-  _meta?: { unharnessed?: { model?: ModelMeta } };
-};
-
-/** `_meta.unharnessed.model` on a `model` value (crates/uh-daemon/src/acp/meta.rs). */
-type ModelMeta = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow: number;
-  input: string[];
-  cost: { input: number; output: number };
 };
 
 /**
@@ -72,7 +61,7 @@ export class Session {
 
   /**
    * The saved conversation the session writes to, as the history lists it
-   * (`_meta.unharnessed.saved`); a new one's file is written at its first
+   * (`saved` in the bridge's `_meta`); a new one's file is written at its first
    * prompt. Kept when the agent stops, to start it again on it.
    */
   get saved(): SavedSession | undefined {
@@ -186,21 +175,9 @@ function values(option: ConfigOption): SelectValue[] {
   return (option.options ?? []).flatMap((entry) => ("group" in entry ? entry.options : [entry]));
 }
 
+// yusAgent (ticket 32) : le pont ne donne pas de détails du modèle ; la lecture de ceux d'Unharnessed,
+// que personne n'envoie, est retirée. La valeur est la paire `["provider", "id"]`.
 function choice(value: SelectValue): ModelChoice {
-  const meta = value._meta?.unharnessed?.model;
-  if (meta) {
-    const { input, output } = meta.cost;
-    return {
-      value: value.value,
-      id: meta.id,
-      name: meta.name,
-      provider: meta.provider,
-      contextWindow: meta.contextWindow,
-      input: meta.input,
-      cost: { input, output },
-    };
-  }
-  // Without details, the value is the `["provider", "id"]` pair.
   const [provider = "", id = value.value] = parsePair(value.value);
   return { value: value.value, id, name: value.name, provider, contextWindow: 0, input: [] };
 }

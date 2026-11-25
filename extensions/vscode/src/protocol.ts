@@ -414,7 +414,7 @@ export type QueuedMessage = { id: number; text: string; images: Thumb[]; state: 
 
 /**
  * What the conversation has used, as the agent reports it after each
- * message (`_meta.unharnessed.usage`): its context against the model's
+ * message (`usage` in the bridge's `_meta`): its context against the model's
  * window and the automatic compaction's threshold, and what it cost.
  */
 export type Usage = {
