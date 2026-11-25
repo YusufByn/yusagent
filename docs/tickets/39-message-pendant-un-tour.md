@@ -1038,3 +1038,12 @@ Les autres accords du fichier, qui passent par `post({ type: "permission" })`, s
 **Pas de rouge puis vert pour ce correctif** : la course ne se déclenche pas à volonté. Le justificatif est le journal du job 139311928005 (lignes 973-1029, `call-bash` resté `pending`) et la relance verte (job 139371833601, 19/19).
 
 Contrôle avant le push : `git diff --stat 85d8e91d2 HEAD -- crates/ extensions/vscode/src extensions/vscode/webview` est vide. Le produit est donc identique à `85d8e91d2`.
+
+## 24. Contrôle manuel de Yusuf (binaire et `.vsix` de `85d8e91d2`)
+
+- **Étape 0 : conforme.** Étiquette « auto · no sandbox » sous le compositeur, sans bandeau. Output › yusAgent : `agent ready: yusagent 0.10.2-continuous.85d8e91d2b4c96df9b27bd813f9b86a9e7f513ed (protocol 1, pid 9284)`. Avertissement connu : `providers: list failed: _yus/providers/list : méthode pas encore servie`.
+- **Étape 1, premier essai : non testée.**
+  - Le modèle a lancé `h = bash("sleep 20; echo fini")`, **sans `await`** (fichier de session `01a213d7-…jsonl`). `bash()` a rendu une poignée aussitôt : cellule finie en 40 ms, commande en arrière-plan.
+  - Le tour 1 était fini à 18:57:03. Le message est parti après, en prompt (tour 2), pas dans le tour. La fin de la commande a lancé un tour de l'agent (tour 3, `[bash-done]`).
+  - Ce n'est pas `bashWaitSeconds`. L'étape est reprise avec une cellule Python qui bloque vraiment (`time.sleep(20)`).
+- **À noter, hors ticket 39** : au tour 1, le modèle a répondu « La commande a affiché fini » alors que la commande tournait encore en arrière-plan. Le résultat de la cellule était vide. C'est une affirmation non fondée du modèle sur une commande détachée.
