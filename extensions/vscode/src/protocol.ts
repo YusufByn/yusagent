@@ -154,12 +154,6 @@ export type SettingsView = {
   restart: string[];
 };
 
-/**
- * One group of the `modelInstructions` setting: its text joins the agent's
- * system prompt when it runs on one of its models (`provider/model-id`).
- */
-export type ModelInstructions = { models: string[]; text: string };
-
 /** One MCP server, as the agent's `_yus/mcp/list` gives it. */
 export type McpServer = {
   id: string;
@@ -703,12 +697,6 @@ export type WebviewMessage =
   | ({ type: "setConfig" } & ConfigChange)
   /** `null` removes the key: its default applies again. */
   | { type: "setSetting"; key: string; value: unknown }
-  /**
-   * Save a group of instructions (`index` null: a new one), or delete it
-   * (`group` null). `models` are the ones checked among the connected
-   * providers' models; the group's others stay as they are.
-   */
-  | { type: "setInstructions"; index: number | null; group: ModelInstructions | null }
   | { type: "mcpSignIn"; id: string; label: string }
   /** Add a Marketplace service connected by a pasted token. */
   | { type: "mcpSetToken"; id: string; token: string }

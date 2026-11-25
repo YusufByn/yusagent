@@ -1,7 +1,6 @@
 import type * as vscode from "vscode";
 import { errorText } from "./agent";
-import { savedGroups, withGroup } from "./instructions";
-import type { McpServer, ModelInstructions, SettingsState, SettingsView, SkillsView } from "./protocol";
+import type { McpServer, SettingsState, SettingsView, SkillsView } from "./protocol";
 import type { ShownAgent } from "./shown";
 
 // yusAgent (YA-10, ticket 31, X3) : the bridge's `_yus/settings/*`, `_yus/mcp/*` and `_yus/skills/*`
@@ -92,38 +91,6 @@ export class Settings {
       this.log.warn(`settings: ${key} refused: ${errorText(error)}`);
       return errorText(error);
     }
-  }
-
-  /**
-   * Save the group of instructions at `index` (`null`: a new one), or
-   * delete it (`group` null). `connected`: the models the panel shows; the
-   * group keeps its others, whose provider is not connected now. Resolves
-   * the error to show, if any.
-   */
-  async setInstructions(
-    index: number | null,
-    group: ModelInstructions | null,
-    connected: ReadonlySet<string> | null,
-  ): Promise<string | undefined> {
-    const refuse = (reason: string) => {
-      this.log.warn(`settings: modelInstructions refused: ${reason}`);
-      return reason;
-    };
-    // Written over what the file holds: it must be read first.
-    if (!this.view) return refuse("The settings are not read yet.");
-    const groups = savedGroups(this.view);
-    if (index !== null && !groups[index]) return refuse("This group changed meanwhile; open it again.");
-    if (group === null) {
-      if (index === null) return undefined;
-      const rest = groups.filter((_, at) => at !== index);
-      return this.set("modelInstructions", rest.length > 0 ? rest : null);
-    }
-    if (!connected) return refuse("The models show once the session is open.");
-    const checked = [...new Set(group.models)].filter((model) => connected.has(model));
-    const text = group.text.trim();
-    if (checked.length === 0) return refuse("Check at least one model.");
-    if (!text) return refuse("Write the instructions.");
-    return this.set("modelInstructions", withGroup(groups, index, checked, text, connected));
   }
 
   async refreshMcp(): Promise<void> {
