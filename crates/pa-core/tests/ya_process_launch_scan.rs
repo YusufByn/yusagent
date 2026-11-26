@@ -70,7 +70,10 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
             if name != "tests" {
                 rust_files(&path, found);
             }
-        } else if name.ends_with(".rs") && name != "tests.rs" && !name.ends_with("_tests.rs") {
+        } else if path.extension().is_some_and(|extension| extension == "rs")
+            && name != "tests.rs"
+            && !name.ends_with("_tests.rs")
+        {
             found.push(path);
         }
     }
