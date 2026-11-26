@@ -620,13 +620,57 @@ fn a_key_moves_a_session_opened_without_credentials_off_the_fallback_model() {
         &json!({ "providerId": "openai", "apiKey": "sk-ya40-moved" }),
     );
     assert_eq!(set["result"]["outcome"], "done", "{set}");
+    let from = client.seen.len();
     let _ = client.prompt(&session, "after the key");
+    // What the bridge did, for the message: the model announced after the key (the last
+    // `config_option_update` before the prompt), and the session file's `model_change` rows,
+    // which every `set_model` writes.
+    let announced = client.seen[..from]
+        .iter()
+        .rev()
+        .filter(|frame| frame["params"]["update"]["sessionUpdate"] == "config_option_update")
+        .flat_map(|frame| {
+            frame["params"]["update"]["configOptions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .find(|option| option["id"] == "model")
+        .map_or(Value::Null, |option| option["currentValue"].clone());
     assert_eq!(
         home.server.authorizations(),
         [String::from("Bearer sk-ya40-moved")],
-        "the prompt after the key reaches openai/ya40-extra with it; requests: {:?}",
-        labels(&home)
+        "the prompt after the key reaches openai/ya40-extra with it; requests: {:?}; announced \
+         after the key: {announced}; model_change rows: {:?}",
+        labels(&home),
+        model_changes(&home)
     );
+}
+
+/// The `model_change` rows of the home's session files, as `provider/model`.
+fn model_changes(home: &Home) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(home.path().join(".yusagent/sessions")) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if row["type"] == "model_change" {
+                rows.push(format!(
+                    "{}/{}",
+                    row["provider"].as_str().unwrap_or_default(),
+                    row["modelId"].as_str().unwrap_or_default()
+                ));
+            }
+        }
+    }
+    rows
 }
 
 /// Test 4: the rows of the providers screen (Unharnessed's shape): the `ChatGPT` subscription by
