@@ -4,17 +4,18 @@
 // (`authProviderName`, `src/ya/auth.ts`).
 import { createContext, useContext } from "react";
 import type { Provider } from "../src/protocol";
-import { authProviderName, authText } from "../src/ya/auth";
+import type { TurnHead } from "../src/protocol";
+import { authFailureText } from "../src/ya/auth";
 
 export type AuthScreen = { providers: Provider[]; onProviders: () => void };
 
 export const AuthContext = createContext<AuthScreen>({ providers: [], onProviders: () => undefined });
 
-export function AuthFailure({ provider }: { provider: string | null }) {
+export function AuthFailure({ turn }: { turn: Pick<TurnHead, "auth" | "error"> }) {
   const { providers, onProviders } = useContext(AuthContext);
   return (
     <div className="turn-error ya-settings">
-      <p className="error">{authText(authProviderName(providers, provider))}</p>
+      <p className="error">{authFailureText(turn, providers)}</p>
       <div className="actions">
         <button className="button" type="button" onClick={onProviders}>
           Open Providers

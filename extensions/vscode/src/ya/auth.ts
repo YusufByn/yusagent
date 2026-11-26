@@ -1,7 +1,7 @@
 // yusAgent (YA-10, ticket 24 ; ticket 40, X5) : échec d'authentification d'un prompt, et le texte fixe
 // de l'extension, qui mène à l'écran Providers (décision 7, réponse 2 de Yusuf du 26/11/2026).
 
-import type { Provider } from "../protocol";
+import type { Provider, TurnHead } from "../protocol";
 
 /**
  * `kind: "authentication"` du pont (`crates/pa-daemon/src/acp/mod.rs`, `turn_failure_error`) : depuis
@@ -29,4 +29,12 @@ export function authProviderName(providers: Provider[], provider: string | null)
 /** Le texte fixe ; `provider` : le nom du fournisseur, absent quand il n'est pas connu. */
 export function authText(provider?: string): string {
   return provider ? `Not signed in to ${provider}, or the sign-in has expired.` : "Not signed in, or the sign-in has expired.";
+}
+
+/**
+ * Le texte que le panneau affiche sous un tour en échec d'authentification (`webview/ya-auth.tsx`),
+ * d'après la liste des fournisseurs qu'il a (ticket 40, X5, D6).
+ */
+export function authFailureText(turn: Pick<TurnHead, "auth" | "error">, providers: Provider[]): string {
+  return authText(authProviderName(providers, turn.auth?.provider ?? null));
 }

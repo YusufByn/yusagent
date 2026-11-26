@@ -298,7 +298,7 @@ const TurnView = memo(function TurnView({
       )}
       {turn.state === "cancelled" && <p className="turn-end">Stopped</p>}
       {/* yusAgent (ticket 40, X5) : un échec d'authentification mène à l'écran Providers. */}
-      {turn.state === "failed" && turn.auth && <AuthFailure provider={turn.auth.provider} />}
+      {turn.state === "failed" && turn.auth && <AuthFailure turn={turn} />}
       {turn.state === "failed" && !turn.auth && turn.error && <p className="error turn-error">{turn.error}</p>}
     </section>
   );

@@ -15,8 +15,8 @@ import type { Files } from "../../src/files";
 import { Providers } from "../../src/providers";
 import { Settings } from "../../src/settings";
 import { ShownAgent } from "../../src/shown";
-import type { Provider } from "../../src/protocol";
-import { authProviderName, authText } from "../../src/ya/auth";
+import type { Provider, TurnHead } from "../../src/protocol";
+import { authFailureText, authProviderName, authText } from "../../src/ya/auth";
 import { features } from "../../src/ya/methods";
 import { fakeAgentPath, newControlDir, received, starts, waitFor } from "../helpers";
 
@@ -179,4 +179,32 @@ test("échec d'auth (ticket 40, X5, défaut 2) : sans fournisseur connecté, le 
     "un autre fournisseur connecté : le modèle de la session est nommé",
   );
   assert.equal(authText(authProviderName(one, null)), "Not signed in, or the sign-in has expired.", "fournisseur inconnu");
+});
+
+// Ticket 40 (X5, D6 du contrôle de Yusuf) : le texte sous un tour en échec d'authentification est celui
+// de l'échec ; il ne change pas quand la liste des fournisseurs change ensuite (un login, une clé).
+const lastFailed = (h: Harness) =>
+  h.conversations.shown.chat.current.entries.filter((entry) => entry.kind === "turn").at(-1) as TurnHead;
+
+async function failAuth(h: Harness): Promise<TurnHead> {
+  h.conversations.shown.chat.send("auth", []);
+  await waitFor(() => !h.conversations.shown.chat.current.busy && lastFailed(h)?.state === "failed", "tour en échec");
+  return lastFailed(h);
+}
+
+test("D6 (ticket 40, X5) : le texte d'un échec d'auth ne change pas après une clé", async () => {
+  const h = open({ providers: "none" });
+  await listed(h);
+  const turn = await failAuth(h);
+  const before = authFailureText(turn, h.providers.providers ?? []);
+  assert.equal(before, "Not signed in, or the sign-in has expired.", "aucun fournisseur connecté à l'échec");
+  assert.equal(await h.providers.setApiKey("anthropic", "sk-x5-d6"), undefined, "clé acceptée");
+  assert.equal(authFailureText(lastFailed(h), h.providers.providers ?? []), before, "le même échec, après la clé");
+});
+
+test("D6 (ticket 40, X5) : un échec alors qu'un fournisseur est connecté nomme le fournisseur de la session", async () => {
+  const h = open();
+  await listed(h);
+  const turn = await failAuth(h);
+  assert.equal(authFailureText(turn, h.providers.providers ?? []), "Not signed in to Capture, or the sign-in has expired.");
 });
