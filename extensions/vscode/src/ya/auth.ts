@@ -32,9 +32,25 @@ export function authText(provider?: string): string {
 }
 
 /**
- * Le texte que le panneau affiche sous un tour en échec d'authentification (`webview/ya-auth.tsx`),
- * d'après la liste des fournisseurs qu'il a (ticket 40, X5, D6).
+ * La liste des fournisseurs que l'hôte connaît (`src/providers.ts`), lue au moment d'un échec
+ * d'authentification pour en figer le texte (ticket 40, X5, D6).
  */
-export function authFailureText(turn: Pick<TurnHead, "auth" | "error">, providers: Provider[]): string {
-  return authText(authProviderName(providers, turn.auth?.provider ?? null));
+let known: Provider[] = [];
+
+export function noteProviders(providers: Provider[]): void {
+  known = providers;
+}
+
+/** Le texte d'un échec d'authentification, figé au moment de l'échec : `provider` est l'id du fournisseur. */
+export function authFailureAt(provider: string | null): string {
+  return authText(authProviderName(known, provider));
+}
+
+/**
+ * Le texte que le panneau affiche sous un tour en échec d'authentification (`webview/ya-auth.tsx`) :
+ * celui de l'échec, rangé dans `error`, qui ne change plus quand la liste des fournisseurs change
+ * (ticket 40, X5, D6).
+ */
+export function authFailureText(turn: Pick<TurnHead, "auth" | "error">): string {
+  return turn.error ?? authText();
 }

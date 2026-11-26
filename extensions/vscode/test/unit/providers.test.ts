@@ -196,15 +196,15 @@ test("D6 (ticket 40, X5) : le texte d'un échec d'auth ne change pas après une 
   const h = open({ providers: "none" });
   await listed(h);
   const turn = await failAuth(h);
-  const before = authFailureText(turn, h.providers.providers ?? []);
+  const before = authFailureText(turn);
   assert.equal(before, "Not signed in, or the sign-in has expired.", "aucun fournisseur connecté à l'échec");
   assert.equal(await h.providers.setApiKey("anthropic", "sk-x5-d6"), undefined, "clé acceptée");
-  assert.equal(authFailureText(lastFailed(h), h.providers.providers ?? []), before, "le même échec, après la clé");
+  assert.equal(authFailureText(lastFailed(h)), before, "le même échec, après la clé");
 });
 
 test("D6 (ticket 40, X5) : un échec alors qu'un fournisseur est connecté nomme le fournisseur de la session", async () => {
   const h = open();
   await listed(h);
   const turn = await failAuth(h);
-  assert.equal(authFailureText(turn, h.providers.providers ?? []), "Not signed in to Capture, or the sign-in has expired.");
+  assert.equal(authFailureText(turn), "Not signed in to Capture, or the sign-in has expired.");
 });

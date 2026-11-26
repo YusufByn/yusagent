@@ -207,7 +207,7 @@ export function App() {
     default:
       return (
         <FeaturesContext.Provider value={features}>
-        <AuthContext.Provider value={{ providers: providers ?? [], onProviders: () => setManaging(true) }}>
+        <AuthContext.Provider value={{ onProviders: () => setManaging(true) }}>
         <PathsContext.Provider value={paths}>
           <Status
             agent={agent}

@@ -281,7 +281,8 @@ test("authentification (ticket 40, X5) : tour marqué avec le fournisseur, texte
   await idle(h);
   const auth = lastTurn(h) as { state?: string; error?: string; auth?: unknown };
   assert.equal(auth.state, "failed");
-  assert.equal(auth.error, "Not signed in, or the sign-in has expired.");
+  // D6 : le texte est figé à l'échec ; le fournisseur de la session est nommé (Capture est connecté).
+  assert.equal(auth.error, "Not signed in to Capture, or the sign-in has expired.");
   assert.deepEqual(auth.auth, { provider: "capture" }, "le fournisseur du modèle de la session");
   shown(h).chat.send("sanscle", []);
   await idle(h);

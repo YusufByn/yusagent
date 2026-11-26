@@ -22,7 +22,7 @@ import type {
 } from "./protocol";
 import type { Session } from "./session";
 // yusAgent (YA-10, ticket 24, PR I) : adaptation à notre pont, dans des modules à part.
-import { authText, isAuthFailure } from "./ya/auth";
+import { authFailureAt, isAuthFailure } from "./ya/auth";
 import { features } from "./ya/methods";
 import { yaMeta } from "./ya/meta";
 import { noticeLines } from "./ya/notice";
@@ -632,8 +632,10 @@ export class Chat {
       // yusAgent (ticket 40, X5) : échec d'authentification, texte fixe ; le panneau nomme le fournisseur.
       const last = this.sent ?? turn;
       const auth = isAuthFailure(error);
-      if (auth && last.state === "running") last.auth = { provider: sessionProvider(this.session.current) };
-      this.end(last, "failed", auth ? authText() : errorText(error));
+      const provider = auth ? sessionProvider(this.session.current) : null;
+      if (auth && last.state === "running") last.auth = { provider };
+      // D6 : le texte est figé ici, avec la liste des fournisseurs connue au moment de l'échec.
+      this.end(last, "failed", auth ? authFailureAt(provider) : errorText(error));
     }
   }
 
