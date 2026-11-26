@@ -762,3 +762,117 @@ Question 1 de Yusuf du 26/11 : le test 8 ne couvre pas l'URL de login ni son `st
 - **Limite** : le test couvre Codex, dont le `state` est aléatoire (`openai_codex.rs:218-224`) et dont le vérifieur PKCE ne sort jamais du processus. Chez Anthropic, `state` est le vérifieur PKCE (`crates/pa-ai/src/oauth/anthropic.rs:4`, `:120`), ligne cachée dans l'extension (décision 5). Si la ligne Claude par abonnement est un jour montrée dans l'extension, ajouter le même test pour elle.
 - Pas de contrôle manuel pour R5 : l'extension actuelle rejette `_yus/providers/list` sur place (`extensions/vscode/src/ya/methods.ts:10-33`, `src/agent.ts:97`, `src/providers.ts:55`, `:74`, `:79`), rien ne change à l'écran.
 - Aides de test ajoutées au même fichier : `Client::spawn_with` (`:243`), `notify` (`:297`), `response` (`:311`), `wait_for` (`:319`).
+
+## 20. X5 (extension) : constat, plan et réponses de Yusuf (26/11/2026)
+
+Seconde PR du ticket 40 (décision 15.4). Lignes citées : `main` à `c8b396caa` (R5 ne touche pas `extensions/vscode`). Aucun code dans ce commit.
+
+### 20.1 Constat
+
+#### 20.1.1 Méthodes : toutes rejetées sur place
+
+- `served()` ne connaît que les méthodes de la liste `REQUESTS` (`extensions/vscode/src/ya/methods.ts:10-32`) et la notification `session/cancel` (`:33`). Aucune `_yus/providers/*` n'y figure.
+- `Agent.request` rejette une méthode non servie sans trame (`src/agent.ts:97`), et `notify` ne l’envoie pas (`:104-108`).
+- Effets visibles aujourd'hui :
+  - `features().providers` est faux (`src/ya/methods.ts:50`), donc le bouton Providers est caché (`webview/Status.tsx:82`) ;
+  - `Providers.refresh` échoue à chaque passage en « ready » et le note dans l'Output (`src/providers.ts:55`, `:74`, `:79`) ;
+  - `providers` reste `null`, donc `unconnected` est faux (`webview/App.tsx:163`) et la puce « Connect a provider » n'apparaît jamais (`webview/Composer.tsx:970-974`).
+- Le client `Providers` (`src/providers.ts`) a déjà les formes du pont de R5 : `{providers, outcome, message?}` (`:23-28`), `login_update` avec `{providerId, update}` (`:47`, `:206-224`), `login_cancel` en notification (`:198`), `login_open` (`:189`), `reload` diffusé aux autres agents après un changement (`:149`, `:232`, `src/shown.ts:73-77`).
+- Côté pont (R5), les mêmes noms (`crates/pa-daemon/src/acp/daemon/ya_providers.rs:37-41`), la même forme `login_update` (`:511-513`), le `reload` de la session vivante après un « done » (`:294-296`).
+
+#### 20.1.2 Écran Local (décision 6 : masqué)
+
+- La section « Local » s'affiche dès que la recherche est vide, même sans serveur (`webview/Providers.tsx:168-215`), avec le bouton « Add a local model » (`:191-197`).
+- Ses messages (`scanLocal`, `probeLocal`, `saveLocal`, `removeLocal`, `src/view.ts:168-191`) appellent `local_*`, que le pont ne sert pas et ne servira pas (décision 6).
+- Le pont ne donne pas de champ `local` dans ses lignes (`ya_providers.rs:346-366`) : aucune ligne n'irait dans la section, mais le bouton resterait.
+
+#### 20.1.3 Ligne Claude par abonnement (décision 5, défense côté extension)
+
+- Le pont la retire (`crates/pa-cli/src/print_runtime/ya_acp_providers.rs:123-125`, test 4 de R5).
+- L'extension prend la liste telle quelle à trois endroits : `src/providers.ts:75`, `:146`, `:230`. Rien ne filtre `id: "anthropic"`, `method: "subscription"`.
+
+#### 20.1.4 Catalogue MCP et jeton (décision 8, §15.3)
+
+- Catalogue masqué par une constante : `CATALOG = false` (`webview/SettingsMcp.tsx:15`, rendu `:137-146`).
+- Connexion OAuth d'un service : `post({type: "mcpSignIn"})` (`SettingsMcp.tsx:240-243`) → `startLogin("mcp:<id>")` (`src/view.ts:195`, `:347-351`) → `_yus/providers/login`, que le pont aiguille vers le flux MCP (`ya_acp_providers.rs:160-166`). Après « done », `settings.signedIn(id)` relit la liste (`src/settings.ts:114`).
+- Jeton : le formulaire s'ouvre si le service a `token` (`SettingsMcp.tsx:239-241`, `:262-263`) ; le pont le donne depuis R5 (`crates/pa-daemon/src/acp/ya_resources.rs:458`) ; `_yus/mcp/set_token` est déjà servi (`src/ya/methods.ts:30`).
+- `signIn` vient du pont : `oauth && !connected` (`ya_resources.rs:449`).
+
+#### 20.1.5 Échec d'authentification (décision 7)
+
+- Texte actuel : « Authentification requise : lancez <chemin> dans un terminal, puis /login. » (`src/ya/auth.ts:18-20`), posé par `chat.ts:632`.
+- Détection : `kind: "authentication"`, ou le texte « No API key found for » dans `details` (`src/ya/auth.ts:12-16`). Depuis R5 (H2), le pont donne `authentication` pour les deux textes de la garde (`ya_providers.rs:254-265`). La seconde condition devient une défense.
+- Rendu : un simple `<p>` (`webview/Chat.tsx:299`). `Transcript` ne reçoit pas `onProviders` (`Chat.tsx:119-127`) ; `Status` l'a (`webview/Status.tsx:36`, `:159`).
+- Tests sur l'ancien texte : `test/unit/agent.test.ts:274-282` (formes `auth` et `sanscle` de l'agent factice, `test/fake-agent/fake-agent.mjs:279-293`) et `test/e2e/suite.ts:389-393`.
+
+#### 20.1.6 Output (exigence de sécurité)
+
+- Le journal des trames n'écrit que les noms et les id (`src/agent.ts:148`, `:153`, `:216`).
+- Le stderr du pont va dans l’Output ligne à ligne (`src/agent.ts:143`). Le test 8 (clé) et le test 8b (URL, `state`) de R5 vérifient que le pont n'y écrit rien.
+- `src/providers.ts:144` et `:229` journalisent `result.message` : depuis R5, ce sont des textes fixes (`ya_acp_providers.rs:36-39`). `:151` journalise une erreur du pont (« a sign-in is already running », `ya_providers.rs:181`).
+- `src/providers.ts:111`, `:113` journalisent les sondes locales : morts si l'écran Local est masqué.
+- `src/settings.ts:123` journalise l'id du service, pas le jeton.
+- Rien ne journalise l'URL de login, la clé saisie ni la réponse d'une invite : à verrouiller par le test 14.
+
+#### 20.1.7 Agent factice et tests
+
+- L'agent factice ne sert aucune `_yus/providers/*` et son `_yus/mcp/list` n'a pas `token` (`test/fake-agent/fake-agent.mjs:464-476`). C'est le seul écart de `compare_frames.py` contre le vrai binaire (§18.3).
+- Le journal des tests unitaires ne garde rien : c'est un Proxy muet (`test/unit/setup.ts:23`). Le test 14 demande un journal qui enregistre.
+- `Providers` est construit dans le harnais sans être exposé (`test/unit/setup.ts:43`).
+
+#### 20.1.8 VS Code distant
+
+- « Open » passe par `vscode.env.openExternal` en distant, sinon par `login_open` (`src/providers.ts:181-193`). Conforme à la décision 4 et au §15.2 (page ouverte par le flux au clic sur « Sign in », « Open » gardé).
+
+### 20.2 Plan (PR à part, décision 15.4)
+
+Branche `ya-40-x5` depuis `main` à `c8b396caa` (merge de R5, PR #91). Commits préfixés `YA-10: ticket 40 : X5, …`. Pas de Rust, pas de changement du préfixe de prompt (l'extension n'envoie rien au modèle).
+
+#### Push 1 : tests seuls, rouges sur leur assertion
+
+1. Agent factice (`fake-agent.mjs`) :
+   - `_yus/providers/list`, `set_api_key`, `logout`, `reload` à la forme du pont ;
+   - `login`, qui émet `url`, `prompt` puis règle `done`, ou `cancelled` sur `login_cancel` ;
+   - `login_answer`, `login_open` ;
+   - une ligne `anthropic`/`subscription` dans `list`, pour le test 11 ;
+   - `token` sur un service du catalogue dans `_yus/mcp/list` ;
+   - un échec d'auth `kind: "authentication"` (existe déjà : `auth`).
+2. Harnais unitaire : journal qui enregistre (au lieu du Proxy muet), `Providers` exposé.
+3. Tests du §12 :
+   - 9 : `features().providers` vrai ; puce « Connect a provider » sans fournisseur connecté ;
+   - 10 : SignIn affiche URL, invite, attente ; « Open » envoie `login_open` ; Cancel envoie `login_cancel` ;
+   - 11 : pas de section Local, pas de ligne Claude par abonnement même si l'agent factice en envoie une ;
+   - 12 : nouveau texte fixe et bouton vers l'écran Providers ; `agent.test.ts:274-282` et `suite.ts:389-393` passent au rouge sur l'ancien texte ;
+   - 13 : formulaire de jeton pour un service qui a `token` ; `_yus/mcp/set_token` part ; le jeton n'est pas dans l'Output ;
+   - 14 : Output sans la clé saisie, sans l'URL ni `state`, sans la réponse d'une invite.
+   - Méthodes hors de `served()` au push 1 (réponse 1, §20.3).
+
+#### Push 2 : le code
+
+1. `src/ya/methods.ts` : 7 requêtes `_yus/providers/{list,reload,set_api_key,logout,login,login_answer,login_open}` et la notification `login_cancel`. `local_*` reste hors liste.
+2. Écran Local masqué : une constante `LOCAL = false` dans `webview/Providers.tsx`, sur le modèle de `CATALOG` (section et bouton).
+3. Défense Claude par abonnement : un filtre unique dans `src/providers.ts`, appliqué aux trois affectations (`:75`, `:146`, `:230`).
+4. `CATALOG = true` (`webview/SettingsMcp.tsx:15`) et commentaire mis à jour.
+5. Échec d'auth :
+   - texte fixe sans chemin ni terminal dans `src/ya/auth.ts` (réponse 2), détection par le texte retirée (réponse 4) ;
+   - un marqueur sur le tour en échec (champ du type de tour, `src/protocol.ts`) posé par `chat.ts:632` ;
+   - un bouton dans `Chat.tsx:299` qui appelle `onProviders`, passé de `Status` à `Transcript` ;
+   - `authText` perd son paramètre `binaryPath`.
+6. Fragment de changelog. `extensions/vscode` est un dossier du fork : rien dans `docs/fork-changes.md` pour lui, sauf mention contraire au relevé.
+
+#### Contrôles
+
+- En local : `cd extensions/vscode && npm run typecheck && npm run lint && npm run test:unit`.
+- CI : job `extension (tsc, lint, tests, vsix, e2e)` et `e2e vrai binaire (build debug, provider factice)`.
+- Banc : `compare_frames.py <branche>` contre l'agent factice : `écarts : 0` attendu (le `token` aligné).
+- Contrôle manuel de Yusuf (§14), sur la vsix de la branche et le binaire de `main` après R5. Les étapes 3 à 7 font des appels réels, donc elles sont à sa main.
+
+### 20.3 Réponses de Yusuf (26/11/2026)
+
+1. **`served()` au push 1** : si, sans les méthodes dans `served()`, les tests 9, 10, 11 et 13 échouent sur une assertion (bouton caché, aucune trame), elles restent hors de `served()` au push 1, comme X0 à X3 au ticket 39. S'ils échouent sur une exception `-32601` non attrapée, elles sont ajoutées au push 1, à condition que les tests restent rouges sur leur assertion.
+   - **Cas relevé : le premier.** Le rejet de `served()` est attrapé par `refresh` (`src/providers.ts:78`), `startLogin` (`:150`) et `settle` (`:234`). Les tests échouent donc sur leur assertion : liste `null`, aucune trame `_yus/providers/*` reçue par l'agent factice, bouton Providers caché, catalogue absent. Méthodes hors de `served()` au push 1.
+2. **Texte fixe, en anglais** : « Not signed in to {provider}, or the sign-in has expired. », avec un bouton « Open Providers ». Sans nom de fournisseur : « Not signed in, or the sign-in has expired. » Les deux tests sur l'ancien texte sont mis à jour (`test/unit/agent.test.ts:274-282`, `test/e2e/suite.ts:389-393`).
+3. **Ligne Anthropic par clé API** : visible. Seule la ligne par abonnement est cachée.
+4. **Détection par le texte** (`isAuthFailure`, `details`) : retirée. Le classement vient du pont depuis R5 (H2).
+
+Suite : push 1 (tests rouges, relevé run, job, ligne), push 2 (code), CI verte, `compare_frames.py` à 0 écart, compte rendu, puis le contrôle manuel de Yusuf (§14), une étape à la fois. Pas de merge sans ce contrôle.
