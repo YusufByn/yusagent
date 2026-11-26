@@ -1,0 +1,7 @@
+# yusAgent (YA-11, ticket 41, §S.3): process launches allowed outside the guard.
+# Format: <file relative to the repo> | <exact trimmed source line> | <category> | <reason>
+# Only one category is admitted: "relance du binaire yusAgent". The process launched is
+# yusAgent itself (it reads the credentials); the file must obtain the program from
+# `current_exe()`, and the guard profile refuses writes to that path (PR A).
+crates/pa-daemon/src/supervisor/supervision.rs | let mut command = Command::new(&executable); | relance du binaire yusAgent | the supervisor starts a worker (`current_exe() worker`)
+crates/pa-cli/src/interactive_mode/daemon.rs | let mut command = Command::new(exe); | relance du binaire yusAgent | the bridge or the TUI starts the supervisor (`current_exe --mode daemon`)
