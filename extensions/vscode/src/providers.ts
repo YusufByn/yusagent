@@ -3,8 +3,9 @@ import { errorText } from "./agent";
 import type { LocalProbe, LocalSave, LocalServer, LoginAnswer, LoginState, LoginUpdate, Provider } from "./protocol";
 import type { ShownAgent } from "./shown";
 
-// The agent's `_yus/providers/*` extension methods, not served yet: Unharnessed's
-// (crates/uh-daemon/src/acp/providers.rs) under the yusAgent prefix (ticket 32).
+// The agent's `_yus/providers/*` extension methods: Unharnessed's
+// (crates/uh-daemon/src/acp/providers.rs) under the yusAgent prefix (ticket 32), served by the
+// bridge since ticket 40 (R5), but `local_*` (screen masked, decision 6).
 const LIST = "_yus/providers/list";
 const RELOAD = "_yus/providers/reload";
 const SET_API_KEY = "_yus/providers/set_api_key";

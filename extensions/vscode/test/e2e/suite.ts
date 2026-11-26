@@ -403,7 +403,7 @@ const tests: [string, () => Promise<void>][] = [
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await ready();
       await userClicks("Connect a provider");
-      const screen = await shows("Sign in with a subscription, add an API key", "écran Providers, rien de connecté");
+      const screen = await shows("Sign in with a subscription", "écran Providers, rien de connecté");
       assert.ok(screen.includes("ChatGPT Plus/Pro"), "ligne ChatGPT");
       await userClicks("Back");
       setScenario(control, {});

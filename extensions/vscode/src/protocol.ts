@@ -354,6 +354,11 @@ export type TurnHead = {
   wake?: "bash" | "quota" | "goal" | "heartbeat";
   state: "running" | "done" | "cancelled" | "failed";
   error?: string;
+  /**
+   * yusAgent (ticket 40, X5) : un échec d'authentification ; `provider`, l'id du fournisseur du modèle
+   * de la session. Le panneau le nomme et mène à l'écran Providers (`webview/ya-auth.tsx`).
+   */
+  auth?: { provider: string | null };
   /** How long it worked, once done; absent on a turn the agent replays. */
   ms?: number;
   /** Where the agent goes back to send the prompt again, changed; absent when it cannot (an earlier agent's turn). */

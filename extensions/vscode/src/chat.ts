@@ -14,6 +14,7 @@ import type {
   Goal,
   HostMessage,
   QueuedMessage,
+  SessionState,
   Thumb,
   TurnHead,
   TurnItem,
@@ -628,8 +629,11 @@ export class Chat {
       this.end(last, stopReason === "cancelled" ? "cancelled" : "done", undefined, stopReason);
     } catch (error) {
       if (run !== this.run) return;
-      // yusAgent : échec d'authentification, message fixe avec le chemin du binaire.
-      this.end(this.sent ?? turn, "failed", isAuthFailure(error) ? authText(this.agent.binaryPath) : errorText(error));
+      // yusAgent (ticket 40, X5) : échec d'authentification, texte fixe ; le panneau nomme le fournisseur.
+      const last = this.sent ?? turn;
+      const auth = isAuthFailure(error);
+      if (auth && last.state === "running") last.auth = { provider: sessionProvider(this.session.current) };
+      this.end(last, "failed", auth ? authText() : errorText(error));
     }
   }
 
@@ -1253,4 +1257,11 @@ function summary(items: TurnItem[]): string {
   for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
   const parts = [...counts].map(([kind, n]) => count(n, kind));
   return parts.length ? parts.join(", ") : "nothing streamed";
+}
+
+/** yusAgent (ticket 40, X5) : le fournisseur du modèle de la session ouverte (`["provider", "id"]`). */
+function sessionProvider(session: SessionState | null): string | null {
+  if (session?.kind !== "open" || !session.config.model) return null;
+  const { current, choices } = session.config.model;
+  return choices.find((choice) => choice.value === current)?.provider || null;
 }

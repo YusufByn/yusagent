@@ -27,6 +27,7 @@ import {
   IconTerminal,
   IconVariables,
 } from "./icons";
+import { AuthFailure } from "./ya-auth"; // yusAgent (ticket 40)
 import { ThinkingOrb } from "./ya-orb"; // yusAgent : bouchon du paquet thinking-orbs
 import { BashRuns, exitMeta, FileEdits } from "./ya-cells"; // yusAgent (PR 3)
 import { Markdown } from "./Markdown";
@@ -296,7 +297,9 @@ const TurnView = memo(function TurnView({
         </p>
       )}
       {turn.state === "cancelled" && <p className="turn-end">Stopped</p>}
-      {turn.state === "failed" && turn.error && <p className="error turn-error">{turn.error}</p>}
+      {/* yusAgent (ticket 40, X5) : un échec d'authentification mène à l'écran Providers. */}
+      {turn.state === "failed" && turn.auth && <AuthFailure provider={turn.auth.provider} />}
+      {turn.state === "failed" && !turn.auth && turn.error && <p className="error turn-error">{turn.error}</p>}
     </section>
   );
 });

@@ -9,6 +9,9 @@ import { post } from "./vscode";
 /** From this many rows on, a search field filters them. */
 const SEARCH_FROM = 9;
 
+/** yusAgent (ticket 40, X5, décision 6) : l'écran Local est masqué ; le pont ne sert pas `local_*`. */
+const LOCAL = false;
+
 /**
  * The row whose form is open: its key form, the confirmation before a
  * sign-in that replaces a credential, the one before a disconnect, or a
@@ -148,7 +151,11 @@ export function Providers({
         {!providers.some((provider) => provider.connected) && (
           <div className="intro">
             <h1>Connect a provider</h1>
-            <p>Sign in with a subscription, add an API key, or use a model on this machine.</p>
+            <p>
+              {LOCAL
+                ? "Sign in with a subscription, add an API key, or use a model on this machine."
+                : "Sign in with a subscription, or add an API key."}
+            </p>
           </div>
         )}
         {providers.length >= SEARCH_FROM && (
@@ -165,7 +172,7 @@ export function Providers({
           </label>
         )}
         {group(groups[0])}
-        {(!words || servers.length > 0) && (
+        {LOCAL && (!words || servers.length > 0) && (
           <section className="section">
             <h2 className="section-label">Local</h2>
             <ul className="list">
