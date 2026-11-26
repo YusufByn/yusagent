@@ -1,7 +1,21 @@
-# yusAgent (YA-11, ticket 41, §S.3): process launches allowed outside the guard.
+# yusAgent (YA-11, ticket 41, §S.3 and §U): process launches allowed outside the guard.
 # Format: <file relative to the repo> | <exact trimmed source line> | <category> | <reason>
-# Only one category is admitted: "relance du binaire yusAgent". The process launched is
-# yusAgent itself (it reads the credentials); the file must obtain the program from
-# `current_exe()`, and the guard profile refuses writes to that path (PR A).
+# Categories, each checked by `ya_process_launch_scan.rs`:
+# - "relance du binaire yusAgent": the process is yusAgent itself (it reads the credentials);
+#   the file must launch `current_exe()`, whose path the guard profile refuses to write.
+# - "propre à Windows": no execution in native Windows (WSL2 only, CDC 28/10/2026); the 40
+#   lines before the launch must hold `cfg(windows)`.
+# - "propre à Linux, jusqu'à la PR C": the Linux mechanism comes with PR C; the 40 lines before
+#   the launch must hold `not(target_vendor = "apple")` or name Linux.
+# - "inatteignable": the reason cites the blocking `file:line`, which the test reads.
 crates/pa-daemon/src/supervisor/supervision.rs | let mut command = Command::new(&executable); | relance du binaire yusAgent | the supervisor starts a worker (`current_exe() worker`)
-crates/pa-cli/src/interactive_mode/daemon.rs | let mut command = Command::new(exe); | relance du binaire yusAgent | the bridge or the TUI starts the supervisor (`current_exe --mode daemon`)
+crates/pa-cli/src/interactive_mode/daemon.rs | let mut command = Command::new(exe); | relance du binaire yusAgent | the bridge or the TUI starts the supervisor (`current_exe --mode daemon`, `:64`)
+crates/pa-ai/src/providers/bedrock/credential_process.rs | let mut process = tokio::process::Command::new("cmd"); | propre à Windows | `cmd /C` for a Bedrock credential_process
+crates/pa-core/src/auth/resolve_config_value.rs | match Command::new(&config.shell) | propre à Windows | the Windows `hidden_spawn` of a `!command` value
+crates/pa-core/src/auth/resolve_config_value.rs | let output = Command::new(comspec) | propre à Windows | the Windows `hidden_spawn` fallback (`ComSpec`)
+crates/pa-core/src/platform/process.rs | let mut command = Command::new(&taskkill); | propre à Windows | `taskkill` of a process tree
+crates/pa-core/src/platform/shell.rs | let mut command = std::process::Command::new("where"); | propre à Windows | `where bash`
+crates/pa-tui/src/external_editor.rs | let mut editor = tokio::process::Command::new("cmd"); | propre à Windows | the external editor through `cmd /C`
+crates/pa-types/src/platform/process.rs | let output = std::process::Command::new("ps") | propre à Linux, jusqu'à la PR C | `ps` start time and liveness, not on macOS (`target_vendor = "apple"` uses libproc)
+crates/pa-tui/src/clipboard.rs | let wl_copy_exists = Command::new("which") | propre à Linux, jusqu'à la PR C | `copy_on_linux`: `which wl-copy`
+crates/pa-cli/src/client_update.rs | let output = tokio::process::Command::new(executable) | inatteignable | the TUI `/update` returns before any launch: `crates/pa-cli/src/client_update.rs:17` (`SELF_UPDATE`, ticket 19)

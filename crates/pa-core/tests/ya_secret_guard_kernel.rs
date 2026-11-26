@@ -51,7 +51,7 @@ fn uid() -> String {
 }
 
 /// One cell that tries every access and prints a JSON map `check -> "denied" | "ok" | <error>`.
-fn cell(agent: &Path, project: &Path, socket: &Path, exe: &Path) -> String {
+fn cell(agent: &Path, project: &Path, socket: &Path, outside: &Path, exe: &Path) -> String {
     let auth = agent.join("auth.json");
     let models = agent.join("models.json");
     let temp = agent.join("auth.json.tmp123");
@@ -86,6 +86,11 @@ def connect():
     client.connect({socket:?})
     client.close()
 check("connect to the daemon socket dir", connect)
+def connect_outside():
+    client = socket.socket(socket.AF_UNIX)
+    client.connect({outside:?})
+    client.close()
+check("connect to a daemon socket outside the default dir", connect_outside)
 check("write the running binary", lambda: open({exe:?}, "ab").close())
 check("write package.json next to it", lambda: open({package:?}, "ab").close())
 shell = await bash("cat " + {auth:?})
@@ -98,6 +103,7 @@ print("YA41=" + json.dumps(results))"#,
         link = link.display().to_string(),
         project = project.display().to_string(),
         socket = socket.display().to_string(),
+        outside = outside.display().to_string(),
         exe = exe.display().to_string(),
         package = package.display().to_string(),
         moved = moved.display().to_string(),
@@ -163,11 +169,17 @@ async fn the_kernel_cannot_reach_the_credentials_the_socket_or_the_binary() {
     let socket = socket_dir.join(format!("ya41-guard-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&socket);
     let _listener = UnixListener::bind(&socket).unwrap();
+    // A daemon started with `--daemon-socket` elsewhere: its exact path is registered by the
+    // worker at start (`register_sockets`), the test stands for it.
+    let outside = root_path.join("custom").join("daemon.sock");
+    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    let _outside_listener = UnixListener::bind(&outside).unwrap();
+    pa_types::platform::ya_secret_guard::register_sockets(vec![outside.clone()]);
 
     let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
     let package = exe.with_file_name("package.json");
     let package_existed = package.exists();
-    let code = cell(&agent, &project, &socket, &exe);
+    let code = cell(&agent, &project, &socket, &outside, &exe);
 
     // Guard on (forced: the other tests switch it off through `.cargo/config.toml`).
     std::env::remove_var(SWITCH);

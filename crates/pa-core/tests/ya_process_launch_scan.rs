@@ -48,6 +48,9 @@ const LAUNCH_PATTERNS: &[&str] = &[
 const GUARD_FILE: &str = "ya_secret_guard.rs";
 
 const RELAUNCH: &str = "relance du binaire yusAgent";
+const WINDOWS: &str = "propre à Windows";
+const LINUX: &str = "propre à Linux, jusqu'à la PR C";
+const UNREACHABLE: &str = "inatteignable";
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -113,6 +116,8 @@ fn without_test_items(source: &str) -> Vec<(usize, String)> {
 struct Exception {
     file: String,
     line: String,
+    category: String,
+    reason: String,
 }
 
 fn exceptions(root: &Path) -> Vec<Exception> {
@@ -125,16 +130,62 @@ fn exceptions(root: &Path) -> Vec<Exception> {
         .map(|line| {
             let fields: Vec<&str> = line.split(" | ").collect();
             assert_eq!(fields.len(), 4, "malformed exception: {line}");
-            assert_eq!(
-                fields[2], RELAUNCH,
-                "only the relaunch of the yusAgent binary may be excepted: {line}"
+            assert!(
+                [RELAUNCH, WINDOWS, LINUX, UNREACHABLE].contains(&fields[2]),
+                "unknown exception category: {line}"
             );
             Exception {
                 file: fields[0].to_string(),
                 line: fields[1].to_string(),
+                category: fields[2].to_string(),
+                reason: fields[3].to_string(),
             }
         })
         .collect()
+}
+
+/// Each category's proof: `current_exe()` in the file, the platform `cfg` in the 40 lines
+/// before the launch, or the cited blocking `file:line`.
+fn check_exception(root: &Path, exception: &Exception, source: &str, number: usize) {
+    let lines: Vec<&str> = source.lines().collect();
+    let before = lines[number.saturating_sub(40)..number].join("\n");
+    match exception.category.as_str() {
+        RELAUNCH => assert!(
+            source.contains("current_exe()"),
+            "{}: a relaunch exception must launch `current_exe()`",
+            exception.file
+        ),
+        WINDOWS => assert!(
+            before.contains("cfg(windows)"),
+            "{}:{number}: no `cfg(windows)` before a Windows exception",
+            exception.file
+        ),
+        LINUX => assert!(
+            before.contains("not(target_vendor = \"apple\")") || before.contains("linux"),
+            "{}:{number}: no Linux-only marker before a Linux exception",
+            exception.file
+        ),
+        _ => {
+            let cited = exception
+                .reason
+                .split('`')
+                .find(|part| part.starts_with("crates/") && part.contains(".rs:"))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: an unreachable launch cites no blocking file:line",
+                        exception.file
+                    )
+                });
+            let (file, line) = cited.rsplit_once(':').unwrap();
+            let line: usize = line.parse().unwrap();
+            let blocking = std::fs::read_to_string(root.join(file)).unwrap();
+            assert!(
+                blocking.lines().count() >= line,
+                "{}: the cited blocking line {cited} does not exist",
+                exception.file
+            );
+        }
+    }
 }
 
 #[test]
@@ -168,10 +219,7 @@ fn every_process_launch_goes_through_the_guard() {
                     .position(|exception| exception.file == relative && exception.line == trimmed);
                 match excepted {
                     Some(position) => {
-                        assert!(
-                            source.contains("current_exe()"),
-                            "{relative}: a relaunch exception must launch `current_exe()`"
-                        );
+                        check_exception(&root, &allowed[position], &source, number);
                         used.insert(position);
                     }
                     None => violations.push(format!("{relative}:{number}: {trimmed}")),

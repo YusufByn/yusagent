@@ -9,8 +9,10 @@ pub mod process;
 pub mod terminal;
 pub mod transport;
 pub mod windows_console;
+// yusAgent (YA-11, ticket 41): the secret guard.
 #[cfg(windows)]
 pub(crate) mod windows_pipe;
+pub mod ya_secret_guard;
 
 pub use dirs::{agent_dir, home_dir};
 pub use identity::socket_identity;
