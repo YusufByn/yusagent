@@ -156,9 +156,17 @@ impl Home {
         Home::build(with_openai, true)
     }
 
-    /// No credential anywhere: `ya40` without its `models.json` fallback key (D3).
+    /// No credential anywhere (D3): `ya40` without its `models.json` fallback key, and the
+    /// built-in `openai` with the local `ya40-extra` model, saved as the settings default (a
+    /// `models.json` provider without a key is not offered a key sign-in; `openai` is).
     fn without_fallback() -> Home {
-        Home::build(false, false)
+        let home = Home::build(true, false);
+        std::fs::write(
+            home.path().join(".yusagent/settings.json"),
+            json!({ "defaultProvider": "openai", "defaultModel": "ya40-extra" }).to_string(),
+        )
+        .unwrap();
+        home
     }
 
     fn build(with_openai: bool, fallback: bool) -> Home {
@@ -579,8 +587,8 @@ fn a_new_key_lists_its_models_in_the_running_conversation() {
 
 /// Test 3b (X5, D3): without any credential, the session opens on the daemon's fallback model,
 /// the first of the catalog (`amazon-bedrock`, `agent_engine/model.rs`), and its agent is built
-/// on it. A key set through the bridge makes `ya40-model` the announced model; the next prompt
-/// must reach it with the key, not the agent built on the fallback model.
+/// on it. A key for `openai` makes the saved default `openai/ya40-extra` the announced model; the
+/// next prompt must reach it with the key, not the agent built on the fallback model.
 #[test]
 fn a_key_moves_a_session_opened_without_credentials_off_the_fallback_model() {
     let home = Home::without_fallback();
@@ -609,14 +617,14 @@ fn a_key_moves_a_session_opened_without_credentials_off_the_fallback_model() {
     );
     let set = client.call(
         "_yus/providers/set_api_key",
-        &json!({ "providerId": "ya40", "apiKey": "sk-ya40-moved" }),
+        &json!({ "providerId": "openai", "apiKey": "sk-ya40-moved" }),
     );
     assert_eq!(set["result"]["outcome"], "done", "{set}");
     let _ = client.prompt(&session, "after the key");
     assert_eq!(
         home.server.authorizations(),
         [String::from("Bearer sk-ya40-moved")],
-        "the prompt after the key reaches ya40 with it; requests: {:?}",
+        "the prompt after the key reaches openai/ya40-extra with it; requests: {:?}",
         labels(&home)
     );
 }
