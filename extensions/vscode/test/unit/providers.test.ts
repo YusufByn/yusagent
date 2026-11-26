@@ -15,6 +15,8 @@ import type { Files } from "../../src/files";
 import { Providers } from "../../src/providers";
 import { Settings } from "../../src/settings";
 import { ShownAgent } from "../../src/shown";
+import type { Provider } from "../../src/protocol";
+import { authProviderName, authText } from "../../src/ya/auth";
 import { features } from "../../src/ya/methods";
 import { fakeAgentPath, newControlDir, received, starts, waitFor } from "../helpers";
 
@@ -154,4 +156,27 @@ test("test 14 (ticket 40, X5) : le journal ne garde ni la clé, ni l'URL du logi
   for (const secret of [key, LOGIN_STATE, LOGIN_HOST, "x5-answer-0c3d"]) {
     assert.deepEqual(h.lines.filter((line) => line.includes(secret)), [], `${secret} absent du journal`);
   }
+});
+
+// Ticket 40 (X5, défaut 2 du contrôle de Yusuf) : sans aucun identifiant, le démon ouvre la session sur
+// le premier modèle du catalogue (`amazon-bedrock`, `crates/pa-daemon/src/agent_engine/model.rs:41`). Le
+// texte ne nomme pas ce fournisseur de repli tant qu'aucun fournisseur n'est connecté.
+test("échec d'auth (ticket 40, X5, défaut 2) : sans fournisseur connecté, le texte ne nomme pas le fournisseur du modèle de repli", () => {
+  const row = (id: string, name: string, connected: boolean): Provider => ({
+    id,
+    name,
+    method: "apiKey",
+    login: "apiKey",
+    connected,
+    removable: connected,
+  });
+  const none = [row("amazon-bedrock", "Amazon Bedrock", false), row("openai", "OpenAI", false)];
+  assert.equal(authText(authProviderName(none, "amazon-bedrock")), "Not signed in, or the sign-in has expired.", "rien de connecté");
+  const one = [row("amazon-bedrock", "Amazon Bedrock", false), row("openai", "OpenAI", true)];
+  assert.equal(
+    authText(authProviderName(one, "amazon-bedrock")),
+    "Not signed in to Amazon Bedrock, or the sign-in has expired.",
+    "un autre fournisseur connecté : le modèle de la session est nommé",
+  );
+  assert.equal(authText(authProviderName(one, null)), "Not signed in, or the sign-in has expired.", "fournisseur inconnu");
 });
