@@ -15,10 +15,13 @@ export function isAuthFailure(error: unknown): boolean {
 
 /**
  * Le nom à donner au fournisseur `provider` (id) dans le texte, d'après la liste : la ligne connectée,
- * sinon la première ligne de ce fournisseur, sinon l'id. `undefined` sans fournisseur.
+ * sinon la première ligne de ce fournisseur, sinon l'id. `undefined` sans fournisseur, ou quand aucun
+ * fournisseur n'est connecté : la session tourne alors sur le modèle de repli du démon, le premier du
+ * catalogue (`crates/pa-daemon/src/agent_engine/model.rs:41`), que le texte ne nomme pas (défaut 2 du
+ * contrôle de Yusuf, ticket 40, §22).
  */
 export function authProviderName(providers: Provider[], provider: string | null): string | undefined {
-  if (!provider) return undefined;
+  if (!provider || !providers.some((row) => row.connected)) return undefined;
   const rows = providers.filter((row) => row.id === provider);
   return (rows.find((row) => row.connected) ?? rows[0])?.name ?? provider;
 }
