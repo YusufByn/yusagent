@@ -17,6 +17,7 @@ Unharnessed (lu à `bb55464`) n'a rien sur ce point : aucun choix à reprendre, 
 - **Variables d'environnement (G)** : sur macOS, `sysctl(KERN_PROCARGS2)` lit depuis la sandbox l'environnement de tout processus parent (mesuré). Aucune règle Seatbelt essayée ne l'empêche. Je recommande une limite documentée.
 - **Recommandation** : macOS d'abord (PR A : Seatbelt et socket), puis les jetons MCP hors du kernel (PR B), puis Linux après la sonde (PR C). Les questions sont au §L.
 - **Mise à jour du 26/11/2026** : réponses de Yusuf (§N), plan révisé (§M : B, puis A, puis C). Compléments au §O : inventaire F.4, exécution différée, smoke bench, vérifications de la PR B. **Question bloquante au §P** : `packages`/`npmCommand` font exécuter le worker sans action de l'utilisateur.
+- **Mise à jour du 26/11/2026 (suite)** : réponses 11 à 13 (§Q). **Nouveau constat bloquant au §Q.2** : le worker lance sans action de l'utilisateur des programmes que le kernel peut changer (`git` du `PATH` à chaque tour, `npm root -g` même avec P1, `exec_command` de la variante shell natif, binaire `yusagent`). Une protection posée sur le kernel seul ne tient pas.
 
 ## A. Inventaire
 
@@ -295,6 +296,8 @@ Ce document n'existe pas encore dans le dépôt (recherche dans `docs/`) ; la li
 - Clés passées par variable d'environnement : lisibles par le code du modèle sur macOS, et sous Linux sans espace de noms PID. Texte de l'avertissement (réponse 3) : « une clé passée par variable d'environnement reste lisible par le code du modèle ; pour la protéger, connectez le fournisseur par l'écran Providers ou `/login` ».
 - Clés rangées sous forme `!commande` (trousseau, gestionnaire de mots de passe) : le kernel peut relancer la même commande.
 - Identifiants de l'utilisateur hors de yusAgent : `~/.aws`, identifiants Google par défaut (`GOOGLE_APPLICATION_CREDENTIALS`, `env_allowlist.rs:128`), `~/.ssh`, identifiants git, trousseau via `/usr/bin/security`.
+- Clé Serper ambiante : `SERPER_API_KEY` n'est jamais transmise au kernel (réponse 13), mais elle reste lisible dans l'environnement initial du worker, comme toute clé passée par variable d'environnement (G-b).
+- Smoke bench : le modèle peut lire l'`auth.json` du banc, avec le login des runs à vrai modèle (réponse 12, `bench/smoke/README.md`).
 - Secrets fournis par le client : `env` des serveurs MCP stdio fournis par le client ACP, qui ne sont pas des identifiants rangés par yusAgent (réponse 4). Variables que l'utilisateur nomme dans `kernel.envAllowlist`.
 - Lien physique créé avant la protection : jetons déjà lus valides jusqu'à expiration (F.1).
 - Le modèle peut toujours **utiliser** les identifiants par les voies prévues (appels MCP et websearch par le relais), sans les lire.
@@ -500,6 +503,78 @@ Questions ouvertes :
 11. **§P** : P1, P2, P3 ou P4, et dans quelle PR ?
 12. **§O.3** : refus des fichiers de secrets dans `sandbox-agent.sb` du smoke bench ?
 13. **§O.4** : `SERPER_API_KEY` dans les noms jamais transmis au kernel, le relais la lisant dans l'environnement du worker ?
+
+## Q. Réponses 11 à 13 et nouveau constat bloquant (26/11/2026)
+
+### Q.1 Réponses de Yusuf
+
+11. **P1**, dans une PR à part avant la PR B :
+    - push 1 : le test rouge (réglage `packages` écrit depuis une cellule, puis tour suivant ou tour lancé par un avis `[bash-done]` : aucune installation lancée) ;
+    - lignes upstream annoncées avant le push 2 ;
+    - le `npmCommand` planté rejoint l'« exécution différée ».
+    - **Bloqué par le §Q.2.**
+12. Refus dans `sandbox-agent.sb` seulement si le binaire du smoke bench peut encore lire son login. **Vérifié : non.**
+    - En mode `-p`, la session tourne dans le processus du binaire (`crates/pa-cli/src/print_runtime.rs:1288-1291`, commande `bench/smoke/run.py:391-393`), enveloppé par `sandbox-exec` (`run.py:347-357`).
+    - Le processus qui lit le login et celui qui lance le kernel ne font qu'un sous ce profil. Refuser `auth.json` casserait les runs.
+    - Le refus n'est donc pas posé. Note ajoutée dans `bench/smoke/README.md` et au §J.
+13. Oui :
+    - `SERPER_API_KEY` rejoint les noms jamais transmis au kernel, même via `kernel.envAllowlist` ;
+    - le relais la lit dans l'environnement du worker ;
+    - ajouté au §J (lisible dans l'environnement du worker, G-b).
+
+Choix validés et précisions :
+
+- `PRIME_AGENT_SECRET_GUARD=off` : d'accord.
+- `.cargo/config.toml [env]` : d'accord. Cette section vaut aussi sur macOS : **les tests 2 et 3 forcent explicitement la protection active**, en retirant la variable de l'environnement du processus qu'ils lancent.
+- La ligne des « Limites » sur le Python arbitraire reste telle quelle.
+
+### Q.2 Constat bloquant : le worker lance, sans action de l'utilisateur, des programmes que le kernel peut changer
+
+Lu dans le code ; deux points mesurés (signal, droits du binaire). Rien n'a été mesuré de bout en bout.
+
+**Q.2.1 P1 ne suffit pas.**
+- Pour chaque paquet `npm:` de portée utilisateur, la résolution calcule le dossier d'installation par `global_npm_root()` (`crates/pa-core/src/packages/resolve/manager.rs:355-361`). Celle-ci lance `<npmCommand> root -g` (`crates/pa-core/src/packages/manager.rs:514-520`, `crates/pa-core/src/packages/npm.rs:37-64`) **avant** de savoir si le paquet manque.
+- Le cache `global_npm_root` part de `None` à chaque `PackageManager` (`manager.rs:128`) et `global_npm_root(&self)` ne le remplit jamais : la commande tourne à chaque résolution.
+- Ignorer les paquets absents (P1) laisse donc un `npmCommand` planté s'exécuter à chaque tour.
+
+**Q.2.2 Autres lancements par le worker ou le démon, hors de la descendance du kernel.** Relevé par `grep` de `Command::new` hors tests dans `pa-core`, `pa-daemon`, `pa-ai` et `pa-cli`.
+
+| Lancement | Programme | Déclenchement | Ce que le kernel peut changer |
+|---|---|---|---|
+| Contexte git de la session (`crates/pa-core/src/session/manager/git.rs:18-28`, appelé à `AgentStart` et `AgentEnd`, `crates/pa-core/src/session_engine/mod.rs:480-491`) | `git`, **par son nom** (`PATH` du worker) | **Chaque début et fin de tour**, y compris les tours lancés par l'agent | Placer un `git` dans un dossier écrivable du `PATH`. Sur ce poste, `~/.local/bin` vient en premier, et `/opt/homebrew/bin` appartient à l'utilisateur (`drwxrwxr-x`, observé) |
+| Paquets (`crates/pa-core/src/packages/process.rs:19`, `:45`) | `npmCommand`, ou `npm` du `PATH` | Chaque résolution (§P, §Q.2.1) | Le réglage, ou le `PATH` |
+| Tool `exec_command` de la variante `shellTool: "native"` (`crates/pa-core/src/tools/ya_exec.rs:317`) | Shell lancé par le worker | **Chaque commande du modèle** dans cette variante | Rien à changer : la variante exécute les commandes du modèle hors du kernel, donc hors de toute protection posée sur le kernel |
+| Worker (`crates/pa-daemon/src/supervisor/supervision.rs:583`) | `current_exe()`, le binaire `yusagent` | À chaque nouveau worker, et après un plantage (relance déduite de `supervision.rs:86-87`) | Remplacer le binaire : `~/.cache/yusagent-bin/<sha>/yusagent` est en `-rwxr-xr-x` à l'utilisateur (observé). Un processus sous la sandbox peut terminer un autre processus du même utilisateur (mesuré : `kill -TERM` depuis `sandbox-exec`, rc 0, cible terminée) |
+| Valeurs `!commande` (`crates/pa-core/src/auth/resolve_config_value.rs:70`) | `bash`, par son nom | À la résolution d'une clé `!…`, seulement si l'utilisateur en a | Le `PATH` |
+| Vertex (`crates/pa-ai/src/providers/google_vertex.rs:104`), Bedrock `credential_process` (`crates/pa-ai/src/providers/bedrock/credential_process.rs:131`) | `gcloud` par son nom ; `sh -c` sur la commande lue dans la configuration AWS | À l'obtention d'un identifiant, si l'utilisateur emploie ces fournisseurs | Le `PATH` ; `~/.aws/config` |
+| Sonde du venv du kernel (`crates/pa-core/src/kernel/bootstrap/venv/probe.rs:13-14`), shells persistants (`crates/pa-daemon/src/persistent_shells.rs:366`, `:394`, `sh`), portes du mode autonome (`crates/pa-core/src/autonomous/gates.rs:397-403`) | à vérifier | à vérifier | à vérifier |
+
+Après une action de l'utilisateur seulement (classe « exécution différée ») : `ExecuteBash` (TUI), `trash` à la suppression d'une session (`crates/pa-daemon/src/saved_session_commands.rs:117`), le navigateur d'un login, les commandes `update` et `package`.
+
+**Conséquence** : refuser les fichiers de secrets au kernel et à ses descendants ne suffit pas. Le kernel peut faire exécuter son code par le worker, qui n'est pas protégé, au tour même, sans action de l'utilisateur, et ce de plusieurs façons (au minimum `git` du `PATH` et `npmCommand`).
+
+### Q.3 Options
+
+- **X1. Tous les lancements du worker et du démon passent par la même enveloppe que le kernel (recommandé).**
+  - Ce que le worker lance ne lit plus les secrets, quel que soit le programme : `git`, `npm`, `exec_command`, `!commande`, `gcloud`, `credential_process`, `sh`.
+  - Seuls restent hors enveloppe le kernel (déjà enveloppé) et le worker lui-même.
+  - Ajout au profil : refus d'écriture sur le binaire `yusagent` en cours (chemin canonique de `current_exe()`), pour que le kernel ne puisse pas remplacer le worker.
+  - Coût :
+    - un utilitaire du fork pour envelopper une commande ;
+    - de l'ordre de 8 à 12 sites upstream d'une ou deux lignes (estimation, d'après le tableau, à fixer par l'inventaire complet) ;
+    - les sites `packages/process.rs` regroupent tous les lancements des paquets.
+  - Les `!commande` et `credential_process` continuent de fonctionner : le trousseau et `~/.aws` ne sont pas refusés, seuls les fichiers de secrets de yusAgent le sont.
+  - Linux : même règle à la PR C.
+- **X2. Chemins absolus et `PATH` réduit aux dossiers système pour les lancements du worker.** Ne couvre ni `npmCommand`, ni `exec_command`, ni `credential_process`, ni le binaire. Casse un `git` installé seulement par Homebrew. Non recommandé.
+- **X3. Refuser au kernel l'écriture des dossiers du `PATH` et des fichiers exécutés.** La liste est ouverte (`PATH`, `~/.aws/config`, binaire, configuration git du dépôt…) et contraire à « reste du système libre ». Non recommandé seul. Le refus d'écriture sur le binaire, inclus dans X1, en est le seul cas ciblé.
+
+**Conséquence pour P1 (question 15)** : avec X1, un `npmCommand` planté s'exécute sous l'enveloppe et ne lit plus les secrets. P1 n'est alors plus nécessaire pour l'objectif de sécurité. Il ne servirait plus qu'à éviter des installations non voulues.
+
+Questions :
+
+14. **X1**, avec le refus d'écriture sur le binaire ? Dans la PR A (même mécanisme), ou dans une PR à part avant la PR B, à la place de P1 ?
+15. **P1** : abandonné (X1 couvre l'exécution de `npm`), ou gardé sous la forme P1' ? P1' : les résolutions faites pour une session ignorent `packages`, sans `npm root -g` ni installation.
+16. **Inventaire complet** des lancements du worker et du démon (lignes « à vérifier » du tableau, autres crates) au constat de la PR qui fera X1, avant son code : d'accord ?
 
 ## Annexe : mesures macOS
 
