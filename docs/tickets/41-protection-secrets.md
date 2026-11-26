@@ -10,12 +10,13 @@ Unharnessed (lu à `bb55464`) n'a rien sur ce point : aucun choix à reprendre, 
 
 - **Fichiers à protéger** : `auth.json` (clés API, OAuth des fournisseurs, jetons MCP `mcp:*`, clé Serper) avec son temporaire `auth.json.tmp<pid>` et son verrou `auth.json.lock`, plus `models.json` (`apiKey` et `headers` peuvent être littéraux). Pas d'autre secret trouvé dans `~/.yusagent` ni dans `<cwd>/.yusagent/`.
 - **Point d'héritage** : `crates/pa-core/src/kernel/manager/startup.rs:168-181`, fichier upstream déjà modifié par le fork. Une enveloppe autour de `Command::new(&python)` y couvre le kernel et tous ses descendants.
-- **macOS, mesuré** : Seatbelt (`sandbox-exec`, `(allow default)`) avec un refus par regex de préfixe sur `auth.json*` et `models.json*` tient, fichiers laissés en place. 38 essais conformes, contournements compris (§E.1, annexe).
+- **macOS, mesuré** : Seatbelt (`sandbox-exec`, `(allow default)`) avec un refus par regex de préfixe sur `auth.json*` et `models.json*` tient, fichiers laissés en place. 38 essais conformes, contournements compris (§E.1, annexe ; 42 avec les 4 essais d'exécution différée ajoutés le 26/11).
   - Pour que ça tienne, le kernel doit aussi être coupé du socket du démon : `ExecuteBash` lance un shell **dans le worker**, hors de la protection.
 - **Linux, documenté et non mesuré** : masquer un fichier ne survit pas à l'écriture atomique du démon, il faut masquer un **dossier**. Il faudrait donc déplacer `auth.json` dans un dossier à lui. bubblewrap ou un espace de noms demandent les user namespaces non privilégiés, restreints par défaut sur Ubuntu 24.04. Une sonde en CI s'impose avant de choisir.
 - **Jetons MCP** : ils sont aujourd'hui **dans la mémoire du kernel**. Le Python lit `auth.json` et construit l'en-tête lui-même (`mcp.py:1088`, `:967`, `:975`). Il faut déplacer l'appel HTTP authentifié dans le worker.
 - **Variables d'environnement (G)** : sur macOS, `sysctl(KERN_PROCARGS2)` lit depuis la sandbox l'environnement de tout processus parent (mesuré). Aucune règle Seatbelt essayée ne l'empêche. Je recommande une limite documentée.
 - **Recommandation** : macOS d'abord (PR A : Seatbelt et socket), puis les jetons MCP hors du kernel (PR B), puis Linux après la sonde (PR C). Les questions sont au §L.
+- **Mise à jour du 26/11/2026** : réponses de Yusuf (§N), plan révisé (§M : B, puis A, puis C). Compléments au §O : inventaire F.4, exécution différée, smoke bench, vérifications de la PR B. **Question bloquante au §P** : `packages`/`npmCommand` font exécuter le worker sans action de l'utilisateur.
 
 ## A. Inventaire
 
@@ -120,7 +121,7 @@ Unharnessed (lu à `bb55464`) n'a rien sur ce point : aucun choix à reprendre, 
 
 ### E.1 macOS : Seatbelt (`sandbox-exec`), mesuré
 
-Profil essayé (annexe, 38 essais, 0 écart, macOS 27.0.1) :
+Profil essayé (annexe, 0 écart, macOS 27.0.1) :
 
 ```
 (version 1)(allow default)
@@ -230,7 +231,7 @@ Légende : **M** = mesuré (annexe ou recherche), **D** = déduit de la doc ou d
   - Un modèle qui écrit `shellCommandPrefix` fait donc exécuter son préfixe **dans le worker** au prochain `!commande` tapé dans le TUI (seul émetteur de `ExecuteBash`, `crates/pa-tui/src/session_ui/bash.rs`). Cela demande une action de l'utilisateur dans le TUI ; l'extension ne l'envoie pas.
   - Question 9.
 - `mcpServers.<nom>.url` réécrit vers un autre serveur : la règle d'`endpoint` lié (`mcp.py:893-904`) refuse le jeton. Le relais C1 doit la garder.
-- Autres clés qui feraient exécuter ou envoyer quelque chose par le worker (`packages`, `npmCommand`, fournisseurs) : non vérifiées une à une (§J).
+- Autres clés qui feraient exécuter ou envoyer quelque chose par le worker : inventaire terminé au §O.1 ; `packages`/`npmCommand` se déclenchent sans action de l'utilisateur (§P).
 
 ## G. Clés passées par variable d'environnement au démon ou au pont
 
@@ -282,16 +283,25 @@ Chaque test est vu rouge sur son assertion avant le code (au push 1), puis vert.
 
 Ce document n'existe pas encore dans le dépôt (recherche dans `docs/`) ; la liste est prête pour lui.
 
-- Clés passées par variable d'environnement : lisibles sur macOS (G-b), sous Linux sans espace de noms PID.
+- **Portée de la garantie** : la protection empêche la **lecture directe** des identifiants depuis la session (le kernel et ce qu'il lance). Elle ne rend pas yusAgent résistant à une attaque préparée (voir « exécution différée »).
+- **Exécution différée** (classe ajoutée le 26/11/2026, confirmée, §O.2) : le kernel peut écrire un fichier qu'un processus non protégé exécutera plus tard, et ce processus lira les identifiants. Exemples :
+  - `~/.zshrc` et autres fichiers de démarrage du shell ;
+  - hooks git d'un dépôt ;
+  - réglages utilisateur de VS Code, dont `yusagent.binaryPath`, ou un `yusagent` placé plus tôt dans le `PATH` ;
+  - `~/Library/LaunchAgents` ;
+  - scripts du projet lancés ensuite par l'utilisateur ;
+  - `shellCommandPrefix`/`shellPath` exécutés par le `!commande` du TUI (réponse 9) ;
+  - `npmCommand` exécuté par une installation de paquet lancée par l'utilisateur (selon le §P).
+- Clés passées par variable d'environnement : lisibles par le code du modèle sur macOS, et sous Linux sans espace de noms PID. Texte de l'avertissement (réponse 3) : « une clé passée par variable d'environnement reste lisible par le code du modèle ; pour la protéger, connectez le fournisseur par l'écran Providers ou `/login` ».
 - Clés rangées sous forme `!commande` (trousseau, gestionnaire de mots de passe) : le kernel peut relancer la même commande.
 - Identifiants de l'utilisateur hors de yusAgent : `~/.aws`, identifiants Google par défaut (`GOOGLE_APPLICATION_CREDENTIALS`, `env_allowlist.rs:128`), `~/.ssh`, identifiants git, trousseau via `/usr/bin/security`.
-- Clés rendues volontairement au kernel : variables de `kernel.envAllowlist`, clé Serper selon la question 2, `env` des serveurs MCP stdio fournis par le client ACP (question 4).
+- Secrets fournis par le client : `env` des serveurs MCP stdio fournis par le client ACP, qui ne sont pas des identifiants rangés par yusAgent (réponse 4). Variables que l'utilisateur nomme dans `kernel.envAllowlist`.
 - Lien physique créé avant la protection : jetons déjà lus valides jusqu'à expiration (F.1).
-- Réglages écrits par le modèle et exécutés par le worker (F.4), selon la question 9.
-- Le modèle peut toujours **utiliser** les identifiants par les voies prévues (appels MCP par le relais, websearch), sans les lire.
+- Le modèle peut toujours **utiliser** les identifiants par les voies prévues (appels MCP et websearch par le relais), sans les lire.
 - Rien n'empêche le kernel de supprimer des sessions, d'arrêter le démon ou d'envoyer des données par le réseau : hors de l'objectif.
 - Sur macOS, dépendance à `sandbox-exec`, déprécié mais présent.
-- Plateformes où le mécanisme manque (userns refusés, `sandbox-exec` absent) : selon la question 8.
+- Plateforme sans mécanisme (userns refusés, `sandbox-exec` absent) : le kernel ne démarre pas, sauf si la protection est coupée par la variable d'environnement (réponses 7 et 8) ; elle est alors entièrement absente.
+- Banc de capture et smoke bench : la protection y est coupée (réponse 7, §O.3).
 
 ## K. Options comparées
 
@@ -337,79 +347,209 @@ Ce document n'existe pas encore dans le dépôt (recherche dans `docs/`) ; la li
 9. **`ExecuteBash` et `shellCommandPrefix`/`shellPath` du projet (F.4)** : à traiter ici, en lançant ce shell sous la même protection ou en lisant ces clés dans les réglages globaux seulement, ou en limite documentée ?
 10. **Exception `ps`/`top`** (`with no-sandbox`) : d'accord ? Sinon le shell persistant de `bash.py` sur macOS est à réécrire sans `/bin/ps` (`libproc` par `ctypes`, de l'ordre de 20 à 30 lignes dans un fichier upstream, estimation).
 
-## M. Plan de PR (après validation)
+## M. Plan de PR (ordre validé le 26/11/2026 : B, puis A, puis C après la sonde ; en attente du §P)
 
 Chaque PR a son push 1 de tests seuls, rouges sur leur assertion, puis le code. Commits `YA-11: ticket 41 : …`. Tout fichier upstream touché va dans `docs/fork-changes.md`.
 
+- **PR B : jetons MCP et clé Serper hors du kernel (C1, réponse 2)**
+  - Push 1 : tests 4 et 5, plus un test websearch : un serveur Serper factice exige la clé sentinelle, et l'appel depuis le kernel passe par le relais.
+  - Push 2 :
+    - transport Python du fork (requêtes complètes, GET refusé par un 405, §O.4) ;
+    - handler Rust du fork qui ajoute l'en-tête avec la règle d'`endpoint` lié ;
+    - `mcp.py` et `mcp_base.py` cessent de lire `auth.json` ;
+    - `mcp.config` sans `headers` littéraux ;
+    - relais `websearch` (URL fixe), lecture d'`auth.json` retirée du skill, injection `SERPER_API_KEY` retirée de l'environnement du kernel (`runtime_wiring.rs:296-298`).
+  - Proposition à confirmer (§O.4) : `SERPER_API_KEY` ajoutée aux noms jamais transmis au kernel, même nommée dans `kernel.envAllowlist`.
+  - Préfixe : inchangé. Seuls des textes d'erreur dans le résultat d'une cellule peuvent changer, à relever.
 - **PR A, macOS : protection des fichiers et du socket (K1)**
   - Push 1 : tests 1, 2, 3 et 7, et le nouveau job CI `macos-15`.
   - Push 2 :
-    - module du fork `crates/pa-core/src/kernel/ya_secret_guard.rs` : profil, chemins canoniques, réglage selon la question 7 ;
+    - module du fork `crates/pa-core/src/kernel/ya_secret_guard.rs` : profil (regex `auth.json*` et `models.json*`, ancêtres, sockets), chemins canoniques ;
     - enveloppe à `startup.rs:168-170`, 3 à 5 lignes upstream ;
-    - exception `ps`/`top` selon la question 10 ;
-    - contrôle `st_nlink` au démarrage du démon ;
-    - adaptation du banc selon la question 7.
+    - exception `(allow process-exec (literal "/bin/ps") (literal "/usr/bin/top") (with no-sandbox))`, rien d'autre (réponse 10) ;
+    - contrôle `st_nlink` au démarrage du démon.
+  - **Interrupteur** (réponse 7) : variable `PRIME_AGENT_SECRET_GUARD=off`, nom proposé selon la convention `PRIME_AGENT_*` du fork.
+    - Lue par le superviseur à son lancement et passée aux workers par l'environnement interne, jamais par l'environnement de lancement d'un client (`supervision.rs:62-72`).
+    - Jamais transmise au kernel : ajoutée aux noms refusés de `env_allowlist.rs`, même nommée dans `kernel.envAllowlist`.
+    - Sans elle, la protection est active.
+    - Coupée : avertissement sur stderr du démon et du pont, que l'extension recopie dans l'Output (`extensions/vscode/src/agent.ts:143`).
+  - **Mécanisme absent** (réponse 8) : refus de lancer le kernel, avec un message qui nomme la variable.
+  - **Tests existants qui lancent un kernel** (réponse 8) : l'assertion de chaque test reste inchangée.
+    - Sous Linux jusqu'à la PR C : `PRIME_AGENT_SECRET_GUARD = "off"` dans `[env]` de `.cargo/config.toml`, comme `PRIME_AGENT_PROMPT_VERSION` (`docs/fork-changes.md:260`).
+    - Les scripts lancés hors de `cargo` avec un environnement en liste blanche (`scripts/check_*.py`, précédent `docs/fork-changes.md:267`) et l'e2e « vrai binaire » de l'extension (`.github/workflows/ya-extension.yml`) posent la variable eux aussi.
+    - Les tests de la protection, sous macOS, la retirent explicitement.
+  - **Bancs** (réponse 7) : le banc de capture et le smoke bench posent la variable et gardent leur `sandbox-exec`. La différence avec le produit est notée dans `bench/smoke/README.md` et `bench/tools/capture/README.md`. Le test 3 tourne sans enveloppe externe, protection active.
   - Captures et script de contrôle lancés sur le binaire de la branche (règle 13).
   - Préfixe inchangé.
-- **PR B : jetons MCP hors du kernel (C1)**
-  - Push 1 : tests 4 et 5.
-  - Push 2 :
-    - transport Python du fork ;
-    - handler Rust du fork ;
-    - `mcp.py` et `mcp_base.py` cessent de lire `auth.json` ;
-    - `mcp.config` sans `headers` littéraux ;
-    - websearch selon la question 2.
-  - Peut précéder la PR A : sans elle, la PR A casse le MCP authentifié (le kernel ne lit plus `auth.json`). **Ordre proposé : B puis A**, ou les deux avant toute remise.
 - **PR C, Linux (K3)**
   - Avant le code : sonde CI (un job qui essaie `bwrap` et `unshare -Ur` sur `ubuntu-24.04`, avec et sans sysctl), et relevé.
-  - Puis déplacement d'`auth.json` (question 6), masquage du dossier et du dossier des sockets, `--unshare-pid`, test 6.
-- **Doc** : avertissement « ce qui reste ouvert » (§J) dans le document que Yusuf indiquera. Gate de YA-16 cochée après les PR exigées par la question 5.
+  - Puis, selon la réponse 6 : constat de la migration vers `~/.yusagent/credentials/` avec la liste des sites, traitement de `models.json` (réponse 1), masquage du dossier et du dossier des sockets, `--unshare-pid`, test 6.
+  - Retrait de `PRIME_AGENT_SECRET_GUARD` de `.cargo/config.toml`.
+- **Doc** : avertissement « ce qui reste ouvert » (§J) dans le document que Yusuf indiquera. Gate de YA-16 : macOS après les PR B et A, pour des testeurs sur macOS ; Linux et WSL après la PR C (réponse 5).
+
+## N. Réponses de Yusuf (26/11/2026)
+
+- Deux commits au lieu d'un au départ : accepté. `x5-constat-2026-11-26.md` reste local.
+- Notes « Écart (26/11/2026, ticket 41) » ajoutées au point « Usage perso vs publication » de YA-11 et à la ligne des « Limites » du CDC sur les secrets.
+
+Réponses au §L :
+
+1. `models.json` : dans le périmètre, en lecture et en écriture. Le traitement sous Linux se décide à la PR C.
+2. websearch : (a), relais par le worker. La lecture d'`auth.json` est retirée du skill, et aucune clé n'est lisible par le modèle par défaut. Arrêt si ce relais coûte nettement plus que C1 : ce n'est pas le cas (§O.4).
+3. G-b : limite documentée, avec le texte du §G (repris au §J).
+4. `env` des serveurs MCP stdio du client ACP : limite documentée (secrets du client). Leurs `headers` HTTP passent par le relais.
+5. Pas de blocage par plateforme : une plateforme sans mécanisme refuse de lancer le kernel. macOS suffit pour des testeurs sur macOS ; Linux et WSL attendent la PR C.
+6. Après la sonde CI. Accord de principe sur `~/.yusagent/credentials/` si le masquage par dossier est retenu. La migration et la liste des sites sont à faire au constat de la PR C.
+7. Pas de réglage dans `settings.json`, puisque le kernel peut l'écrire. Interrupteur par variable d'environnement lue par le démon à son lancement, jamais transmise au kernel, avec avertissement sur stderr et dans l'Output. Les bancs posent la variable ; le test 3 tourne protection active.
+8. Mécanisme absent : refus de lancer le kernel, avec un message qui nomme la variable. Les tests Linux existants posent la variable jusqu'à la PR C, sans changer leurs assertions.
+9. `shellCommandPrefix` et `shellPath` : limite documentée, dans la classe « exécution différée ».
+10. Exception limitée à `/bin/ps` et `/usr/bin/top` en `literal`.
+
+Plan : ordre B, puis A, puis C après la sonde. Avant le code de la PR B : vérifier qu'un relais à réponses complètes suffit (§O.4).
+
+## O. Compléments au constat (26/11/2026)
+
+### O.1 F.4 terminé : clés de réglages qui font exécuter ou envoyer quelque chose par le worker ou le démon
+
+Liste des clés connues : `crates/pa-core/src/settings/load.rs:10` et suivantes (`KNOWN_FIELDS`). Les réglages globaux et ceux du projet sont fusionnés (`SettingsManager::create`, `settings()` rend `merged`, `crates/pa-core/src/settings/manager.rs:101-103`). Tout a été lu, rien n'a été mesuré.
+
+| Clé | Effet dans un processus non protégé | Déclenchement |
+|---|---|---|
+| **`packages`** (avec ou sans **`npmCommand`**) | Un paquet `npm:` ou `git:` absent est **installé à la résolution des ressources** (`crates/pa-core/src/packages/resolve/manager.rs:216-229`, `:275-303`). `npm install -g <spec>` ou `git clone` puis `npm install` (`crates/pa-core/src/packages/manager.rs:518-536`, `crates/pa-core/src/packages/git.rs:43-73`) exécutent les scripts du paquet. `npmCommand` remplace le programme lancé par n'importe quel exécutable (`crates/pa-core/src/packages/npm.rs:15-23`). Le tout tourne **dans le worker**. | **Sans action de l'utilisateur** (détail au §P) |
+| `shellPath`, `shellCommandPrefix` | Shell de `ExecuteBash` dans le worker (`crates/pa-daemon/src/user_bash.rs:243-248`) | Après une action : `!commande` dans le TUI. Limite documentée (réponse 9) |
+| `updateChannel` | Canal de `yusagent update` (`crates/pa-cli/src/self_update.rs:115`, `public_command.rs:334-340`) | Après une action : commande `update` |
+| `kernel.envAllowlist` | Ajoute à l'environnement du **kernel** des variables nommées. Les identifiants des fournisseurs ne passent jamais (`env_allowlist.rs:115-131`). La clé Serper rangée passe si `SERPER_API_KEY` est nommée (`runtime_wiring.rs:296-298`). | À la construction du provisionneur, c'est-à-dire à la création d'une session (`runtime_wiring.rs:257`, `:292`, déduit). L'injection Serper disparaît avec la PR B |
+| `mcpServers` | Le worker ne lance aucun serveur. `prompt_gating` est une lecture locale (`crates/pa-core/src/mcp/mod.rs:554-577`). Le rafraîchissement OAuth part vers le `tokenEndpoint` rangé dans `auth.json` (`crates/pa-core/src/mcp/login.rs:717`), pas vers une URL des réglages. Une URL réécrite ne reçoit pas le jeton (`endpoint` lié, `mcp.py:893-904`, à garder dans le relais) | Sans objet |
+| `agentTraces` | Envoi coupé par le fork, sans interrupteur (`crates/pa-core/src/agent_traces/ya_sharing_off.rs:1-14`) | Sans objet |
+| `telemetry` | Champs `enabled`, `noticeShown`, `localMirror` (`crates/pa-core/src/settings/types.rs:253-259`) : aucune URL réglable. Le contenu de l'envoi n'est pas vérifié en détail | Sans objet pour les identifiants (déduit) |
+| Choix de modèle (`defaultProvider`, `defaultModel`, `enabledModels`, `providerBackupModel`, `imageModel`, `auxiliaryModel`, `subagentDefaultModel`, `transport`, `codexSessionIdHeader`) | Requêtes au fournisseur avec sa clé, vers l'URL du catalogue intégré ou de `models.json` (protégé). Aucune clé de réglage ne porte d'URL de fournisseur (liste `KNOWN_FIELDS`) | Sans objet (déduit) |
+| `skills`, `prompts`, `factory`, `autonomous`, `harnessRefinements`, `autoRefine`, `sessionDir` et clés d'affichage | Fichiers lus comme texte, ou code exécuté **dans le kernel** (skills, machines de la factory). `sessionDir` change seulement le dossier où le démon écrit les sessions | Sans objet (déduit) |
+
+### O.2 Classe « exécution différée » : confirmée
+
+- Le profil est `(allow default)` et ne refuse que les fichiers de secrets et le dossier des sockets (§E.1). Toute autre écriture reste permise.
+- **Mesuré** sur un faux HOME (annexe, lignes « exécution différée ») : écrire `~/.zshrc`, un hook git, un `~/Library/LaunchAgents/*.plist` et `~/Library/Application Support/Code/User/settings.json` est permis.
+- **`yusagent.binaryPath`** : le réglage est en portée `machine` (`extensions/vscode/package.json:61-65`). Le `.vscode/settings.json` du projet ne peut donc pas le fixer, mais le fichier de réglages utilisateur de VS Code, lui, est écrivable. Le nom nu par défaut est cherché dans le `PATH` (`extensions/vscode/src/binary.ts:1`).
+- **LaunchAgents** : la recherche a vu `launchctl submit` échouer depuis la sandbox (code 1, non repris par le script). Le fichier écrit est chargé à la session suivante (déduit).
+- La garantie est bien « pas de lecture directe depuis la session » (§J).
+
+### O.3 Smoke bench
+
+- `bench/smoke/run.py` **enveloppe aussi le binaire** dans `sandbox-exec` :
+  - `run_binary(..., sandboxed=True)` préfixe `/usr/bin/sandbox-exec` (`bench/smoke/run.py:347-357`) ;
+  - la phase agent utilise `sandbox-agent.sb` (`agent_profile`, `:328-343`), la chauffe et la sonde réseau aussi ;
+  - le bras Codex utilise le même profil (`:826`).
+- **Conséquence** : avec la protection, le kernel ne démarrerait pas sous le smoke bench, à cause de la sandbox imbriquée (code 71, annexe). Le smoke bench pose donc la variable et garde son profil (réponse 7).
+  - Ses mesures portent sur un kernel non protégé. Le préfixe est le même ; seuls les refus (setuid, fichiers protégés) diffèrent.
+- **Constat en plus** : `sandbox-agent.sb` laisse lire et écrire `AGENT_DIR`, le dossier agent du banc, qui garde le login des runs à vrai modèle. Pendant un run du smoke bench, le modèle peut donc lire l'`auth.json` du banc, aujourd'hui comme après le ticket.
+  - Proposition : ajouter à `sandbox-agent.sb` les mêmes refus sur `AGENT_DIR/auth.json*` et `models.json*`, ce qui coûte quelques lignes et garde la parité avec le produit. À trancher (question 12).
+
+### O.4 PR B : vérifications avant le code
+
+- **Un relais à réponses complètes (C1) suffit** (déduit du code, à confirmer par le test 4) :
+  - le client MCP du kernel ne connaît que `http` (streamable HTTP) et `stdio` (`prime-agent-runtime/src/rlm/mcp.py:267-273`), pas l'ancien transport SSE ; les intégrations `mcp_base.py` passent aussi par streamable HTTP (`mcp_base.py:203`) ;
+  - SDK `mcp` 2.3.0 du venv du kernel : la réponse à un POST est du JSON ou un flux SSE fini, que le serveur ferme après sa réponse (`mcp/client/streamable_http.py:404`, `:438-440`) ; le relais peut le mettre en mémoire puis le rendre en entier ;
+  - le flux GET des messages lancés par le serveur est facultatif : sur une erreur, le SDK réessaie au plus deux fois à une seconde d'intervalle puis abandonne (`:59-60`, `:224-273`). Le relais répond 405 au GET ;
+  - ce qui est perdu : les messages lancés par le serveur hors d'une requête (notifications, demandes du serveur). Les tools appelés par le modèle n'en ont pas besoin ;
+  - un appel long arrive en une fois à la fin. Le délai du relais doit dépasser celui de l'appel (`mcp.py:295`).
+  - **Pas de flux SSE long nécessaire : pas d'arrêt, C2 non requis.**
+- **Relais websearch : moins cher que C1** :
+  - une URL fixe (`https://google.serper.dev/search`), un POST JSON avec `X-API-KEY` (`skills/websearch/src/websearch/websearch.py:119-127`) ;
+  - côté worker, la résolution de la clé existe déjà (`websearch_api_key`, `crates/pa-core/src/session_engine/runtime_wiring.rs:332-360`, `!commande` compris) ;
+  - **pas d'arrêt.**
+- **Point à confirmer** : `SERPER_API_KEY` ambiante. Le skill la préfère aujourd'hui (`websearch.py:41`), et elle n'arrive au kernel que nommée dans `kernel.envAllowlist`, que le kernel peut lui-même écrire (§O.1).
+  - Proposition : le relais lit `SERPER_API_KEY` dans l'environnement du worker ou dans `auth.json`, et le nom rejoint les noms jamais transmis au kernel (question 13).
+
+## P. Question bloquante (26/11/2026) : `packages` et `npmCommand` se déclenchent sans action de l'utilisateur
+
+**Chemin, lu et non mesuré :**
+
+- Le modèle écrit dans `settings.json` (global, ou `<cwd>/.yusagent/settings.json`) une entrée `packages` absente, éventuellement avec un `npmCommand`.
+- La résolution suivante l'installe dans le worker, hors protection :
+  - à chaque tour, y compris **un tour lancé par l'agent** : `prompt_injected_message` (`crates/pa-core/src/session_engine/admission.rs:31-47`), chemin des avis `[bash-done]` (ticket 25), puis `ya_announce_resources` (`crates/pa-core/src/session_engine/ya_resource_notice.rs:377-387`), `load_resources` (`:166`) et `resolve()` (`crates/pa-core/src/resources/resolution.rs:180`) ;
+  - à chaque prompt de l'utilisateur (`admission.rs:148`) ;
+  - à la création d'une session (`crates/pa-core/src/session_engine/engine.rs:350`) ;
+  - à l'ouverture de l'écran skills de l'extension (`crates/pa-daemon/src/acp/ya_resources.rs:178`).
+- Seul `PI_OFFLINE=1` coupe l'installation (`crates/pa-core/src/packages/mod.rs:38`, `resolve/manager.rs:281-283`). C'est pourquoi les bancs ne l'ont jamais exercée.
+- **Conséquence** : une cellule écrit le réglage, lance un `bash()` en arrière-plan, et l'avis de fin déclenche un tour où le worker exécute la commande, puis lit `auth.json`. **La protection est contournée sans action de l'utilisateur.**
+- Le chemin `ya_resource_notice` vient du fork (ticket 31). `engine.rs:350` est upstream.
+
+**Options :**
+
+- **P1. Pas d'installation automatique dans le démon (recommandé).**
+  - Les résolutions faites pour une session (création, comparaison par tour, écran skills) passent `MissingSourceAction::Skip` (`resolve/manager.rs:284-289`).
+  - Un paquet absent est ignoré, avec une ligne sur stderr. Il s'installe seulement par `yusagent package install`, commande lancée par l'utilisateur.
+  - Upstream : `resources/resolution.rs:180`, `manager.resolve()` devient `resolve_with_on_missing(Some(skip))` (2 à 3 lignes, estimation), ou une option passée depuis les trois appelants.
+  - Reste : un `npmCommand` planté s'exécute quand l'utilisateur lance une installation. Cela entre dans l'« exécution différée ».
+  - À vérifier au constat de la PR : si la résolution met aussi à jour les paquets git (« refreshed », `resources/mod.rs:125`), même traitement.
+- **P2. Installations sous la même protection que le kernel.** Les lancements de `npm` et `git` de `packages/` passent par l'enveloppe de la PR A (`manager.rs:518`, `:568`, `git.rs:71`, `:206` et le clone), soit 4 à 6 sites upstream.
+  - L'installation automatique est gardée, et les scripts de paquet ne lisent plus les secrets.
+  - macOS seulement jusqu'à la PR C. Couvre aussi l'installation lancée par l'utilisateur.
+- **P3. Refus d'écriture sur `settings.json`, global et projet.** Contraire à « reste du système libre », et le réglage du projet est un fichier du workspace. Non recommandé.
+- **P4. `packages` coupé dans yusAgent**, comme l'envoi des traces (`ya_sharing_off.rs`). Les skills restent dans `~/.yusagent/skills` et dans ceux du projet, et les skills intégrés ne passent pas par `packages` (`bundled_skills_dir`, `resolution.rs:173-178`).
+  - Le plus simple si les paquets ne servent pas. Coût du même ordre que P1.
+
+**Recommandation** : P1, ou P4 si tu n'utilises pas les paquets. P2 en plus de P1 si l'installation par l'utilisateur doit aussi être protégée.
+
+**Avant le code** : un test rouge à poser au push 1 de la PR qui traitera ce point. Un `settings.json` porte `packages: ["npm:ya41-absent"]` et un `npmCommand` vers un script marqueur ; un tour lancé par un avis `[bash-done]` doit laisser le marqueur absent.
+
+**Où le traiter** : la PR A (à mettre avant toute remise), ou une PR à part avant la PR A (question 11).
+
+Questions ouvertes :
+
+11. **§P** : P1, P2, P3 ou P4, et dans quelle PR ?
+12. **§O.3** : refus des fichiers de secrets dans `sandbox-agent.sb` du smoke bench ?
+13. **§O.4** : `SERPER_API_KEY` dans les noms jamais transmis au kernel, le relais la lisant dans l'environnement du worker ?
 
 ## Annexe : mesures macOS
 
-Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, arbre à `9010a9c21`) :
+Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des essais d'exécution différée, arbre à `1eed69ebc` plus ce commit) :
 
 ```
 ProductName:		macOS ; ProductVersion:		27.0.1 ; BuildVersion:		26A434
-ok  cat auth.json                                                      attendu : refusé          obtenu : refusé
-ok  python open(auth.json)                                             attendu : refusé          obtenu : refusé
-ok  cat models.json                                                    attendu : refusé          obtenu : refusé
-ok  lire kernel-venv/f                                                 attendu : permis (rc=0)   obtenu : permis (rc=0)
-ok  écrire settings.json                                               attendu : permis (rc=0)   obtenu : permis (rc=0)
-ok  créer un fichier dans le dossier                                   attendu : permis (rc=0)   obtenu : permis (rc=0)
-ok  planter auth.json.tmp123                                           attendu : refusé          obtenu : refusé
-ok  créer le verrou auth.json.lock                                     attendu : refusé          obtenu : refusé
-ok  remplacer models.json par renommage                                attendu : refusé          obtenu : refusé
-ok  renommer le dossier agent                                          attendu : refusé          obtenu : refusé
-ok  renommer son parent                                                attendu : refusé          obtenu : refusé
-ok  lien symbolique puis cat                                           attendu : refusé          obtenu : refusé
-ok  lien physique créé dans la sandbox                                 attendu : refusé          obtenu : refusé
-ok  variante de chemin …/regex/home/.ya/AUTH.JSON                      attendu : refusé          obtenu : refusé
-ok  variante de chemin …/regex/home/.ya/../.ya/auth.json               attendu : refusé          obtenu : refusé
-ok  variante de chemin /System/Volumes/Data…/regex/home/.ya/auth.json  attendu : refusé          obtenu : refusé
-ok  accès par inode /.vol/<dev>/<ino>                                  attendu : refusé          obtenu : refusé
-ok  pendant l'écriture : cat du temporaire                             attendu : refusé          obtenu : refusé
-ok  pendant l'écriture : lien physique du temporaire                   attendu : refusé          obtenu : refusé
-ok  après renommage : cat auth.json                                    attendu : refusé          obtenu : refusé
-ok  descendant : setsid + sh -c cat                                    attendu : refusé          obtenu : refusé
-ok  sandbox imbriquée (sandbox-exec dans sandbox-exec)                 attendu : refusé (rc=71)  obtenu : refusé (rc=71)
-ok  exécuter /bin/ps (setuid)                                          attendu : refusé          obtenu : refusé
-ok  exception (with no-sandbox) pour /bin/ps                           attendu : permis (rc=0)   obtenu : permis (rc=0)
-ok  contrôle positif : cat auth.json hors sandbox                      attendu : permis (rc=0)   obtenu : permis (rc=0)
-ok  literal : lien physique du temporaire pendant l'écriture           attendu : permis (rc=0)   obtenu : permis (rc=0)
-ok  sans règle sur les ancêtres : mv du dossier puis cat               attendu : permis (rc=0)   obtenu : permis (rc=0)
-ok  lien physique créé AVANT, hors sandbox                             attendu : permis (rc=0)   obtenu : permis (rc=0)
-ok  hors sandbox : env du parent par sysctl KERN_PROCARGS2             attendu : visible         obtenu : visible
-ok  hors sandbox : env du parent par ps eww                            attendu : visible         obtenu : visible
-ok  hors sandbox : mémoire du parent par task_for_pid                  attendu : refusé (kr=5)   obtenu : refusé (kr=5)
-ok  sous sandbox : env du parent par sysctl KERN_PROCARGS2             attendu : visible         obtenu : visible
-ok  sous sandbox : env du parent par ps eww                            attendu : refusé          obtenu : refusé
-ok  sous sandbox : mémoire du parent par task_for_pid                  attendu : refusé (kr=5)   obtenu : refusé (kr=5)
-ok  (deny process-info* (target others)) : env par sysctl              attendu : visible         obtenu : visible
-ok  connexion au socket hors sandbox                                   attendu : permis          obtenu : permis
-ok  connexion au socket sous le profil                                 attendu : refusé          obtenu : refusé
-ok  faux socket dans le dossier des sockets                            attendu : refusé          obtenu : refusé
-38 essais, 0 écart(s)
+ok  cat auth.json                                                                      attendu : refusé          obtenu : refusé
+ok  python open(auth.json)                                                             attendu : refusé          obtenu : refusé
+ok  cat models.json                                                                    attendu : refusé          obtenu : refusé
+ok  lire kernel-venv/f                                                                 attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  écrire settings.json                                                               attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  créer un fichier dans le dossier                                                   attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  planter auth.json.tmp123                                                           attendu : refusé          obtenu : refusé
+ok  créer le verrou auth.json.lock                                                     attendu : refusé          obtenu : refusé
+ok  remplacer models.json par renommage                                                attendu : refusé          obtenu : refusé
+ok  renommer le dossier agent                                                          attendu : refusé          obtenu : refusé
+ok  renommer son parent                                                                attendu : refusé          obtenu : refusé
+ok  lien symbolique puis cat                                                           attendu : refusé          obtenu : refusé
+ok  lien physique créé dans la sandbox                                                 attendu : refusé          obtenu : refusé
+ok  variante de chemin …/regex/home/.ya/AUTH.JSON                                      attendu : refusé          obtenu : refusé
+ok  variante de chemin …/regex/home/.ya/../.ya/auth.json                               attendu : refusé          obtenu : refusé
+ok  variante de chemin /System/Volumes/Data…/regex/home/.ya/auth.json                  attendu : refusé          obtenu : refusé
+ok  accès par inode /.vol/<dev>/<ino>                                                  attendu : refusé          obtenu : refusé
+ok  pendant l'écriture : cat du temporaire                                             attendu : refusé          obtenu : refusé
+ok  pendant l'écriture : lien physique du temporaire                                   attendu : refusé          obtenu : refusé
+ok  après renommage : cat auth.json                                                    attendu : refusé          obtenu : refusé
+ok  descendant : setsid + sh -c cat                                                    attendu : refusé          obtenu : refusé
+ok  sandbox imbriquée (sandbox-exec dans sandbox-exec)                                 attendu : refusé (rc=71)  obtenu : refusé (rc=71)
+ok  exécuter /bin/ps (setuid)                                                          attendu : refusé          obtenu : refusé
+ok  exécution différée : écrire ~/.zshrc                                               attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  exécution différée : écrire ~/projet/.git/hooks/pre-commit                         attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  exécution différée : écrire ~/Library/LaunchAgents/x.plist                         attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  exécution différée : écrire ~/Library/Application Support/Code/User/settings.json  attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  exception (with no-sandbox) pour /bin/ps                                           attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  contrôle positif : cat auth.json hors sandbox                                      attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  literal : lien physique du temporaire pendant l'écriture                           attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  sans règle sur les ancêtres : mv du dossier puis cat                               attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  lien physique créé AVANT, hors sandbox                                             attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  hors sandbox : env du parent par sysctl KERN_PROCARGS2                             attendu : visible         obtenu : visible
+ok  hors sandbox : env du parent par ps eww                                            attendu : visible         obtenu : visible
+ok  hors sandbox : mémoire du parent par task_for_pid                                  attendu : refusé (kr=5)   obtenu : refusé (kr=5)
+ok  sous sandbox : env du parent par sysctl KERN_PROCARGS2                             attendu : visible         obtenu : visible
+ok  sous sandbox : env du parent par ps eww                                            attendu : refusé          obtenu : refusé
+ok  sous sandbox : mémoire du parent par task_for_pid                                  attendu : refusé (kr=5)   obtenu : refusé (kr=5)
+ok  (deny process-info* (target others)) : env par sysctl                              attendu : visible         obtenu : visible
+ok  connexion au socket hors sandbox                                                   attendu : permis          obtenu : permis
+ok  connexion au socket sous le profil                                                 attendu : refusé          obtenu : refusé
+ok  faux socket dans le dossier des sockets                                            attendu : refusé          obtenu : refusé
+42 essais, 0 écart(s)
 ```
 
 La recherche sur les mécanismes (essais sur ce Mac : sandbox imbriquée, trousseau jetable, `/.vol`, `setsid`) a été faite par un agent pendant le constat. Les essais dont dépend une conclusion de ce document sont refaits par le script ci-dessus, sauf ceux du trousseau (E.2) et du `curl` (E.1), qui ne sont pas repris.

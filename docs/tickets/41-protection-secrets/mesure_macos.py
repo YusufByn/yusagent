@@ -113,6 +113,12 @@ def seatbelt(base: Path) -> None:
         else f"rc={p.returncode} {p.stderr.strip()[:60]}")
     p = run(sb + ["/bin/ps", "-p", str(os.getpid())])
     row("exécuter /bin/ps (setuid)", "refusé", "refusé" if "Operation not permitted" in p.stderr else f"permis (rc={p.returncode})")
+    # Exécution différée : fichiers qu'un processus non protégé exécutera plus tard (faux HOME).
+    for rel in (".zshrc", "projet/.git/hooks/pre-commit", "Library/LaunchAgents/x.plist",
+                "Library/Application Support/Code/User/settings.json"):
+        target = home / rel
+        got = run(sb + ["/bin/sh", "-c", f'mkdir -p "{target.parent}" && echo x >> "{target}"'])
+        row(f"exécution différée : écrire ~/{rel}", "permis (rc=0)", denied(got))
     p = run([SB, "-p", prof + '(allow process-exec (literal "/bin/ps") (with no-sandbox))\n',
              "/bin/ps", "-p", str(os.getpid())])
     row("exception (with no-sandbox) pour /bin/ps", "permis (rc=0)", denied(p))
