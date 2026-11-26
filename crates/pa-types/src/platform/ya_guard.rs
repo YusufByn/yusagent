@@ -14,6 +14,7 @@
 //! Listed in `docs/fork-changes.md`.
 
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -277,11 +278,12 @@ fn prefix_regex(path: &Path) -> String {
 pub fn profile(paths: &GuardPaths, variant: Variant) -> String {
     let mut text = String::from("(version 1)\n(allow default)\n");
     let agent = &paths.agent_dir;
-    text.push_str(&format!(
-        "(deny file-read* file-write* {} {})\n",
+    let _ = writeln!(
+        text,
+        "(deny file-read* file-write* {} {})",
         prefix_regex(&agent.join("auth.json")),
         prefix_regex(&agent.join("models.json"))
-    ));
+    );
     let mut renames = vec![format!("(literal {})", quoted(agent))];
     if let Some(parent) = agent.parent() {
         renames.push(format!("(literal {})", quoted(parent)));
@@ -289,7 +291,7 @@ pub fn profile(paths: &GuardPaths, variant: Variant) -> String {
     if let Some(parent) = paths.binary.parent() {
         renames.push(format!("(literal {})", quoted(parent)));
     }
-    text.push_str(&format!("(deny file-write-unlink {})\n", renames.join(" ")));
+    let _ = writeln!(text, "(deny file-write-unlink {})", renames.join(" "));
     let mut remote = Vec::new();
     let mut socket_writes = Vec::new();
     for socket in &paths.sockets {
@@ -303,13 +305,14 @@ pub fn profile(paths: &GuardPaths, variant: Variant) -> String {
         remote.push(format!("(remote unix-socket (subpath {}))", quoted(dir)));
         socket_writes.push(format!("(subpath {})", quoted(dir)));
     }
-    text.push_str(&format!("(deny network-outbound {})\n", remote.join(" ")));
-    text.push_str(&format!(
-        "(deny file-write* {} (literal {}) (literal {}))\n",
+    let _ = writeln!(text, "(deny network-outbound {})", remote.join(" "));
+    let _ = writeln!(
+        text,
+        "(deny file-write* {} (literal {}) (literal {}))",
         socket_writes.join(" "),
         quoted(&paths.binary),
         quoted(&paths.manifest)
-    ));
+    );
     if variant == Variant::Full {
         text.push_str(
             "(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") \
