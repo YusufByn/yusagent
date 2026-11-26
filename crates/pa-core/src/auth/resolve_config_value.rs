@@ -81,6 +81,7 @@ fn hidden_spawn(command: &str) -> Result<Option<std::process::Output>> {
 fn hidden_spawn(command: &str) -> Result<Option<std::process::Output>> {
     use std::process::{Command, Stdio};
     if let Ok(config) = crate::platform::get_shell_config(None) {
+        // yusAgent (YA-11, ticket 41): propre à Windows, hors enveloppe (pas d'exécution en Windows natif).
         match Command::new(&config.shell)
             .args(&config.args)
             .arg(command)
@@ -97,6 +98,7 @@ fn hidden_spawn(command: &str) -> Result<Option<std::process::Output>> {
         }
     }
     let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
+    // yusAgent (YA-11, ticket 41): propre à Windows, hors enveloppe (pas d'exécution en Windows natif).
     let output = Command::new(comspec)
         .args(["/d", "/s", "/c"])
         .arg(command)

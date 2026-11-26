@@ -64,6 +64,7 @@ pub(crate) async fn edit(command: &str, text: &str) -> Result<Option<String>> {
         };
         #[cfg(windows)]
         let mut editor = {
+            // yusAgent (YA-11, ticket 41): propre à Windows, hors enveloppe (pas d'exécution en Windows natif).
             let mut editor = tokio::process::Command::new("cmd");
             editor.arg("/C").arg(command);
             editor

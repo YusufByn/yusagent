@@ -51,6 +51,59 @@ const RELAUNCH: &str = "relance du binaire yusAgent";
 const WINDOWS: &str = "propre à Windows";
 const LINUX: &str = "propre à Linux, jusqu'à la PR C";
 const UNREACHABLE: &str = "inatteignable";
+/// The explicit marker on the line before each Windows-only launch.
+const WINDOWS_MARKER: &str = "// yusAgent (YA-11, ticket 41): propre à Windows";
+
+/// Whether the 1-based line `number` lies inside an item (function, block, module) attributed
+/// `#[cfg(windows)]`: from the attribute, the item's braces are matched up to that line.
+fn inside_cfg_windows(lines: &[&str], number: usize) -> bool {
+    let launch = number - 1;
+    (0..launch).rev().any(|start| {
+        if !lines[start].trim_start().starts_with("#[cfg(windows)]") {
+            return false;
+        }
+        let mut depth = 0_i64;
+        let mut opened = false;
+        for line in &lines[start + 1..launch] {
+            for ch in line.chars() {
+                match ch {
+                    '{' => {
+                        depth += 1;
+                        opened = true;
+                    }
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if opened && depth <= 0 {
+                return false;
+            }
+        }
+        opened && depth > 0
+    })
+}
+
+/// A Windows exception's proof: the explicit marker on the line before the launch, and the
+/// launch inside a `#[cfg(windows)]` item.
+fn windows_proof(lines: &[&str], number: usize) -> Result<(), String> {
+    let previous = lines[..number - 1]
+        .iter()
+        .rev()
+        .map(|line| line.trim())
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    if !previous.starts_with(WINDOWS_MARKER) {
+        return Err(format!(
+            "line {number}: no Windows marker on the line before the launch"
+        ));
+    }
+    if !inside_cfg_windows(lines, number) {
+        return Err(format!(
+            "line {number}: the launch is not inside a `#[cfg(windows)]` item"
+        ));
+    }
+    Ok(())
+}
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -158,11 +211,11 @@ fn check_exception(root: &Path, exception: &Exception, source: &str, number: usi
             "{}: a relaunch exception must launch `current_exe()`",
             exception.file
         ),
-        WINDOWS => assert!(
-            before.contains("cfg(windows)"),
-            "{}:{number}: no `cfg(windows)` before a Windows exception",
-            exception.file
-        ),
+        WINDOWS => {
+            if let Err(error) = windows_proof(&lines, number) {
+                panic!("{}: {error}", exception.file);
+            }
+        }
         LINUX => assert!(
             before.contains("not(target_vendor = \"apple\")") || before.contains("linux"),
             "{}:{number}: no Linux-only marker before a Linux exception",
@@ -265,5 +318,40 @@ fn every_crate_of_the_lockfile_was_reviewed() {
     assert!(
         unreviewed.is_empty(),
         "crates new to Cargo.lock, not reviewed for process launches (ticket 41): {unreviewed:?}"
+    );
+}
+
+#[test]
+fn a_windows_exception_needs_its_marker_and_its_cfg() {
+    let marker = "    // yusAgent (YA-11, ticket 41): propre à Windows, hors enveloppe (pas d'exécution en Windows natif).";
+    let site = [
+        "#[cfg(windows)]",
+        "fn spawn() {",
+        marker,
+        "    let child = Command::new(\"cmd\");",
+        "}",
+    ];
+    assert_eq!(windows_proof(&site, 4), Ok(()));
+    let without_marker = [site[0], site[1], site[3], site[4]];
+    assert!(
+        windows_proof(&without_marker, 3).is_err(),
+        "the marker is required"
+    );
+    let without_cfg = [site[1], site[2], site[3], site[4]];
+    assert!(
+        windows_proof(&without_cfg, 3).is_err(),
+        "the cfg is required"
+    );
+    let cfg_on_another_item = [
+        "#[cfg(windows)]",
+        "fn other() {}",
+        "fn spawn() {",
+        marker,
+        "    let child = Command::new(\"cmd\");",
+        "}",
+    ];
+    assert!(
+        windows_proof(&cfg_on_another_item, 5).is_err(),
+        "the cfg must hold the launch's own item"
     );
 }

@@ -263,6 +263,7 @@ pub fn kill_process_group_or_pid(pid: i32) -> bool {
     let taskkill = std::path::Path::new(&system_root)
         .join("System32")
         .join("taskkill.exe");
+    // yusAgent (YA-11, ticket 41): propre à Windows, hors enveloppe (pas d'exécution en Windows natif).
     let mut command = Command::new(&taskkill);
     command
         .args(["/F", "/T", "/PID", &pid.to_string()])
