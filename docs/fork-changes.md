@@ -1642,10 +1642,11 @@ Constat, décisions et plan : `docs/tickets/40-login-extension.md` (§10, §15, 
 | `crates/pa-cli/src/print_runtime.rs` | modif. (fichier upstream, +3) | Branchement de l'implémentation au lancement du mode ACP (`:110-111`) ; `mod ya_acp_providers;` (`:487`). | YA-10 (ticket 40) |
 | `crates/pa-daemon/src/acp/daemon/ya_providers.rs` | nouveau | Contrat (`ProviderSignIn`, `install`), méthodes `_yus/providers/*` (sans `local_*`), un login à la fois, `login_update`, invites, `login_open`, `login_cancel`, `reload` du worker et relecture des modèles après un changement, H2. | YA-10 (ticket 40) |
 | `crates/pa-daemon/src/acp/daemon/ya_providers_tests.rs` | nouveau | Tests 6 (login) et 7 (H2). | YA-10 (ticket 40) |
-| `crates/pa-cli/src/print_runtime/ya_acp_providers.rs` | nouveau | Implémentation sur `ProviderAuth` : lignes sans la Claude par abonnement, clé, déconnexion, login par un panneau neuf, textes d'échec fixes. Tests 4 et 8 (unitaires). | YA-10 (ticket 40) |
+| `crates/pa-cli/src/print_runtime/ya_acp_providers.rs` | nouveau | Implémentation sur `ProviderAuth` : toutes les lignes, Claude par abonnement comprise depuis X5 (décision 5 annulée le 26/11/2026), clé, déconnexion, login par un panneau neuf, textes d'échec fixes. Tests 4 et 8 (unitaires). | YA-10 (ticket 40) |
 | `crates/pa-daemon/src/acp/ya_resources.rs` | modif. (fichier du fork) | `token` pour un service du catalogue ajouté par jeton (`pasteToken`), lu dans les `services` de `get_mcp_connections`. Test 13. | YA-10 (ticket 40) |
-| `crates/pa-cli/tests/ya_providers_acp_e2e.rs` | nouveau | Vrai binaire en ACP, modèle intercepté par un serveur local : tests 1a, 1b (H1), 2, 3, 4, 5, 8, 8b (URL de login et `state`, faux ouvreur). | YA-10 (ticket 40) |
+| `crates/pa-cli/tests/ya_providers_acp_e2e.rs` | nouveau | Vrai binaire en ACP, modèle intercepté par un serveur local : tests 1a, 1b (H1), 2, 3, 4, 5, 8, 8b (URL de login et `state`, faux ouvreur) ; 8c (le même pour Claude, X5). | YA-10 (ticket 40) |
 | `bench/tools/sim40.sh` | nouveau | Simulation P-A / P-B et cherry-pick de `a05bcb695`, `dad2232cc` (§11), pour E-C. | YA-10 (ticket 40) |
+| `bench/tools/capture/run.py` | modif. (outil du fork) | Cas `acp-extension` : le fixture de l'extension a 4 trames depuis X5 ; `_yus/providers/list` rejouée entre `session/new` et `session/prompt` (`:307`, `:372-374`). Écart au périmètre accepté par Yusuf (ticket 40, §21.4). | YA-10 (ticket 40, X5) |
 
 Limites (§16.2) :
 - un login MCP en attente du navigateur ne s'arrête qu'à sa prochaine invite ou à sa fin (`FlowCancel::mark` est `pub(crate)` dans `pa-tui`) ;

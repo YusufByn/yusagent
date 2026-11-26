@@ -329,7 +329,7 @@ Les étapes 2 à 5 font des appels réels : à ta main, pas à Claude Code (règ
 2. **Connexion expirée** : un login depuis l'extension pousse la nouvelle clé dans les sessions vivantes et relit la liste des modèles (comme Unharnessed). Le test 7 (H1) vient en premier, rouge sur son assertion si H1 est vraie. Rafraîchissement automatique d'un jeton expiré (`a05bcb695`, `dad2232cc`) : ticket à part (E-C), à prioriser si H1 est confirmée.
 3. **Identifiants dans `auth.json`** ; écart au CDC porté au journal.
 4. **Pas de `registerUriHandler`** ; écart au CDC porté au journal ; VS Code distant : collage du code (limite).
-5. **Claude par abonnement caché dans l'extension** (règle 7).
+5. ~~**Claude par abonnement caché dans l'extension** (règle 7).~~ **Annulée le 26/11/2026 (Yusuf)** : la ligne reste visible, dans le pont comme dans l'extension ; Yusuf gère ce login lui-même, à la main (§21.3).
 6. **Serveurs `local_*`** : écran masqué.
 7. **Échec d'auth** : texte fixe qui mène à l'écran Providers (écart à Unharnessed : le texte brut renvoie au TUI). Le classement de l'erreur d'authentification dans le pont (H2) est traité dans ce ticket.
 8. **`set_token` rouvert** (formulaire démasqué, méthode déjà servie). Services du catalogue par OAuth MCP : inclus seulement si le pont les couvre sans coût en plus ; sinon limite (réponse au §13.2).
@@ -876,3 +876,72 @@ Branche `ya-40-x5` depuis `main` à `c8b396caa` (merge de R5, PR #91). Commits p
 4. **Détection par le texte** (`isAuthFailure`, `details`) : retirée. Le classement vient du pont depuis R5 (H2).
 
 Suite : push 1 (tests rouges, relevé run, job, ligne), push 2 (code), CI verte, `compare_frames.py` à 0 écart, compte rendu, puis le contrôle manuel de Yusuf (§14), une étape à la fois. Pas de merge sans ce contrôle.
+
+## 21. X5 : relevé des push 1 et 1 bis, écarts au périmètre, décision 5 annulée (26/11/2026)
+
+### 21.1 Push 1 (`35ef28e69`)
+
+Run `ya-extension` 45783371002, job 139784004356 :
+- **Tests unitaires** : 82 tests, 76 réussis, 6 en échec. Les 6 sont ceux de X5, chacun sur son assertion (tableau du §21.2, mêmes lignes).
+- **e2e : 11 sur 20.** Les tests 12, 9, 11 et 10 échouent sur ce qu'ils vérifient.
+- **Le test 13 échouait avant son assertion.** Il attendait « Compaction » (onglet General) en ouvrant Settings. Or le panneau rouvre le dernier onglet ouvert (`extensions/vscode/webview/App.tsx:44`), et le test du ticket 31 qui le précède s'arrête sur MCP.
+- Le test 13 laissait alors l'écran Settings ouvert, et 4 tests plus anciens tombaient derrière lui : réglages stylés, skills, permissions, ticket 39.
+- Relevé non valable : push 1 bis, avec l'accord de Yusuf.
+
+### 21.2 Push 1 bis (`751cf0d34`)
+
+- **Correction** : le test 13 ouvre directement l'onglet MCP et referme l'écran dans un `finally`. Le test du ticket 31 ouvre General lui-même ; son titre perd « catalogue masqué ». Les deux autres tests qui ouvrent Settings ouvraient déjà leur onglet (`userClicks("Settings", "General")`, `userClicks("Settings", "Skills", …)`).
+- **Résultat** (run `ya-extension` 45785770099, job 139792036888) :
+  - tests unitaires : 82 tests, 76 réussis, 6 en échec, ceux de X5 ;
+  - e2e : 15 sur 20, **exactement les 5 tests de X5**, chacun sur son assertion ;
+  - les 4 anciens tests sont verts.
+
+| Test | Fichier:ligne (`751cf0d34`) | Assertion rouge |
+|---|---|---|
+| 12 (unitaire) | `extensions/vscode/test/unit/agent.test.ts:283` | `error` : l'ancien texte « Authentification requise : lancez … dans un terminal, puis /login. » |
+| 9 (unitaire) | `test/unit/providers.test.ts:71` | « le panneau montre l'écran Providers » : `false` |
+| 10 (unitaire) | `:84-88` | « login envoyé ; état : {…, "error":"_yus/providers/login : méthode pas encore servie par yusAgent"} » : `[]` |
+| 10 Cancel (unitaire) | `:110` | « login envoyé » : `0 !== 1` |
+| 11 (unitaire) | `:121` | « liste lue » : `null` |
+| 14 (unitaire) | `:150` | « précondition : la clé est partie » : `0 !== 1` |
+| 12 (e2e) | `test/e2e/suite.ts:392` | « délai dépassé : texte fixe avec le fournisseur » |
+| 9 (e2e) | `:405` | « délai dépassé : clic sur « Connect a provider » » (puce absente) |
+| 11 (e2e) | `:420` | « délai dépassé : clic sur « Providers » » (bouton caché) |
+| 10 (e2e) | `:433` | idem |
+| 13 (e2e) | `:517` | « délai dépassé : catalogue » (Marketplace masqué) |
+
+- Le test 13 côté journal (unitaire) est vert d'emblée : `_yus/mcp/set_token` est servie depuis le ticket 31, et le journal n'écrit que l'id du service (`src/settings.ts:123`). Son rouge est côté e2e.
+
+### 21.3 Décision 5 annulée (Yusuf, 26/11/2026)
+
+- **La ligne Claude par abonnement reste visible, dans le pont comme dans l'extension.** Yusuf gère ce login lui-même, à la main. Corrigé au §10 et au journal du CDC (ligne du 26/11/2026).
+- **Pont** : le filtre est retiré de `crates/pa-cli/src/print_runtime/ya_acp_providers.rs`, un fichier du fork. Il était à trois endroits, lignes de `751cf0d34` :
+  - `:124` (`login_row`) ;
+  - `:242-244` (`claude_subscription`) ;
+  - `:251` (`views`).
+
+  **Aucune ligne upstream touchée.**
+- **Extension** : le filtre prévu au push 2 est retiré (jamais poussé). L'agent factice envoie la ligne comme le pont.
+- **Tests inversés** :
+  - test 4 du pont, unitaire (`the_rows_offer_the_claude_subscription`) et e2e (`list_gives_the_providers_screen_with_the_claude_subscription`) ;
+  - test 11 de l'extension, unitaire et e2e.
+- **Test 8c** (`crates/pa-cli/tests/ya_providers_acp_e2e.rs`, `a_claude_sign_in_url_and_its_verifier_are_nowhere_under_the_home`) : le test 8b sur le flux Claude, dont le `state` est le vérifieur PKCE (`crates/pa-ai/src/oauth/anthropic.rs:4`, `:120`). Les deux tests partagent un même corps, `sign_in_url_is_nowhere_under_the_home`.
+  - Assertions : ni l'URL ni `state` dans le stderr du pont ni sous le dossier personnel ; contrôle positif dans le fichier du faux ouvreur.
+  - Différence avec Codex : le serveur de rappel lie 53692 avant l'URL (`crates/pa-ai/src/oauth/anthropic_callback.rs:15`, `:76-78`). Un port pris fait échouer le login avant l'URL ; la précondition le dit.
+  - Les messages d'échec n'impriment plus l'URL.
+- **Règle 7 de `CLAUDE.md`** : « **Login par abonnement Claude** hérité d'upstream : ne pas y toucher, Yusuf le retire à la main. » Elle ne demande pas de cacher la ligne : **non modifiée**. Le login lui-même n'est pas touché, seul le filtre du fork est retiré.
+
+### 21.4 Écarts au périmètre (accord de Yusuf du 26/11/2026)
+
+- **Trames d'ouverture** : une fois servie, `_yus/providers/list` part à l'ouverture, après `session/new` (puce « Connect a provider »).
+  - L'ordre est déterministe : `Agent.set` appelle ses écouteurs dans l'ordre d'inscription (`extensions/vscode/src/agent.ts:269-271`). Celui de la session (`src/session.ts:40-44`) est inscrit avant celui de `ShownAgent` (`src/shown.ts:68`).
+  - Le fixture `test/fixtures/acp-frames.json` passe à 4 trames, ids décalés.
+  - Les deux tests « rien d'autre à l'ouverture » (unitaire et e2e) sont adaptés.
+  - `bench/tools/capture/run.py` rejoue la trame en plus (`:307`, `:372-374`).
+- **Test d'identité** : une exception est ajoutée à `extensions/vscode/test/unit/identity.test.ts` pour la citation `Unharnessed's \`_unharnessed/providers/*\`` de `crates/pa-daemon/src/acp/daemon/ya_providers.rs:3` (R5). La même forme est déjà admise pour `ya_resources.rs`.
+- **À traiter dans un ticket à part, pas ici** : le test d'identité était rouge sur `main` sans être vu.
+  - Il parcourt `crates/` (`identity.test.ts:24-31`), mais `ya-extension.yml` se termine en succès sans lancer les tests quand `extensions/vscode/` ne change pas (`.github/workflows/ya-extension.yml:5`, `:46`). C'était le cas de la PR #91.
+  - Ticket à part : faire tourner ce test sur tout changement, ou élargir les chemins à `crates/`.
+- **Choix acceptés par Yusuf** :
+  - le panneau nomme le fournisseur depuis la liste (`providerName`, comme le sélecteur de modèles) ;
+  - l'intro de l'écran Providers devient « Sign in with a subscription, or add an API key. » (écran Local masqué).
