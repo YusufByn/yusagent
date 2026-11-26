@@ -206,8 +206,9 @@ const tests: [string, () => Promise<void>][] = [
       assert.doesNotMatch(csp, /unsafe-|data:|blob:|(^|\s)\*(\s|;|$)/);
       console.log(`CSP : ${csp.replace(/'nonce-[^']+'/, "'nonce-…'")}`);
       assert.equal(starts(control).at(-1)!.cwd, workspace, "processus lancé dans le workspace");
-      // Fournisseurs, réglages, historique : rien ne part à l'ouverture (méthodes non servies).
-      assert.deepEqual(received(control, lastPid()).map((frame) => frame.method), ["initialize", "session/new"]);
+      // Réglages, historique : rien ne part à l'ouverture. Ticket 40 (X5) : la liste des fournisseurs, oui.
+      await waitFor(() => received(control, lastPid()).length >= 3, "trames de l'ouverture");
+      assert.deepEqual(received(control, lastPid()).map((frame) => frame.method), ["initialize", "session/new", "_yus/providers/list"]);
       await post({ type: "send", text: "bonjour", images: [] });
       await idle();
       assert.deepEqual(normalize(received(control, lastPid()), { cwd: workspace, sessionId: "fake-session-1", prompt: "bonjour" }), fixtureFrames());

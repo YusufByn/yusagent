@@ -303,7 +303,8 @@ def fixture_frames(fixture: Path, project: Path) -> list[dict]:
 
     frames = [walk(frame) for frame in frames]
     methods = [frame["method"] for frame in frames]
-    if methods != ["initialize", "session/new", "session/prompt"]:
+    # Ticket 40 (X5) : l'extension lit la liste des fournisseurs à l'ouverture, après `session/new`.
+    if methods != ["initialize", "session/new", "_yus/providers/list", "session/prompt"]:
         sys.exit(f"fixture {fixture} : trames inattendues {methods}")
     return frames
 
@@ -368,8 +369,9 @@ def acp_check(binary: Path, cache: Path, work: Path, project: Path, out: Path,
             init = request(frames[0]["id"], frames[0]["method"], frames[0]["params"])
             new = request(frames[1]["id"], frames[1]["method"], frames[1]["params"])
             session_id = ((new or {}).get("result") or {}).get("sessionId")
-            prompt = request(frames[2]["id"], frames[2]["method"],
-                             {**frames[2]["params"], "sessionId": session_id})
+            request(frames[2]["id"], frames[2]["method"], frames[2]["params"])
+            prompt = request(frames[3]["id"], frames[3]["method"],
+                             {**frames[3]["params"], "sessionId": session_id})
     finally:
         proc.stdin.close()
         try:

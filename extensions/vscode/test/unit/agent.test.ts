@@ -64,9 +64,10 @@ const lastTurn = (h: Harness) => shown(h).chat.current.entries.filter((entry) =>
 test("ouverture puis prompt : exactement les trames du fixture (preuve 1), rien d'autre à l'ouverture", async () => {
   const h = open();
   await ready(h);
-  // Fournisseurs, réglages, historique interrogent l'agent au démarrage : rien ne part (méthodes non servies).
+  // Réglages, historique : rien ne part au démarrage. Ticket 40 (X5) : la liste des fournisseurs, oui (puce
+  // « Connect a provider »), après `session/new` (écouteur de la session inscrit avant celui du panneau).
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.deepEqual(methods(h), ["initialize", "session/new"]);
+  assert.deepEqual(methods(h), ["initialize", "session/new", "_yus/providers/list"]);
   const { cwd, argv } = starts(h.dir).at(-1)!;
   assert.deepEqual(argv, ["--mode", "acp"]);
   assert.equal(cwd, h.cwd);
