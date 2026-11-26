@@ -309,6 +309,7 @@ Ce document n'existe pas encore dans le dépôt (recherche dans `docs/`) ; la li
 - Sur macOS, dépendance à `sandbox-exec`, déprécié mais présent.
 - Plateforme sans mécanisme (userns refusés, `sandbox-exec` absent) : le kernel ne démarre pas, sauf si la protection est coupée par la variable d'environnement (réponses 7 et 8) ; elle est alors entièrement absente.
 - Banc de capture et smoke bench : la protection y est coupée (réponse 7, §O.3).
+- **`apply_patch` du worker** (point ouvert, ajouté par Yusuf le 26/11/2026, ticket à part après le ticket 41) : avec `editTool: "native"`, `apply_patch` écrit depuis le worker, donc hors protection. Sa seule garde est le workspace de la session. Un workspace qui contient `~/.yusagent` (dossier personnel ouvert comme projet, par exemple) permet d'y écrire `models.json` ou `auth.json`, une `!commande` comprise.
 
 ## K. Options comparées
 
