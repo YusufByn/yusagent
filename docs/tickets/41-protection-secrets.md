@@ -857,6 +857,38 @@ Lignes de l'arbre à `a91207b34`. Les nombres de lignes sont des estimations.
 - Les nouvelles requêtes sont internes (`prompt_guards.rs`), et ni `SKILL.md` ni les descriptions de skills ne changent : le `SKILL.md` de websearch renvoie déjà à `/mcp` pour la clé (`skills/websearch/SKILL.md:3`, `:12-13`).
 - Seuls des textes d'erreur, dans le résultat d'une cellule, peuvent changer : relais refusé, serveur sans identifiant.
 
+### T.3 Push 2 : réductions demandées par Yusuf et lignes finales (26/11/2026)
+
+**Réduction 1, variante à diff minimal : retenue.**
+- Seuls changent, côté kernel, les points où le client HTTP est construit. Rien n'est nettoyé.
+  - `_open_http` et `_open_session` ouvrent le client relais.
+  - `_headers` et `_auth_identity` ne cherchent plus de jeton pour un serveur relayé.
+  - `_read_auth` reste en place, mais n'est plus appelé sur le chemin relayé.
+- Lignes upstream hors tests, comptées par `git diff --numstat` : **+46, −12**, contre environ 170 à 200 pour la liste du §T.2. La réduction dépasse le tiers demandé.
+- Mêmes tests : la suite Python passe en local (823 tests, `uv run --python 3.11 python -m unittest discover -s test`).
+
+**Réduction 2, clé Serper : retenue.**
+- `SERPER_API_KEY` entre dans `EXTRA_HARNESS_CREDENTIALS` (`env_allowlist.rs`, fichier du fork).
+- Le retrait final au lancement, `strip_harness_credentials` (`crates/pa-core/src/kernel/manager/startup.rs:546`), écarte alors la clé injectée par le câblage.
+- `runtime_wiring.rs` et `engine.rs` ne sont pas touchés.
+
+**Lignes upstream finales** (fichier:ligne, nombre) :
+
+| Fichier | Lignes | Nombre |
+|---|---|---|
+| `crates/pa-core/src/mcp/mod.rs` | `:22-23` (`mod ya_relay;`), `:709` (ACP), `:735` (catalogue), `:744-747` (réglages), `:774-775` (enregistrement) | +10, −1 |
+| `prime-agent-runtime/src/rlm/mcp.py` | `:35` (import), `:284-287` (`_open_http`), `:920-921` (`_auth_identity`), `:968-969` (`_headers`) | +9 |
+| `prime-agent-runtime/src/rlm/mcp_base.py` | `:28` (import), `:215-220` (`_open_session`) | +7 |
+| `skills/websearch/src/websearch/websearch.py` | `:10-11` (import), `run` (`:160-183`), `_clip` extrait | +17, −11 |
+| `crates/pa-core/tests/prompt_guards.rs` | `:185-187` | +3 |
+| `prime-agent-runtime/test/test_mcp.py` (7 tests annoncés, 6 réellement touchés) | `:360-423` | +23, −63 |
+| `prime-agent-runtime/test/test_mcp_base.py` | `:258-262` | +5, −2 |
+
+- `test_acp_headers_never_consult_or_override_host_oauth` passe toujours : son assertion ne change pas. Il n'y a donc que 6 tests réécrits dans `test_mcp.py`, plus 1 dans `test_mcp_base.py`.
+- Les règles reprises par les tests Rust sont listées dans `docs/fork-changes.md` (section « Identifiants hors du kernel, PR B »). Aucun test n'est supprimé.
+- **Écart** : les 4 tests Rust qui reprennent ces règles (`…_bound_elsewhere_or_unbound`, `…_fails_closed_with_the_unavailable_message`, `…_attaches_a_pasted_token_literally`, `…_outside_the_settings_without_a_bound_credential`) arrivent avec le code, au push 2. Ils n'ont donc pas été vus rouges : ils portent des règles qui existaient déjà côté kernel.
+- La règle « l'identité de génération suit le jeton » est retirée : le worker lit le jeton à chaque requête.
+
 ## Annexe : mesures macOS
 
 Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des sorties de sandbox du §R.2, 48 essais) :
