@@ -641,9 +641,14 @@ fn a_key_moves_a_session_opened_without_credentials_off_the_fallback_model() {
         home.server.authorizations(),
         [String::from("Bearer sk-ya40-moved")],
         "the prompt after the key reaches openai/ya40-extra with it; requests: {:?}; announced \
-         after the key: {announced}; model_change rows: {:?}",
+         after the key: {announced}; model_change rows: {:?}; bridge: {:?}",
         labels(&home),
-        model_changes(&home)
+        model_changes(&home),
+        std::fs::read_to_string(home.stderr_file())
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains("ya-providers d3"))
+            .collect::<Vec<_>>()
     );
 }
 
