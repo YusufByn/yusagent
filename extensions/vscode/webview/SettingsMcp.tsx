@@ -9,17 +9,17 @@ import { post } from "./vscode";
 type ServerConfig = Record<string, unknown>;
 
 /**
- * yusAgent (ticket 31, C4) : la section du catalogue (connexion OAuth ou par jeton) est masquée
- * jusqu'au ticket du login dans l'extension ; un service déjà connecté reste dans « Your servers ».
+ * yusAgent (ticket 31, C4) : la section du catalogue (connexion OAuth ou par jeton) était masquée
+ * jusqu'au ticket du login dans l'extension ; démasquée au ticket 40 (X5, décision 8).
  */
-const CATALOG = false;
+const CATALOG = true;
 
 /** The name the agent addresses a server by. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 /**
  * The MCP servers: yours (the `mcpServers` setting and the services you
- * added), then the catalog of services (masked, `CATALOG`). The agent calls
+ * added), then the catalog of services (`CATALOG`). The agent calls
  * their tools from its Python kernel; a change reaches it with the next
  * message.
  */

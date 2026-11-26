@@ -14,6 +14,7 @@ import type {
   Goal,
   HostMessage,
   QueuedMessage,
+  SessionState,
   Thumb,
   TurnHead,
   TurnItem,
@@ -21,7 +22,7 @@ import type {
 } from "./protocol";
 import type { Session } from "./session";
 // yusAgent (YA-10, ticket 24, PR I) : adaptation à notre pont, dans des modules à part.
-import { authText, isAuthFailure } from "./ya/auth";
+import { authFailureAt, isAuthFailure } from "./ya/auth";
 import { features } from "./ya/methods";
 import { yaMeta } from "./ya/meta";
 import { noticeLines } from "./ya/notice";
@@ -628,8 +629,13 @@ export class Chat {
       this.end(last, stopReason === "cancelled" ? "cancelled" : "done", undefined, stopReason);
     } catch (error) {
       if (run !== this.run) return;
-      // yusAgent : échec d'authentification, message fixe avec le chemin du binaire.
-      this.end(this.sent ?? turn, "failed", isAuthFailure(error) ? authText(this.agent.binaryPath) : errorText(error));
+      // yusAgent (ticket 40, X5) : échec d'authentification, texte fixe ; le panneau nomme le fournisseur.
+      const last = this.sent ?? turn;
+      const auth = isAuthFailure(error);
+      const provider = auth ? sessionProvider(this.session.current) : null;
+      if (auth && last.state === "running") last.auth = { provider };
+      // D6 : le texte est figé ici, avec la liste des fournisseurs connue au moment de l'échec.
+      this.end(last, "failed", auth ? authFailureAt(provider) : errorText(error));
     }
   }
 
@@ -1253,4 +1259,11 @@ function summary(items: TurnItem[]): string {
   for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
   const parts = [...counts].map(([kind, n]) => count(n, kind));
   return parts.length ? parts.join(", ") : "nothing streamed";
+}
+
+/** yusAgent (ticket 40, X5) : le fournisseur du modèle de la session ouverte (`["provider", "id"]`). */
+function sessionProvider(session: SessionState | null): string | null {
+  if (session?.kind !== "open" || !session.config.model) return null;
+  const { current, choices } = session.config.model;
+  return choices.find((choice) => choice.value === current)?.provider || null;
 }

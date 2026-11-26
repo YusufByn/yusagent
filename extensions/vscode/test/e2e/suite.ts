@@ -7,8 +7,7 @@ import { join } from "node:path";
 import * as vscode from "vscode";
 
 import type { AgentState, ChatState, Probe, ProbeInput, SessionState, WebviewMessage } from "../../src/protocol";
-import { authText } from "../../src/ya/auth";
-import { fakeAgentPath, fixtureFrames, noticesOf, normalize, permissionsOf, received, setScenario, starts, waitFor } from "../helpers";
+import { fixtureFrames, noticesOf, normalize, permissionsOf, received, setScenario, starts, waitFor } from "../helpers";
 
 interface State {
   agent: AgentState;
@@ -207,8 +206,9 @@ const tests: [string, () => Promise<void>][] = [
       assert.doesNotMatch(csp, /unsafe-|data:|blob:|(^|\s)\*(\s|;|$)/);
       console.log(`CSP : ${csp.replace(/'nonce-[^']+'/, "'nonce-…'")}`);
       assert.equal(starts(control).at(-1)!.cwd, workspace, "processus lancé dans le workspace");
-      // Fournisseurs, réglages, historique : rien ne part à l'ouverture (méthodes non servies).
-      assert.deepEqual(received(control, lastPid()).map((frame) => frame.method), ["initialize", "session/new"]);
+      // Réglages, historique : rien ne part à l'ouverture. Ticket 40 (X5) : la liste des fournisseurs, oui.
+      await waitFor(() => received(control, lastPid()).length >= 3, "trames de l'ouverture");
+      assert.deepEqual(received(control, lastPid()).map((frame) => frame.method), ["initialize", "session/new", "_yus/providers/list"]);
       await post({ type: "send", text: "bonjour", images: [] });
       await idle();
       assert.deepEqual(normalize(received(control, lastPid()), { cwd: workspace, sessionId: "fake-session-1", prompt: "bonjour" }), fixtureFrames());
@@ -386,11 +386,95 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
-    "authentification : message fixe avec le chemin du binaire",
+    "authentification (ticket 40, X5, test 12) : texte fixe avec le nom du fournisseur, bouton « Open Providers » vers l'écran Providers",
     async () => {
-      await post({ type: "send", text: "sanscle", images: [] });
+      await post({ type: "send", text: "auth", images: [] });
       await idle();
-      await shows(authText(fakeAgentPath()), "message /login");
+      const shown = await shows("Not signed in to Capture, or the sign-in has expired.", "texte fixe avec le fournisseur");
+      assert.ok(!shown.includes("/login") && !/terminal/i.test(shown), "plus de renvoi au terminal");
+      await userClicks("Open Providers");
+      await shows("ChatGPT Plus/Pro", "écran Providers");
+      await userClicks("Back");
+    },
+  ],
+  [
+    "Providers (ticket 40, X5, test 9) : sans fournisseur connecté, la puce « Connect a provider » mène à l'écran ; bouton Providers visible",
+    async () => {
+      setScenario(control, { providers: "none" });
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await userClicks("Connect a provider");
+      const screen = await shows("Sign in with a subscription", "écran Providers, rien de connecté");
+      assert.ok(screen.includes("ChatGPT Plus/Pro"), "ligne ChatGPT");
+      await userClicks("Back");
+      setScenario(control, {});
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await userClicks("Providers");
+      await shows("Capture", "écran Providers par le bouton");
+      await userClicks("Back");
+    },
+  ],
+  [
+    "Providers (ticket 40, X5, test 11) : pas d'écran Local ; lignes Anthropic par clé et Claude par abonnement (décision 5 annulée)",
+    async () => {
+      await userClicks("Providers");
+      const screen = await shows("ChatGPT Plus/Pro", "écran Providers");
+      assert.ok(screen.includes("Anthropic"), "ligne Anthropic par clé");
+      assert.ok(screen.includes("Anthropic (Claude Pro/Max)"), "ligne Claude par abonnement");
+      assert.ok(!screen.split("\n").some((line) => line.trim() === "Local"), "pas de section Local");
+      assert.ok(!screen.includes("Add a local model"), "pas d'ajout de modèle local");
+      await userClicks("Back");
+    },
+  ],
+  [
+    "login (ticket 40, X5, test 10) : écran SignIn, « Open » envoie login_open, Cancel envoie login_cancel",
+    async () => {
+      const sent = (method: string) => received(control, lastPid()).filter((frame) => frame.method === method);
+      await userClicks("Providers");
+      await shows("ChatGPT Plus/Pro", "écran Providers");
+      await userClicks("ChatGPT Plus/Pro");
+      await shows("Sign in with your browser", "écran SignIn");
+      assert.deepEqual(sent("_yus/providers/login").map((frame) => frame.params), [{ providerId: "openai-codex" }]);
+      await userClicks("Open the sign-in page");
+      await waitFor(() => sent("_yus/providers/login_open").length === 1, "login_open envoyée");
+      await userClicks("Cancel");
+      await waitFor(() => sent("_yus/providers/login_cancel").length === 1, "login_cancel envoyée");
+      await shows("ChatGPT Plus/Pro", "retour à l'écran Providers");
+      await userClicks("Back");
+    },
+  ],
+  [
+    "écran Providers stylé (ticket 40, X5) : initiale du badge à part du nom, nom et statut sur deux lignes ; SignIn avec son indicateur d'attente",
+    async () => {
+      await userClicks("Providers");
+      try {
+        const screen = await shows("ChatGPT Plus/Pro", "écran Providers");
+        const lines = screen.split("\n").map((line) => line.trim());
+        // Le badge (`.badge`, initiale dans `.logo`) est un bloc à part : sinon « AAnthropic », « CChatGPT ».
+        assert.ok(
+          lines.includes("ChatGPT Plus/Pro (Codex Subscription)") && lines.includes("Anthropic (Claude Pro/Max)"),
+          `initiale collée au nom : ${JSON.stringify(lines.filter((line) => /ChatGPT|Claude/.test(line)))}`,
+        );
+        assert.ok(
+          lines.includes("Capture") && lines.includes("Connected with a saved API key"),
+          `nom et statut sur une ligne : ${JSON.stringify(lines.filter((line) => line.includes("Capture")))}`,
+        );
+        await userClicks("ChatGPT Plus/Pro");
+        try {
+          await shows("Sign in with your browser", "écran SignIn");
+          const spinners = (await probe())?.spinners ?? [];
+          assert.ok(
+            spinners.some((spinner) => spinner.width >= 8 && spinner.height >= 8),
+            `indicateur d'attente invisible : ${JSON.stringify(spinners)}`,
+          );
+        } finally {
+          await userClicks("Cancel");
+          await shows("ChatGPT Plus/Pro", "retour à l'écran Providers");
+        }
+      } finally {
+        await userClicks("Back");
+      }
     },
   ],
   [
@@ -426,15 +510,18 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
-    "réglages (ticket 31, X3) : bouton Settings, onglets General, MCP et Skills sans Instructions ni Images ni « restart », écran lu à son ouverture seulement, catalogue masqué",
+    "réglages (ticket 31, X3) : bouton Settings, onglets General, MCP et Skills sans Instructions ni Images ni « restart », écran lu à son ouverture seulement",
     async () => {
       setScenario(control, {});
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await ready();
-      const screenFrames = () => received(control, lastPid()).filter((frame) => String(frame.method ?? "").startsWith("_yus/"));
+      // Ticket 40 (X5) : les trames de cet écran ; `_yus/providers/list` part à l'ouverture (puce « Connect a provider »).
+      const screenFrames = () =>
+        received(control, lastPid()).filter((frame) => /^_yus\/(settings|skills|mcp)\//.test(String(frame.method ?? "")));
       await sleep(300);
       assert.deepEqual(screenFrames(), [], "rien lu avant l'ouverture de l'écran (E7)");
-      await userClicks("Settings");
+      // L'onglet ouvert, sans dépendre de celui où un test précédent a laissé l'écran.
+      await userClicks("Settings", "General");
       const general = await shows("Compaction", "onglet General");
       for (const label of ["General", "MCP", "Skills", "Retries", "Switching providers", "Usage limits"]) {
         assert.ok(general.includes(label), `${label} affiché`);
@@ -451,8 +538,30 @@ const tests: [string, () => Promise<void>][] = [
       await userClicks("MCP");
       const mcp = await shows("Your servers", "onglet MCP");
       assert.ok(mcp.includes("Changes reach the agent with your next message."), "texte de l'onglet MCP (C3)");
-      for (const absent of ["Marketplace", "Catalog", "Linear"]) assert.ok(!mcp.includes(absent), `${absent} masqué (C4)`);
+      // Ticket 40 (X5, décision 8) : le catalogue n'est plus masqué (C4) ; test 13 plus bas.
       await userClicks("Back");
+    },
+  ],
+  [
+    "catalogue MCP (ticket 40, X5, test 13) : Marketplace visible, Add ouvre le formulaire de jeton, _yus/mcp/set_token part",
+    async () => {
+      // L'onglet MCP directement : l'écran rouvre le dernier onglet ouvert.
+      await userClicks("Settings", "MCP");
+      try {
+        const mcp = await shows("Marketplace", "catalogue");
+        assert.ok(mcp.includes("Linear") && mcp.includes("Zoom"), "services du catalogue");
+        // Le dernier « Add » de la page : Zoom (A à Z), le service ajouté par jeton.
+        await userClicks("Add");
+        await shows("Zoom token", "formulaire de jeton");
+        await post({ type: "mcpSetToken", id: "zoom", token: "zoom-x5-e2e" });
+        await waitFor(
+          () => received(control, lastPid()).some((frame) => frame.method === "_yus/mcp/set_token" && (frame.params as { id?: string }).id === "zoom"),
+          "_yus/mcp/set_token envoyée",
+        );
+      } finally {
+        // Même en échec : l'écran fermé, les tests suivants partent de la conversation.
+        await userClicks("Back");
+      }
     },
   ],
   [

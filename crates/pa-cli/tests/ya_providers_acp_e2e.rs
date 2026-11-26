@@ -12,13 +12,18 @@
 //!     the next request.
 //! 2. `_yus/providers/set_api_key` pushes the key into the running session.
 //! 3. After a key for a new provider, the model picker lists its models (`config_option_update`).
-//! 4. `_yus/providers/list`: the rows of the providers screen, without the Claude subscription.
+//! 3b. A session opened without any credential runs on the daemon's fallback model, the first of
+//!     the catalog; a key set through the bridge moves the engine onto the model announced after
+//!     it (X5, D3), not only the picker.
+//! 4. `_yus/providers/list`: the rows of the providers screen, the Claude subscription among them
+//!    (§10 decision 5 cancelled on 26/11/2026).
 //! 5. `set_api_key` stores the key in `auth.json` (0600) and never answers it back.
 //! 8. The key is nowhere under the home but `auth.json`: not on the bridge's stderr, not in the
 //!    session files, not in the usage log.
 //! 8b. A real `ChatGPT` subscription sign-in, up to its URL (offline: the URL and PKCE are made
 //!     locally), then `login_cancel`: neither the URL nor its `state` is on the bridge's stderr
 //!     or in a file under the home; the fake browser outside the home got them.
+//! 8c. The same for the Claude subscription, whose `state` is its PKCE verifier.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -148,6 +153,23 @@ impl Home {
     /// `openai` (a built-in provider) gets a `ya40-extra` model without a fallback key when
     /// `with_openai`: it is listed only once a key is stored (test 3).
     fn new(with_openai: bool) -> Home {
+        Home::build(with_openai, true)
+    }
+
+    /// No credential anywhere (D3): no `ya40` (a custom provider needs its key), and the built-in
+    /// `openai` with the local `ya40-extra` model, saved as the settings default (`openai` is
+    /// offered a key sign-in).
+    fn without_fallback() -> Home {
+        let home = Home::build(true, false);
+        std::fs::write(
+            home.path().join(".yusagent/settings.json"),
+            json!({ "defaultProvider": "openai", "defaultModel": "ya40-extra" }).to_string(),
+        )
+        .unwrap();
+        home
+    }
+
+    fn build(with_openai: bool, fallback: bool) -> Home {
         let dir = tempfile::TempDir::new().unwrap();
         let server = ModelServer::start();
         let agent_dir = dir.path().join(".yusagent");
@@ -164,6 +186,14 @@ impl Home {
             "baseUrl": base_url, "apiKey": FALLBACK, "api": "openai-responses",
             "models": [model("ya40-model")]
         }});
+        if !fallback {
+            // A custom provider needs its `apiKey` (`pa-core`'s `models/custom.rs`): without a
+            // fallback key, `ya40` goes, and `models.json` stays valid.
+            providers
+                .as_object_mut()
+                .expect("the providers")
+                .remove("ya40");
+        }
         if with_openai {
             providers["openai"] = json!({
                 "baseUrl": base_url, "api": "openai-responses", "models": [model("ya40-extra")]
@@ -241,12 +271,33 @@ impl Client {
 
     /// [`Client::spawn`], with the command adjusted before it starts.
     fn spawn_with(home: &Home, adjust: impl FnOnce(&mut Command)) -> Client {
+        Client::launch(home, true, adjust)
+    }
+
+    /// Like the extension: no `--provider` nor `--model`, the daemon picks the startup model (D3).
+    fn spawn_bare(home: &Home) -> Client {
+        Client::launch(home, false, |command| {
+            for name in [
+                "AWS_PROFILE",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_BEARER_TOKEN_BEDROCK",
+            ] {
+                command.env_remove(name);
+            }
+        })
+    }
+
+    fn launch(home: &Home, model_flags: bool, adjust: impl FnOnce(&mut Command)) -> Client {
         let stderr = std::fs::File::create(home.stderr_file()).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_prime-agent"));
         command
             .args(["--mode", "acp", "--daemon-socket"])
-            .arg(&home.socket)
-            .args(["--provider", "ya40", "--model", "ya40-model"])
+            .arg(&home.socket);
+        if model_flags {
+            command.args(["--provider", "ya40", "--model", "ya40-model"]);
+        }
+        command
             .env("HOME", home.path())
             .env("PRIME_AGENT_KERNEL_PYTHON", kernel_python())
             .env(
@@ -410,6 +461,7 @@ fn labels(home: &Home) -> Vec<&'static str> {
             |value| match value.strip_prefix("Bearer ").unwrap_or(value) {
                 "sk-ya40-old" | "tok-ya40-old" => "old",
                 "sk-ya40-renewed" | "tok-ya40-renewed" => "renewed",
+                "sk-ya40-moved" => "moved",
                 FALLBACK => "fallback",
                 "" => "none",
                 _ => "other",
@@ -535,12 +587,100 @@ fn a_new_key_lists_its_models_in_the_running_conversation() {
     );
 }
 
+/// Test 3b (X5, D3): without any credential, the session opens on the daemon's fallback model,
+/// the first of the catalog (`amazon-bedrock`, `agent_engine/model.rs`), and its agent is built
+/// on it. A key for `openai` makes the saved default `openai/ya40-extra` the announced model; the
+/// next prompt must reach it with the key, not the agent built on the fallback model.
+#[test]
+fn a_key_moves_a_session_opened_without_credentials_off_the_fallback_model() {
+    let home = Home::without_fallback();
+    home.write_auth(&json!({}));
+    let mut client = Client::spawn_bare(&home);
+    let _ = client.call(
+        "initialize",
+        &json!({ "protocolVersion": 1, "clientCapabilities": {} }),
+    );
+    let new = client.call("session/new", &json!({ "mcpServers": [] }));
+    let session = new["result"]["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("session/new: {new}"))
+        .to_string();
+    let current = new["result"]["configOptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|option| option["id"] == "model")
+        .map_or(Value::Null, |option| option["currentValue"].clone());
+    assert!(
+        current
+            .as_str()
+            .is_some_and(|value| value.contains("amazon-bedrock")),
+        "precondition: the session opens on the fallback model; model option: {current}"
+    );
+    let set = client.call(
+        "_yus/providers/set_api_key",
+        &json!({ "providerId": "openai", "apiKey": "sk-ya40-moved" }),
+    );
+    assert_eq!(set["result"]["outcome"], "done", "{set}");
+    let from = client.seen.len();
+    let _ = client.prompt(&session, "after the key");
+    // What the bridge did, for the message: the model announced after the key (the last
+    // `config_option_update` before the prompt), and the session file's `model_change` rows,
+    // which every `set_model` writes.
+    let announced = client.seen[..from]
+        .iter()
+        .rev()
+        .filter(|frame| frame["params"]["update"]["sessionUpdate"] == "config_option_update")
+        .flat_map(|frame| {
+            frame["params"]["update"]["configOptions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .find(|option| option["id"] == "model")
+        .map_or(Value::Null, |option| option["currentValue"].clone());
+    assert_eq!(
+        home.server.authorizations(),
+        [String::from("Bearer sk-ya40-moved")],
+        "the prompt after the key reaches openai/ya40-extra with it; requests: {:?}; announced \
+         after the key: {announced}; model_change rows: {:?}",
+        labels(&home),
+        model_changes(&home)
+    );
+}
+
+/// The `model_change` rows of the home's session files, as `provider/model`.
+fn model_changes(home: &Home) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(home.path().join(".yusagent/sessions")) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for line in text.lines() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if row["type"] == "model_change" {
+                rows.push(format!(
+                    "{}/{}",
+                    row["provider"].as_str().unwrap_or_default(),
+                    row["modelId"].as_str().unwrap_or_default()
+                ));
+            }
+        }
+    }
+    rows
+}
+
 /// Test 4: the rows of the providers screen (Unharnessed's shape): the `ChatGPT` subscription by
 /// the browser, `ya40` by a key, connected and removable (its key is in `auth.json`; a
-/// `models.json` key alone does not count as connected in the TUI's rows), no Claude
-/// subscription.
+/// `models.json` key alone does not count as connected in the TUI's rows), the Claude subscription
+/// by the browser (§10 decision 5 cancelled on 26/11/2026).
 #[test]
-fn list_gives_the_providers_screen_without_the_claude_subscription() {
+fn list_gives_the_providers_screen_with_the_claude_subscription() {
     let home = Home::new(false);
     home.write_auth(&json!({ "ya40": api_key("sk-ya40-old") }));
     let mut client = Client::spawn(&home);
@@ -563,10 +703,9 @@ fn list_gives_the_providers_screen_without_the_claude_subscription() {
     assert_eq!(ya40["login"], "apiKey", "{ya40}");
     assert_eq!(ya40["connected"], true, "{ya40}");
     assert_eq!(ya40["removable"], true, "{ya40}");
-    assert!(
-        row("anthropic", "subscription").is_none(),
-        "no Claude subscription row: {list}"
-    );
+    let claude = row("anthropic", "subscription")
+        .unwrap_or_else(|| panic!("the Claude subscription row: {list}"));
+    assert_eq!(claude["login"], "browser", "{claude}");
 }
 
 /// Test 5: `set_api_key` stores the key in `auth.json`, owner-only, and the answer never
@@ -657,16 +796,29 @@ fn a_key_set_through_the_bridge_is_nowhere_but_auth_json() {
 /// Test 8b: a real `ChatGPT` subscription sign-in in the binary, up to its URL, then
 /// `login_cancel`. The URL and its PKCE are made locally (`pa-ai`'s `oauth/openai_codex.rs`,
 /// `login_openai_codex`), so no network is needed; the callback server on 1455 is dead when the
-/// port is taken, and the flow then waits on the paste, which the cancel ends too. The flow opens
-/// the page itself (`codex_subscription_login.rs`, `on_auth`): fake `open` and `xdg-open`, first
-/// on the bridge's `PATH`, write their arguments to a file outside the home, so no browser runs.
-/// Neither the URL nor its `state` is on the bridge's stderr or in a file under the home. The
-/// current code logs neither, so the test is green from the start: the positive control is the
-/// same search finding `state` in the fake opener's file.
-/// Limit: Codex's `state` is random and its PKCE verifier never leaves the process; Anthropic's
-/// `state` is the verifier (`pa-ai`'s `oauth/anthropic.rs`), a row hidden from the extension.
+/// port is taken, and the flow then waits on the paste, which the cancel ends too. Codex's
+/// `state` is random; its PKCE verifier never leaves the process.
 #[test]
 fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
+    sign_in_url_is_nowhere_under_the_home("openai-codex");
+}
+
+/// Test 8c: the same for the Claude subscription (`pa-ai`'s `oauth/anthropic.rs`,
+/// `login_anthropic`), whose `state` is its PKCE verifier. Its callback server binds 53692 first:
+/// a taken port fails the sign-in before the URL (the precondition says so).
+#[test]
+fn a_claude_sign_in_url_and_its_verifier_are_nowhere_under_the_home() {
+    sign_in_url_is_nowhere_under_the_home("anthropic");
+}
+
+/// Tests 8b and 8c: a real subscription sign-in of `provider_id`, up to its URL, then
+/// `login_cancel`. The flow opens the page itself (`on_auth` of `codex_subscription_login.rs` and
+/// `subscription_login.rs`): fake `open` and `xdg-open`, first on the bridge's `PATH`, write their
+/// arguments to a file outside the home, so no browser runs. Neither the URL nor its `state` is on
+/// the bridge's stderr or in a file under the home. The current code logs neither, so the test is
+/// green from the start: the positive control is the same search finding `state` in the fake
+/// opener's file.
+fn sign_in_url_is_nowhere_under_the_home(provider_id: &str) {
     let home = Home::new(false);
     home.write_auth(&json!({}));
     let fake_bin = tempfile::TempDir::new().unwrap();
@@ -698,12 +850,17 @@ fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
     let _session = client.open();
     let login = client.request(
         "_yus/providers/login",
-        &json!({ "providerId": "openai-codex" }),
+        &json!({ "providerId": provider_id }),
     );
     let step = client.wait_for("the sign-in URL", |frame| {
-        frame["method"] == "_yus/providers/login_update"
-            && frame["params"]["update"]["kind"] == "url"
+        (frame["method"] == "_yus/providers/login_update"
+            && frame["params"]["update"]["kind"] == "url")
+            || frame["id"] == json!(login)
     });
+    assert_eq!(
+        step["method"], "_yus/providers/login_update",
+        "precondition: the {provider_id} sign-in reached its URL; answer: {step}"
+    );
     let url = step["params"]["update"]["url"]
         .as_str()
         .unwrap_or_else(|| panic!("a URL step: {step}"))
@@ -712,16 +869,21 @@ fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
         .split_once("state=")
         .map_or("", |(_, rest)| rest.split('&').next().unwrap_or(rest))
         .to_string();
+    // The messages never print the URL: Claude's `state` is its PKCE verifier.
     assert!(
         state.len() >= 16,
-        "precondition: the URL carries its state (state=): {url}"
+        "precondition: the URL carries its state (state=), {} characters long",
+        url.len()
     );
     let deadline = Instant::now() + Duration::from_secs(10);
     while !std::fs::read_to_string(&opened).is_ok_and(|text| text.contains(&url)) {
         assert!(
             Instant::now() < deadline,
-            "precondition: the fake opener got the URL; it wrote: {:?}",
-            std::fs::read_to_string(&opened).ok()
+            "precondition: the fake opener got the URL; it wrote {:?} bytes",
+            std::fs::metadata(&opened)
+                .ok()
+                .as_ref()
+                .map(std::fs::Metadata::len)
         );
         std::thread::sleep(Duration::from_millis(50));
     }

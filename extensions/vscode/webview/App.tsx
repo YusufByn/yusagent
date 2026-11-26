@@ -20,6 +20,7 @@ import { SignIn } from "./SignIn";
 import { Splash } from "./Splash";
 import { Status } from "./Status";
 import { onHostMessage, post, saveDraft, savedDraft } from "./vscode";
+import { AuthContext } from "./ya-auth"; // yusAgent (ticket 40)
 import { FeaturesContext, NO_FEATURES } from "./ya-features"; // yusAgent
 
 type Phase = "boot" | "splash" | "main";
@@ -206,6 +207,7 @@ export function App() {
     default:
       return (
         <FeaturesContext.Provider value={features}>
+        <AuthContext.Provider value={{ onProviders: () => setManaging(true) }}>
         <PathsContext.Provider value={paths}>
           <Status
             agent={agent}
@@ -224,6 +226,7 @@ export function App() {
             history={history}
           />
         </PathsContext.Provider>
+        </AuthContext.Provider>
         </FeaturesContext.Provider>
       );
   }

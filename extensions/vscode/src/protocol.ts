@@ -354,6 +354,11 @@ export type TurnHead = {
   wake?: "bash" | "quota" | "goal" | "heartbeat";
   state: "running" | "done" | "cancelled" | "failed";
   error?: string;
+  /**
+   * yusAgent (ticket 40, X5) : un échec d'authentification ; `provider`, l'id du fournisseur du modèle
+   * de la session. Le panneau le nomme et mène à l'écran Providers (`webview/ya-auth.tsx`).
+   */
+  auth?: { provider: string | null };
   /** How long it worked, once done; absent on a turn the agent replays. */
   ms?: number;
   /** Where the agent goes back to send the prompt again, changed; absent when it cannot (an earlier agent's turn). */
@@ -628,6 +633,8 @@ export type Probe = {
    * leur état se lit.
    */
   switches: { label: string | null; width: number; height: number; checked: boolean; background: string; knobLeft: number | null }[];
+  /** Ticket 40 (X5) : les indicateurs d'attente (`.spinner`), avec leur taille affichée. */
+  spinners: { width: number; height: number }[];
   /**
    * Ticket 31 : la boîte de permission ouverte, lue avec les fonctions de `src/ya/permission-keys.ts`
    * à l'instant de la sonde : touches et boutons prêts ou non, et quand (horloge de la webview) ;

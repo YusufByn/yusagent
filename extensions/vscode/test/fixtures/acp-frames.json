@@ -1,5 +1,5 @@
 {
-  "description": "Trames envoyées par l'extension à l'ouverture d'un chat puis pour un prompt texte (ticket 24, §5.4, preuve 1). Toute trame en plus ou différente fait échouer les tests. Rejoué tel quel contre le vrai binaire par le cas acp-extension du banc de capture (preuve 2). Jetons : <cwd> dossier du workspace, <sessionId> identifiant rendu par session/new, <prompt> texte du prompt.",
+  "description": "Trames envoyées par l'extension à l'ouverture d'un chat puis pour un prompt texte (ticket 24, §5.4, preuve 1 ; ticket 40, X5 : `_yus/providers/list` à l'ouverture, après `session/new`). Toute trame en plus ou différente fait échouer les tests. Rejoué tel quel contre le vrai binaire par le cas acp-extension du banc de capture (preuve 2). Jetons : <cwd> dossier du workspace, <sessionId> identifiant rendu par session/new, <prompt> texte du prompt.",
   "frames": [
     {
       "jsonrpc": "2.0",
@@ -22,6 +22,12 @@
     {
       "jsonrpc": "2.0",
       "id": 3,
+      "method": "_yus/providers/list",
+      "params": {}
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 4,
       "method": "session/prompt",
       "params": {
         "sessionId": "<sessionId>",

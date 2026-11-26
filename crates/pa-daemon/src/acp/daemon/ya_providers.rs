@@ -26,9 +26,12 @@ use serde_json::{json, Map, Value};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use super::{DaemonAcpState, DaemonLink};
+use crate::acp::config_options::{model_value, PickerModel, SessionConfigOption};
 use crate::acp::jsonrpc::{self, Incoming};
 use crate::acp::producer::FrameSink;
-use crate::acp::wire_config::{fetch_available_models, refresh_wire_config};
+use crate::acp::wire_config::{
+    fetch_available_models, fetch_connection_state, refresh_wire_config,
+};
 
 const LIST: &str = "_yus/providers/list";
 const RELOAD: &str = "_yus/providers/reload";
@@ -253,11 +256,19 @@ pub(super) async fn serve(
 
 /// H2 (`docs/tickets/40-login-extension.md`, §4.1): the run guard's texts for a missing or
 /// unusable credential (`agent_engine/turn/model.rs`) are an authentication failure, which no
-/// classifier rule recognizes. Every other `kind` stays.
+/// classifier rule recognizes. X5 (D4, §22): so are the providers' own texts for a missing
+/// credential, raised at the request (`pa-ai`'s `providers/bedrock/mod.rs`, and `No API key for
+/// provider:` in its `OpenAI`, Azure, Codex, Mistral and Anthropic providers). Every other `kind`
+/// stays.
 #[must_use]
 pub(crate) fn auth_failure_kind(failure: &str, kind: &'static str) -> &'static str {
-    if failure.contains("No API key found for ") || failure.contains("Authentication failed for \"")
-    {
+    const TEXTS: [&str; 4] = [
+        "No API key found for ",
+        "Authentication failed for \"",
+        "No API key for provider: ",
+        "No AWS credentials available for Bedrock",
+    ];
+    if TEXTS.iter().any(|text| failure.contains(text)) {
         "authentication"
     } else {
         kind
@@ -310,6 +321,11 @@ async fn settled(
 /// MCP auth), and its model picker lists what they open (`config_option_update` when it
 /// changes), one config operation at a time like `session/set_config_option`. Before
 /// `session/new`, nothing runs yet.
+///
+/// X5 (D3, §22): the announced model is a fresh resolution (`model_metadata`), the engine's agent
+/// keeps the model it was built with, and `reload` never moves it. When the announced model
+/// changes to one the session can now use, the engine is switched onto it, as the picker does
+/// (`set_model`; it also saves the model as the settings default, the daemon's own rule).
 async fn refresh_session(link: &Arc<DaemonLink>, state: &Arc<Mutex<DaemonAcpState>>) {
     let hosted = {
         let guard = state.lock().await;
@@ -325,6 +341,7 @@ async fn refresh_session(link: &Arc<DaemonLink>, state: &Arc<Mutex<DaemonAcpStat
         return;
     };
     let _queue = config.queue.lock().await;
+    let shown = announced_model(&config.published.lock().await);
     let _ = link
         .request(DaemonCommand::Reload {
             id: None,
@@ -335,7 +352,38 @@ async fn refresh_session(link: &Arc<DaemonLink>, state: &Arc<Mutex<DaemonAcpStat
     if let Ok(models) = fetch_available_models(link, &session_id).await {
         *config.models.lock().await = models;
     }
+    let announced = fetch_connection_state(link, &session_id)
+        .await
+        .and_then(|state| PickerModel::from_connection_state(&state["model"]));
+    if let Some(model) = announced {
+        let value = model_value(&model.provider, &model.id);
+        let usable = config
+            .models
+            .lock()
+            .await
+            .iter()
+            .any(|available| model_value(&available.provider, &available.id) == value);
+        if usable && shown.as_deref() != Some(value.as_str()) {
+            let _ = link
+                .request(DaemonCommand::SetModel {
+                    id: None,
+                    active_session_id: session_id.clone(),
+                    provider: model.provider,
+                    model_id: model.id,
+                    rest: Map::new(),
+                })
+                .await;
+        }
+    }
     let _ = refresh_wire_config(link, &session_id, &config, &producer).await;
+}
+
+/// The model the client was last shown: the published `model` option's value.
+fn announced_model(published: &[SessionConfigOption]) -> Option<String> {
+    published
+        .iter()
+        .find(|option| option.id == "model")
+        .map(|option| option.current_value.clone())
 }
 
 /// The rows of the providers screen.

@@ -329,7 +329,7 @@ Les étapes 2 à 5 font des appels réels : à ta main, pas à Claude Code (règ
 2. **Connexion expirée** : un login depuis l'extension pousse la nouvelle clé dans les sessions vivantes et relit la liste des modèles (comme Unharnessed). Le test 7 (H1) vient en premier, rouge sur son assertion si H1 est vraie. Rafraîchissement automatique d'un jeton expiré (`a05bcb695`, `dad2232cc`) : ticket à part (E-C), à prioriser si H1 est confirmée.
 3. **Identifiants dans `auth.json`** ; écart au CDC porté au journal.
 4. **Pas de `registerUriHandler`** ; écart au CDC porté au journal ; VS Code distant : collage du code (limite).
-5. **Claude par abonnement caché dans l'extension** (règle 7).
+5. ~~**Claude par abonnement caché dans l'extension** (règle 7).~~ **Annulée le 26/11/2026 (Yusuf)** : la ligne reste visible, dans le pont comme dans l'extension ; Yusuf gère ce login lui-même, à la main (§21.3).
 6. **Serveurs `local_*`** : écran masqué.
 7. **Échec d'auth** : texte fixe qui mène à l'écran Providers (écart à Unharnessed : le texte brut renvoie au TUI). Le classement de l'erreur d'authentification dans le pont (H2) est traité dans ce ticket.
 8. **`set_token` rouvert** (formulaire démasqué, méthode déjà servie). Services du catalogue par OAuth MCP : inclus seulement si le pont les couvre sans coût en plus ; sinon limite (réponse au §13.2).
@@ -504,9 +504,9 @@ P-B  | a05 exit=1 conflits: crates/pa-daemon/src/agent_engine/tests.rs  | dad ap
 
 1. Sauvegarder puis déplacer `~/.yusagent/auth.json`. Ouvrir l'extension : puce « Connect a provider », écran Providers sans ligne Claude par abonnement, sans écran Local.
 2. Prompt sans identifiant : texte fixe et bouton vers l'écran Providers (pas de renvoi au terminal).
-3. **Appel réel, fait par toi** : connexion ChatGPT par abonnement depuis l'écran, avec l'ouverture du navigateur décidée au §13.4. Puis, **sans rouvrir la conversation**, le sélecteur de modèles se remplit et « Réponds seulement : bonjour » répond.
+3. **Appel réel, fait par toi** : connexion ChatGPT par abonnement depuis l'écran, avec l'ouverture du navigateur décidée au §13.4. Puis, **sans rouvrir la conversation**, le sélecteur de modèles se remplit et « Réponds seulement : bonjour » répond. *(Précisé le 26/11/2026, §22.4 : une fois connecté, l'écran Providers reste affiché, comme chez Unharnessed ; retour à la conversation par « Back ».)*
 4. Deuxième conversation ouverte avant le login : son sélecteur se met à jour et elle répond sans être rouverte.
-5. Logout depuis l'écran, puis prompt : texte fixe du point 2.
+5. Logout depuis l'écran, puis prompt : texte fixe du point 2. *(Précisé le 26/11/2026, §22.11 : la conversation garde son modèle, choisi explicitement depuis la correction D3 ; le prompt échoue à la garde avec le texte fixe sans nom. La liste relue après le logout se voit au retour de la puce « Connect a provider » ; l'Output ne journalise que `logout of <id>: done`, pas de ligne `providers: …`.)*
 6. Clé API d'un fournisseur (si tu en as une) : connectée, sans rouvrir la conversation.
 7. MCP : formulaire de jeton pour un service à jeton (si tu en as un) ; catalogue OAuth selon la décision sur le §13.2.
 8. Output de l'extension : rechercher la clé saisie et `state=` : aucune occurrence.
@@ -762,3 +762,364 @@ Question 1 de Yusuf du 26/11 : le test 8 ne couvre pas l'URL de login ni son `st
 - **Limite** : le test couvre Codex, dont le `state` est aléatoire (`openai_codex.rs:218-224`) et dont le vérifieur PKCE ne sort jamais du processus. Chez Anthropic, `state` est le vérifieur PKCE (`crates/pa-ai/src/oauth/anthropic.rs:4`, `:120`), ligne cachée dans l'extension (décision 5). Si la ligne Claude par abonnement est un jour montrée dans l'extension, ajouter le même test pour elle.
 - Pas de contrôle manuel pour R5 : l'extension actuelle rejette `_yus/providers/list` sur place (`extensions/vscode/src/ya/methods.ts:10-33`, `src/agent.ts:97`, `src/providers.ts:55`, `:74`, `:79`), rien ne change à l'écran.
 - Aides de test ajoutées au même fichier : `Client::spawn_with` (`:243`), `notify` (`:297`), `response` (`:311`), `wait_for` (`:319`).
+
+## 20. X5 (extension) : constat, plan et réponses de Yusuf (26/11/2026)
+
+Seconde PR du ticket 40 (décision 15.4). Lignes citées : `main` à `c8b396caa` (R5 ne touche pas `extensions/vscode`). Aucun code dans ce commit.
+
+### 20.1 Constat
+
+#### 20.1.1 Méthodes : toutes rejetées sur place
+
+- `served()` ne connaît que les méthodes de la liste `REQUESTS` (`extensions/vscode/src/ya/methods.ts:10-32`) et la notification `session/cancel` (`:33`). Aucune `_yus/providers/*` n'y figure.
+- `Agent.request` rejette une méthode non servie sans trame (`src/agent.ts:97`), et `notify` ne l’envoie pas (`:104-108`).
+- Effets visibles aujourd'hui :
+  - `features().providers` est faux (`src/ya/methods.ts:50`), donc le bouton Providers est caché (`webview/Status.tsx:82`) ;
+  - `Providers.refresh` échoue à chaque passage en « ready » et le note dans l'Output (`src/providers.ts:55`, `:74`, `:79`) ;
+  - `providers` reste `null`, donc `unconnected` est faux (`webview/App.tsx:163`) et la puce « Connect a provider » n'apparaît jamais (`webview/Composer.tsx:970-974`).
+- Le client `Providers` (`src/providers.ts`) a déjà les formes du pont de R5 : `{providers, outcome, message?}` (`:23-28`), `login_update` avec `{providerId, update}` (`:47`, `:206-224`), `login_cancel` en notification (`:198`), `login_open` (`:189`), `reload` diffusé aux autres agents après un changement (`:149`, `:232`, `src/shown.ts:73-77`).
+- Côté pont (R5), les mêmes noms (`crates/pa-daemon/src/acp/daemon/ya_providers.rs:37-41`), la même forme `login_update` (`:511-513`), le `reload` de la session vivante après un « done » (`:294-296`).
+
+#### 20.1.2 Écran Local (décision 6 : masqué)
+
+- La section « Local » s'affiche dès que la recherche est vide, même sans serveur (`webview/Providers.tsx:168-215`), avec le bouton « Add a local model » (`:191-197`).
+- Ses messages (`scanLocal`, `probeLocal`, `saveLocal`, `removeLocal`, `src/view.ts:168-191`) appellent `local_*`, que le pont ne sert pas et ne servira pas (décision 6).
+- Le pont ne donne pas de champ `local` dans ses lignes (`ya_providers.rs:346-366`) : aucune ligne n'irait dans la section, mais le bouton resterait.
+
+#### 20.1.3 Ligne Claude par abonnement (décision 5, défense côté extension)
+
+- Le pont la retire (`crates/pa-cli/src/print_runtime/ya_acp_providers.rs:123-125`, test 4 de R5).
+- L'extension prend la liste telle quelle à trois endroits : `src/providers.ts:75`, `:146`, `:230`. Rien ne filtre `id: "anthropic"`, `method: "subscription"`.
+
+#### 20.1.4 Catalogue MCP et jeton (décision 8, §15.3)
+
+- Catalogue masqué par une constante : `CATALOG = false` (`webview/SettingsMcp.tsx:15`, rendu `:137-146`).
+- Connexion OAuth d'un service : `post({type: "mcpSignIn"})` (`SettingsMcp.tsx:240-243`) → `startLogin("mcp:<id>")` (`src/view.ts:195`, `:347-351`) → `_yus/providers/login`, que le pont aiguille vers le flux MCP (`ya_acp_providers.rs:160-166`). Après « done », `settings.signedIn(id)` relit la liste (`src/settings.ts:114`).
+- Jeton : le formulaire s'ouvre si le service a `token` (`SettingsMcp.tsx:239-241`, `:262-263`) ; le pont le donne depuis R5 (`crates/pa-daemon/src/acp/ya_resources.rs:458`) ; `_yus/mcp/set_token` est déjà servi (`src/ya/methods.ts:30`).
+- `signIn` vient du pont : `oauth && !connected` (`ya_resources.rs:449`).
+
+#### 20.1.5 Échec d'authentification (décision 7)
+
+- Texte actuel : « Authentification requise : lancez <chemin> dans un terminal, puis /login. » (`src/ya/auth.ts:18-20`), posé par `chat.ts:632`.
+- Détection : `kind: "authentication"`, ou le texte « No API key found for » dans `details` (`src/ya/auth.ts:12-16`). Depuis R5 (H2), le pont donne `authentication` pour les deux textes de la garde (`ya_providers.rs:254-265`). La seconde condition devient une défense.
+- Rendu : un simple `<p>` (`webview/Chat.tsx:299`). `Transcript` ne reçoit pas `onProviders` (`Chat.tsx:119-127`) ; `Status` l'a (`webview/Status.tsx:36`, `:159`).
+- Tests sur l'ancien texte : `test/unit/agent.test.ts:274-282` (formes `auth` et `sanscle` de l'agent factice, `test/fake-agent/fake-agent.mjs:279-293`) et `test/e2e/suite.ts:389-393`.
+
+#### 20.1.6 Output (exigence de sécurité)
+
+- Le journal des trames n'écrit que les noms et les id (`src/agent.ts:148`, `:153`, `:216`).
+- Le stderr du pont va dans l’Output ligne à ligne (`src/agent.ts:143`). Le test 8 (clé) et le test 8b (URL, `state`) de R5 vérifient que le pont n'y écrit rien.
+- `src/providers.ts:144` et `:229` journalisent `result.message` : depuis R5, ce sont des textes fixes (`ya_acp_providers.rs:36-39`). `:151` journalise une erreur du pont (« a sign-in is already running », `ya_providers.rs:181`).
+- `src/providers.ts:111`, `:113` journalisent les sondes locales : morts si l'écran Local est masqué.
+- `src/settings.ts:123` journalise l'id du service, pas le jeton.
+- Rien ne journalise l'URL de login, la clé saisie ni la réponse d'une invite : à verrouiller par le test 14.
+
+#### 20.1.7 Agent factice et tests
+
+- L'agent factice ne sert aucune `_yus/providers/*` et son `_yus/mcp/list` n'a pas `token` (`test/fake-agent/fake-agent.mjs:464-476`). C'est le seul écart de `compare_frames.py` contre le vrai binaire (§18.3).
+- Le journal des tests unitaires ne garde rien : c'est un Proxy muet (`test/unit/setup.ts:23`). Le test 14 demande un journal qui enregistre.
+- `Providers` est construit dans le harnais sans être exposé (`test/unit/setup.ts:43`).
+
+#### 20.1.8 VS Code distant
+
+- « Open » passe par `vscode.env.openExternal` en distant, sinon par `login_open` (`src/providers.ts:181-193`). Conforme à la décision 4 et au §15.2 (page ouverte par le flux au clic sur « Sign in », « Open » gardé).
+
+### 20.2 Plan (PR à part, décision 15.4)
+
+Branche `ya-40-x5` depuis `main` à `c8b396caa` (merge de R5, PR #91). Commits préfixés `YA-10: ticket 40 : X5, …`. Pas de Rust, pas de changement du préfixe de prompt (l'extension n'envoie rien au modèle).
+
+#### Push 1 : tests seuls, rouges sur leur assertion
+
+1. Agent factice (`fake-agent.mjs`) :
+   - `_yus/providers/list`, `set_api_key`, `logout`, `reload` à la forme du pont ;
+   - `login`, qui émet `url`, `prompt` puis règle `done`, ou `cancelled` sur `login_cancel` ;
+   - `login_answer`, `login_open` ;
+   - une ligne `anthropic`/`subscription` dans `list`, pour le test 11 ;
+   - `token` sur un service du catalogue dans `_yus/mcp/list` ;
+   - un échec d'auth `kind: "authentication"` (existe déjà : `auth`).
+2. Harnais unitaire : journal qui enregistre (au lieu du Proxy muet), `Providers` exposé.
+3. Tests du §12 :
+   - 9 : `features().providers` vrai ; puce « Connect a provider » sans fournisseur connecté ;
+   - 10 : SignIn affiche URL, invite, attente ; « Open » envoie `login_open` ; Cancel envoie `login_cancel` ;
+   - 11 : pas de section Local, pas de ligne Claude par abonnement même si l'agent factice en envoie une ;
+   - 12 : nouveau texte fixe et bouton vers l'écran Providers ; `agent.test.ts:274-282` et `suite.ts:389-393` passent au rouge sur l'ancien texte ;
+   - 13 : formulaire de jeton pour un service qui a `token` ; `_yus/mcp/set_token` part ; le jeton n'est pas dans l'Output ;
+   - 14 : Output sans la clé saisie, sans l'URL ni `state`, sans la réponse d'une invite.
+   - Méthodes hors de `served()` au push 1 (réponse 1, §20.3).
+
+#### Push 2 : le code
+
+1. `src/ya/methods.ts` : 7 requêtes `_yus/providers/{list,reload,set_api_key,logout,login,login_answer,login_open}` et la notification `login_cancel`. `local_*` reste hors liste.
+2. Écran Local masqué : une constante `LOCAL = false` dans `webview/Providers.tsx`, sur le modèle de `CATALOG` (section et bouton).
+3. Défense Claude par abonnement : un filtre unique dans `src/providers.ts`, appliqué aux trois affectations (`:75`, `:146`, `:230`).
+4. `CATALOG = true` (`webview/SettingsMcp.tsx:15`) et commentaire mis à jour.
+5. Échec d'auth :
+   - texte fixe sans chemin ni terminal dans `src/ya/auth.ts` (réponse 2), détection par le texte retirée (réponse 4) ;
+   - un marqueur sur le tour en échec (champ du type de tour, `src/protocol.ts`) posé par `chat.ts:632` ;
+   - un bouton dans `Chat.tsx:299` qui appelle `onProviders`, passé de `Status` à `Transcript` ;
+   - `authText` perd son paramètre `binaryPath`.
+6. Fragment de changelog. `extensions/vscode` est un dossier du fork : rien dans `docs/fork-changes.md` pour lui, sauf mention contraire au relevé.
+
+#### Contrôles
+
+- En local : `cd extensions/vscode && npm run typecheck && npm run lint && npm run test:unit`.
+- CI : job `extension (tsc, lint, tests, vsix, e2e)` et `e2e vrai binaire (build debug, provider factice)`.
+- Banc : `compare_frames.py <branche>` contre l'agent factice : `écarts : 0` attendu (le `token` aligné).
+- Contrôle manuel de Yusuf (§14), sur la vsix de la branche et le binaire de `main` après R5. Les étapes 3 à 7 font des appels réels, donc elles sont à sa main.
+
+### 20.3 Réponses de Yusuf (26/11/2026)
+
+1. **`served()` au push 1** : si, sans les méthodes dans `served()`, les tests 9, 10, 11 et 13 échouent sur une assertion (bouton caché, aucune trame), elles restent hors de `served()` au push 1, comme X0 à X3 au ticket 39. S'ils échouent sur une exception `-32601` non attrapée, elles sont ajoutées au push 1, à condition que les tests restent rouges sur leur assertion.
+   - **Cas relevé : le premier.** Le rejet de `served()` est attrapé par `refresh` (`src/providers.ts:78`), `startLogin` (`:150`) et `settle` (`:234`). Les tests échouent donc sur leur assertion : liste `null`, aucune trame `_yus/providers/*` reçue par l'agent factice, bouton Providers caché, catalogue absent. Méthodes hors de `served()` au push 1.
+2. **Texte fixe, en anglais** : « Not signed in to {provider}, or the sign-in has expired. », avec un bouton « Open Providers ». Sans nom de fournisseur : « Not signed in, or the sign-in has expired. » Les deux tests sur l'ancien texte sont mis à jour (`test/unit/agent.test.ts:274-282`, `test/e2e/suite.ts:389-393`).
+3. **Ligne Anthropic par clé API** : visible. Seule la ligne par abonnement est cachée.
+4. **Détection par le texte** (`isAuthFailure`, `details`) : retirée. Le classement vient du pont depuis R5 (H2).
+
+Suite : push 1 (tests rouges, relevé run, job, ligne), push 2 (code), CI verte, `compare_frames.py` à 0 écart, compte rendu, puis le contrôle manuel de Yusuf (§14), une étape à la fois. Pas de merge sans ce contrôle.
+
+## 21. X5 : relevé des push 1 et 1 bis, écarts au périmètre, décision 5 annulée (26/11/2026)
+
+### 21.1 Push 1 (`35ef28e69`)
+
+Run `ya-extension` 45783371002, job 139784004356 :
+- **Tests unitaires** : 82 tests, 76 réussis, 6 en échec. Les 6 sont ceux de X5, chacun sur son assertion (tableau du §21.2, mêmes lignes).
+- **e2e : 11 sur 20.** Les tests 12, 9, 11 et 10 échouent sur ce qu'ils vérifient.
+- **Le test 13 échouait avant son assertion.** Il attendait « Compaction » (onglet General) en ouvrant Settings. Or le panneau rouvre le dernier onglet ouvert (`extensions/vscode/webview/App.tsx:44`), et le test du ticket 31 qui le précède s'arrête sur MCP.
+- Le test 13 laissait alors l'écran Settings ouvert, et 4 tests plus anciens tombaient derrière lui : réglages stylés, skills, permissions, ticket 39.
+- Relevé non valable : push 1 bis, avec l'accord de Yusuf.
+
+### 21.2 Push 1 bis (`751cf0d34`)
+
+- **Correction** : le test 13 ouvre directement l'onglet MCP et referme l'écran dans un `finally`. Le test du ticket 31 ouvre General lui-même ; son titre perd « catalogue masqué ». Les deux autres tests qui ouvrent Settings ouvraient déjà leur onglet (`userClicks("Settings", "General")`, `userClicks("Settings", "Skills", …)`).
+- **Résultat** (run `ya-extension` 45785770099, job 139792036888) :
+  - tests unitaires : 82 tests, 76 réussis, 6 en échec, ceux de X5 ;
+  - e2e : 15 sur 20, **exactement les 5 tests de X5**, chacun sur son assertion ;
+  - les 4 anciens tests sont verts.
+
+| Test | Fichier:ligne (`751cf0d34`) | Assertion rouge |
+|---|---|---|
+| 12 (unitaire) | `extensions/vscode/test/unit/agent.test.ts:283` | `error` : l'ancien texte « Authentification requise : lancez … dans un terminal, puis /login. » |
+| 9 (unitaire) | `test/unit/providers.test.ts:71` | « le panneau montre l'écran Providers » : `false` |
+| 10 (unitaire) | `:84-88` | « login envoyé ; état : {…, "error":"_yus/providers/login : méthode pas encore servie par yusAgent"} » : `[]` |
+| 10 Cancel (unitaire) | `:110` | « login envoyé » : `0 !== 1` |
+| 11 (unitaire) | `:121` | « liste lue » : `null` |
+| 14 (unitaire) | `:150` | « précondition : la clé est partie » : `0 !== 1` |
+| 12 (e2e) | `test/e2e/suite.ts:392` | « délai dépassé : texte fixe avec le fournisseur » |
+| 9 (e2e) | `:405` | « délai dépassé : clic sur « Connect a provider » » (puce absente) |
+| 11 (e2e) | `:420` | « délai dépassé : clic sur « Providers » » (bouton caché) |
+| 10 (e2e) | `:433` | idem |
+| 13 (e2e) | `:517` | « délai dépassé : catalogue » (Marketplace masqué) |
+
+- Le test 13 côté journal (unitaire) est vert d'emblée : `_yus/mcp/set_token` est servie depuis le ticket 31, et le journal n'écrit que l'id du service (`src/settings.ts:123`). Son rouge est côté e2e.
+
+### 21.3 Décision 5 annulée (Yusuf, 26/11/2026)
+
+- **La ligne Claude par abonnement reste visible, dans le pont comme dans l'extension.** Yusuf gère ce login lui-même, à la main. Corrigé au §10 et au journal du CDC (ligne du 26/11/2026).
+- **Pont** : le filtre est retiré de `crates/pa-cli/src/print_runtime/ya_acp_providers.rs`, un fichier du fork. Il était à trois endroits, lignes de `751cf0d34` :
+  - `:124` (`login_row`) ;
+  - `:242-244` (`claude_subscription`) ;
+  - `:251` (`views`).
+
+  **Aucune ligne upstream touchée.**
+- **Extension** : le filtre prévu au push 2 est retiré (jamais poussé). L'agent factice envoie la ligne comme le pont.
+- **Tests inversés** :
+  - test 4 du pont, unitaire (`the_rows_offer_the_claude_subscription`) et e2e (`list_gives_the_providers_screen_with_the_claude_subscription`) ;
+  - test 11 de l'extension, unitaire et e2e.
+- **Test 8c** (`crates/pa-cli/tests/ya_providers_acp_e2e.rs`, `a_claude_sign_in_url_and_its_verifier_are_nowhere_under_the_home`) : le test 8b sur le flux Claude, dont le `state` est le vérifieur PKCE (`crates/pa-ai/src/oauth/anthropic.rs:4`, `:120`). Les deux tests partagent un même corps, `sign_in_url_is_nowhere_under_the_home`.
+  - Assertions : ni l'URL ni `state` dans le stderr du pont ni sous le dossier personnel ; contrôle positif dans le fichier du faux ouvreur.
+  - Différence avec Codex : le serveur de rappel lie 53692 avant l'URL (`crates/pa-ai/src/oauth/anthropic_callback.rs:15`, `:76-78`). Un port pris fait échouer le login avant l'URL ; la précondition le dit.
+  - Les messages d'échec n'impriment plus l'URL.
+- **Règle 7 de `CLAUDE.md`** : « **Login par abonnement Claude** hérité d'upstream : ne pas y toucher, Yusuf le retire à la main. » Elle ne demande pas de cacher la ligne : **non modifiée**. Le login lui-même n'est pas touché, seul le filtre du fork est retiré.
+
+### 21.4 Écarts au périmètre (accord de Yusuf du 26/11/2026)
+
+- **Trames d'ouverture** : une fois servie, `_yus/providers/list` part à l'ouverture, après `session/new` (puce « Connect a provider »).
+  - L'ordre est déterministe : `Agent.set` appelle ses écouteurs dans l'ordre d'inscription (`extensions/vscode/src/agent.ts:269-271`). Celui de la session (`src/session.ts:40-44`) est inscrit avant celui de `ShownAgent` (`src/shown.ts:68`).
+  - Le fixture `test/fixtures/acp-frames.json` passe à 4 trames, ids décalés.
+  - Les deux tests « rien d'autre à l'ouverture » (unitaire et e2e) sont adaptés.
+  - `bench/tools/capture/run.py` rejoue la trame en plus (`:307`, `:372-374`).
+  - `bench/tools/capture/extension_frames_check.py` cherche la trame `session/prompt` par sa méthode, plus par son indice (`:45-47`). Avant ce changement, il supposait 3 trames et s'arrêtait sur les captures de `main` et de la branche (`runs/20261126T090834Z`, `runs/20261126T090940Z`), alors que les trames envoyées étaient bien égales au fixture. Accord de Yusuf du 26/11/2026.
+- **Test d'identité** : une exception est ajoutée à `extensions/vscode/test/unit/identity.test.ts` pour la citation `Unharnessed's \`_unharnessed/providers/*\`` de `crates/pa-daemon/src/acp/daemon/ya_providers.rs:3` (R5). La même forme est déjà admise pour `ya_resources.rs`.
+- **À traiter dans un ticket à part, pas ici** : le test d'identité était rouge sur `main` sans être vu.
+  - Il parcourt `crates/` (`identity.test.ts:24-31`), mais `ya-extension.yml` se termine en succès sans lancer les tests quand `extensions/vscode/` ne change pas (`.github/workflows/ya-extension.yml:5`, `:46`). C'était le cas de la PR #91.
+  - Ticket à part : faire tourner ce test sur tout changement, ou élargir les chemins à `crates/`.
+- **Choix acceptés par Yusuf** :
+  - le panneau nomme le fournisseur depuis la liste (`providerName`, comme le sélecteur de modèles) ;
+  - l'intro de l'écran Providers devient « Sign in with a subscription, or add an API key. » (écran Local masqué).
+
+## 22. Contrôle manuel de Yusuf (binaire `5515c0fd5`, `.vsix` du run `ya-extension` 45786714824)
+
+- **Étape 0 : conforme.**
+  - Output : `agent ready: yusagent 0.10.2-continuous.5515c0fd5978d7c07e1a6623408d1304b43781e8 (protocol 1, pid 85844)`, puis `providers: 34 listed, connected: openai-codex (subscription)`. Plus d'avertissement « list failed ».
+  - Bouton Providers visible à côté de Settings.
+  - `status` : démon pid 85845, version `5515c0fd5…`, état `current`.
+- **Étape 1 : contenu conforme, affichage NON CONFORME.**
+  - Préparation : `auth.json` mis de côté (`auth.json.avant-x5`, 0600) ; aucune clé d'environnement.
+  - Conforme : `providers: 34 listed, connected: none` ; puce « Connect a provider », qui ouvre l'écran Providers ; titre et texte attendus ; Subscriptions avec Anthropic (Claude Pro/Max), ChatGPT, GitHub Copilot et xAI ; API keys avec Anthropic ; aucune section Local.
+  - Défauts 1 et 2 ci-dessous.
+
+### 22.1 Défaut 1 : écrans Providers et SignIn non stylés
+
+- **Constat** : puces de liste, boutons gris, initiale doublée (« AAnthropic », « CChatGPT »…). C'est le cas annoncé en X3 (`docs/tickets/31-skills-mcp-reglages.md`, §9.14).
+- **Cause** :
+  - `styles.css` ne couvre que 5 des 31 classes de `Providers.tsx` et 5 des 27 de `SignIn.tsx`. `ya-settings.css` en couvre la plupart, mais seulement sous `.ya-settings`, racine de `Settings.tsx`.
+  - Les racines des deux écrans étaient un simple `screen` (`webview/Providers.tsx:133`, `webview/SignIn.tsx:25`).
+  - L'initiale est le `.logo` du badge (`webview/logos.tsx:11-12`), affiché dans le texte faute de règle `.badge`.
+- **Correction** (proposition validée par Yusuf le 26/11/2026) :
+  - classe `ya-settings` sur les racines de `Providers.tsx`, de `SignIn.tsx` et du bloc d'échec d'auth (`webview/ya-auth.tsx`) ;
+  - `webview/ya-providers.css`, nouveau, importé après `ya-settings.css`, avec la notice MIT d'Unharnessed (`5494a33a5` ; `styles.css` identique à `f8e4658dd`). Il reprend telles quelles, limitées à `.ya-settings`, les règles des classes que ni `styles.css` ni `ya-settings.css` ne couvrent : `.button` et ses variantes (`is-quiet`, `is-danger`, `is-end`), `intro`, `row-warning`, `step-title`, `status-line`, `spinner`, `code`, `code-line`, `link`, `error`. Variables en `--ya-*`, animation `ya-spin`, aucun `url()` ;
+  - exception du test d'identité pour la notice de cette feuille, comme pour `ya-settings.css`.
+- **Écart** : la règle `.button` d'Unharnessed n'était pas dans `ya-settings.css` (X3 avait laissé « New skill » au style provisoire). Elle est reprise ici, puisque les boutons gris font partie du défaut. Elle s'applique donc aussi aux boutons de l'écran Settings.
+- **Test e2e** « écran Providers stylé » :
+  - l'initiale du badge est sur sa ligne, à part du nom ;
+  - le nom d'une ligne et son statut sont sur deux lignes ;
+  - sur SignIn, l'indicateur d'attente (`.spinner`) a au moins 8×8 px. La sonde gagne `spinners`.
+  - Retour à la conversation dans des `finally`.
+
+### 22.2 Défaut 2 : sans identifiant, la session s'ouvre sur `amazon-bedrock/amazon.nova-2-lite-v1:0`
+
+- **Cause (upstream, non modifiée, décision de Yusuf)** :
+  - `find_initial_model` cherche dans les modèles disponibles (`crates/pa-core/src/models/resolver.rs:594-643`), y compris le défaut enregistré (`:625-639`).
+  - Sans identifiant, il n'y en a aucun. Le démon prend alors le premier modèle du catalogue complet (`crates/pa-daemon/src/agent_engine/model.rs:41`), soit `amazon-bedrock`/`amazon.nova-2-lite-v1:0` (`crates/pa-ai/src/models_generated.rs:52-56`).
+- **Un prompt dans cet état** : la garde répond « No API key found for amazon-bedrock. … » avant toute requête (`crates/pa-daemon/src/agent_engine/turn/model.rs:52-72`), et H2 le classe en `authentication`.
+- **Remarque, sans correction ici** : le modèle de repli est le premier du catalogue, un fournisseur que l'utilisateur n'a pas choisi.
+- **Correction côté extension seulement** : quand la liste ne montre aucun fournisseur connecté, le texte ne nomme pas le fournisseur du modèle de repli. Il affiche « Not signed in, or the sign-in has expired. » (`authProviderName`, `extensions/vscode/src/ya/auth.ts`).
+  - Au push A, la règle de nommage est extraite dans cette fonction **sans changement de comportement**, pour que le test compile et échoue sur son assertion. Écart signalé à Yusuf.
+
+### 22.3 Push A (`ed11431ea`) : tests seuls, rouges
+
+Run `ya-extension` 45795404847, job 139824660006 :
+- tests unitaires : 83 tests, 82 réussis. **Seul rouge** : « échec d'auth (ticket 40, X5, défaut 2) » (`test/unit/providers.test.ts:174`, « rien de connecté » : `'Not signed in to Amazon Bedrock, or the sign-in has expired.'` au lieu du texte sans nom) ;
+- e2e : 20 sur 21. **Seul rouge** : « écran Providers stylé » (`test/e2e/suite.ts:457`, « initiale collée au nom : ["CChatGPT Plus/Pro (Codex Subscription)","AAnthropic (Claude Pro/Max)"] »).
+
+### 22.4 Étapes 1 et 2 (reprise) et étape 3
+
+- **Étape 1, reprise avec le `.vsix` du run 45796092308 : conforme.** Écran Providers stylé : badges ronds, plus de lettre doublée, titre et sous-titre, recherche en pilule, aucune section Local. Formulaire de clé Anthropic : champ en pilule, « Save » désactivé quand le champ est vide, « Cancel » discret. En plus, un login xAI lancé puis annulé, sans URL dans l'Output.
+- **Étape 2 : conforme.** Sous « bonjour » : « Not signed in, or the sign-in has expired. », sans nom, avec « Open Providers », qui ouvre l'écran. Output : `chat: turn 1 failed: Not signed in, or the sign-in has expired.; nothing streamed`.
+  - **Remarque de Yusuf, sans correction ici** : juste avant, l'Output recopie le stderr brut du démon (« [agent] pa-daemon: acp turn failed: No API key found for amazon-bedrock. Use /login … » et les chemins de `docs/providers.md` et `docs/models.md`). Aucun secret, mais le renvoi au terminal, retiré de l'écran, reste visible dans l'Output.
+- **Étape 3 : NON CONFORME.** Login ChatGPT réussi (`sign-in to openai-codex: done`), et la session annonce `openai-codex/gpt-6-luna`. Mais le tour suivant part sur `amazon-bedrock` : « yusagent turn failed: No AWS credentials available for Bedrock », texte brut. Défauts D3 à D5 ci-dessous.
+- **Attendu de l'étape 3 corrigé (D5, décision de Yusuf)** : après le login, l'écran Providers reste affiché, comme chez Unharnessed (`webview/App.tsx:168-169`, `uh:vscode/webview/App.tsx:164`). Retour à la conversation par « Back ». Mon attendu « le panneau revient de lui-même » était faux. Précisé au §14.
+
+### 22.5 D3 : le modèle annoncé n'est pas celui du moteur
+
+- **Ce que fait R5 après un changement d'identifiant** (`refresh_session`, `crates/pa-daemon/src/acp/daemon/ya_providers.rs`) :
+  - `Reload` du worker, qui relit la clé du modèle de la cible vivante, **sans jamais changer le modèle** (`crates/pa-daemon/src/agent_engine/reload.rs:34-37`, `:82-118`) ;
+  - relecture des modèles disponibles ;
+  - republication des options.
+- **Cause** :
+  - le modèle annoncé vient de `model_metadata`, une résolution refaite à chaque appel (`crates/pa-daemon/src/agent_engine/session_engine_impl.rs:574-583`, `agent_engine/model.rs:273-292`). Après le login, c'est le défaut enregistré, `gpt-6-luna` ;
+  - l'agent du moteur est construit une seule fois, avec le modèle du moment (`turn/run_loop.rs:216-228`), ici dès l'ouverture : le fichier de session du contrôle porte `model_change` vers `amazon-bedrock` à sa création ;
+  - au tour, la garde vérifie le modèle d'une résolution fraîche (`turn/model.rs:29-52`), puis prend l'agent déjà construit (`:80`) ;
+  - les 4 tentatives du fichier de session portent `"provider":"amazon-bedrock"`.
+- **Rechoisir le modèle annoncé dans le sélecteur ne corrige rien** : `wire_config.rs:156-165` ignore le choix du modèle courant.
+- **Correction (décision de Yusuf)**, dans `ya_providers.rs` (fork, aucune ligne upstream) :
+  - `refresh_session` retient le modèle montré au client (l'option `model` publiée), puis relit le modèle annoncé après `Reload` ;
+  - s'il a changé et qu'il est disponible, le pont envoie `DaemonCommand::SetModel`, comme le sélecteur (`wire_config.rs:181-199`) ;
+  - ça s'applique au login, à la clé, au logout et au `reload` diffusé aux autres conversations ;
+  - après un logout, le modèle de repli n'a pas d'identifiant : rien n'est forcé.
+- **Limite 1** :
+  - `SetModel` enregistre aussi le modèle comme défaut des réglages et écrit une ligne `model_change` (`crates/pa-daemon/src/model_switch.rs:88-107`) ;
+  - aucun chemin du démon ne change le modèle du moteur sans cet enregistrement : `CycleModel` fait de même (`crates/pa-daemon/src/setting_switches.rs:170-199`), et `switch_model` n'est joignable que par ces deux commandes ;
+  - conséquence : sans défaut enregistré, un login fixe le premier modèle disponible comme défaut.
+- **Limite 2 (de fond)** : le modèle annoncé est recalculé à chaque fois, le modèle du moteur reste figé. Un `auth.json` modifié hors du pont, par un `/login` dans un terminal par exemple, n'est pas suivi : cela relève d'E-C.
+- **Test 3b** (`crates/pa-cli/tests/ya_providers_acp_e2e.rs`, `a_key_moves_a_session_opened_without_credentials_off_the_fallback_model`) :
+  - aucun identifiant, client lancé sans `--provider` ni `--model`, comme l'extension ;
+  - précondition : la session s'ouvre sur `amazon-bedrock`, premier du catalogue (le catalogue intégré passe avant `models.json`, `crates/pa-core/src/models/registry.rs:579-588`) ;
+  - déroulé : `set_api_key` pour `openai`, puis un prompt ;
+  - assertion : le prompt atteint le modèle local `openai/ya40-extra`, défaut des réglages du bac à sable, avec la clé.
+
+### 22.6 D4 : textes d'identifiant manquant des fournisseurs
+
+- **Cause** : `auth_failure_kind` (H2) ne reconnaissait que les textes de la garde.
+- **Textes qui lui échappaient** :
+  - « No AWS credentials available for Bedrock » (`crates/pa-ai/src/providers/bedrock/mod.rs:555`) ;
+  - « No API key for provider: <id> » : `openai_responses.rs:449`, `azure_openai_responses.rs:481`, `openai_codex_responses/mod.rs:184`, `:772`, `mistral/mod.rs:179`, `mistral/stream.rs:243`, `openai_completions/mod.rs:351`, `anthropic/mod.rs:464`.
+- **Correction (décision de Yusuf)** : ces deux textes sont classés `authentication`.
+- **Hors du classement** : les textes Vertex (« Vertex AI requires a project ID… », « … a location… », `google_vertex.rs:77`, `:88`) et gcloud (`:109-116`). Ce sont de la configuration ou l'outil gcloud, pas un identifiant manquant.
+- **Test 7b** (`crates/pa-daemon/src/acp/daemon/ya_providers_tests.rs`, `the_providers_missing_credential_texts_are_authentication_failures`).
+
+### 22.7 Remarques, sans correction ici
+
+- **Modèle de repli** : sans identifiant, le démon ouvre la session sur le premier modèle du catalogue, `amazon-bedrock`/`amazon.nova-2-lite-v1:0` (`crates/pa-daemon/src/agent_engine/model.rs:41`), un fournisseur que l'utilisateur n'a pas choisi. Comportement upstream.
+- **Relances sur identifiant manquant** :
+  - les erreurs des fournisseurs sont relancées comme une panne : le fichier de session du contrôle porte 4 `provider_stream_failure`, à +1,9 s, +3,7 s et +7,9 s, soit 13,6 s (défauts `retry.maxRetries` 3, `retry.baseDelayMs` 2000) ;
+  - ce n'est pas une recherche réseau : `resolve_credentials` ne lit que l'environnement et des fichiers (`crates/pa-ai/src/providers/bedrock/auth.rs:96-129`) ;
+  - classifieur upstream (`error_classify.rs`).
+- **Stderr brut du démon dans l'Output** (remarque de l'étape 2).
+
+### 22.8 Push A (`fafeb9c01`) et A′ (`f5199e189`) : tests D3 et D4
+
+- **Push A**, run `ci` 45801480792 :
+  - test 7b rouge sur son assertion (shard 3/8, job 139845697654, `ya_providers_tests.rs:195`, « Bedrock without AWS credentials ») ;
+  - **test 3b non valable** : précondition passée (session sur `amazon-bedrock`), mais `set_api_key` pour `ya40` répond `failed`, « This provider cannot be signed in to here. » (shard 4/8, job 139845697473, `:614`). Une ligne de `models.json` sans clé n'est pas proposée en connexion par clé. Défaut du test.
+- **Push A′** (test corrigé seul : fournisseur `openai`, modèle `ya40-extra` en défaut des réglages), run `ci` 45803883264 :
+  - test 7b : rouge sur son assertion (shard 3/8, job 139854091781, `ya_providers_tests.rs:195`, `left: "other"`, `right: "authentication"`) ;
+  - test 3b : rouge sur son assertion (shard 4/8, job 139854091824, `ya_providers_acp_e2e.rs:624`, « the prompt after the key reaches openai/ya40-extra with it; requests: [] », en 15,1 s avec les relances) ;
+  - autre échec, hors X5 : `concurrent_producers_drop_at_the_reserve_when_the_queue_is_full` (shard 2/8, job 139854091845). Il est listé comme instable (`docs/fork-changes.md`, « Instabilité probable : `request_timing::payload` »), avec le même symptôme. Pas de relance, noté au tableau.
+
+### 22.9 Push B (`6f2af31db`), diagnostic, test 3b corrigé (`446009b61`)
+
+- **Push B** (corrections D3 et D4 dans `ya_providers.rs`), run `ci` 45806197260 :
+  - test 7b vert ;
+  - **test 3b toujours rouge** (shard 4/8, job 139862214570, `:624`, « requests: [] »).
+- **Diagnostic** (deux pushes, test seul puis trace provisoire) :
+  - `3573380ab`, run 45809055570 : le modèle annoncé après la clé est bien `["openai","ya40-extra"]`, mais il n'y a aucune ligne `model_change` vers `openai`.
+  - `ff380dd8b`, run 45811314621 : trace **provisoire** sur le stderr du pont (trois `eprintln!` dans `refresh_session`, ids de modèle seulement, aucune clé). Elle donne : montré `amazon-bedrock`, annoncé `openai/ya40-extra`, **`usable false`**. `SetModel` n'est donc jamais parti.
+  - La trace a été retirée au commit suivant (`446009b61`). Elle n'a été dans aucun binaire ni `.vsix` remis pour le contrôle.
+- **Cause : défaut du test, pas de la correction.**
+  - En retirant la clé de `ya40`, le test rendait tout `models.json` invalide : « "apiKey" is required when defining custom models » (`crates/pa-core/src/models/custom.rs:213-216`).
+  - `openai/ya40-extra` disparaissait alors du catalogue. Le modèle annoncé était une reconstruction sur le gabarit d'`openai` (`crates/pa-core/src/models/resolver.rs:635-639`), absente des modèles disponibles.
+  - Le garde-fou « disponible » a empêché un `SetModel` vers ce modèle reconstruit, dont l'adresse aurait été celle d'OpenAI.
+- **Correction du test** (`446009b61`) : sans clé de repli, le fournisseur `ya40` est retiré, et `models.json` reste valide.
+  - Produit inchangé : `git diff --stat 6f2af31db 446009b61 -- crates/`, hors fichiers de test, est vide.
+- **Le test 3b n'a pas été vu rouge dans sa version finale** (décision de Yusuf, option B).
+  - Au push A et au push A′, il échouait avec un `models.json` invalide.
+  - La preuve du défaut est la reproduction manuelle de Yusuf à l'étape 3 (11:16, tour parti sur `amazon-bedrock`, fichier de session du contrôle). L'étape 3, refaite avec la correction, sert de preuve du vert, en plus du test.
+- **CI de `446009b61`** (runs `ci` 45813684218, `ya-extension` 45813684185) : les 16 checks requis sont verts.
+  - Shard 4/8 (job 139887970923) : 3b, 8b, 8c et `list_gives_the_providers_screen_with_the_claude_subscription` passent.
+  - Shard 8/8 (job 139887971005) : `the_rows_offer_the_claude_subscription` passe.
+  - Shard 3/8 (job 139887971286) : 7b passe.
+- **Binaire de la branche** : `~/.cache/yusagent-bin/446009b61460620afcfe4d729b6a31a88f2c5dbc/yusagent` (build 45813674765, `SHA256SUMS` OK, `--version` `0.10.2-continuous.446009b61…`).
+- **Captures** (`DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`) :
+  - `run.py --binary <446009b61>` : `runs/20261126T120251Z` ; trames de l'extension « fixture : oui », TOUT IDENTIQUE ; chemins du préfixe CONFORME ; acp-resume et acp-live CONFORME. `spawn` `ok=False`, comme sur `main`.
+  - `compare.py runs/20261126T092241Z (main c8b396caa) runs/20261126T120251Z --all` : **TOUT IDENTIQUE**.
+  - `acp_frames.py` : CONFORME ; `compare_frames.py` contre l'agent factice : **écarts : 0**.
+- **`.vsix`** du run 45813684185 : 202 158 octets, sha256 `835867ef51cbe79e95319173b7e946929471121c019465ef82b09ea5587f7a6f`. L'extension est identique à celle du `.vsix` 45796092308 (`git diff --stat de98cad72 446009b61 -- extensions/vscode` vide) ; le sha diffère par l'empaquetage.
+
+### 22.10 Étapes 3 (refaite) et 4, D6
+
+- **Étape 3, refaite (binaire `446009b61`) : conforme, D3 corrigé.** Partie de `connected: none` sur `amazon-bedrock`. Output : `sign-in to openai-codex: started` (13:07:59), `session: options updated, model openai-codex/gpt-6-luna` puis `done` (13:08:19), `chat: turn 1 sent` (13:08:36.917), `turn 1 done (end_turn)` (13:08:39.560). Réponse « bonjour » en 2,6 s, ni Bedrock ni AWS, aucune URL. L'écran Providers reste après le login (attendu corrigé). C'est la preuve de l'option B pour 3b : le même scénario qu'à 11:16, corrigé.
+- **Étape 4 : conforme sur le fond.** A = [2], B = [3].
+  - Login dans B : `[3] session: options updated, model openai-codex/gpt-6-luna` (13:13:18.505), puis, par la diffusion du `reload`, `[2] session: options updated, model openai-codex/gpt-6-luna` (13:13:18.533).
+  - Retour à A par l'historique, sans `session: opened`. `[2] chat: turn 2 sent` puis `done` : « bonjour », ni Bedrock ni AWS.
+- **D6 (affichage)** : dans A, le texte du premier échec passe, après le login, de « Not signed in, or the sign-in has expired. » à « Not signed in to Amazon Bedrock… ».
+  - **Cause** : l'hôte ne gardait que l'id du fournisseur, avec un texte sans nom (`src/chat.ts:635-636`). Le webview recalculait le texte à chaque affichage, à partir de la liste **courante** des fournisseurs (`webview/ya-auth.tsx:14-17`, `webview/App.tsx:210`, `authProviderName`).
+  - **Correction (décision de Yusuf)** : le texte est figé dans `turn.error` au moment de l'échec, avec la liste connue à cet instant. `Providers` la note à chaque changement (`noteProviders`, `src/ya/auth.ts`), et `chat.ts` appelle `authFailureAt`. Le webview affiche `turn.error` tel quel (`authFailureText`).
+  - **Push A** (`5aa8bee52`) : `authFailureText` est extrait **avec le comportement actuel** (écart annoncé), avec deux tests unitaires. Run `ya-extension` 45818508225, job 139904349587 : **seul rouge**, « D6 : le texte d'un échec d'auth ne change pas après une clé » (`test/unit/providers.test.ts:202`, « le même échec, après la clé »). Le cas « un fournisseur connecté nomme celui de la session » est vert. e2e 21 sur 21.
+  - **Push B** : la correction. `authFailureText(turn)` ne prend plus la liste, et les appels du test suivent. Le test unitaire de l'échec d'auth (`test/unit/agent.test.ts`) attend désormais le texte figé avec le nom : « Not signed in to Capture… », Capture étant connecté dans l'agent factice.
+
+### 22.11 Étapes 5 à 8, annulation d'un login MCP
+
+- **Étape 5 : conforme sur l'essentiel.**
+  - Output : `logout of openai-codex: done` (13:20:45.703) ; `[2] session: options updated, model openai-codex/gpt-6-luna (1 choices)`, et de même pour [1].
+  - Prompt « salut » : `[2] chat: turn 3 failed: Not signed in, or the sign-in has expired.`, en 23 ms, à la garde. Texte sans nom, avec « Open Providers ». La puce « Connect a provider » revient.
+  - **Écart 1 (attendu corrigé)** : le modèle reste `openai-codex/gpt-6-luna` et ne revient pas sur `amazon-bedrock`. Le `SetModel` de la correction D3 (étape 3 pour [1], diffusion de l'étape 4 pour [2]) a rendu le choix explicite (`session_engine_impl.rs:425-435`), et une sélection explicite se résout sur tout le catalogue même sans identifiant, la garde signalant le manque (`agent_engine/model.rs:293-302`). Comportement voulu : la session garde le modèle choisi et demande de se reconnecter, au lieu de retomber sur le repli.
+  - **Écart 2 (attendu corrigé)** : pas de ligne `providers: … connected: none`. La liste est relue (réponse du logout, `src/providers.ts:226-233`, et retour de la puce), mais `settle` ne journalise que `<action>: <issue>` (`:229`) ; la ligne `providers: …` ne sort que de `refresh`, quand un agent devient prêt (`:72-77`).
+- **Étape 6 : sautée** (pas de clé API payante). Le chemin des clés est couvert par les tests 2, 3, 4, 5 et 8 du pont.
+- **Étape 7** :
+  - Marketplace conforme : stylée, « Search 70 services », un badge et « Add » par ligne.
+  - Formulaire de jeton GitHub conforme : « GitHub token », champ en pilule, « Add » désactivé sur un champ vide, « Cancel » discret. Jeton réel : sauté.
+  - Login Linear : écran SignIn stylé, navigateur ouvert. Deux écarts, ci-dessous.
+- **Linear a) Un refus dans le navigateur n'arrête pas le login : limite** (décision de Yusuf).
+  - Le serveur de rappel traite `?error=…` : il règle l'attente à vide et affiche « yusAgent authentication failed. Error: … » (`crates/pa-core/src/mcp/oauth_callback.rs:240-250`).
+  - Mais le flux attend ensuite le collage manuel (`crates/pa-core/src/mcp/oauth.rs:259-266`). Comportement de `pa-core` (upstream), le même dans le TUI.
+  - La page affichée par le navigateur après le refus n'a pas été relevée : on ne sait pas si Linear a redirigé.
+- **Linear b) « failed » au lieu de « cancelled » après « Cancel » : défaut, corrigé** (décision de Yusuf).
+  - « Cancel » vide les invites. Le collage se règle à vide, puis le flux MCP rend « Missing authorization code » après 500 ms (`oauth.rs:227-230`, `:284-287`), soit 511 ms entre `cancel requested` et `failed`.
+  - Le pont ne répondait `cancelled` que sur un `Cancelled` du flux (`ya_acp_providers.rs:161-166`).
+  - Correction (fichier du fork) : `mcp_settled`. Un identifiant rangé donne `Done` ; sinon, une annulation demandée (`cancel_flag`) donne `Cancelled` ; sinon `Failed`.
+  - Test unitaire `a_cancelled_mcp_sign_in_answers_cancelled`.
+- **Étape 8 : conforme.**
+  - Script de comptage, lancé d'abord par Claude Code puis par Yusuf : `journaux : 4`, et 0 pour `state=`, `code_challenge`, `oauth/authorize`, `auth.openai.com`, `claude.ai/oauth`, `access_token`, `refresh_token`, `Bearer `, `sk-`. Il ne lit que les journaux de l'Output yusAgent écrits depuis le début du contrôle et n'affiche que des comptes.
+  - Cmd+F dans Output › yusAgent : rien pour `state=` ni pour `http`.
+- **Push A de b)** (`fb55988e8`, décision extraite sans changement, avec le test), run `ci` 45822159161 : **seul rouge**, `a_cancelled_mcp_sign_in_answers_cancelled` (shard 8/8, job 139917113255, `ya_acp_providers.rs:361`, « cancel asked, nothing stored », `left: Failed("Sign-in failed. Try again.")`, `right: Cancelled`).

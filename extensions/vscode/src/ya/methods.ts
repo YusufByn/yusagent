@@ -1,6 +1,6 @@
 // yusAgent (YA-10, ticket 24, PR I) : méthodes ACP que notre pont sert
 // (`crates/pa-daemon/src/acp/daemon.rs:1052-1068` ; ticket 28 : `ya_history.rs`). Le code repris d'Unharnessed en appelle
-// d'autres (ticket 32 : `_yus/session/rewind`, `_yus/kernel/*`, `_yus/providers/*`) : elles ne partent pas, l'appel est
+// d'autres (ticket 32 : `_yus/session/rewind`, `_yus/kernel/*`, `_yus/providers/local_*`) : elles ne partent pas, l'appel est
 // rejeté sur place comme le ferait le pont (`-32601`), sans trame (fixture des trames, §5.4).
 
 import { METHOD_NOT_FOUND, RpcError } from "../acp/connection";
@@ -29,8 +29,17 @@ const REQUESTS = new Set([
   "_yus/mcp/list",
   "_yus/mcp/set_token",
   "_yus/mcp/logout",
+  // Ticket 40 (X5, `crates/pa-daemon/src/acp/daemon/ya_providers.rs`) : écran Providers et login ;
+  // pas `local_*` (écran Local masqué, décision 6).
+  "_yus/providers/list",
+  "_yus/providers/reload",
+  "_yus/providers/set_api_key",
+  "_yus/providers/logout",
+  "_yus/providers/login",
+  "_yus/providers/login_answer",
+  "_yus/providers/login_open",
 ]);
-const NOTIFICATIONS = new Set(["session/cancel"]);
+const NOTIFICATIONS = new Set(["session/cancel", "_yus/providers/login_cancel"]);
 
 export function served(method: string): boolean {
   return REQUESTS.has(method) || NOTIFICATIONS.has(method);

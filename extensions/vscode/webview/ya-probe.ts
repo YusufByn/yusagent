@@ -86,6 +86,10 @@ function probe(): Probe {
         knobLeft: knob ? knob.left - rect.left : null,
       };
     }),
+    spinners: Array.from(document.querySelectorAll<HTMLElement>(".spinner")).map((element) => {
+      const rect = element.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    }),
     boxButtons: Array.from(document.querySelectorAll<HTMLButtonElement>(`${BOX} .ya-permission-actions button`)).map((button) => ({
       name: button.textContent ?? "",
       disabled: button.disabled,

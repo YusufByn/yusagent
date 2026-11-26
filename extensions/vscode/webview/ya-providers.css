@@ -1,0 +1,196 @@
+/*
+ * Portions copied from Unharnessed (github.com/unharnessed-agent/Unharnessed, commit 5494a33a5,
+ * vscode/webview/styles.css), under the MIT License:
+ *
+ * Copyright (c) 2026 Unharnessed
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+ * associated documentation files (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute,
+ * sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all copies or
+ * substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+ * NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+ * OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+/*
+ * yusAgent (YA-10, ticket 40, X5) : les écrans Providers et SignIn (formulaire de clé compris), le
+ * bloc d'échec d'auth du chat et le formulaire de jeton MCP, avec les règles du styles.css
+ * d'Unharnessed (MIT, github.com/unharnessed-agent/Unharnessed, commit 5494a33a5,
+ * vscode/webview/styles.css, identique à f8e4658dd pour ce fichier) pour les classes que ni
+ * `styles.css` ni `ya-settings.css` ne couvrent, reprises telles quelles, sans passe de design.
+ * Comme `ya-settings.css` : chaque règle est limitée à `.ya-settings` (posé aussi sur la racine de
+ * `Providers.tsx`, de `SignIn.tsx` et du bloc d'échec d'auth), dont les variables de couleur et
+ * les animations servent ici ; ses variables passées en `--ya-*`, son animation de rotation en
+ * `ya-spin`. Aucun `url()` ni police chargée.
+ */
+
+@keyframes ya-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Controls: pills. The main action is a soft cyan; the others stay quiet. */
+
+.ya-settings .button {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 16px 0 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgb(var(--ya-accent-rgb) / 0.95);
+  cursor: pointer;
+  background: rgb(var(--ya-accent-rgb) / 0.13);
+  border: 0;
+  border-radius: 999px;
+  transition:
+    color 220ms var(--ya-soft),
+    background-color 220ms var(--ya-soft);
+}
+
+.ya-settings .button:hover:not(:disabled) {
+  background: rgb(var(--ya-accent-rgb) / 0.2);
+}
+
+.ya-settings .button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.ya-settings .button.is-quiet {
+  color: var(--ya-muted);
+  background: transparent;
+}
+
+.ya-settings .button.is-quiet:hover:not(:disabled) {
+  color: var(--ya-text);
+  background: var(--ya-tint);
+}
+
+.ya-settings .button.is-danger {
+  color: var(--ya-danger);
+  background: rgb(var(--ya-danger-rgb) / 0.12);
+}
+
+.ya-settings .button.is-danger:hover:not(:disabled) {
+  background: rgb(var(--ya-danger-rgb) / 0.18);
+}
+
+.ya-settings .button.is-end {
+  margin-left: auto;
+}
+
+.ya-settings .intro {
+  padding: 4px 2px 0;
+}
+
+.ya-settings .intro h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 520;
+  letter-spacing: -0.015em;
+}
+
+.ya-settings .intro p {
+  margin: 6px 0 0;
+  color: var(--ya-muted);
+}
+
+.ya-settings .step-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+/* Under the name it is about, clear of the row's hover. */
+.ya-settings .row-warning {
+  margin: 6px 10px 8px 49px;
+  padding: 8px 11px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ya-muted);
+  background: var(--ya-tint);
+  border-radius: 12px;
+}
+
+/* Sign-in */
+
+.ya-settings .status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ya-muted);
+}
+
+.ya-settings .spinner {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin: 0 1.5px;
+  border: 1.25px solid var(--ya-accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ya-spin 800ms linear infinite;
+}
+
+.ya-settings .code-line {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  padding: 8px 8px 8px 16px;
+  background: var(--ya-raised);
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px var(--ya-line),
+    inset 0 1px 0 var(--ya-highlight);
+}
+
+.ya-settings .code {
+  font: 500 20px/1.2 var(--ya-mono);
+  letter-spacing: 0.08em;
+  user-select: all;
+}
+
+.ya-settings .error {
+  margin: 0;
+  font: 11.5px/1.5 var(--ya-mono);
+  color: var(--ya-danger);
+  overflow-wrap: anywhere;
+}
+
+/* A quiet text action, for what most people never need. */
+.ya-settings .link {
+  align-self: flex-start;
+  padding: 0;
+  font-size: 12px;
+  color: var(--ya-muted);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  text-decoration-color: var(--ya-line-strong);
+  text-underline-offset: 3px;
+  transition: color 220ms var(--ya-soft);
+}
+
+.ya-settings .link:hover {
+  color: var(--ya-text);
+}
+
+.ya-settings .link:focus-visible {
+  outline: 2px solid rgb(var(--ya-accent-rgb) / 0.5);
+  outline-offset: 3px;
+  border-radius: 4px;
+}

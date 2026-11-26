@@ -42,7 +42,9 @@ def check(run: Path) -> dict:
     project = Path(run_info.get("project", "/private/tmp/ya-capture/project"))
     expected = fixture_frames(EXTENSION_FIXTURE, project)
     sent = sent_frames(run / "acp-extension")
-    session_id = (sent[2].get("params") or {}).get("sessionId") if len(sent) == 3 else None
+    # Ticket 40 (X5) : la trame du prompt par sa méthode (4 trames depuis `_yus/providers/list`).
+    prompt = next((frame for frame in sent if frame.get("method") == "session/prompt"), {})
+    session_id = (prompt.get("params") or {}).get("sessionId")
     for frame in expected:
         if frame["method"] == "session/prompt":
             frame["params"]["sessionId"] = session_id
