@@ -1085,3 +1085,15 @@ Run `ya-extension` 45795404847, job 139824660006 :
   - `compare.py runs/20261126T092241Z (main c8b396caa) runs/20261126T120251Z --all` : **TOUT IDENTIQUE**.
   - `acp_frames.py` : CONFORME ; `compare_frames.py` contre l'agent factice : **écarts : 0**.
 - **`.vsix`** du run 45813684185 : 202 158 octets, sha256 `835867ef51cbe79e95319173b7e946929471121c019465ef82b09ea5587f7a6f`. L'extension est identique à celle du `.vsix` 45796092308 (`git diff --stat de98cad72 446009b61 -- extensions/vscode` vide) ; le sha diffère par l'empaquetage.
+
+### 22.10 Étapes 3 (refaite) et 4, D6
+
+- **Étape 3, refaite (binaire `446009b61`) : conforme, D3 corrigé.** Partie de `connected: none` sur `amazon-bedrock`. Output : `sign-in to openai-codex: started` (13:07:59), `session: options updated, model openai-codex/gpt-6-luna` puis `done` (13:08:19), `chat: turn 1 sent` (13:08:36.917), `turn 1 done (end_turn)` (13:08:39.560). Réponse « bonjour » en 2,6 s, ni Bedrock ni AWS, aucune URL. L'écran Providers reste après le login (attendu corrigé). C'est la preuve de l'option B pour 3b : le même scénario qu'à 11:16, corrigé.
+- **Étape 4 : conforme sur le fond.** A = [2], B = [3].
+  - Login dans B : `[3] session: options updated, model openai-codex/gpt-6-luna` (13:13:18.505), puis, par la diffusion du `reload`, `[2] session: options updated, model openai-codex/gpt-6-luna` (13:13:18.533).
+  - Retour à A par l'historique, sans `session: opened`. `[2] chat: turn 2 sent` puis `done` : « bonjour », ni Bedrock ni AWS.
+- **D6 (affichage)** : dans A, le texte du premier échec passe, après le login, de « Not signed in, or the sign-in has expired. » à « Not signed in to Amazon Bedrock… ».
+  - **Cause** : l'hôte ne gardait que l'id du fournisseur, avec un texte sans nom (`src/chat.ts:635-636`). Le webview recalculait le texte à chaque affichage, à partir de la liste **courante** des fournisseurs (`webview/ya-auth.tsx:14-17`, `webview/App.tsx:210`, `authProviderName`).
+  - **Correction (décision de Yusuf)** : le texte est figé dans `turn.error` au moment de l'échec, avec la liste connue à cet instant. `Providers` la note à chaque changement (`noteProviders`, `src/ya/auth.ts`), et `chat.ts` appelle `authFailureAt`. Le webview affiche `turn.error` tel quel (`authFailureText`).
+  - **Push A** (`5aa8bee52`) : `authFailureText` est extrait **avec le comportement actuel** (écart annoncé), avec deux tests unitaires. Run `ya-extension` 45818508225, job 139904349587 : **seul rouge**, « D6 : le texte d'un échec d'auth ne change pas après une clé » (`test/unit/providers.test.ts:202`, « le même échec, après la clé »). Le cas « un fournisseur connecté nomme celui de la session » est vert. e2e 21 sur 21.
+  - **Push B** : la correction. `authFailureText(turn)` ne prend plus la liste, et les appels du test suivent. Le test unitaire de l'échec d'auth (`test/unit/agent.test.ts`) attend désormais le texte figé avec le nom : « Not signed in to Capture… », Capture étant connecté dans l'agent factice.
