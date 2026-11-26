@@ -12,13 +12,15 @@
 //!     the next request.
 //! 2. `_yus/providers/set_api_key` pushes the key into the running session.
 //! 3. After a key for a new provider, the model picker lists its models (`config_option_update`).
-//! 4. `_yus/providers/list`: the rows of the providers screen, without the Claude subscription.
+//! 4. `_yus/providers/list`: the rows of the providers screen, the Claude subscription among them
+//!    (§10 decision 5 cancelled on 26/11/2026).
 //! 5. `set_api_key` stores the key in `auth.json` (0600) and never answers it back.
 //! 8. The key is nowhere under the home but `auth.json`: not on the bridge's stderr, not in the
 //!    session files, not in the usage log.
 //! 8b. A real `ChatGPT` subscription sign-in, up to its URL (offline: the URL and PKCE are made
 //!     locally), then `login_cancel`: neither the URL nor its `state` is on the bridge's stderr
 //!     or in a file under the home; the fake browser outside the home got them.
+//! 8c. The same for the Claude subscription, whose `state` is its PKCE verifier.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -537,10 +539,10 @@ fn a_new_key_lists_its_models_in_the_running_conversation() {
 
 /// Test 4: the rows of the providers screen (Unharnessed's shape): the `ChatGPT` subscription by
 /// the browser, `ya40` by a key, connected and removable (its key is in `auth.json`; a
-/// `models.json` key alone does not count as connected in the TUI's rows), no Claude
-/// subscription.
+/// `models.json` key alone does not count as connected in the TUI's rows), the Claude subscription
+/// by the browser (§10 decision 5 cancelled on 26/11/2026).
 #[test]
-fn list_gives_the_providers_screen_without_the_claude_subscription() {
+fn list_gives_the_providers_screen_with_the_claude_subscription() {
     let home = Home::new(false);
     home.write_auth(&json!({ "ya40": api_key("sk-ya40-old") }));
     let mut client = Client::spawn(&home);
@@ -563,10 +565,9 @@ fn list_gives_the_providers_screen_without_the_claude_subscription() {
     assert_eq!(ya40["login"], "apiKey", "{ya40}");
     assert_eq!(ya40["connected"], true, "{ya40}");
     assert_eq!(ya40["removable"], true, "{ya40}");
-    assert!(
-        row("anthropic", "subscription").is_none(),
-        "no Claude subscription row: {list}"
-    );
+    let claude = row("anthropic", "subscription")
+        .unwrap_or_else(|| panic!("the Claude subscription row: {list}"));
+    assert_eq!(claude["login"], "browser", "{claude}");
 }
 
 /// Test 5: `set_api_key` stores the key in `auth.json`, owner-only, and the answer never
@@ -657,16 +658,29 @@ fn a_key_set_through_the_bridge_is_nowhere_but_auth_json() {
 /// Test 8b: a real `ChatGPT` subscription sign-in in the binary, up to its URL, then
 /// `login_cancel`. The URL and its PKCE are made locally (`pa-ai`'s `oauth/openai_codex.rs`,
 /// `login_openai_codex`), so no network is needed; the callback server on 1455 is dead when the
-/// port is taken, and the flow then waits on the paste, which the cancel ends too. The flow opens
-/// the page itself (`codex_subscription_login.rs`, `on_auth`): fake `open` and `xdg-open`, first
-/// on the bridge's `PATH`, write their arguments to a file outside the home, so no browser runs.
-/// Neither the URL nor its `state` is on the bridge's stderr or in a file under the home. The
-/// current code logs neither, so the test is green from the start: the positive control is the
-/// same search finding `state` in the fake opener's file.
-/// Limit: Codex's `state` is random and its PKCE verifier never leaves the process; Anthropic's
-/// `state` is the verifier (`pa-ai`'s `oauth/anthropic.rs`), a row hidden from the extension.
+/// port is taken, and the flow then waits on the paste, which the cancel ends too. Codex's
+/// `state` is random; its PKCE verifier never leaves the process.
 #[test]
 fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
+    sign_in_url_is_nowhere_under_the_home("openai-codex");
+}
+
+/// Test 8c: the same for the Claude subscription (`pa-ai`'s `oauth/anthropic.rs`,
+/// `login_anthropic`), whose `state` is its PKCE verifier. Its callback server binds 53692 first:
+/// a taken port fails the sign-in before the URL (the precondition says so).
+#[test]
+fn a_claude_sign_in_url_and_its_verifier_are_nowhere_under_the_home() {
+    sign_in_url_is_nowhere_under_the_home("anthropic");
+}
+
+/// Tests 8b and 8c: a real subscription sign-in of `provider_id`, up to its URL, then
+/// `login_cancel`. The flow opens the page itself (`on_auth` of `codex_subscription_login.rs` and
+/// `subscription_login.rs`): fake `open` and `xdg-open`, first on the bridge's `PATH`, write their
+/// arguments to a file outside the home, so no browser runs. Neither the URL nor its `state` is on
+/// the bridge's stderr or in a file under the home. The current code logs neither, so the test is
+/// green from the start: the positive control is the same search finding `state` in the fake
+/// opener's file.
+fn sign_in_url_is_nowhere_under_the_home(provider_id: &str) {
     let home = Home::new(false);
     home.write_auth(&json!({}));
     let fake_bin = tempfile::TempDir::new().unwrap();
@@ -698,12 +712,17 @@ fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
     let _session = client.open();
     let login = client.request(
         "_yus/providers/login",
-        &json!({ "providerId": "openai-codex" }),
+        &json!({ "providerId": provider_id }),
     );
     let step = client.wait_for("the sign-in URL", |frame| {
-        frame["method"] == "_yus/providers/login_update"
-            && frame["params"]["update"]["kind"] == "url"
+        (frame["method"] == "_yus/providers/login_update"
+            && frame["params"]["update"]["kind"] == "url")
+            || frame["id"] == json!(login)
     });
+    assert_eq!(
+        step["method"], "_yus/providers/login_update",
+        "precondition: the {provider_id} sign-in reached its URL; answer: {step}"
+    );
     let url = step["params"]["update"]["url"]
         .as_str()
         .unwrap_or_else(|| panic!("a URL step: {step}"))
@@ -712,16 +731,21 @@ fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
         .split_once("state=")
         .map_or("", |(_, rest)| rest.split('&').next().unwrap_or(rest))
         .to_string();
+    // The messages never print the URL: Claude's `state` is its PKCE verifier.
     assert!(
         state.len() >= 16,
-        "precondition: the URL carries its state (state=): {url}"
+        "precondition: the URL carries its state (state=), {} characters long",
+        url.len()
     );
     let deadline = Instant::now() + Duration::from_secs(10);
     while !std::fs::read_to_string(&opened).is_ok_and(|text| text.contains(&url)) {
         assert!(
             Instant::now() < deadline,
-            "precondition: the fake opener got the URL; it wrote: {:?}",
-            std::fs::read_to_string(&opened).ok()
+            "precondition: the fake opener got the URL; it wrote {:?} bytes",
+            std::fs::metadata(&opened)
+                .ok()
+                .as_ref()
+                .map(std::fs::Metadata::len)
         );
         std::thread::sleep(Duration::from_millis(50));
     }

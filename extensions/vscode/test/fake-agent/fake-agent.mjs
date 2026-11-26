@@ -555,7 +555,7 @@ const providerRows = [
   { id: "capture", name: "Capture", method: "apiKey", login: "apiKey", connected: scenario.providers !== "none", removable: scenario.providers !== "none" },
   { id: "openai-codex", name: "ChatGPT Plus/Pro (Codex Subscription)", method: "subscription", login: "browser", connected: false, removable: false },
   { id: "anthropic", name: "Anthropic", method: "apiKey", login: "apiKey", connected: false, removable: false },
-  // Le pont ne l'envoie jamais (décision 5) ; l'agent factice si, pour la défense de l'extension (test 11).
+  // Ticket 40 (X5) : la ligne Claude par abonnement est proposée comme les autres (décision 5 annulée).
   { id: "anthropic", name: "Anthropic (Claude Pro/Max)", method: "subscription", login: "browser", connected: false, removable: false },
 ];
 const providersView = () => providerRows.map((row) => ({ ...row }));

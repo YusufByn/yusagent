@@ -1,6 +1,6 @@
 // yusAgent (YA-10, ticket 40, X5) : l'écran Providers et le login contre l'agent factice, sur les
 // méthodes `_yus/providers/*` du pont de R5 (`crates/pa-daemon/src/acp/daemon/ya_providers.rs`),
-// formes reprises dans `test/fake-agent/fake-agent.mjs`. Tests du §12 du ticket 40 : 9, 10, 11,
+// formes reprises dans `test/fake-agent/fake-agent.mjs`. Tests du §12 du ticket 40 (et §20) : 9, 10, 11,
 // 13 (journal) et 14. Le journal de l'extension est lu : ni clé, ni URL de login, ni `state`, ni
 // réponse d'une invite (règle 9, exigence de sécurité du §10).
 
@@ -115,15 +115,17 @@ test("test 10 (ticket 40, X5) : Cancel envoie login_cancel, le login se règle e
   assert.equal(h.providers.signIn, null, "écran du login fermé, sans erreur");
 });
 
-test("test 11 (ticket 40, X5) : la ligne Anthropic par clé reste, la ligne Claude par abonnement est cachée même si l'agent l'envoie", async () => {
+// Ticket 40 (X5) : la décision 5 est annulée (Yusuf, 26/11/2026) : la ligne Claude par abonnement
+// est montrée comme les autres, à côté de la ligne Anthropic par clé.
+test("test 11 (ticket 40, X5) : la ligne Anthropic par clé et la ligne Claude par abonnement sont montrées", async () => {
   const h = open();
   const list = await listed(h);
   assert.ok(list, "liste lue");
   const rows = (providers: typeof list) => providers.filter((row) => row.id === "anthropic").map((row) => row.method);
-  assert.deepEqual(rows(list), ["apiKey"], "à l'ouverture (l'agent factice envoie aussi la ligne par abonnement)");
+  assert.deepEqual(rows(list), ["apiKey", "subscription"], "à l'ouverture");
   const error = await h.providers.setApiKey("anthropic", "sk-x5-anthropic");
   assert.equal(error, undefined, "clé acceptée");
-  assert.deepEqual(rows(h.providers.providers ?? []), ["apiKey"], "après une clé");
+  assert.deepEqual(rows(h.providers.providers ?? []), ["apiKey", "subscription"], "après une clé");
 });
 
 test("test 13 (ticket 40, X5) : un jeton MCP part par _yus/mcp/set_token, jamais dans le journal", async () => {

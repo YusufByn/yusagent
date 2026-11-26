@@ -4,8 +4,9 @@
 //! same browser and device flows, driven through a fresh auth panel whose requests become the
 //! screen's `login_update` steps (`docs/tickets/40-login-extension.md`, §16.2, option P-B).
 //!
-//! The Claude subscription row is not offered (decision 5, rule 7). A failed flow answers a
-//! fixed text: the flows' errors can carry the body of a token response (decision 5, §13.1).
+//! Every row is offered, the Claude subscription too (ticket 40, §10 decision 5 cancelled on
+//! 26/11/2026: Yusuf handles that sign-in himself). A failed flow answers a fixed text: the flows'
+//! errors can carry the body of a token response (§15 decision 5, §13.1).
 //! The flows open the sign-in page themselves, as in the TUI (decision 2). A cancel raises the
 //! panel's flag, which the Claude and Codex flows read; `FlowCancel::mark` is `pa-tui`'s own, so
 //! an MCP sign-in waiting on the browser stops at its next prompt or its end (limit).
@@ -31,8 +32,6 @@ use tokio::sync::oneshot;
 use crate::mode::RuntimeConfig;
 use crate::provider_login::ProviderAuth;
 
-/// The Claude subscription's provider id (its API key row stays).
-const ANTHROPIC: &str = "anthropic";
 const SIGN_IN_FAILED: &str = "Sign-in failed. Try again.";
 const KEY_NOT_SAVED: &str = "The key was not saved.";
 const NOT_REMOVED: &str = "The credential was not removed.";
@@ -106,8 +105,7 @@ impl ProviderSignIn for SignIn {
 
 impl SignIn {
     /// The row a sign-in runs on: a browser or device flow of the login rows, or an MCP
-    /// server's (`mcp:<server>`, as the TUI's `/mcp` view builds it). Never the Claude
-    /// subscription.
+    /// server's (`mcp:<server>`, as the TUI's `/mcp` view builds it).
     async fn login_row(&self, provider_id: &str) -> Option<ProviderRow> {
         if let Some(server) = provider_id.strip_prefix("mcp:") {
             return Some(ProviderRow {
@@ -120,9 +118,11 @@ impl SignIn {
                 available: true,
             });
         }
-        self.auth.login_options().await.into_iter().find(|row| {
-            row.id == provider_id && row.flow == AuthFlow::TerminalFlow && !claude_subscription(row)
-        })
+        self.auth
+            .login_options()
+            .await
+            .into_iter()
+            .find(|row| row.id == provider_id && row.flow == AuthFlow::TerminalFlow)
     }
 
     async fn run_login(&self, provider_id: &str, events: &SignInEvents) -> SignInOutcome {
@@ -239,16 +239,11 @@ fn team_step(
     }
 }
 
-fn claude_subscription(row: &ProviderRow) -> bool {
-    row.id == ANTHROPIC && row.auth_type == AuthType::Oauth
-}
-
 /// The screen's rows from the TUI's login rows (`login`) and stored-credential rows (`logout`):
 /// removable when stored, the source's label as the note of a credential from elsewhere.
 fn views(login: &[ProviderRow], logout: &[ProviderRow]) -> Vec<ProviderView> {
     login
         .iter()
-        .filter(|row| !claude_subscription(row))
         .map(|row| {
             let removable = logout.iter().any(|stored| stored.id == row.id);
             let note = if row.configured && !removable {
@@ -300,9 +295,10 @@ mod tests {
         }
     }
 
-    /// Test 4: the rows the screen gets; no Claude subscription row (decision 5).
+    /// Test 4: the rows the screen gets, the Claude subscription beside the Anthropic API key
+    /// (§10 decision 5 cancelled on 26/11/2026).
     #[test]
-    fn the_rows_leave_out_the_claude_subscription() {
+    fn the_rows_offer_the_claude_subscription() {
         let login = [
             row("anthropic", AuthType::Oauth, AuthFlow::TerminalFlow, false),
             row(
@@ -326,17 +322,16 @@ mod tests {
             .find(|view| view.id == "openai-codex")
             .expect("the ChatGPT subscription row");
         assert!(codex.subscription && codex.browser && codex.connected && codex.removable);
-        assert!(
-            !views
-                .iter()
-                .any(|view| view.id == "anthropic" && view.subscription),
-            "no Claude subscription row: {views:?}"
-        );
+        let claude = views
+            .iter()
+            .find(|view| view.id == "anthropic" && view.subscription)
+            .unwrap_or_else(|| panic!("the Claude subscription row: {views:?}"));
+        assert!(claude.browser && !claude.connected);
         let anthropic = views
             .iter()
-            .find(|view| view.id == "anthropic")
+            .find(|view| view.id == "anthropic" && !view.subscription)
             .expect("the Anthropic API key row stays");
-        assert!(!anthropic.subscription && !anthropic.browser);
+        assert!(!anthropic.browser);
         let openai = views
             .iter()
             .find(|view| view.id == "openai")

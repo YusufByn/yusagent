@@ -416,12 +416,12 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
-    "Providers (ticket 40, X5, test 11) : pas d'écran Local, pas de ligne Claude par abonnement (même envoyée), ligne Anthropic par clé",
+    "Providers (ticket 40, X5, test 11) : pas d'écran Local ; lignes Anthropic par clé et Claude par abonnement (décision 5 annulée)",
     async () => {
       await userClicks("Providers");
       const screen = await shows("ChatGPT Plus/Pro", "écran Providers");
       assert.ok(screen.includes("Anthropic"), "ligne Anthropic par clé");
-      assert.ok(!screen.includes("Claude Pro/Max"), "pas de ligne Claude par abonnement");
+      assert.ok(screen.includes("Anthropic (Claude Pro/Max)"), "ligne Claude par abonnement");
       assert.ok(!screen.split("\n").some((line) => line.trim() === "Local"), "pas de section Local");
       assert.ok(!screen.includes("Add a local model"), "pas d'ajout de modèle local");
       await userClicks("Back");
