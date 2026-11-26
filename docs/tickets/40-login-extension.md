@@ -1056,3 +1056,32 @@ Run `ya-extension` 45795404847, job 139824660006 :
   - test 7b : rouge sur son assertion (shard 3/8, job 139854091781, `ya_providers_tests.rs:195`, `left: "other"`, `right: "authentication"`) ;
   - test 3b : rouge sur son assertion (shard 4/8, job 139854091824, `ya_providers_acp_e2e.rs:624`, « the prompt after the key reaches openai/ya40-extra with it; requests: [] », en 15,1 s avec les relances) ;
   - autre échec, hors X5 : `concurrent_producers_drop_at_the_reserve_when_the_queue_is_full` (shard 2/8, job 139854091845). Il est listé comme instable (`docs/fork-changes.md`, « Instabilité probable : `request_timing::payload` »), avec le même symptôme. Pas de relance, noté au tableau.
+
+### 22.9 Push B (`6f2af31db`), diagnostic, test 3b corrigé (`446009b61`)
+
+- **Push B** (corrections D3 et D4 dans `ya_providers.rs`), run `ci` 45806197260 :
+  - test 7b vert ;
+  - **test 3b toujours rouge** (shard 4/8, job 139862214570, `:624`, « requests: [] »).
+- **Diagnostic** (deux pushes, test seul puis trace provisoire) :
+  - `3573380ab`, run 45809055570 : le modèle annoncé après la clé est bien `["openai","ya40-extra"]`, mais il n'y a aucune ligne `model_change` vers `openai`.
+  - `ff380dd8b`, run 45811314621 : trace **provisoire** sur le stderr du pont (trois `eprintln!` dans `refresh_session`, ids de modèle seulement, aucune clé). Elle donne : montré `amazon-bedrock`, annoncé `openai/ya40-extra`, **`usable false`**. `SetModel` n'est donc jamais parti.
+  - La trace a été retirée au commit suivant (`446009b61`). Elle n'a été dans aucun binaire ni `.vsix` remis pour le contrôle.
+- **Cause : défaut du test, pas de la correction.**
+  - En retirant la clé de `ya40`, le test rendait tout `models.json` invalide : « "apiKey" is required when defining custom models » (`crates/pa-core/src/models/custom.rs:213-216`).
+  - `openai/ya40-extra` disparaissait alors du catalogue. Le modèle annoncé était une reconstruction sur le gabarit d'`openai` (`crates/pa-core/src/models/resolver.rs:635-639`), absente des modèles disponibles.
+  - Le garde-fou « disponible » a empêché un `SetModel` vers ce modèle reconstruit, dont l'adresse aurait été celle d'OpenAI.
+- **Correction du test** (`446009b61`) : sans clé de repli, le fournisseur `ya40` est retiré, et `models.json` reste valide.
+  - Produit inchangé : `git diff --stat 6f2af31db 446009b61 -- crates/`, hors fichiers de test, est vide.
+- **Le test 3b n'a pas été vu rouge dans sa version finale** (décision de Yusuf, option B).
+  - Au push A et au push A′, il échouait avec un `models.json` invalide.
+  - La preuve du défaut est la reproduction manuelle de Yusuf à l'étape 3 (11:16, tour parti sur `amazon-bedrock`, fichier de session du contrôle). L'étape 3, refaite avec la correction, sert de preuve du vert, en plus du test.
+- **CI de `446009b61`** (runs `ci` 45813684218, `ya-extension` 45813684185) : les 16 checks requis sont verts.
+  - Shard 4/8 (job 139887970923) : 3b, 8b, 8c et `list_gives_the_providers_screen_with_the_claude_subscription` passent.
+  - Shard 8/8 (job 139887971005) : `the_rows_offer_the_claude_subscription` passe.
+  - Shard 3/8 (job 139887971286) : 7b passe.
+- **Binaire de la branche** : `~/.cache/yusagent-bin/446009b61460620afcfe4d729b6a31a88f2c5dbc/yusagent` (build 45813674765, `SHA256SUMS` OK, `--version` `0.10.2-continuous.446009b61…`).
+- **Captures** (`DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`) :
+  - `run.py --binary <446009b61>` : `runs/20261126T120251Z` ; trames de l'extension « fixture : oui », TOUT IDENTIQUE ; chemins du préfixe CONFORME ; acp-resume et acp-live CONFORME. `spawn` `ok=False`, comme sur `main`.
+  - `compare.py runs/20261126T092241Z (main c8b396caa) runs/20261126T120251Z --all` : **TOUT IDENTIQUE**.
+  - `acp_frames.py` : CONFORME ; `compare_frames.py` contre l'agent factice : **écarts : 0**.
+- **`.vsix`** du run 45813684185 : 202 158 octets, sha256 `835867ef51cbe79e95319173b7e946929471121c019465ef82b09ea5587f7a6f`. L'extension est identique à celle du `.vsix` 45796092308 (`git diff --stat de98cad72 446009b61 -- extensions/vscode` vide) ; le sha diffère par l'empaquetage.
