@@ -80,6 +80,12 @@ const EXCEPTIONS: { path: string; contains?: string; why: string }[] = [
     contains: "Unharnessed's `_unharnessed/*`",
     why: "méthodes d'Unharnessed citées comme origine des formes de `_yus/*`",
   },
+  {
+    // Ticket 40 (R5), relevé à X5 : le job de l'extension n'a pas tourné sur la PR #91.
+    path: "crates/pa-daemon/src/acp/daemon/ya_providers.rs",
+    contains: "Unharnessed's `_unharnessed/providers/*`",
+    why: "méthodes d'Unharnessed citées comme origine des formes de `_yus/providers/*`",
+  },
   // L'option du banc (décision 5) : elle désigne le dépôt d'Unharnessed qu'on mesure.
   {
     path: "bench/smoke/ab/ya09-bash-count.py",
