@@ -1690,6 +1690,7 @@ Le code devenu inutile côté kernel n'est pas retiré (`_read_auth`, `_bound_au
 | `skills/websearch/src/websearch/websearch.py` | modif. (fichier upstream, +17, −11) | `run` appelle `websearch.search` et garde son message d'aide quand aucune clé n'est configurée ; découpe de la sortie extraite en `_clip`. | YA-11 (ticket 41) |
 | `prime-agent-runtime/test/test_ya_secret_relay.py` | nouveau | Client MCP générique, intégration `mcp_base` et skill websearch : pas de lecture d'`auth.json`, pas d'`Authorization`, passage par le relais. | YA-11 (ticket 41) |
 | `prime-agent-runtime/test/test_mcp.py`, `test_mcp_base.py` | modif. (tests upstream) | Sept tests réécrits (tableau ci-dessous). | YA-11 (ticket 41) |
+| `scripts/check_kernel_env.py` | modif. (contrôle de cycle de vie upstream, +3, −2) | `expected` : `SERPER_API_KEY` vaut toujours `None` dans le kernel, même nommée dans `kernel.envAllowlist` (réponse 13). Auparavant, la clé résolue (`resolved-fixture-key`) ou la clé ambiante y étaient attendues. Échec relevé au run `ci` 45871612250, shard 1, reçu `kernel_env.json`. Le contrôle « la commande de la clé ne tourne que si le skill ou la variable ambiante le demande » ne change pas. | YA-11 (ticket 41) |
 
 **Tests upstream dont l'assertion change**
 
@@ -1704,6 +1705,8 @@ Aucun test n'est supprimé. Les règles qu'ils vérifiaient côté kernel sont r
 | `test_mcp.py` `test_static_token_bearer_is_never_env_or_command_resolved` | aucune valeur d'environnement dans les en-têtes du kernel | `mcp_http_relay_attaches_a_pasted_token_literally` (nom de variable, `!commande`, espaces) |
 | `test_mcp.py` `test_static_token_auth_identity_hashes_the_bound_bearer` | `_auth_identity` rend `"relay"` | **Règle retirée** : l'identité de génération ne dépend plus du jeton. Le worker lit le jeton à chaque requête, donc un jeton changé s'applique sans reconnexion |
 | `test_mcp_base.py` `test_open_session_uses_headers_signature` | un SDK qui ne prend que `headers=` est refusé (`TypeError`) et ne reçoit aucun jeton | `mcp_http_relay_adds_the_bound_token_and_returns_no_secret` (le worker ajoute le jeton) |
+
+`scripts/check_kernel_env.py` (cas `command_key_and_prefix`, `ambient_key_wins`, `blank_ambient_resolves`) attend désormais `serper: None`. La règle « jamais dans le kernel » est vérifiée de bout en bout par ce contrôle, sur le vrai binaire.
 
 Le test `a_stored_serper_key_reaches_the_kernel_env` (`crates/pa-core/src/kernel/provisioner.rs:1442`) garde son assertion. Il lit l'environnement préparé par le provisionneur, avant le retrait final du lancement, que vérifie `serper_api_key_never_reaches_the_kernel_even_when_named`.
 

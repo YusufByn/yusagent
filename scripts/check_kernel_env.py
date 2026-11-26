@@ -90,8 +90,9 @@ def expected(case):
     key = case['ambient']
     if case['skill'] and (key is None or not key.strip()):
         key = 'resolved-fixture-key'
-    if not case.get('allow_serper', True):
-        key = None
+    # yusAgent (YA-11, ticket 41): SERPER_API_KEY never reaches the kernel, even named in
+    # kernel.envAllowlist (the websearch relay reads it in the worker).
+    key = None
     prefix = case['prefix'] or None
     return {'serper': key, 'prefix': prefix,
             'bash_output': 'prefix-ran' if prefix else 'ABSENT', 'bash_exit': 0}
