@@ -16,3 +16,4 @@ PRIME_AGENT_PROMPT_VERSION = "1"
 # sandbox" warning on stderr, which the default does in `-p` and RPC. Read by debug builds only
 # (release builds ignore it); a test that sets its own value (or removes it) keeps it.
 PRIME_AGENT_TEST_PERMISSIONS = "auto"
+PRIME_AGENT_SECRET_GUARD = "off" # yusAgent (YA-11, ticket 41): no Linux mechanism before PR C; guard tests force it on.

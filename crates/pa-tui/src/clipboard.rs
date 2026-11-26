@@ -57,7 +57,7 @@ const OVERSIZED_REMOTE_COPIED: &str =
     "Payload too large for terminal forwarding; copied to the remote machine's clipboard instead";
 
 fn tmux_output(args: &[&str]) -> Option<String> {
-    let mut child = Command::new("tmux")
+    let mut child = pa_types::platform::ya_guard::command("tmux")
         .args(args)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -226,7 +226,7 @@ const PIPE_POLL: Duration = Duration::from_millis(20);
 /// Run `program` with `text` on its stdin: a helper that does not finish
 /// inside the cap is killed and reported as a failed copy.
 fn pipe_to(program: &str, args: &[&str], text: &str) -> bool {
-    let Ok(mut child) = Command::new(program)
+    let Ok(mut child) = pa_types::platform::ya_guard::command(program)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

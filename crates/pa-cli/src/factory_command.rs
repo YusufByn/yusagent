@@ -267,7 +267,7 @@ fn resolve_kernel_python() -> Result<PathBuf, String> {
 
 /// Drive one `rlm.factory.cli_dispatch` payload through the kernel Python.
 fn dispatch_via_kernel(python: &std::path::Path, payload: &Value) -> Result<Value, String> {
-    let mut child = Command::new(python);
+    let mut child: Command = pa_types::platform::ya_guard::command(python);
     child
         .args(["-c", CLI_DISPATCH_RUNNER])
         .stdin(Stdio::piped())

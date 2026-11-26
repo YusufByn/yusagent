@@ -535,6 +535,7 @@ pub(crate) enum Outbound {
 ///
 /// Returns an error when the supervisor cannot start or its serve loop fails.
 pub async fn run_supervisor(options: SupervisorOptions) -> Result<()> {
+    pa_types::platform::ya_guard::supervisor_start(&options.agent_dir, &options.socket_path);
     let supervisor = Arc::new(Supervisor::new(options)?);
     supervisor.run().await
 }

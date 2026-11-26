@@ -11,7 +11,7 @@ fn python_imports(python: &str, module_name: &str) -> bool {
 }
 
 fn run_quiet(command: &str, args: &[&str]) -> bool {
-    let mut child = std::process::Command::new(command);
+    let mut child = pa_types::platform::ya_guard::command(command);
     child
         .args(args)
         .stdin(Stdio::null())

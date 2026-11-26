@@ -146,14 +146,14 @@ pub fn spawn_gist_create(file: &Path) -> std::io::Result<tokio::process::Child> 
 fn gh_command() -> tokio::process::Command {
     // CREATE_NO_WINDOW: the loader surfaces the wait, not a console window.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let mut command = tokio::process::Command::new("gh");
+    let mut command = pa_types::platform::ya_guard::tokio("gh");
     command.creation_flags(CREATE_NO_WINDOW);
     command
 }
 
 #[cfg(unix)]
 fn gh_command() -> tokio::process::Command {
-    tokio::process::Command::new("gh")
+    pa_types::platform::ya_guard::tokio("gh")
 }
 
 /// The blocking `gh` probe command, hidden on Windows the same way.
@@ -161,14 +161,14 @@ fn gh_command() -> tokio::process::Command {
 fn gh_probe_command() -> std::process::Command {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let mut command = std::process::Command::new("gh");
+    let mut command = pa_types::platform::ya_guard::command("gh");
     command.creation_flags(CREATE_NO_WINDOW);
     command
 }
 
 #[cfg(unix)]
 fn gh_probe_command() -> std::process::Command {
-    std::process::Command::new("gh")
+    pa_types::platform::ya_guard::command("gh")
 }
 
 #[cfg(test)]

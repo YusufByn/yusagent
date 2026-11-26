@@ -174,13 +174,15 @@ async fn the_kernel_cannot_reach_the_credentials_the_socket_or_the_binary() {
     let outside = root_path.join("custom").join("daemon.sock");
     std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
     let _outside_listener = UnixListener::bind(&outside).unwrap();
-    pa_types::platform::ya_secret_guard::register_sockets(vec![outside.clone()]);
+    pa_types::platform::ya_guard::register_sockets(vec![outside.clone()]);
 
     let exe = std::env::current_exe().unwrap().canonicalize().unwrap();
     let package = exe.with_file_name("package.json");
     let package_existed = package.exists();
     let code = cell(&agent, &project, &socket, &outside, &exe);
 
+    // The guard reads the agent dir of the launching process (the worker's in the product).
+    std::env::set_var("PRIME_AGENT_CODING_AGENT_DIR", &agent);
     // Guard on (forced: the other tests switch it off through `.cargo/config.toml`).
     std::env::remove_var(SWITCH);
     let guarded = run_cell(&python, &project, &agent, &code).await;

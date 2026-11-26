@@ -79,7 +79,7 @@ async fn run_async(command: &str, args: &[String]) -> anyhow::Result<()> {
     let command = command.to_string();
     let args = args.to_vec();
     tokio::task::spawn_blocking(move || {
-        let mut child = std::process::Command::new(&command);
+        let mut child = pa_types::platform::ya_guard::command(&command);
         child.args(&args).stdin(Stdio::null());
         // Hidden window on Windows (TS `spawnHidden`).
         crate::platform::process::set_no_window(&mut child);

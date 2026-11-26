@@ -66,8 +66,8 @@ fn run_command(command: &str) -> Result<Option<String>> {
 /// shell; Windows tries the configured shell first and falls back to `ComSpec`.
 #[cfg(unix)]
 fn hidden_spawn(command: &str) -> Result<Option<std::process::Output>> {
-    use std::process::{Command, Stdio};
-    let output = Command::new("bash")
+    use std::process::Stdio;
+    let output = pa_types::platform::ya_guard::command("bash")
         .arg("-c")
         .arg(command)
         .stdin(Stdio::null())

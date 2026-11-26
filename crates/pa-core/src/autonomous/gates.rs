@@ -400,7 +400,7 @@ async fn run_child_process(
     cwd: &Path,
     timeout_ms: u64,
 ) -> anyhow::Result<ChildProcessResult> {
-    let mut child = tokio::process::Command::new(program)
+    let mut child = pa_types::platform::ya_guard::tokio(program)
         .args(args)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())

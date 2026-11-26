@@ -2,6 +2,8 @@
 
 Lance le binaire `yusagent` (`prime-agent` avant le ticket 19) contre un serveur HTTP local qui enregistre chaque requête modèle et renvoie des réponses factices, puis analyse le préambule, le préfixe N/N+1 et les variations entre sessions. Aucun vrai modèle, aucune clé, aucun login.
 
+**Protection des secrets coupée dans le banc** (ticket 41, réponse 7) : le banc lance le binaire sous son propre `sandbox-exec`, et une sandbox imbriquée est refusée ; il pose donc `PRIME_AGENT_SECRET_GUARD=off`. Le kernel du banc n'est pas protégé comme celui du produit : le préfixe envoyé au modèle est le même, seuls les refus (fichiers d'identifiants, sockets, `LaunchServices`, setuid) diffèrent. Le kernel protégé est vérifié sans enveloppe externe par `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs` (test 3).
+
 ## Commande unique
 
 ```bash

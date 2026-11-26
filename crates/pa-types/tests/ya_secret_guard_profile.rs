@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use pa_types::platform::ya_secret_guard::{profile, GuardPaths, Variant};
+use pa_types::platform::ya_guard::{profile, GuardPaths, Variant};
 
 fn paths() -> GuardPaths {
     GuardPaths {

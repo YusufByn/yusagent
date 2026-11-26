@@ -165,7 +165,7 @@ impl Inner {
 
         let env = kernel_spawn_env(&self.options.env);
         let cwd = self.options.cwd.clone();
-        let mut command = tokio::process::Command::new(&python);
+        let mut command = pa_types::platform::ya_guard::model_tokio(&python);
         command
             .args(["-m", "rlm.repl"])
             .stdin(std::process::Stdio::piped())

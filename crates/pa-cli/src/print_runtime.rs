@@ -83,6 +83,7 @@ impl crate::mode::Runtime for PrintRuntime {
 /// until the client disconnects. Any startup failure is an `Error:` exit 1
 /// before the first ACP frame.
 fn run_acp_mode(options: &RunOptions) -> Result<i32, String> {
+    pa_types::platform::ya_guard::warn_if_off();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

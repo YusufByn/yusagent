@@ -2,7 +2,7 @@
 //! login dialog's command table — darwin `open`, Windows
 //! `rundll32 url.dll,FileProtocolHandler`, otherwise `xdg-open`).
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 #[cfg(target_os = "macos")]
 fn opener(url: &str) -> (&'static str, Vec<String>) {
@@ -33,7 +33,7 @@ fn opener(url: &str) -> (String, Vec<String>) {
 /// the login.
 pub fn open_in_browser(url: &str) {
     let (program, args) = opener(url);
-    let _ = Command::new(program)
+    let _ = pa_types::platform::ya_guard::browser(program, url)
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -58,7 +58,7 @@ mod tests {
     fn browser_launch_uses_system32_program_and_dll_entrypoint_arguments() {
         let url = "https://example.com/login?state=a%20b&code=c";
         let (program, args) = opener(url);
-        let command = Command::new(&program);
+        let command = std::process::Command::new(&program);
         let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
         let expected_program = std::path::Path::new(&system_root)
             .join("System32")

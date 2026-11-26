@@ -3,12 +3,12 @@
 //! `list_agent_peers`; the worker arms the selector forms forward to.
 
 use std::path::{Path, PathBuf};
-use std::process::Command as StdCommand;
 use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 
 use pa_types::daemon::DaemonCommand;
+use pa_types::platform::ya_guard;
 
 use crate::lease::canonical_session_path;
 use crate::protocol::{response_failure, response_line, response_success, DaemonResponse};
@@ -114,7 +114,7 @@ pub(crate) fn delete_session_file_after_file_removed(
     path: &Path,
     after_file_removed: &dyn Fn(&Path),
 ) -> Value {
-    let trash = StdCommand::new("trash").arg("--").arg(path).output();
+    let trash = ya_guard::command("trash").arg("--").arg(path).output();
     let removed_by_trash = match trash {
         Ok(output) => output.status.success() || !path.exists(),
         Err(_) => false,

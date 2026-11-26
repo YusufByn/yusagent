@@ -173,7 +173,7 @@ pub async fn run_update_command(options: &UpdateCommandOptions) -> Result<i32> {
 
     // Spawn the detached coordinator (the new - or previous - binary) and
     // hand the lock over (spec §3: only the status file couples them).
-    let mut command = std::process::Command::new(&coordinator_exe);
+    let mut command = pa_types::platform::ya_guard::command(&coordinator_exe);
     command
         .args([
             "update",

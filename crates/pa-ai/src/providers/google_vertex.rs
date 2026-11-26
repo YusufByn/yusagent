@@ -101,7 +101,7 @@ fn resolve_adc_access_token() -> Result<String, String> {
             return Ok(token.trim().to_string());
         }
     }
-    let output = std::process::Command::new("gcloud")
+    let output = pa_types::platform::ya_guard::command("gcloud")
         .args(["auth", "print-access-token"])
         .output()
         .map_err(|error| format!("Failed to run gcloud for ADC access token: {error}"))?;

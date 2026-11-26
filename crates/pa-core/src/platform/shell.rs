@@ -115,7 +115,7 @@ pub fn get_shell_config(_custom_shell_path: Option<&str>) -> anyhow::Result<Shel
 
 #[cfg(unix)]
 fn find_bash_on_path() -> Option<String> {
-    let out = std::process::Command::new("which")
+    let out = pa_types::platform::ya_guard::command("which")
         .arg("bash")
         .output()
         .ok()?;

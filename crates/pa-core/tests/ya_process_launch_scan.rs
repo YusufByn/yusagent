@@ -1,5 +1,5 @@
 //! yusAgent (YA-11, ticket 41, PR A, answer 17): every process the worker, the supervisor, the
-//! bridge or the TUI launches goes through the guard (`ya_secret_guard::command`), so no process
+//! bridge or the TUI launches goes through the guard (`pa_types::platform::ya_guard`), so no process
 //! launched by yusAgent can read the credential files.
 //!
 //! - `every_process_launch_goes_through_the_guard`: the sources of the crates linked into the
@@ -45,7 +45,7 @@ const LAUNCH_PATTERNS: &[&str] = &[
 ];
 
 /// The guard module itself builds the wrapped commands.
-const GUARD_FILE: &str = "ya_secret_guard.rs";
+const GUARD_FILE: &str = "ya_guard.rs";
 
 const RELAUNCH: &str = "relance du binaire yusAgent";
 const WINDOWS: &str = "propre à Windows";

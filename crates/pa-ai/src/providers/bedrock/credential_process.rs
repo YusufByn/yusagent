@@ -129,7 +129,7 @@ async fn run(command: &str) -> Option<Vec<u8>> {
     };
     #[cfg(not(windows))]
     let mut process = {
-        let mut process = tokio::process::Command::new("sh");
+        let mut process = pa_types::platform::ya_guard::tokio("sh");
         process.args(["-c", command]);
         process
     };

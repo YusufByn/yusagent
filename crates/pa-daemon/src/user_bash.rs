@@ -583,7 +583,7 @@ async fn run_bash(run: RunBash<'_>) -> BashEnd {
         Ok(shell) => shell,
         Err(error) => return spawn_failure(error.to_string()),
     };
-    let mut command = tokio::process::Command::new(&shell.shell);
+    let mut command = pa_types::platform::ya_guard::tokio(&shell.shell);
     command
         .args(&shell.args)
         .arg(&resolved)

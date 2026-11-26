@@ -130,7 +130,7 @@ pub async fn binary_reported_version(exe: &Path) -> Result<String> {
     const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
     const MAX_VERSION_OUTPUT: usize = 512;
     let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
-    let mut child = tokio::process::Command::new(exe)
+    let mut child = pa_types::platform::ya_guard::tokio(exe)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

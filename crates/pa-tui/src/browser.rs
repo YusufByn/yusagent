@@ -4,7 +4,7 @@
 //! to an absolute path: a bare name would search the inherited `PATH`.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// The fixed `xdg-open` tool slots — searched in order, the first that
 /// exists wins.
@@ -52,7 +52,7 @@ pub(crate) fn open_in_browser(url: &str) {
     let Some((program, args)) = opener(url) else {
         return;
     };
-    let Ok(mut child) = Command::new(program)
+    let Ok(mut child) = pa_types::platform::ya_guard::browser(program, url)
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
