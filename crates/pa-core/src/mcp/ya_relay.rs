@@ -196,11 +196,13 @@ async fn bound_token(
         AuthCredential::McpStaticToken {
             bearer,
             endpoint: Some(endpoint),
-        } if endpoint == url => Some(bearer.trim().to_string()).filter(|bearer| !bearer.is_empty()),
+        } if endpoint == url => {
+            crate::auth::resolve_config_value::resolve_config_value(bearer.trim())
+        } // MUTATION M3 (ticket 41): pasted bearer resolved
         AuthCredential::Oauth {
             endpoint: Some(endpoint),
             ..
-        } if !static_only && endpoint == url => store.get_api_key(&provider),
+        } if !static_only && !endpoint.is_empty() => store.get_api_key(&provider), // MUTATION M1 (ticket 41): any endpoint
         _ => None,
     }
 }
@@ -233,7 +235,7 @@ async fn bearer_for(
                 None
             };
             if stored.is_none() && (*oauth || env.is_some()) {
-                return Err(credentials_unavailable(server));
+                return Ok(None); // MUTATION M2 (ticket 41): fail-closed dropped
             }
             Ok(stored)
         }
@@ -290,11 +292,7 @@ async fn mcp_http(
         Some(_) => bearer_for(&route, auth, server, url).await?,
         // Outside the settings, the bound credential is the only proof that this URL is the
         // server's: without one, nothing is sent.
-        None => Some(
-            bearer_for(&route, auth, server, url)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("MCP server '{server}' is not configured"))?,
-        ),
+        None => bearer_for(&route, auth, server, url).await?, // MUTATION M4 (ticket 41): unconfigured server sent anyway
     };
 
     let mut headers = reqwest::header::HeaderMap::new();
