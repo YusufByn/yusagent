@@ -620,6 +620,8 @@ Si ce test retombe sur une PR suivante : enquête.
 | 44593768562 | `897b0f758` | 1 | test réussi (le run a échoué sur d'autres tests) |
 | 44601054912 | `8efe27bdf` | 1 | échec du shard 8 (job 135832457352) |
 | 44604335224 | `74137ca47` | 1 | réussi, aucun changement de code (le push de la passation compte comme la relance, accord de Yusuf, commenté dans la PR #63) |
+| 45824622225 | `e7cd09922` (`ya-40-x5`, PR #92), 26/11/2026 | 1 (job 139925725503) | échec du shard 8/8, même symptôme (`rpc_mode_e2e.rs:1399`) |
+| 45824622225 | `e7cd09922` (`ya-40-x5`, PR #92) | 2 (job 139933317263, relance du job seul, sans push) | réussi, aucun changement de code ; relance notée dans un commentaire de la PR #92 |
 
 Symptôme : « the compaction never ran behind the stalled reader: the flush wedged the command on the reader » à `rpc_mode_e2e.rs:1399`. Le test attend au plus 4 s la ligne `"compaction"` dans le fichier de session, lecteur de sortie bloqué (`:1385-1397`). Hypothèse : borne de temps trop courte sur un runner chargé. Entre `897b0f758` et `8efe27bdf`, aucun code du produit ne change. Dans ce fichier, la PR #63 ne change que le chemin du venv de test (`:61-62`).
 
