@@ -180,3 +180,31 @@ fn the_guard_texts_are_authentication_failures() {
         "another failure keeps its kind"
     );
 }
+
+/// Test 7b (ticket 40, X5, D4): the providers' own texts for a missing credential, raised at the
+/// request (`pa-ai`'s `providers/bedrock/mod.rs`, and `No API key for provider:` in the `OpenAI`,
+/// Azure, Codex, Mistral and Anthropic providers), answer `kind: "authentication"`. Vertex's
+/// project and location texts are configuration, not a credential: they keep their kind.
+#[test]
+fn the_providers_missing_credential_texts_are_authentication_failures() {
+    let kind = |failure: &str| {
+        crate::acp::turn_failure_error(&json!(1), failure, "yusagent turn failed")["error"]["data"]
+            ["kind"]
+            .clone()
+    };
+    assert_eq!(
+        kind("yusagent turn failed: No AWS credentials available for Bedrock"),
+        "authentication",
+        "Bedrock without AWS credentials"
+    );
+    assert_eq!(
+        kind("yusagent turn failed: No API key for provider: openai"),
+        "authentication",
+        "a provider without its key"
+    );
+    assert_ne!(
+        kind("yusagent turn failed: Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or pass project in options."),
+        "authentication",
+        "a configuration text keeps its kind"
+    );
+}

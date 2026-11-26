@@ -12,6 +12,9 @@
 //!     the next request.
 //! 2. `_yus/providers/set_api_key` pushes the key into the running session.
 //! 3. After a key for a new provider, the model picker lists its models (`config_option_update`).
+//! 3b. A session opened without any credential runs on the daemon's fallback model, the first of
+//!     the catalog; a key set through the bridge moves the engine onto the model announced after
+//!     it (X5, D3), not only the picker.
 //! 4. `_yus/providers/list`: the rows of the providers screen, the Claude subscription among them
 //!    (§10 decision 5 cancelled on 26/11/2026).
 //! 5. `set_api_key` stores the key in `auth.json` (0600) and never answers it back.
@@ -150,6 +153,15 @@ impl Home {
     /// `openai` (a built-in provider) gets a `ya40-extra` model without a fallback key when
     /// `with_openai`: it is listed only once a key is stored (test 3).
     fn new(with_openai: bool) -> Home {
+        Home::build(with_openai, true)
+    }
+
+    /// No credential anywhere: `ya40` without its `models.json` fallback key (D3).
+    fn without_fallback() -> Home {
+        Home::build(false, false)
+    }
+
+    fn build(with_openai: bool, fallback: bool) -> Home {
         let dir = tempfile::TempDir::new().unwrap();
         let server = ModelServer::start();
         let agent_dir = dir.path().join(".yusagent");
@@ -166,6 +178,12 @@ impl Home {
             "baseUrl": base_url, "apiKey": FALLBACK, "api": "openai-responses",
             "models": [model("ya40-model")]
         }});
+        if !fallback {
+            providers["ya40"]
+                .as_object_mut()
+                .expect("the ya40 provider")
+                .remove("apiKey");
+        }
         if with_openai {
             providers["openai"] = json!({
                 "baseUrl": base_url, "api": "openai-responses", "models": [model("ya40-extra")]
@@ -243,12 +261,33 @@ impl Client {
 
     /// [`Client::spawn`], with the command adjusted before it starts.
     fn spawn_with(home: &Home, adjust: impl FnOnce(&mut Command)) -> Client {
+        Client::launch(home, true, adjust)
+    }
+
+    /// Like the extension: no `--provider` nor `--model`, the daemon picks the startup model (D3).
+    fn spawn_bare(home: &Home) -> Client {
+        Client::launch(home, false, |command| {
+            for name in [
+                "AWS_PROFILE",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_BEARER_TOKEN_BEDROCK",
+            ] {
+                command.env_remove(name);
+            }
+        })
+    }
+
+    fn launch(home: &Home, model_flags: bool, adjust: impl FnOnce(&mut Command)) -> Client {
         let stderr = std::fs::File::create(home.stderr_file()).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_prime-agent"));
         command
             .args(["--mode", "acp", "--daemon-socket"])
-            .arg(&home.socket)
-            .args(["--provider", "ya40", "--model", "ya40-model"])
+            .arg(&home.socket);
+        if model_flags {
+            command.args(["--provider", "ya40", "--model", "ya40-model"]);
+        }
+        command
             .env("HOME", home.path())
             .env("PRIME_AGENT_KERNEL_PYTHON", kernel_python())
             .env(
@@ -412,6 +451,7 @@ fn labels(home: &Home) -> Vec<&'static str> {
             |value| match value.strip_prefix("Bearer ").unwrap_or(value) {
                 "sk-ya40-old" | "tok-ya40-old" => "old",
                 "sk-ya40-renewed" | "tok-ya40-renewed" => "renewed",
+                "sk-ya40-moved" => "moved",
                 FALLBACK => "fallback",
                 "" => "none",
                 _ => "other",
@@ -534,6 +574,50 @@ fn a_new_key_lists_its_models_in_the_running_conversation() {
         client.seen[from..].iter().any(&lists_extra),
         "the picker lists {extra} once its key is stored; frames: {:?}",
         &client.seen[from..]
+    );
+}
+
+/// Test 3b (X5, D3): without any credential, the session opens on the daemon's fallback model,
+/// the first of the catalog (`amazon-bedrock`, `agent_engine/model.rs`), and its agent is built
+/// on it. A key set through the bridge makes `ya40-model` the announced model; the next prompt
+/// must reach it with the key, not the agent built on the fallback model.
+#[test]
+fn a_key_moves_a_session_opened_without_credentials_off_the_fallback_model() {
+    let home = Home::without_fallback();
+    home.write_auth(&json!({}));
+    let mut client = Client::spawn_bare(&home);
+    let _ = client.call(
+        "initialize",
+        &json!({ "protocolVersion": 1, "clientCapabilities": {} }),
+    );
+    let new = client.call("session/new", &json!({ "mcpServers": [] }));
+    let session = new["result"]["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("session/new: {new}"))
+        .to_string();
+    let current = new["result"]["configOptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|option| option["id"] == "model")
+        .map_or(Value::Null, |option| option["currentValue"].clone());
+    assert!(
+        current
+            .as_str()
+            .is_some_and(|value| value.contains("amazon-bedrock")),
+        "precondition: the session opens on the fallback model; model option: {current}"
+    );
+    let set = client.call(
+        "_yus/providers/set_api_key",
+        &json!({ "providerId": "ya40", "apiKey": "sk-ya40-moved" }),
+    );
+    assert_eq!(set["result"]["outcome"], "done", "{set}");
+    let _ = client.prompt(&session, "after the key");
+    assert_eq!(
+        home.server.authorizations(),
+        [String::from("Bearer sk-ya40-moved")],
+        "the prompt after the key reaches ya40 with it; requests: {:?}",
+        labels(&home)
     );
 }
 
