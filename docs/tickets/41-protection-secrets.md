@@ -790,6 +790,73 @@ Le profil complet s'applique au kernel, à ses descendants et aux lancements env
 - **Login MCP depuis l'extension** : **pas touché**. Le flux tourne dans le pont (`crates/pa-cli/src/print_runtime/ya_acp_providers.rs:106-166`), qui ouvre le navigateur par `login_open` (`crates/pa-daemon/src/acp/daemon/ya_providers.rs:42`, `:436`), sous la même variante.
 - **À mesurer à la PR A** : une valeur `!…` ou un `credential_process` qui s'appuie sur une application de bureau, par exemple un gestionnaire de mots de passe dont la CLI lancerait l'application par LaunchServices si elle ne tourne pas. `security` (trousseau) passe par un autre service ; c'est déduit, non mesuré.
 
+## T. PR B (PR #93) : relevé du push 1 et plan du push 2 (26/11/2026)
+
+### T.1 Push 1 : tests seuls
+
+- `crates/pa-core/tests/ya_secret_relay.rs` (nouveau, fork) et `prime-agent-runtime/test/test_ya_secret_relay.py` (nouveau, fork).
+- `99c3b8f4d`, run `ci` 45850576629 : **le test Rust ne compilait pas**. Il manquait les champs `client_secret` et `scopes` de `McpServerConfig::Http` (`crates/pa-core/src/mcp/mod.rs:135-140`). Clippy (workspace et Windows) et le shard 1 sont tombés sur cette erreur. Corrigé par `596783b4d`.
+- `a91207b34`, run `ci` 45852970664 :
+  - **clippy** (`while_let_loop`, `ya_secret_relay.rs:64`) a fait échouer `check + clippy` et le job Windows. Corrigé par le push 1 ter ;
+  - **test shard 1/8** : seule l'unité `pa-core#test:ya_secret_relay` échoue. Ses 6 tests échouent chacun sur son assertion :
+
+| Test | Assertion en échec |
+|---|---|
+| `mcp_http_relay_adds_the_bound_token_and_returns_no_secret` | `relay mcp.http absent: the kernel still calls the MCP server itself, with the token` |
+| `mcp_http_relay_refuses_a_url_other_than_the_configured_one` | `relay mcp.http absent` |
+| `mcp_http_relay_answers_the_get_stream_with_405_without_calling_the_server` | `relay mcp.http absent` |
+| `mcp_config_never_hands_the_kernel_a_literal_header` | `mcp.config hands the kernel a user header: {"type":"http","url":"http://127.0.0.1:39281/mcp","headers":{"X-Api-Key":"ya41-sentinel-user-header-5e1b"}}` |
+| `websearch_relay_adds_the_stored_key_and_returns_no_secret` | `relay websearch.search absent: the kernel still reads the Serper key itself` |
+| `serper_api_key_never_reaches_the_kernel_even_when_named` | `SERPER_API_KEY is a harness credential (ticket 41, answer 13)` |
+
+  - **suite du runtime** (CPython 3.11) : 823 tests, 3 échecs, exactement les 3 tests de `test_ya_secret_relay.py`, chacun sur son assertion (`the kernel read auth.json`, `the integration read auth.json`, `[] != ['websearch.search']`).
+  - Autres jobs verts.
+
+### T.2 Push 2 : le code, lignes upstream (à valider avant de coder)
+
+Lignes de l'arbre à `a91207b34`. Les nombres de lignes sont des estimations.
+
+**Rust**
+- Nouveau module du fork `crates/pa-core/src/mcp/ya_relay.rs`, d'environ 250 lignes :
+  - handlers `mcp.http` et `websearch.search` ;
+  - URL du serveur prise dans la configuration (utilisateur, catalogue, ACP), jamais celle du kernel. Il faut qu'elle soit égale à l'`endpoint` lié pour un identifiant OAuth ou un jeton collé ;
+  - en-têtes configurés et jeton ajoutés par le worker ;
+  - GET refusé par un 405 ;
+  - réponse complète `{status, headers, body}` ;
+  - clé Serper prise dans `SERPER_API_KEY` du worker, sinon dans `serper` d'`auth.json` (avec résolution `!…`), puis POST vers l'URL fixe de Serper. Le test peut la remplacer par `PRIME_AGENT_TEST_SERPER_URL`.
+- `crates/pa-core/src/mcp/mod.rs`, environ 8 à 10 lignes :
+  - déclaration `mod ya_relay;` (après `:21`) ;
+  - appel d'enregistrement à la fin de `register_host_handlers` (`:601` et suivantes, après le bloc `mcp.begin_login`) ;
+  - retrait des `headers` aux trois retours de `mcp.config` (ACP `:702-710`, catalogue `:724-735`, utilisateur `:740`).
+- `crates/pa-core/src/kernel/env_allowlist.rs` (fichier du fork) : `SERPER_API_KEY` dans `EXTRA_HARNESS_CREDENTIALS` (`:119-131`).
+- `crates/pa-core/src/session_engine/runtime_wiring.rs` : retrait de l'injection de `SERPER_API_KEY` dans l'environnement du kernel (`:296-298`) et du paramètre `serper_api_key` (`:259`), environ 5 lignes. `websearch_api_key` (`:332-360`) reste, appelé par le relais.
+- `crates/pa-core/src/session_engine/engine.rs` : retrait du calcul de la clé Serper pour le kernel (`:600-614`) et de son passage (`:653`), environ 15 lignes.
+- `crates/pa-core/tests/prompt_guards.rs` : `mcp.http` et `websearch.search` dans `INTERNAL_HOST_REQUESTS` (`:180-190`), 2 lignes. Ces requêtes sont de la plomberie interne ; le prompt ne les documente pas.
+
+**Python** (le kernel)
+- Nouveau module du fork `prime-agent-runtime/src/rlm/ya_relay.py`, d'environ 80 lignes : transport `httpx2` qui envoie chaque requête par `host_request("mcp.http")`.
+- `prime-agent-runtime/src/rlm/mcp.py`, de l'ordre de 60 à 90 lignes retirées ou changées :
+  - `_open_http` (`:275-300`) passe par le transport du relais, sans en-têtes ;
+  - retrait de `_headers` (`:956-978`), `_static_token` (`:942-953`), `_bound_auth` (`:893-904`) et `_read_auth` (`:1085-1094`) ;
+  - `_auth_identity` (`:889`, `:914-940`) n'utilise plus le jeton. Clé de réutilisation proposée : serveur et URL.
+- `prime-agent-runtime/src/rlm/mcp_base.py`, environ 40 lignes : `_read_auth` (`:68-77`), `_token` (`:142-165`), `_resolve_token` (`:167-190`) et `_open_session` (`:199-240`) passent par le relais.
+- `skills/websearch/src/websearch/websearch.py`, environ 40 lignes :
+  - `run` appelle `host_request("websearch.search", {"query", "num"})` ;
+  - retrait de `_resolve_api_key`, `_resolve_config_value`, `_agent_dir` et de l'appel direct à Serper (`:10-17`, `:29-60`, `:117-136`) ;
+  - le formatage des résultats ne change pas.
+
+**Tests upstream dont l'assertion change**, parce que le comportement passe du kernel au worker :
+- `prime-agent-runtime/test/test_mcp.py`, 7 tests :
+  - `test_acp_headers_never_consult_or_override_host_oauth` (`:329`) ;
+  - `test_endpoint_bound_credential_never_attaches_to_another_url` (`:360`) et `test_unbound_credential_requires_relogin` (`:374`) ;
+  - `test_static_token_headers_attach_only_from_the_bound_credential` (`:380`), `test_static_token_failure_is_the_kernel_unavailable_error` (`:405`), `test_static_token_bearer_is_never_env_or_command_resolved` (`:419`) et `test_static_token_auth_identity_hashes_the_bound_bearer` (`:434`).
+  - Les règles qu'ils vérifient (`endpoint` lié, re-login, jeton collé jamais résolu par l'environnement ni par une commande) sont reportées dans des tests Rust du relais.
+- `prime-agent-runtime/test/test_mcp_base.py` : lecture du jeton (`:72-145`) et signatures d'ouverture (`:243-279`), même report.
+
+**Préfixe** : inchangé.
+- Les nouvelles requêtes sont internes (`prompt_guards.rs`), et ni `SKILL.md` ni les descriptions de skills ne changent : le `SKILL.md` de websearch renvoie déjà à `/mcp` pour la clé (`skills/websearch/SKILL.md:3`, `:12-13`).
+- Seuls des textes d'erreur, dans le résultat d'une cellule, peuvent changer : relais refusé, serveur sans identifiant.
+
 ## Annexe : mesures macOS
 
 Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des sorties de sandbox du §R.2, 48 essais) :
