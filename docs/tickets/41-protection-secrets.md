@@ -889,6 +889,16 @@ Lignes de l'arbre à `a91207b34`. Les nombres de lignes sont des estimations.
 - **Écart** : les 4 tests Rust qui reprennent ces règles (`…_bound_elsewhere_or_unbound`, `…_fails_closed_with_the_unavailable_message`, `…_attaches_a_pasted_token_literally`, `…_outside_the_settings_without_a_bound_credential`) arrivent avec le code, au push 2. Ils n'ont donc pas été vus rouges : ils portent des règles qui existaient déjà côté kernel.
 - La règle « l'identité de génération suit le jeton » est retirée : le worker lit le jeton à chaque requête.
 
+### T.4 Push 2 : relevé de la CI (26/11/2026)
+
+- `c74c9d16d` (push 1 ter), run `ci` 45869754654 : clippy passe (workspace et Windows). Restent les seuls rouges attendus : le shard 1 (`ya_secret_relay`) et la suite Python (3 tests).
+- `35f7bdc4b` (push 2), run `ci` 45871612250 : tout passe sauf le shard 1, à l'étape « Run the rust lifecycle checks ».
+  - Reçu `kernel_env.json` : `scripts/check_kernel_env.py` attendait la clé Serper résolue dans le kernel (`resolved-fixture-key`).
+  - C'est l'effet voulu de la réponse 13.
+  - **Écart** : ce contrôle upstream n'était pas dans les lignes validées. Je l'ai traité comme un test dont l'assertion change (`serper: None`, +3, −2) et je l'ai listé dans `docs/fork-changes.md`.
+- `f49bff54f` (push 2 bis), run `ci` 45874752019 : **tous les jobs passent**, y compris le shard 1 (vérifications de cycle de vie et tests de `ya_secret_relay`), clippy et la suite Python.
+  - Échec à part : « Check changelog fragment ». Il manquait le fragment `.changes/ya-41-protection-secrets.md`, ajouté au push suivant.
+
 ## Annexe : mesures macOS
 
 Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des sorties de sandbox du §R.2, 48 essais) :
