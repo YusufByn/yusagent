@@ -416,8 +416,11 @@ async fn skills(bound: &Bound<'_>, agent_dir: &Path, method: &str, params: &Valu
 // MCP
 
 /// One server of the MCP screen from a connection of the worker's roster
-/// (`pa_core::mcp::McpConnectionEntry`).
-fn server_row(entry: &Value, configured: &Map<String, Value>) -> Value {
+/// (`pa_core::mcp::McpConnectionEntry`). Ticket 40 (decision 3): `services` is the catalog's
+/// view (`pa_core::mcp::McpPluginView`); a service added by a pasted token gets `token`, what
+/// to paste: `<label> token` (the bridge does not have the catalog's field, which names it in
+/// Unharnessed).
+fn server_row(entry: &Value, configured: &Map<String, Value>, services: &[Value]) -> Value {
     let id = entry
         .get("server")
         .and_then(Value::as_str)
@@ -438,14 +441,23 @@ fn server_row(entry: &Value, configured: &Map<String, Value>) -> Value {
         "not_connected"
     };
     let credential = oauth || entry.get("authKind").and_then(Value::as_str) == Some("api key");
-    json!({
+    let mut row = json!({
         "id": id,
         "label": entry.get("label").cloned().unwrap_or_else(|| json!(id)),
         "source": if flag("userDeclared") { "user" } else { "catalog" },
         "status": status,
         "signIn": oauth && !connected,
         "signedIn": connected && credential,
-    })
+    });
+    let pasted = services.iter().any(|service| {
+        service.get("serviceId").and_then(Value::as_str) == Some(id)
+            && service.get("pasteToken").and_then(Value::as_bool) == Some(true)
+    });
+    if pasted {
+        let label = row["label"].as_str().unwrap_or(id).to_string();
+        row["token"] = json!(format!("{label} token"));
+    }
+    row
 }
 
 /// The MCP screen: the worker's roster, the local catalog and the `mcpServers` setting.
@@ -471,6 +483,12 @@ async fn mcp_view(bound: &Bound<'_>, agent_dir: &Path) -> Answer {
         .mcp_servers
         .clone()
         .unwrap_or_default();
+    let services: &[Value] = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("services"))
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice);
     let servers: Vec<Value> = response
         .data
         .as_ref()
@@ -479,7 +497,7 @@ async fn mcp_view(bound: &Bound<'_>, agent_dir: &Path) -> Answer {
         .map(|connections| {
             connections
                 .iter()
-                .map(|entry| server_row(entry, &configured))
+                .map(|entry| server_row(entry, &configured, services))
                 .collect()
         })
         .unwrap_or_default();
@@ -550,6 +568,7 @@ mod tests {
                      "authKind": "subscription", "transport": "http", "userDeclared": false,
                      "generic": false }),
             &configured,
+            &[],
         );
         assert_eq!(
             row,
@@ -561,8 +580,37 @@ mod tests {
                      "authKind": "stdio", "transport": "stdio", "userDeclared": true,
                      "generic": false }),
             &configured,
+            &[],
         );
         assert_eq!(row["status"], "disabled");
         assert_eq!(row["source"], "user");
+    }
+
+    /// Ticket 40, test 13: a catalog service added by a pasted token says what to paste
+    /// (`token`), so the extension's token form opens; another service has no `token`.
+    #[test]
+    fn a_pasted_token_service_says_what_to_paste() {
+        let services = [
+            json!({ "serviceId": "github", "label": "GitHub", "pasteToken": true,
+                    "usesOauth": false, "source": "catalog" }),
+            json!({ "serviceId": "linear", "label": "Linear", "usesOauth": true,
+                    "source": "catalog" }),
+        ];
+        let row = server_row(
+            &json!({ "server": "github", "label": "GitHub", "connected": false,
+                     "usesOauth": false, "authKind": "http", "transport": "http",
+                     "userDeclared": false, "generic": false }),
+            &Map::new(),
+            &services,
+        );
+        assert_eq!(row["token"], "GitHub token", "{row}");
+        let row = server_row(
+            &json!({ "server": "linear", "label": "Linear", "connected": false,
+                     "usesOauth": true, "authKind": "subscription", "transport": "http",
+                     "userDeclared": false, "generic": false }),
+            &Map::new(),
+            &services,
+        );
+        assert!(row.get("token").is_none(), "{row}");
     }
 }

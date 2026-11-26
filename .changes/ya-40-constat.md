@@ -1,0 +1,1 @@
+- yusAgent: the ACP bridge serves the VS Code extension's providers and sign-in screens (`_yus/providers/*`): API keys, subscription and MCP sign-ins run the TUI's own flows, a new credential reaches the running conversation and its model picker, and a missing credential is reported as an authentication failure.

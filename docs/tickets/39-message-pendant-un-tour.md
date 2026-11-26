@@ -1038,3 +1038,55 @@ Les autres accords du fichier, qui passent par `post({ type: "permission" })`, s
 **Pas de rouge puis vert pour ce correctif** : la course ne se déclenche pas à volonté. Le justificatif est le journal du job 139311928005 (lignes 973-1029, `call-bash` resté `pending`) et la relance verte (job 139371833601, 19/19).
 
 Contrôle avant le push : `git diff --stat 85d8e91d2 HEAD -- crates/ extensions/vscode/src extensions/vscode/webview` est vide. Le produit est donc identique à `85d8e91d2`.
+
+## 24. Contrôle manuel de Yusuf (binaire et `.vsix` de `85d8e91d2`)
+
+- **Étape 0 : conforme.** Étiquette « auto · no sandbox » sous le compositeur, sans bandeau. Output › yusAgent : `agent ready: yusagent 0.10.2-continuous.85d8e91d2b4c96df9b27bd813f9b86a9e7f513ed (protocol 1, pid 9284)`. Avertissement connu : `providers: list failed: _yus/providers/list : méthode pas encore servie`.
+- **Étape 1, premier essai : non testée.**
+  - Le modèle a lancé `h = bash("sleep 20; echo fini")`, **sans `await`** (fichier de session `01a213d7-…jsonl`). `bash()` a rendu une poignée aussitôt : cellule finie en 40 ms, commande en arrière-plan.
+  - Le tour 1 était fini à 18:57:03. Le message est parti après, en prompt (tour 2), pas dans le tour. La fin de la commande a lancé un tour de l'agent (tour 3, `[bash-done]`).
+  - Ce n'est pas `bashWaitSeconds`. L'étape est reprise avec une cellule Python qui bloque vraiment (`time.sleep(20)`).
+- **À noter, hors ticket 39** : au tour 1, le modèle a répondu « La commande a affiché fini » alors que la commande tournait encore en arrière-plan. Le résultat de la cellule était vide. C'est une affirmation non fondée du modèle sur une commande détachée.
+- **Étape 1, second essai (conversation [3], cellule Python bloquante) : NON CONFORME sur le raccourci.**
+  - Cmd+Entrée pendant la cellule a mis le message **en file** (`19:00:13.668 chat: queued (1 waiting)`), sans état « Sending ».
+  - La flèche « Send now », cliquée 11 s plus tard, l'a envoyé dans le tour : `message 5 sent into the running turn`, `turn 5 joined the running turn`, réponse « fini » et date, aucun doublon. Le parcours de l'étape 6 est donc **conforme**.
+  - Autre point : le message affiché commence par « joute » (51 caractères au lieu de 52, le « A » manque).
+
+**Enquête (lecture du code, sans push)**
+
+- **Chemin de Cmd+Entrée, juste dans le code** :
+  - `webview/Composer.tsx:341-344` : `Enter` sans Shift donne `submit(event.metaKey || event.ctrlKey)`.
+  - `:277-289` : `post({ type: "send", …, now: now || undefined })`.
+  - `src/view.ts:266-267` : `chat.send(text, images, edit, now)`.
+  - `src/chat.ts:281-284` : `now` et pas d'`edit` donnent `now(message)`, puis tour en cours (`:427-431`), puis `steering` et `steerAll`.
+  - Ce code est celui d'Unharnessed (`uh:vscode/webview/Composer.tsx:336-339`). Ni l'une ni l'autre extension ne déclare de raccourci clavier (`contributes.keybindings` absent).
+- **La ligne `chat: queued (N waiting)` ne sort que de `send` sans `now`, ou avec un `edit`** (`chat.ts:285-289`). Ici, aucune modification de prompt n'était ouverte. Le webview a donc posté le message sans `now` : soit `Enter` est arrivé avec `metaKey` et `ctrlKey` à faux, soit c'est le bouton d'envoi (`Composer.tsx:565`, `submit()`).
+- **Cause non établie.** Le journal ne trace pas les touches du webview. Hypothèses :
+  - (H1) VS Code ne transmet pas Cmd+Entrée au webview avec `metaKey` (gestion des raccourcis du workbench, ou un raccourci `cmd+enter` de l'utilisateur) ;
+  - (H2) Cmd relâché avant Entrée.
+- **Caractère perdu** : rien dans l'extension ne retire une touche imprimable.
+  - `onKeyDown` ne traite qu'Entrée, Tab, flèches, Échap et Retour arrière (`Composer.tsx:305-349`). `Popover.tsx:37-39` ne traite qu'Échap. `onPaste` n'intercepte que les images (`Composer.tsx:351-357`).
+  - Le brouillon est un état React du webview (`App.tsx:49`). L'hôte ne l'écrase qu'au changement de conversation (`App.tsx:83-90`) ou au début d'une modification de prompt (`:109-110`), aucun des deux ici.
+  - Hypothèse : la première touche est partie ailleurs, car le focus n'était pas encore dans la zone de message. Non vérifié.
+- **Cause trouvée par Yusuf : erreur de manipulation, pas de défaut.** À l'étape 1 de 19:00, il a fait Entrée (message mis en file), puis Cmd+Entrée dans une zone vide. Diagnostic dans les outils du webview : Cmd+Entrée arrive bien, `Enter meta true ctrl false composer-input`. **Aucune correction de l'extension.** Le « A » perdu : texte tapé à la main, première frappe probablement avant que le focus soit dans la zone.
+- **L'essai de 19:00 vaut l'étape 6** (Entrée, puis « Send now ») : **conforme**. Les étapes suivantes écrivent « à la place d'Entrée » quand il faut Cmd+Entrée.
+- **Étape 1, Cmd+Entrée direct (19:12, conversation [3]) : conforme.** Pas de file, ni « Send now » ni croix. Cellule bloquée 20 s, terminée avec « fini ». Le message rejoint le tour avec son texte complet. Réponse « fini » et date, aucun doublon. Journal : `turn 7 sent` (19:12:06.783), `turn 7 cell: python` (19:12:08.136), `message 8 sent into the running turn` (19:12:09.785), `turn 7 cell done` (19:12:28.153), `turn 7 done (joined)`, `turn 8 joined the running turn`, `turn 8 done (end_turn)`. Les étapes 2 à 4 du §12.4 sont couvertes par cet essai.
+- **Étape 5, deux messages pendant la cellule (19:15, conversation [3]) : conforme.** Deux Cmd+Entrée, partis dans l'ordre sans file (`message 10 sent into the running turn` à 19:15:35.083, `message 11` à 19:15:43.288). Tours rejoints dans l'ordre (`turn 10 joined`, `turn 11 joined` à 19:15:52), textes complets. Une seule réponse, sous le dernier tour : « fini », date, « Heure : 18:15 UTC », « OK ». L'agent a lancé une cellule pour l'heure (`turn 11 cell: python`). Aucun doublon.
+- **Étape 7, Stop avec un message envoyé et pas encore pris (19:19, conversation [3]) : conforme.**
+  - Message envoyé dans le tour (`message 13 sent into the running turn`, 19:19:29.642), Stop 2 s après. Tour annulé, message revenu en tête de file, en pause (`queue paused`, `1 message not taken by the turn, first in line`). Rien n'est parti seul pendant 32 s. « Resume » l'a envoyé une seule fois en nouveau prompt (`turn 13 sent`, 19:20:03.917).
+  - **Fichier de session** (`~/.yusagent/sessions/01a213d7-…jsonl`) : « Message à ne pas perdre. » apparaît **une seule fois** en ligne user, juste après le résultat `Tool execution aborted` de la cellule arrêtée. Le vidage en fin de run a bien retiré le message de la file de l'agent.
+  - La carte de la cellule interrompue affiche « Failed » : comportement existant, pas du ticket 39. L'abandon d'un tool donne `AgentToolResult::error("Tool execution aborted")` (`crates/pa-agent/src/agent_loop/tool_call.rs:311`). L'extension passe la carte en `failed` sur ce statut (`extensions/vscode/src/chat.ts:939`).
+  - Après « Resume », le modèle a relancé la cellule et repris la date, l'heure et le « OK » des tours précédents (comportement du modèle).
+- **Étape 8, message pendant un tour lancé par l'agent (D6) : conforme au second essai** (19:24, conversation [3]).
+  - Premier essai (tour 15) : message 16 refusé ; renvoyé par « Send now », refusé de nouveau, puis supprimé par la croix. Comportement cohérent (erreur de compréhension de Yusuf).
+  - Second essai (tour 18) :
+    - message refusé pendant le réveil (`message 19 not sent into the turn: The turn is over: send it as a prompt.`, 19:24:31.396), resté en file ;
+    - réveil allé au bout (« réveil fini », `turn 18 done` à 19:24:52.601) ;
+    - message parti seul une fois à la fin (`turn 19 sent`, 19:24:52.602), réponse « Bien reçu. ».
+  - **Remarque, sans correction ici** : pendant un réveil, le refus dit « The turn is over » alors que le tour tourne encore. Le texte est inexact pour le cas D6. C'est celui d'Unharnessed, que le pont renvoie pour tous les refus de la porte (`crates/pa-daemon/src/acp/ya_turns/steer.rs`, `OVER`).
+- **Étape 9, reprise après « Reload Window » (`--resume` et `session/load`) : conforme.** Nouvel agent `85d8e91d2`, `chat: loaded 18 turns; 12 tools, 13 texts`, aucune ligne `sent` après le chargement. Chaque message envoyé pendant un tour apparaît une fois, dans l'ordre, avec son texte complet. Le message 16 supprimé est absent.
+- **Contrôle du §12.4 conforme sur toutes les étapes.** Décision de Yusuf : merge.
+- **Remarques de Yusuf, sans correction ici** :
+  1. l'historique est trop étroit : le titre d'une conversation ne se lit qu'en élargissant beaucoup le panneau (passe de design) ;
+  2. au rejeu, le tour arrêté par Stop s'affiche « Worked·1 cell », sans trace de l'arrêt ;
+  3. le « joute » de 19:00 se rejoue tel quel (envoyé ainsi).
