@@ -476,7 +476,7 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
-    "réglages (ticket 31, X3) : bouton Settings, onglets General, MCP et Skills sans Instructions ni Images ni « restart », écran lu à son ouverture seulement, catalogue masqué",
+    "réglages (ticket 31, X3) : bouton Settings, onglets General, MCP et Skills sans Instructions ni Images ni « restart », écran lu à son ouverture seulement",
     async () => {
       setScenario(control, {});
       await post({ type: "newChat", draft: { text: "", images: [] } });
@@ -486,7 +486,8 @@ const tests: [string, () => Promise<void>][] = [
         received(control, lastPid()).filter((frame) => /^_yus\/(settings|skills|mcp)\//.test(String(frame.method ?? "")));
       await sleep(300);
       assert.deepEqual(screenFrames(), [], "rien lu avant l'ouverture de l'écran (E7)");
-      await userClicks("Settings");
+      // L'onglet ouvert, sans dépendre de celui où un test précédent a laissé l'écran.
+      await userClicks("Settings", "General");
       const general = await shows("Compaction", "onglet General");
       for (const label of ["General", "MCP", "Skills", "Retries", "Switching providers", "Usage limits"]) {
         assert.ok(general.includes(label), `${label} affiché`);
@@ -510,20 +511,23 @@ const tests: [string, () => Promise<void>][] = [
   [
     "catalogue MCP (ticket 40, X5, test 13) : Marketplace visible, Add ouvre le formulaire de jeton, _yus/mcp/set_token part",
     async () => {
-      await userClicks("Settings");
-      await shows("Compaction", "onglet General");
-      await userClicks("MCP");
-      const mcp = await shows("Marketplace", "catalogue");
-      assert.ok(mcp.includes("Linear") && mcp.includes("Zoom"), "services du catalogue");
-      // Le dernier « Add » de la page : Zoom (A à Z), le service ajouté par jeton.
-      await userClicks("Add");
-      await shows("Zoom token", "formulaire de jeton");
-      await post({ type: "mcpSetToken", id: "zoom", token: "zoom-x5-e2e" });
-      await waitFor(
-        () => received(control, lastPid()).some((frame) => frame.method === "_yus/mcp/set_token" && (frame.params as { id?: string }).id === "zoom"),
-        "_yus/mcp/set_token envoyée",
-      );
-      await userClicks("Back");
+      // L'onglet MCP directement : l'écran rouvre le dernier onglet ouvert.
+      await userClicks("Settings", "MCP");
+      try {
+        const mcp = await shows("Marketplace", "catalogue");
+        assert.ok(mcp.includes("Linear") && mcp.includes("Zoom"), "services du catalogue");
+        // Le dernier « Add » de la page : Zoom (A à Z), le service ajouté par jeton.
+        await userClicks("Add");
+        await shows("Zoom token", "formulaire de jeton");
+        await post({ type: "mcpSetToken", id: "zoom", token: "zoom-x5-e2e" });
+        await waitFor(
+          () => received(control, lastPid()).some((frame) => frame.method === "_yus/mcp/set_token" && (frame.params as { id?: string }).id === "zoom"),
+          "_yus/mcp/set_token envoyée",
+        );
+      } finally {
+        // Même en échec : l'écran fermé, les tests suivants partent de la conversation.
+        await userClicks("Back");
+      }
     },
   ],
   [
