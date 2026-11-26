@@ -506,7 +506,7 @@ P-B  | a05 exit=1 conflits: crates/pa-daemon/src/agent_engine/tests.rs  | dad ap
 2. Prompt sans identifiant : texte fixe et bouton vers l'écran Providers (pas de renvoi au terminal).
 3. **Appel réel, fait par toi** : connexion ChatGPT par abonnement depuis l'écran, avec l'ouverture du navigateur décidée au §13.4. Puis, **sans rouvrir la conversation**, le sélecteur de modèles se remplit et « Réponds seulement : bonjour » répond. *(Précisé le 26/11/2026, §22.4 : une fois connecté, l'écran Providers reste affiché, comme chez Unharnessed ; retour à la conversation par « Back ».)*
 4. Deuxième conversation ouverte avant le login : son sélecteur se met à jour et elle répond sans être rouverte.
-5. Logout depuis l'écran, puis prompt : texte fixe du point 2.
+5. Logout depuis l'écran, puis prompt : texte fixe du point 2. *(Précisé le 26/11/2026, §22.11 : la conversation garde son modèle, choisi explicitement depuis la correction D3 ; le prompt échoue à la garde avec le texte fixe sans nom. La liste relue après le logout se voit au retour de la puce « Connect a provider » ; l'Output ne journalise que `logout of <id>: done`, pas de ligne `providers: …`.)*
 6. Clé API d'un fournisseur (si tu en as une) : connectée, sans rouvrir la conversation.
 7. MCP : formulaire de jeton pour un service à jeton (si tu en as un) ; catalogue OAuth selon la décision sur le §13.2.
 8. Output de l'extension : rechercher la clé saisie et `state=` : aucune occurrence.
@@ -1097,3 +1097,29 @@ Run `ya-extension` 45795404847, job 139824660006 :
   - **Correction (décision de Yusuf)** : le texte est figé dans `turn.error` au moment de l'échec, avec la liste connue à cet instant. `Providers` la note à chaque changement (`noteProviders`, `src/ya/auth.ts`), et `chat.ts` appelle `authFailureAt`. Le webview affiche `turn.error` tel quel (`authFailureText`).
   - **Push A** (`5aa8bee52`) : `authFailureText` est extrait **avec le comportement actuel** (écart annoncé), avec deux tests unitaires. Run `ya-extension` 45818508225, job 139904349587 : **seul rouge**, « D6 : le texte d'un échec d'auth ne change pas après une clé » (`test/unit/providers.test.ts:202`, « le même échec, après la clé »). Le cas « un fournisseur connecté nomme celui de la session » est vert. e2e 21 sur 21.
   - **Push B** : la correction. `authFailureText(turn)` ne prend plus la liste, et les appels du test suivent. Le test unitaire de l'échec d'auth (`test/unit/agent.test.ts`) attend désormais le texte figé avec le nom : « Not signed in to Capture… », Capture étant connecté dans l'agent factice.
+
+### 22.11 Étapes 5 à 8, annulation d'un login MCP
+
+- **Étape 5 : conforme sur l'essentiel.**
+  - Output : `logout of openai-codex: done` (13:20:45.703) ; `[2] session: options updated, model openai-codex/gpt-6-luna (1 choices)`, et de même pour [1].
+  - Prompt « salut » : `[2] chat: turn 3 failed: Not signed in, or the sign-in has expired.`, en 23 ms, à la garde. Texte sans nom, avec « Open Providers ». La puce « Connect a provider » revient.
+  - **Écart 1 (attendu corrigé)** : le modèle reste `openai-codex/gpt-6-luna` et ne revient pas sur `amazon-bedrock`. Le `SetModel` de la correction D3 (étape 3 pour [1], diffusion de l'étape 4 pour [2]) a rendu le choix explicite (`session_engine_impl.rs:425-435`), et une sélection explicite se résout sur tout le catalogue même sans identifiant, la garde signalant le manque (`agent_engine/model.rs:293-302`). Comportement voulu : la session garde le modèle choisi et demande de se reconnecter, au lieu de retomber sur le repli.
+  - **Écart 2 (attendu corrigé)** : pas de ligne `providers: … connected: none`. La liste est relue (réponse du logout, `src/providers.ts:226-233`, et retour de la puce), mais `settle` ne journalise que `<action>: <issue>` (`:229`) ; la ligne `providers: …` ne sort que de `refresh`, quand un agent devient prêt (`:72-77`).
+- **Étape 6 : sautée** (pas de clé API payante). Le chemin des clés est couvert par les tests 2, 3, 4, 5 et 8 du pont.
+- **Étape 7** :
+  - Marketplace conforme : stylée, « Search 70 services », un badge et « Add » par ligne.
+  - Formulaire de jeton GitHub conforme : « GitHub token », champ en pilule, « Add » désactivé sur un champ vide, « Cancel » discret. Jeton réel : sauté.
+  - Login Linear : écran SignIn stylé, navigateur ouvert. Deux écarts, ci-dessous.
+- **Linear a) Un refus dans le navigateur n'arrête pas le login : limite** (décision de Yusuf).
+  - Le serveur de rappel traite `?error=…` : il règle l'attente à vide et affiche « yusAgent authentication failed. Error: … » (`crates/pa-core/src/mcp/oauth_callback.rs:240-250`).
+  - Mais le flux attend ensuite le collage manuel (`crates/pa-core/src/mcp/oauth.rs:259-266`). Comportement de `pa-core` (upstream), le même dans le TUI.
+  - La page affichée par le navigateur après le refus n'a pas été relevée : on ne sait pas si Linear a redirigé.
+- **Linear b) « failed » au lieu de « cancelled » après « Cancel » : défaut, corrigé** (décision de Yusuf).
+  - « Cancel » vide les invites. Le collage se règle à vide, puis le flux MCP rend « Missing authorization code » après 500 ms (`oauth.rs:227-230`, `:284-287`), soit 511 ms entre `cancel requested` et `failed`.
+  - Le pont ne répondait `cancelled` que sur un `Cancelled` du flux (`ya_acp_providers.rs:161-166`).
+  - Correction (fichier du fork) : `mcp_settled`. Un identifiant rangé donne `Done` ; sinon, une annulation demandée (`cancel_flag`) donne `Cancelled` ; sinon `Failed`.
+  - Test unitaire `a_cancelled_mcp_sign_in_answers_cancelled`.
+- **Étape 8 : conforme.**
+  - Script de comptage, lancé d'abord par Claude Code puis par Yusuf : `journaux : 4`, et 0 pour `state=`, `code_challenge`, `oauth/authorize`, `auth.openai.com`, `claude.ai/oauth`, `access_token`, `refresh_token`, `Bearer `, `sk-`. Il ne lit que les journaux de l'Output yusAgent écrits depuis le début du contrôle et n'affiche que des comptes.
+  - Cmd+F dans Output › yusAgent : rien pour `state=` ni pour `http`.
+- **Push A de b)** (`fb55988e8`, décision extraite sans changement, avec le test), run `ci` 45822159161 : **seul rouge**, `a_cancelled_mcp_sign_in_answers_cancelled` (shard 8/8, job 139917113255, `ya_acp_providers.rs:361`, « cancel asked, nothing stored », `left: Failed("Sign-in failed. Try again.")`, `right: Cancelled`).
