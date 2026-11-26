@@ -1644,7 +1644,7 @@ Constat, décisions et plan : `docs/tickets/40-login-extension.md` (§10, §15, 
 | `crates/pa-daemon/src/acp/daemon/ya_providers_tests.rs` | nouveau | Tests 6 (login) et 7 (H2). | YA-10 (ticket 40) |
 | `crates/pa-cli/src/print_runtime/ya_acp_providers.rs` | nouveau | Implémentation sur `ProviderAuth` : lignes sans la Claude par abonnement, clé, déconnexion, login par un panneau neuf, textes d'échec fixes. Tests 4 et 8 (unitaires). | YA-10 (ticket 40) |
 | `crates/pa-daemon/src/acp/ya_resources.rs` | modif. (fichier du fork) | `token` pour un service du catalogue ajouté par jeton (`pasteToken`), lu dans les `services` de `get_mcp_connections`. Test 13. | YA-10 (ticket 40) |
-| `crates/pa-cli/tests/ya_providers_acp_e2e.rs` | nouveau | Vrai binaire en ACP, modèle intercepté par un serveur local : tests 1a, 1b (H1), 2, 3, 4, 5, 8. | YA-10 (ticket 40) |
+| `crates/pa-cli/tests/ya_providers_acp_e2e.rs` | nouveau | Vrai binaire en ACP, modèle intercepté par un serveur local : tests 1a, 1b (H1), 2, 3, 4, 5, 8, 8b (URL de login et `state`, faux ouvreur). | YA-10 (ticket 40) |
 | `bench/tools/sim40.sh` | nouveau | Simulation P-A / P-B et cherry-pick de `a05bcb695`, `dad2232cc` (§11), pour E-C. | YA-10 (ticket 40) |
 
 Limites (§16.2) :

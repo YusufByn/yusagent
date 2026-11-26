@@ -16,6 +16,9 @@
 //! 5. `set_api_key` stores the key in `auth.json` (0600) and never answers it back.
 //! 8. The key is nowhere under the home but `auth.json`: not on the bridge's stderr, not in the
 //!    session files, not in the usage log.
+//! 8b. A real `ChatGPT` subscription sign-in, up to its URL (offline: the URL and PKCE are made
+//!     locally), then `login_cancel`: neither the URL nor its `state` is on the bridge's stderr
+//!     or in a file under the home; the fake browser outside the home got them.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -233,8 +236,14 @@ struct Client {
 
 impl Client {
     fn spawn(home: &Home) -> Client {
+        Client::spawn_with(home, |_| {})
+    }
+
+    /// [`Client::spawn`], with the command adjusted before it starts.
+    fn spawn_with(home: &Home, adjust: impl FnOnce(&mut Command)) -> Client {
         let stderr = std::fs::File::create(home.stderr_file()).unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_prime-agent"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_prime-agent"));
+        command
             .args(["--mode", "acp", "--daemon-socket"])
             .arg(&home.socket)
             .args(["--provider", "ya40", "--model", "ya40-model"])
@@ -251,9 +260,9 @@ impl Client {
             .current_dir(home.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .expect("binary present");
+            .stderr(Stdio::from(stderr));
+        adjust(&mut command);
+        let mut child = command.spawn().expect("binary present");
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("stdout piped");
         let (tx, lines) = channel();
@@ -284,28 +293,48 @@ impl Client {
         id
     }
 
+    /// A notification: no id, no answer.
+    fn notify(&mut self, method: &str, params: &Value) {
+        let stdin = self.stdin.as_mut().expect("stdin open");
+        let frame = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        writeln!(stdin, "{frame}").unwrap();
+        stdin.flush().unwrap();
+    }
+
     /// The response to a request, reading (and keeping) every frame before it.
     fn call(&mut self, method: &str, params: &Value) -> Value {
         let id = self.request(method, params);
+        self.response(id, method)
+    }
+
+    /// The response to request `id`, reading (and keeping) every frame before it.
+    fn response(&mut self, id: u64, method: &str) -> Value {
+        self.wait_for(method, |frame| {
+            frame["id"] == json!(id)
+                && (frame.get("result").is_some() || frame.get("error").is_some())
+        })
+    }
+
+    /// The first frame that `wanted` takes, reading (and keeping) every frame up to it.
+    fn wait_for(&mut self, what: &str, wanted: impl Fn(&Value) -> bool) -> Value {
         let deadline = Instant::now() + TIMEOUT;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             assert!(
                 !left.is_zero(),
-                "timed out waiting for the response to {method}; frames: {:?}",
+                "timed out waiting for {what}; frames: {:?}",
                 self.seen
             );
             let line = self.lines.recv_timeout(left).unwrap_or_else(|error| {
                 panic!(
-                    "no frame ({error}) waiting for {method}; frames: {:?}",
+                    "no frame ({error}) waiting for {what}; frames: {:?}",
                     self.seen
                 )
             });
             let frame: Value = serde_json::from_str(&line).expect("a JSON line");
-            let answered = frame["id"] == json!(id)
-                && (frame.get("result").is_some() || frame.get("error").is_some());
+            let found = wanted(&frame);
             self.seen.push(frame.clone());
-            if answered {
+            if found {
                 return frame;
             }
         }
@@ -622,5 +651,99 @@ fn a_key_set_through_the_bridge_is_nowhere_but_auth_json() {
         found.is_empty(),
         "the key is in {found:?} (stderr: {})",
         home.stderr_file().display()
+    );
+}
+
+/// Test 8b: a real `ChatGPT` subscription sign-in in the binary, up to its URL, then
+/// `login_cancel`. The URL and its PKCE are made locally (`pa-ai`'s `oauth/openai_codex.rs`,
+/// `login_openai_codex`), so no network is needed; the callback server on 1455 is dead when the
+/// port is taken, and the flow then waits on the paste, which the cancel ends too. The flow opens
+/// the page itself (`codex_subscription_login.rs`, `on_auth`): fake `open` and `xdg-open`, first
+/// on the bridge's `PATH`, write their arguments to a file outside the home, so no browser runs.
+/// Neither the URL nor its `state` is on the bridge's stderr or in a file under the home. The
+/// current code logs neither, so the test is green from the start: the positive control is the
+/// same search finding `state` in the fake opener's file.
+/// Limit: Codex's `state` is random and its PKCE verifier never leaves the process; Anthropic's
+/// `state` is the verifier (`pa-ai`'s `oauth/anthropic.rs`), a row hidden from the extension.
+#[test]
+fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
+    let home = Home::new(false);
+    home.write_auth(&json!({}));
+    let opener = tempfile::TempDir::new().unwrap();
+    assert!(
+        !opener.path().starts_with(home.path()),
+        "the fake opener is outside the home"
+    );
+    let opened = opener.path().join("opened.txt");
+    for name in ["open", "xdg-open"] {
+        let script = opener.path().join(name);
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\n",
+                opened.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(opener.path().to_path_buf()).chain(std::env::split_paths(&path)),
+    )
+    .unwrap();
+    let mut client = Client::spawn_with(&home, |command| {
+        command.env("PATH", &path);
+    });
+    let _session = client.open();
+    let login = client.request(
+        "_yus/providers/login",
+        &json!({ "providerId": "openai-codex" }),
+    );
+    let step = client.wait_for("the sign-in URL", |frame| {
+        frame["method"] == "_yus/providers/login_update"
+            && frame["params"]["update"]["kind"] == "url"
+    });
+    let url = step["params"]["update"]["url"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a URL step: {step}"))
+        .to_string();
+    let state = url
+        .split_once("state=")
+        .map_or("", |(_, rest)| rest.split('&').next().unwrap_or(rest))
+        .to_string();
+    assert!(
+        state.len() >= 16,
+        "precondition: the URL carries its state (state=): {url}"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !std::fs::read_to_string(&opened).is_ok_and(|text| text.contains(&url)) {
+        assert!(
+            Instant::now() < deadline,
+            "precondition: the fake opener got the URL; it wrote: {:?}",
+            std::fs::read_to_string(&opened).ok()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    client.notify("_yus/providers/login_cancel", &json!({}));
+    let answer = client.response(login, "the login answer");
+    assert_eq!(answer["result"]["outcome"], "cancelled", "{answer}");
+    drop(client);
+    assert_eq!(
+        files_containing(opener.path(), &state),
+        [opened],
+        "positive control: the search finds the state in the fake opener's file"
+    );
+    let stderr = std::fs::read_to_string(home.stderr_file()).unwrap_or_default();
+    assert!(
+        !stderr.contains(&url) && !stderr.contains(&state),
+        "the sign-in URL or its state is on the bridge's stderr ({})",
+        home.stderr_file().display()
+    );
+    let found_url = files_containing(home.path(), &url);
+    let found_state = files_containing(home.path(), &state);
+    assert!(
+        found_url.is_empty() && found_state.is_empty(),
+        "the sign-in URL is in {found_url:?}, its state in {found_state:?}"
     );
 }

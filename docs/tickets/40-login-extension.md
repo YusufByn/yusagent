@@ -745,3 +745,20 @@ Binaires :
 - `acp_frames.py` n'a pas de session nouvelle pour `_yus/providers/*`.
 - Une telle session demanderait l'agent factice de l'extension, côté X5.
 - Les méthodes sont prouvées sur le vrai binaire par les tests e2e 2 à 5 et 8 (CI), avec un modèle intercepté et des clés factices.
+
+## 19. Test 8b : URL de login et `state` (décision de Yusuf du 26/11/2026)
+
+Question 1 de Yusuf du 26/11 : le test 8 ne couvre pas l'URL de login ni son `state`. **Décision** : test 8b ajouté à R5 avant le merge, un push, puis merge sur CI verte du nouveau dernier commit.
+
+- Test : `a_sign_in_url_and_its_state_are_nowhere_under_the_home` (`crates/pa-cli/tests/ya_providers_acp_e2e.rs:669`).
+- Flux : un vrai login `openai-codex` dans le binaire, jusqu'à l'étape URL, sans réseau. L'URL et le PKCE sont générés sur place (`crates/pa-ai/src/oauth/openai_codex.rs:74-81`). Le serveur de rappel sur 1455 est « mort » si le port est pris ; le flux attend alors le collage, que l'annulation termine aussi (`:175-190`). Puis `login_cancel` : Codex relit le drapeau toutes les `CANCEL_POLL_INTERVAL` (`:139-147`).
+- Pas de vrai navigateur : le flux ouvre la page lui-même (`crates/pa-cli/src/codex_subscription_login.rs:29-31`, `crates/pa-core/src/platform/browser.rs:34-42`, `open` sur macOS, `xdg-open` ailleurs). Le `PATH` du pont est préfixé d'un dossier temporaire **hors du dossier personnel**, avec des faux `open` et `xdg-open` qui écrivent leurs arguments dans un fichier.
+- Préconditions : la trame `login_update` de type `url` contient `state=` ; le faux ouvreur a reçu cette URL.
+- Assertions :
+  - la réponse `login` est en `cancelled` ;
+  - ni l'URL ni la valeur de `state` dans le stderr du pont ;
+  - ni l'une ni l'autre dans aucun fichier sous le dossier personnel (`files_containing`).
+- **Contrôle positif, à la place du rouge** : le code actuel ne journalise rien, le test est vert d'emblée. La même recherche (`files_containing`) doit trouver la valeur de `state` dans le fichier du faux ouvreur, hors du dossier personnel : preuve que la recherche voit la valeur.
+- **Limite** : le test couvre Codex, dont le `state` est aléatoire (`openai_codex.rs:218-224`) et dont le vérifieur PKCE ne sort jamais du processus. Chez Anthropic, `state` est le vérifieur PKCE (`crates/pa-ai/src/oauth/anthropic.rs:4`, `:120`), ligne cachée dans l'extension (décision 5). Si la ligne Claude par abonnement est un jour montrée dans l'extension, ajouter le même test pour elle.
+- Pas de contrôle manuel pour R5 : l'extension actuelle rejette `_yus/providers/list` sur place (`extensions/vscode/src/ya/methods.ts:10-33`, `src/agent.ts:97`, `src/providers.ts:55`, `:74`, `:79`), rien ne change à l'écran.
+- Aides de test ajoutées au même fichier : `Client::spawn_with` (`:243`), `notify` (`:297`), `response` (`:311`), `wait_for` (`:319`).
