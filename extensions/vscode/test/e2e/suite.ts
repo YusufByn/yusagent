@@ -445,6 +445,39 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
+    "écran Providers stylé (ticket 40, X5) : initiale du badge à part du nom, nom et statut sur deux lignes ; SignIn avec son indicateur d'attente",
+    async () => {
+      await userClicks("Providers");
+      try {
+        const screen = await shows("ChatGPT Plus/Pro", "écran Providers");
+        const lines = screen.split("\n").map((line) => line.trim());
+        // Le badge (`.badge`, initiale dans `.logo`) est un bloc à part : sinon « AAnthropic », « CChatGPT ».
+        assert.ok(
+          lines.includes("ChatGPT Plus/Pro (Codex Subscription)") && lines.includes("Anthropic (Claude Pro/Max)"),
+          `initiale collée au nom : ${JSON.stringify(lines.filter((line) => /ChatGPT|Claude/.test(line)))}`,
+        );
+        assert.ok(
+          lines.includes("Capture") && lines.includes("Connected with a saved API key"),
+          `nom et statut sur une ligne : ${JSON.stringify(lines.filter((line) => line.includes("Capture")))}`,
+        );
+        await userClicks("ChatGPT Plus/Pro");
+        try {
+          await shows("Sign in with your browser", "écran SignIn");
+          const spinners = (await probe())?.spinners ?? [];
+          assert.ok(
+            spinners.some((spinner) => spinner.width >= 8 && spinner.height >= 8),
+            `indicateur d'attente invisible : ${JSON.stringify(spinners)}`,
+          );
+        } finally {
+          await userClicks("Cancel");
+          await shows("ChatGPT Plus/Pro", "retour à l'écran Providers");
+        }
+      } finally {
+        await userClicks("Back");
+      }
+    },
+  ],
+  [
     "plantage : pas de relance automatique, Restart reprend",
     async () => {
       const before = starts(control).length;

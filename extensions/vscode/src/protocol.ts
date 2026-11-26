@@ -633,6 +633,8 @@ export type Probe = {
    * leur état se lit.
    */
   switches: { label: string | null; width: number; height: number; checked: boolean; background: string; knobLeft: number | null }[];
+  /** Ticket 40 (X5) : les indicateurs d'attente (`.spinner`), avec leur taille affichée. */
+  spinners: { width: number; height: number }[];
   /**
    * Ticket 31 : la boîte de permission ouverte, lue avec les fonctions de `src/ya/permission-keys.ts`
    * à l'instant de la sonde : touches et boutons prêts ou non, et quand (horloge de la webview) ;
