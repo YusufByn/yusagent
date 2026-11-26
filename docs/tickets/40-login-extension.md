@@ -504,7 +504,7 @@ P-B  | a05 exit=1 conflits: crates/pa-daemon/src/agent_engine/tests.rs  | dad ap
 
 1. Sauvegarder puis déplacer `~/.yusagent/auth.json`. Ouvrir l'extension : puce « Connect a provider », écran Providers sans ligne Claude par abonnement, sans écran Local.
 2. Prompt sans identifiant : texte fixe et bouton vers l'écran Providers (pas de renvoi au terminal).
-3. **Appel réel, fait par toi** : connexion ChatGPT par abonnement depuis l'écran, avec l'ouverture du navigateur décidée au §13.4. Puis, **sans rouvrir la conversation**, le sélecteur de modèles se remplit et « Réponds seulement : bonjour » répond.
+3. **Appel réel, fait par toi** : connexion ChatGPT par abonnement depuis l'écran, avec l'ouverture du navigateur décidée au §13.4. Puis, **sans rouvrir la conversation**, le sélecteur de modèles se remplit et « Réponds seulement : bonjour » répond. *(Précisé le 26/11/2026, §22.4 : une fois connecté, l'écran Providers reste affiché, comme chez Unharnessed ; retour à la conversation par « Back ».)*
 4. Deuxième conversation ouverte avant le login : son sélecteur se met à jour et elle répond sans être rouverte.
 5. Logout depuis l'écran, puis prompt : texte fixe du point 2.
 6. Clé API d'un fournisseur (si tu en as une) : connectée, sans rouvrir la conversation.
@@ -991,3 +991,68 @@ Run `ya-extension` 45783371002, job 139784004356 :
 Run `ya-extension` 45795404847, job 139824660006 :
 - tests unitaires : 83 tests, 82 réussis. **Seul rouge** : « échec d'auth (ticket 40, X5, défaut 2) » (`test/unit/providers.test.ts:174`, « rien de connecté » : `'Not signed in to Amazon Bedrock, or the sign-in has expired.'` au lieu du texte sans nom) ;
 - e2e : 20 sur 21. **Seul rouge** : « écran Providers stylé » (`test/e2e/suite.ts:457`, « initiale collée au nom : ["CChatGPT Plus/Pro (Codex Subscription)","AAnthropic (Claude Pro/Max)"] »).
+
+### 22.4 Étapes 1 et 2 (reprise) et étape 3
+
+- **Étape 1, reprise avec le `.vsix` du run 45796092308 : conforme.** Écran Providers stylé : badges ronds, plus de lettre doublée, titre et sous-titre, recherche en pilule, aucune section Local. Formulaire de clé Anthropic : champ en pilule, « Save » désactivé quand le champ est vide, « Cancel » discret. En plus, un login xAI lancé puis annulé, sans URL dans l'Output.
+- **Étape 2 : conforme.** Sous « bonjour » : « Not signed in, or the sign-in has expired. », sans nom, avec « Open Providers », qui ouvre l'écran. Output : `chat: turn 1 failed: Not signed in, or the sign-in has expired.; nothing streamed`.
+  - **Remarque de Yusuf, sans correction ici** : juste avant, l'Output recopie le stderr brut du démon (« [agent] pa-daemon: acp turn failed: No API key found for amazon-bedrock. Use /login … » et les chemins de `docs/providers.md` et `docs/models.md`). Aucun secret, mais le renvoi au terminal, retiré de l'écran, reste visible dans l'Output.
+- **Étape 3 : NON CONFORME.** Login ChatGPT réussi (`sign-in to openai-codex: done`), et la session annonce `openai-codex/gpt-6-luna`. Mais le tour suivant part sur `amazon-bedrock` : « yusagent turn failed: No AWS credentials available for Bedrock », texte brut. Défauts D3 à D5 ci-dessous.
+- **Attendu de l'étape 3 corrigé (D5, décision de Yusuf)** : après le login, l'écran Providers reste affiché, comme chez Unharnessed (`webview/App.tsx:168-169`, `uh:vscode/webview/App.tsx:164`). Retour à la conversation par « Back ». Mon attendu « le panneau revient de lui-même » était faux. Précisé au §14.
+
+### 22.5 D3 : le modèle annoncé n'est pas celui du moteur
+
+- **Ce que fait R5 après un changement d'identifiant** (`refresh_session`, `crates/pa-daemon/src/acp/daemon/ya_providers.rs`) :
+  - `Reload` du worker, qui relit la clé du modèle de la cible vivante, **sans jamais changer le modèle** (`crates/pa-daemon/src/agent_engine/reload.rs:34-37`, `:82-118`) ;
+  - relecture des modèles disponibles ;
+  - republication des options.
+- **Cause** :
+  - le modèle annoncé vient de `model_metadata`, une résolution refaite à chaque appel (`crates/pa-daemon/src/agent_engine/session_engine_impl.rs:574-583`, `agent_engine/model.rs:273-292`). Après le login, c'est le défaut enregistré, `gpt-6-luna` ;
+  - l'agent du moteur est construit une seule fois, avec le modèle du moment (`turn/run_loop.rs:216-228`), ici dès l'ouverture : le fichier de session du contrôle porte `model_change` vers `amazon-bedrock` à sa création ;
+  - au tour, la garde vérifie le modèle d'une résolution fraîche (`turn/model.rs:29-52`), puis prend l'agent déjà construit (`:80`) ;
+  - les 4 tentatives du fichier de session portent `"provider":"amazon-bedrock"`.
+- **Rechoisir le modèle annoncé dans le sélecteur ne corrige rien** : `wire_config.rs:156-165` ignore le choix du modèle courant.
+- **Correction (décision de Yusuf)**, dans `ya_providers.rs` (fork, aucune ligne upstream) :
+  - `refresh_session` retient le modèle montré au client (l'option `model` publiée), puis relit le modèle annoncé après `Reload` ;
+  - s'il a changé et qu'il est disponible, le pont envoie `DaemonCommand::SetModel`, comme le sélecteur (`wire_config.rs:181-199`) ;
+  - ça s'applique au login, à la clé, au logout et au `reload` diffusé aux autres conversations ;
+  - après un logout, le modèle de repli n'a pas d'identifiant : rien n'est forcé.
+- **Limite 1** :
+  - `SetModel` enregistre aussi le modèle comme défaut des réglages et écrit une ligne `model_change` (`crates/pa-daemon/src/model_switch.rs:88-107`) ;
+  - aucun chemin du démon ne change le modèle du moteur sans cet enregistrement : `CycleModel` fait de même (`crates/pa-daemon/src/setting_switches.rs:170-199`), et `switch_model` n'est joignable que par ces deux commandes ;
+  - conséquence : sans défaut enregistré, un login fixe le premier modèle disponible comme défaut.
+- **Limite 2 (de fond)** : le modèle annoncé est recalculé à chaque fois, le modèle du moteur reste figé. Un `auth.json` modifié hors du pont, par un `/login` dans un terminal par exemple, n'est pas suivi : cela relève d'E-C.
+- **Test 3b** (`crates/pa-cli/tests/ya_providers_acp_e2e.rs`, `a_key_moves_a_session_opened_without_credentials_off_the_fallback_model`) :
+  - aucun identifiant, client lancé sans `--provider` ni `--model`, comme l'extension ;
+  - précondition : la session s'ouvre sur `amazon-bedrock`, premier du catalogue (le catalogue intégré passe avant `models.json`, `crates/pa-core/src/models/registry.rs:579-588`) ;
+  - déroulé : `set_api_key` pour `openai`, puis un prompt ;
+  - assertion : le prompt atteint le modèle local `openai/ya40-extra`, défaut des réglages du bac à sable, avec la clé.
+
+### 22.6 D4 : textes d'identifiant manquant des fournisseurs
+
+- **Cause** : `auth_failure_kind` (H2) ne reconnaissait que les textes de la garde.
+- **Textes qui lui échappaient** :
+  - « No AWS credentials available for Bedrock » (`crates/pa-ai/src/providers/bedrock/mod.rs:555`) ;
+  - « No API key for provider: <id> » : `openai_responses.rs:449`, `azure_openai_responses.rs:481`, `openai_codex_responses/mod.rs:184`, `:772`, `mistral/mod.rs:179`, `mistral/stream.rs:243`, `openai_completions/mod.rs:351`, `anthropic/mod.rs:464`.
+- **Correction (décision de Yusuf)** : ces deux textes sont classés `authentication`.
+- **Hors du classement** : les textes Vertex (« Vertex AI requires a project ID… », « … a location… », `google_vertex.rs:77`, `:88`) et gcloud (`:109-116`). Ce sont de la configuration ou l'outil gcloud, pas un identifiant manquant.
+- **Test 7b** (`crates/pa-daemon/src/acp/daemon/ya_providers_tests.rs`, `the_providers_missing_credential_texts_are_authentication_failures`).
+
+### 22.7 Remarques, sans correction ici
+
+- **Modèle de repli** : sans identifiant, le démon ouvre la session sur le premier modèle du catalogue, `amazon-bedrock`/`amazon.nova-2-lite-v1:0` (`crates/pa-daemon/src/agent_engine/model.rs:41`), un fournisseur que l'utilisateur n'a pas choisi. Comportement upstream.
+- **Relances sur identifiant manquant** :
+  - les erreurs des fournisseurs sont relancées comme une panne : le fichier de session du contrôle porte 4 `provider_stream_failure`, à +1,9 s, +3,7 s et +7,9 s, soit 13,6 s (défauts `retry.maxRetries` 3, `retry.baseDelayMs` 2000) ;
+  - ce n'est pas une recherche réseau : `resolve_credentials` ne lit que l'environnement et des fichiers (`crates/pa-ai/src/providers/bedrock/auth.rs:96-129`) ;
+  - classifieur upstream (`error_classify.rs`).
+- **Stderr brut du démon dans l'Output** (remarque de l'étape 2).
+
+### 22.8 Push A (`fafeb9c01`) et A′ (`f5199e189`) : tests D3 et D4
+
+- **Push A**, run `ci` 45801480792 :
+  - test 7b rouge sur son assertion (shard 3/8, job 139845697654, `ya_providers_tests.rs:195`, « Bedrock without AWS credentials ») ;
+  - **test 3b non valable** : précondition passée (session sur `amazon-bedrock`), mais `set_api_key` pour `ya40` répond `failed`, « This provider cannot be signed in to here. » (shard 4/8, job 139845697473, `:614`). Une ligne de `models.json` sans clé n'est pas proposée en connexion par clé. Défaut du test.
+- **Push A′** (test corrigé seul : fournisseur `openai`, modèle `ya40-extra` en défaut des réglages), run `ci` 45803883264 :
+  - test 7b : rouge sur son assertion (shard 3/8, job 139854091781, `ya_providers_tests.rs:195`, `left: "other"`, `right: "authentication"`) ;
+  - test 3b : rouge sur son assertion (shard 4/8, job 139854091824, `ya_providers_acp_e2e.rs:624`, « the prompt after the key reaches openai/ya40-extra with it; requests: [] », en 15,1 s avec les relances) ;
+  - autre échec, hors X5 : `concurrent_producers_drop_at_the_reserve_when_the_queue_is_full` (shard 2/8, job 139854091845). Il est listé comme instable (`docs/fork-changes.md`, « Instabilité probable : `request_timing::payload` »), avec le même symptôme. Pas de relance, noté au tableau.
