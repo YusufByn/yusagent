@@ -15,7 +15,6 @@ import type { ChatEntry, ConfigChange, TurnItem } from "../../src/protocol";
 import { Providers } from "../../src/providers";
 import { Settings } from "../../src/settings";
 import { ShownAgent } from "../../src/shown";
-import { authText } from "../../src/ya/auth";
 import { yaMeta } from "../../src/ya/meta";
 import { features } from "../../src/ya/methods";
 import { fakeAgentPath, fixtureFrames, newControlDir, noticesOf, normalize, permissionsOf, received, starts, waitFor } from "../helpers";
@@ -271,16 +270,24 @@ test("environnement du binaire (PR 3) : PRIME_AGENT_KERNEL_PYTHON retirée, PRIM
   }
 });
 
-test("authentification : message fixe avec le chemin du binaire, deux formes", async () => {
+// Ticket 40 (X5, test 12, réponses 2 et 4 de Yusuf) : `kind: "authentication"` du pont (H2, R5) marque
+// le tour avec le fournisseur du modèle de la session ; le panneau le nomme et mène à l'écran
+// Providers. Le texte seul (`details`) ne compte plus.
+test("authentification (ticket 40, X5) : tour marqué avec le fournisseur, texte fixe sans terminal ; le texte seul ne compte plus", async () => {
   const h = open();
   await ready(h);
-  for (const prompt of ["auth", "sanscle"]) {
-    shown(h).chat.send(prompt, []);
-    await idle(h);
-    const turn = lastTurn(h) as { state?: string; error?: string };
-    assert.equal(turn.state, "failed");
-    assert.equal(turn.error, authText(fakeAgentPath()));
-  }
+  shown(h).chat.send("auth", []);
+  await idle(h);
+  const auth = lastTurn(h) as { state?: string; error?: string; auth?: unknown };
+  assert.equal(auth.state, "failed");
+  assert.equal(auth.error, "Not signed in, or the sign-in has expired.");
+  assert.deepEqual(auth.auth, { provider: "capture" }, "le fournisseur du modèle de la session");
+  shown(h).chat.send("sanscle", []);
+  await idle(h);
+  const other = lastTurn(h) as { state?: string; error?: string; auth?: unknown };
+  assert.equal(other.state, "failed");
+  assert.equal(other.auth, undefined, "kind other : pas un échec d'authentification");
+  assert.match(other.error ?? "", /^yusagent turn failed: No API key found for amazon-bedrock\./, "le texte du pont");
 });
 
 test("plantage : pas de relance automatique, fin du stderr, Relancer", async () => {

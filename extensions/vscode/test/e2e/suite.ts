@@ -7,8 +7,7 @@ import { join } from "node:path";
 import * as vscode from "vscode";
 
 import type { AgentState, ChatState, Probe, ProbeInput, SessionState, WebviewMessage } from "../../src/protocol";
-import { authText } from "../../src/ya/auth";
-import { fakeAgentPath, fixtureFrames, noticesOf, normalize, permissionsOf, received, setScenario, starts, waitFor } from "../helpers";
+import { fixtureFrames, noticesOf, normalize, permissionsOf, received, setScenario, starts, waitFor } from "../helpers";
 
 interface State {
   agent: AgentState;
@@ -386,11 +385,62 @@ const tests: [string, () => Promise<void>][] = [
     },
   ],
   [
-    "authentification : message fixe avec le chemin du binaire",
+    "authentification (ticket 40, X5, test 12) : texte fixe avec le nom du fournisseur, bouton « Open Providers » vers l'écran Providers",
     async () => {
-      await post({ type: "send", text: "sanscle", images: [] });
+      await post({ type: "send", text: "auth", images: [] });
       await idle();
-      await shows(authText(fakeAgentPath()), "message /login");
+      const shown = await shows("Not signed in to Capture, or the sign-in has expired.", "texte fixe avec le fournisseur");
+      assert.ok(!shown.includes("/login") && !/terminal/i.test(shown), "plus de renvoi au terminal");
+      await userClicks("Open Providers");
+      await shows("ChatGPT Plus/Pro", "écran Providers");
+      await userClicks("Back");
+    },
+  ],
+  [
+    "Providers (ticket 40, X5, test 9) : sans fournisseur connecté, la puce « Connect a provider » mène à l'écran ; bouton Providers visible",
+    async () => {
+      setScenario(control, { providers: "none" });
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await userClicks("Connect a provider");
+      const screen = await shows("Sign in with a subscription, add an API key", "écran Providers, rien de connecté");
+      assert.ok(screen.includes("ChatGPT Plus/Pro"), "ligne ChatGPT");
+      await userClicks("Back");
+      setScenario(control, {});
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await userClicks("Providers");
+      await shows("Capture", "écran Providers par le bouton");
+      await userClicks("Back");
+    },
+  ],
+  [
+    "Providers (ticket 40, X5, test 11) : pas d'écran Local, pas de ligne Claude par abonnement (même envoyée), ligne Anthropic par clé",
+    async () => {
+      await userClicks("Providers");
+      const screen = await shows("ChatGPT Plus/Pro", "écran Providers");
+      assert.ok(screen.includes("Anthropic"), "ligne Anthropic par clé");
+      assert.ok(!screen.includes("Claude Pro/Max"), "pas de ligne Claude par abonnement");
+      assert.ok(!screen.split("\n").some((line) => line.trim() === "Local"), "pas de section Local");
+      assert.ok(!screen.includes("Add a local model"), "pas d'ajout de modèle local");
+      await userClicks("Back");
+    },
+  ],
+  [
+    "login (ticket 40, X5, test 10) : écran SignIn, « Open » envoie login_open, Cancel envoie login_cancel",
+    async () => {
+      const sent = (method: string) => received(control, lastPid()).filter((frame) => frame.method === method);
+      await userClicks("Providers");
+      await shows("ChatGPT Plus/Pro", "écran Providers");
+      await userClicks("ChatGPT Plus/Pro");
+      await shows("Sign in with your browser", "écran SignIn");
+      assert.deepEqual(sent("_yus/providers/login").map((frame) => frame.params), [{ providerId: "openai-codex" }]);
+      await userClicks("Open the sign-in page");
+      await waitFor(() => sent("_yus/providers/login_open").length === 1, "login_open envoyée");
+      await userClicks("Cancel");
+      await waitFor(() => sent("_yus/providers/login_cancel").length === 1, "login_cancel envoyée");
+      await shows("ChatGPT Plus/Pro", "retour à l'écran Providers");
+      await userClicks("Back");
     },
   ],
   [
@@ -431,7 +481,9 @@ const tests: [string, () => Promise<void>][] = [
       setScenario(control, {});
       await post({ type: "newChat", draft: { text: "", images: [] } });
       await ready();
-      const screenFrames = () => received(control, lastPid()).filter((frame) => String(frame.method ?? "").startsWith("_yus/"));
+      // Ticket 40 (X5) : les trames de cet écran ; `_yus/providers/list` part à l'ouverture (puce « Connect a provider »).
+      const screenFrames = () =>
+        received(control, lastPid()).filter((frame) => /^_yus\/(settings|skills|mcp)\//.test(String(frame.method ?? "")));
       await sleep(300);
       assert.deepEqual(screenFrames(), [], "rien lu avant l'ouverture de l'écran (E7)");
       await userClicks("Settings");
@@ -451,7 +503,26 @@ const tests: [string, () => Promise<void>][] = [
       await userClicks("MCP");
       const mcp = await shows("Your servers", "onglet MCP");
       assert.ok(mcp.includes("Changes reach the agent with your next message."), "texte de l'onglet MCP (C3)");
-      for (const absent of ["Marketplace", "Catalog", "Linear"]) assert.ok(!mcp.includes(absent), `${absent} masqué (C4)`);
+      // Ticket 40 (X5, décision 8) : le catalogue n'est plus masqué (C4) ; test 13 plus bas.
+      await userClicks("Back");
+    },
+  ],
+  [
+    "catalogue MCP (ticket 40, X5, test 13) : Marketplace visible, Add ouvre le formulaire de jeton, _yus/mcp/set_token part",
+    async () => {
+      await userClicks("Settings");
+      await shows("Compaction", "onglet General");
+      await userClicks("MCP");
+      const mcp = await shows("Marketplace", "catalogue");
+      assert.ok(mcp.includes("Linear") && mcp.includes("Zoom"), "services du catalogue");
+      // Le dernier « Add » de la page : Zoom (A à Z), le service ajouté par jeton.
+      await userClicks("Add");
+      await shows("Zoom token", "formulaire de jeton");
+      await post({ type: "mcpSetToken", id: "zoom", token: "zoom-x5-e2e" });
+      await waitFor(
+        () => received(control, lastPid()).some((frame) => frame.method === "_yus/mcp/set_token" && (frame.params as { id?: string }).id === "zoom"),
+        "_yus/mcp/set_token envoyée",
+      );
       await userClicks("Back");
     },
   ],
