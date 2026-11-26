@@ -54,6 +54,11 @@ const EXCEPTIONS: { path: string; contains?: string; why: string }[] = [
     contains: "(`--uh-*` en `--ya-*`, `uh-rise`, `uh-pop` en `ya-rise`, `ya-pop`)",
     why: "l'en-tête de la feuille reprise dit quels noms ont été passés à yusAgent",
   },
+  {
+    path: "extensions/vscode/webview/ya-providers.css",
+    contains: "github.com/unharnessed-agent/Unharnessed",
+    why: "notice MIT et en-tête de la feuille reprise d'Unharnessed (ticket 40, X5)",
+  },
   // Commentaires qui citent la source (chemin, commit, méthode chez eux).
   {
     path: "prime-agent-runtime/src/rlm/ya_timeout.py",

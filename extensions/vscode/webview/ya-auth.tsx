@@ -13,7 +13,7 @@ export const AuthContext = createContext<AuthScreen>({ providers: [], onProvider
 export function AuthFailure({ provider }: { provider: string | null }) {
   const { providers, onProviders } = useContext(AuthContext);
   return (
-    <div className="turn-error">
+    <div className="turn-error ya-settings">
       <p className="error">{authText(authProviderName(providers, provider))}</p>
       <div className="actions">
         <button className="button" type="button" onClick={onProviders}>

@@ -130,7 +130,8 @@ export function Providers({
     );
 
   return (
-    <div className="screen">
+    // yusAgent (ticket 40) : les règles d'Unharnessed des écrans repris (`ya-settings.css`, `ya-providers.css`).
+    <div className="screen ya-settings">
       <header className="topbar">
         <div className="topbar-title">
           <button

@@ -4,6 +4,7 @@ import "./powder";
 import "./ya-probe"; // yusAgent : sonde des tests e2e
 import "./styles.css";
 import "./ya-settings.css"; // yusAgent (ticket 31) : les écrans Settings, règles d'Unharnessed
+import "./ya-providers.css"; // yusAgent (ticket 40) : écrans Providers et SignIn, règles d'Unharnessed
 import { post } from "./vscode";
 
 // A crash empties the panel: what threw goes to the log.
