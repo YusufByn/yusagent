@@ -946,3 +946,48 @@ Run `ya-extension` 45783371002, job 139784004356 :
 - **Choix acceptés par Yusuf** :
   - le panneau nomme le fournisseur depuis la liste (`providerName`, comme le sélecteur de modèles) ;
   - l'intro de l'écran Providers devient « Sign in with a subscription, or add an API key. » (écran Local masqué).
+
+## 22. Contrôle manuel de Yusuf (binaire `5515c0fd5`, `.vsix` du run `ya-extension` 45786714824)
+
+- **Étape 0 : conforme.**
+  - Output : `agent ready: yusagent 0.10.2-continuous.5515c0fd5978d7c07e1a6623408d1304b43781e8 (protocol 1, pid 85844)`, puis `providers: 34 listed, connected: openai-codex (subscription)`. Plus d'avertissement « list failed ».
+  - Bouton Providers visible à côté de Settings.
+  - `status` : démon pid 85845, version `5515c0fd5…`, état `current`.
+- **Étape 1 : contenu conforme, affichage NON CONFORME.**
+  - Préparation : `auth.json` mis de côté (`auth.json.avant-x5`, 0600) ; aucune clé d'environnement.
+  - Conforme : `providers: 34 listed, connected: none` ; puce « Connect a provider », qui ouvre l'écran Providers ; titre et texte attendus ; Subscriptions avec Anthropic (Claude Pro/Max), ChatGPT, GitHub Copilot et xAI ; API keys avec Anthropic ; aucune section Local.
+  - Défauts 1 et 2 ci-dessous.
+
+### 22.1 Défaut 1 : écrans Providers et SignIn non stylés
+
+- **Constat** : puces de liste, boutons gris, initiale doublée (« AAnthropic », « CChatGPT »…). C'est le cas annoncé en X3 (`docs/tickets/31-skills-mcp-reglages.md`, §9.14).
+- **Cause** :
+  - `styles.css` ne couvre que 5 des 31 classes de `Providers.tsx` et 5 des 27 de `SignIn.tsx`. `ya-settings.css` en couvre la plupart, mais seulement sous `.ya-settings`, racine de `Settings.tsx`.
+  - Les racines des deux écrans étaient un simple `screen` (`webview/Providers.tsx:133`, `webview/SignIn.tsx:25`).
+  - L'initiale est le `.logo` du badge (`webview/logos.tsx:11-12`), affiché dans le texte faute de règle `.badge`.
+- **Correction** (proposition validée par Yusuf le 26/11/2026) :
+  - classe `ya-settings` sur les racines de `Providers.tsx`, de `SignIn.tsx` et du bloc d'échec d'auth (`webview/ya-auth.tsx`) ;
+  - `webview/ya-providers.css`, nouveau, importé après `ya-settings.css`, avec la notice MIT d'Unharnessed (`5494a33a5` ; `styles.css` identique à `f8e4658dd`). Il reprend telles quelles, limitées à `.ya-settings`, les règles des classes que ni `styles.css` ni `ya-settings.css` ne couvrent : `.button` et ses variantes (`is-quiet`, `is-danger`, `is-end`), `intro`, `row-warning`, `step-title`, `status-line`, `spinner`, `code`, `code-line`, `link`, `error`. Variables en `--ya-*`, animation `ya-spin`, aucun `url()` ;
+  - exception du test d'identité pour la notice de cette feuille, comme pour `ya-settings.css`.
+- **Écart** : la règle `.button` d'Unharnessed n'était pas dans `ya-settings.css` (X3 avait laissé « New skill » au style provisoire). Elle est reprise ici, puisque les boutons gris font partie du défaut. Elle s'applique donc aussi aux boutons de l'écran Settings.
+- **Test e2e** « écran Providers stylé » :
+  - l'initiale du badge est sur sa ligne, à part du nom ;
+  - le nom d'une ligne et son statut sont sur deux lignes ;
+  - sur SignIn, l'indicateur d'attente (`.spinner`) a au moins 8×8 px. La sonde gagne `spinners`.
+  - Retour à la conversation dans des `finally`.
+
+### 22.2 Défaut 2 : sans identifiant, la session s'ouvre sur `amazon-bedrock/amazon.nova-2-lite-v1:0`
+
+- **Cause (upstream, non modifiée, décision de Yusuf)** :
+  - `find_initial_model` cherche dans les modèles disponibles (`crates/pa-core/src/models/resolver.rs:594-643`), y compris le défaut enregistré (`:625-639`).
+  - Sans identifiant, il n'y en a aucun. Le démon prend alors le premier modèle du catalogue complet (`crates/pa-daemon/src/agent_engine/model.rs:41`), soit `amazon-bedrock`/`amazon.nova-2-lite-v1:0` (`crates/pa-ai/src/models_generated.rs:52-56`).
+- **Un prompt dans cet état** : la garde répond « No API key found for amazon-bedrock. … » avant toute requête (`crates/pa-daemon/src/agent_engine/turn/model.rs:52-72`), et H2 le classe en `authentication`.
+- **Remarque, sans correction ici** : le modèle de repli est le premier du catalogue, un fournisseur que l'utilisateur n'a pas choisi.
+- **Correction côté extension seulement** : quand la liste ne montre aucun fournisseur connecté, le texte ne nomme pas le fournisseur du modèle de repli. Il affiche « Not signed in, or the sign-in has expired. » (`authProviderName`, `extensions/vscode/src/ya/auth.ts`).
+  - Au push A, la règle de nommage est extraite dans cette fonction **sans changement de comportement**, pour que le test compile et échoue sur son assertion. Écart signalé à Yusuf.
+
+### 22.3 Push A (`ed11431ea`) : tests seuls, rouges
+
+Run `ya-extension` 45795404847, job 139824660006 :
+- tests unitaires : 83 tests, 82 réussis. **Seul rouge** : « échec d'auth (ticket 40, X5, défaut 2) » (`test/unit/providers.test.ts:174`, « rien de connecté » : `'Not signed in to Amazon Bedrock, or the sign-in has expired.'` au lieu du texte sans nom) ;
+- e2e : 20 sur 21. **Seul rouge** : « écran Providers stylé » (`test/e2e/suite.ts:457`, « initiale collée au nom : ["CChatGPT Plus/Pro (Codex Subscription)","AAnthropic (Claude Pro/Max)"] »).
