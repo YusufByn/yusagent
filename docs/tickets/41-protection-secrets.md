@@ -899,6 +899,36 @@ Lignes de l'arbre à `a91207b34`. Les nombres de lignes sont des estimations.
 - `f49bff54f` (push 2 bis), run `ci` 45874752019 : **tous les jobs passent**, y compris le shard 1 (vérifications de cycle de vie et tests de `ya_secret_relay`), clippy et la suite Python.
   - Échec à part : « Check changelog fragment ». Il manquait le fragment `.changes/ya-41-protection-secrets.md`, ajouté au push suivant.
 
+### T.5 Preuve par mutation des quatre tests Rust arrivés avec le code (26/11/2026)
+
+Demande de Yusuf : avant le merge de la PR #93, casser d'une ligne chacune des quatre règles réelles et vérifier que chaque test échoue sur son assertion, et seulement lui.
+- Branche jetable `ya-41-mutation`, créée depuis `863e27b69`, dernier commit de la PR.
+- Commits de diagnostic hors PR : `dd8e142e3`, puis `821134510`.
+- `ci.yml` ne tourne que sur une PR vers `main` : PR temporaire **#94**, en mode prêt, fermée après le relevé, branche distante supprimée.
+
+Mutations, dans `crates/pa-core/src/mcp/ya_relay.rs` :
+
+| Mutation | Ligne cassée | Règle | Test |
+|---|---|---|---|
+| M1 | `bound_token`, bras OAuth : `endpoint == url` devient `!endpoint.is_empty()` | jeton OAuth lié à l'adresse exacte | T1 `mcp_http_relay_never_attaches_a_token_bound_elsewhere_or_unbound` |
+| M2 | `bearer_for`, `Stored` : `return Err(credentials_unavailable(server))` devient `return Ok(None)` | refus net, avec le message fixe | T2 `mcp_http_relay_fails_closed_with_the_unavailable_message` |
+| M3 | `bound_token`, jeton collé : `Some(bearer.trim().to_string())` devient `resolve_config_value(bearer.trim())` | jeton collé pris tel quel, jamais résolu par une variable d'environnement ni par une commande | T3 `mcp_http_relay_attaches_a_pasted_token_literally` |
+| M4 | `mcp_http`, serveur hors réglages : l'absence d'identifiant n'est plus une erreur | serveur hors réglages refusé sans identifiant lié | T4 `mcp_http_relay_refuses_a_server_outside_the_settings_without_a_bound_credential` |
+
+**Run 1** (`dd8e142e3`, M1 à M4, run `ci` 45877790177, shard 1) : exactement T1, T2, T3 et T4 échouent. Les 7 autres tests de `ya_secret_relay.rs` passent.
+- T2 (`:420`) : `no credential: Object {"status": Number(200), …}`. Seule M2 peut le produire (aucun identifiant, serveur configuré) : **attribué**.
+- T4 (`:474`) : `an unknown server with no bound credential is refused`. Seule M4 peut le produire : **attribué**.
+- T1 (`:400`) : `no usable credential: the relay fails closed: Object {"status": Number(200), …}`. M1 comme M2 laissent partir la requête : **ambigu**.
+- T3 (`:448`) : `the pasted bearer is attached as is: POST /mcp HTTP/1.1 / authorization: ***`. GitHub masque la valeur de l'en-tête dans le journal, donc la preuve n'est pas lisible.
+- Clippy échoue aussi (`match_same_arms`, causé par M4). C'est sans rapport avec les tests.
+
+**Run 2, isolement** (`821134510`, M1 et M3 seules, run `ci` 45879883671, shard 1) : **seuls T1 et T3 échouent**, avec les mêmes messages (`:400`, `:448`). T2, T4 et les 7 autres tests du relais passent.
+- T1 ne peut plus échouer que par M1, puisque M2 est retirée : **attribué**.
+- T3 ne peut échouer que par M3, puisque M1 ne touche que le bras OAuth et que T3 n'utilise qu'un jeton collé : **attribué**.
+- Clippy, `fmt` et la suite Python passent.
+
+**Conclusion** : chacun des quatre tests échoue sur son assertion sous la mutation de sa propre règle, et seulement lui.
+
 ## Annexe : mesures macOS
 
 Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des sorties de sandbox du §R.2, 48 essais) :
