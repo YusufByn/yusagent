@@ -1,0 +1,1 @@
+- yusAgent: the kernel no longer reads stored credentials: MCP HTTP requests that need a token or a configured header, and web searches, go through the worker, which adds the credential; `SERPER_API_KEY` never reaches the kernel, even named in `kernel.envAllowlist`.

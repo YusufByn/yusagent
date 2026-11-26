@@ -19,6 +19,8 @@ mod probe;
 mod remote_source;
 mod service_catalog;
 mod url_checks;
+// yusAgent (YA-11, ticket 41): MCP HTTP and web search through the worker.
+mod ya_relay;
 
 pub use catalog_plugin_views::{McpCredentialView, API_KEY_CREDENTIALS};
 pub use catalog_views::{
@@ -704,6 +706,7 @@ impl McpManager {
                         if let Value::Object(map) = &mut config {
                             map.insert("credentialSource".to_string(), json!("acp"));
                         }
+                        ya_relay::strip_headers(&mut config);
                         if let Some(report) = &usage_config {
                             report("config", &server);
                         }
@@ -729,6 +732,7 @@ impl McpManager {
                                 map.insert("credentialSource".to_string(), json!("static-token"));
                             }
                         }
+                        ya_relay::strip_headers(&mut config);
                         if let Some(report) = &usage_config {
                             report("config", &server);
                         }
@@ -737,7 +741,10 @@ impl McpManager {
                     if get_catalog_entry(&server).is_some() {
                         return Ok(json!({}));
                     }
-                    serde_json::to_value(&integration.config).map_err(anyhow::Error::new)
+                    let mut config =
+                        serde_json::to_value(&integration.config).map_err(anyhow::Error::new)?;
+                    ya_relay::strip_headers(&mut config);
+                    Ok(config)
                 })
             }),
         );
@@ -764,6 +771,8 @@ impl McpManager {
                 }),
             );
         }
+        // yusAgent (YA-11, ticket 41): `mcp.http` and `websearch.search`.
+        ya_relay::register(manager, handlers);
         let manager = std::sync::Arc::clone(manager);
         let manager_for_plugins = std::sync::Arc::clone(&manager);
         handlers.register(

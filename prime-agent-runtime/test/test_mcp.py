@@ -357,89 +357,49 @@ class McpRegistryTest(unittest.TestCase):
             env = mcp._stdio_env({"credentialSource": "acp", "env": {"TOKEN": "task-secret"}})
         self.assertEqual(env, {"PATH": "/bin", "TOKEN": "task-secret"})
 
+    # yusAgent (YA-11, ticket 41): the kernel never reads a credential nor sends a token; these
+    # six tests now check that, and their former rules (endpoint binding, re-login, literal
+    # pasted bearer, fail-closed message) moved to the worker relay
+    # (`crates/pa-core/tests/ya_secret_relay.rs`, listed in docs/fork-changes.md).
+    def _no_auth_read(self):
+        return mock.patch.object(mcp, "_read_auth", side_effect=AssertionError("auth.json must not be read"))
+
     def test_endpoint_bound_credential_never_attaches_to_another_url(self):
-        cred = {"access": "old-token", "endpoint": "https://old.example/mcp"}
         config = {"oauth": True, "url": "https://new.example/mcp"}
-        with mock.patch.object(mcp, "_read_auth", return_value=cred):
-            with self.assertRaises(RuntimeError):
-                asyncio.run(mcp._headers("remote", config))
-            # Exact match only: even a trailing-slash difference is a changed entry.
-            config["url"] = "https://old.example/mcp/"
-            with self.assertRaises(RuntimeError):
-                asyncio.run(mcp._headers("remote", config))
-            config["url"] = "https://old.example/mcp"
+        with self._no_auth_read():
             headers = asyncio.run(mcp._headers("remote", config))
-        self.assertEqual(headers["Authorization"], "Bearer old-token")
+        self.assertNotIn("Authorization", headers)
 
     def test_unbound_credential_requires_relogin(self):
         config = {"oauth": True, "url": "https://srv.example/mcp"}
-        with mock.patch.object(mcp, "_read_auth", return_value={"access": "unbound-token"}):
-            with self.assertRaises(RuntimeError):
-                asyncio.run(mcp._headers("remote", config))
+        with self._no_auth_read():
+            headers = asyncio.run(mcp._headers("remote", config))
+        self.assertNotIn("Authorization", headers)
 
     def test_static_token_headers_attach_only_from_the_bound_credential(self):
         config = {"type": "http", "url": "https://api.example/mcp", "credentialSource": "static-token"}
-        cred = {
-            "type": "mcp_static_token",
-            "endpoint": "https://api.example/mcp",
-            "bearer": "pasted-token",
-            "bearerFieldId": "GITHUB_PAT_TOKEN",
-            "values": {"GITHUB_PAT_TOKEN": "pasted-token"},
-        }
-        with mock.patch.object(mcp, "_read_auth", return_value=cred):
+        with self._no_auth_read():
             headers = asyncio.run(mcp._headers("github", config))
-        self.assertEqual(headers["Authorization"], "Bearer pasted-token")
-        # A bearer stored for ANOTHER endpoint never attaches — exact match.
-        with mock.patch.object(mcp, "_read_auth", return_value={**cred, "endpoint": "https://old.example/mcp"}):
-            with self.assertRaises(RuntimeError):
-                asyncio.run(mcp._headers("github", config))
-        # No bearer (missing credential, or a non-static shape) fails closed:
-        # the connection must NOT silently fall back to anonymous.
-        with mock.patch.object(mcp, "_read_auth", return_value={"type": "oauth", "access": "x"}):
-            with self.assertRaises(RuntimeError):
-                asyncio.run(mcp._headers("github", config))
-        with mock.patch.object(mcp, "_read_auth", return_value=None):
-            with self.assertRaises(RuntimeError):
-                asyncio.run(mcp._headers("github", config))
+        self.assertNotIn("Authorization", headers)
 
     def test_static_token_failure_is_the_kernel_unavailable_error(self):
         config = {"type": "http", "url": "https://api.example/mcp", "credentialSource": "static-token"}
-        with mock.patch.object(mcp, "_read_auth", return_value=None):
-            with self.assertRaises(mcp.McpCredentialsUnavailable) as caught:
-                asyncio.run(mcp._headers("github", config))
-        self.assertEqual(
-            str(caught.exception),
-            "MCP credentials for 'github' are not available. Ask the user to connect it "
-            "(/plugins or /mcp login github); do not ask them to set environment variables.",
-        )
-        with mock.patch.object(mcp, "_read_auth", return_value=None):
-            with self.assertRaises(mcp.McpCredentialsUnavailable):
-                asyncio.run(mcp._auth_identity("github", config))
+        with self._no_auth_read():
+            self.assertEqual(asyncio.run(mcp._headers("github", config)), {})
+            self.assertEqual(asyncio.run(mcp._auth_identity("github", config)), "relay")
 
     def test_static_token_bearer_is_never_env_or_command_resolved(self):
         config = {"type": "http", "url": "https://api.example/mcp", "credentialSource": "static-token"}
-        # A bearer that LOOKS like an env-var name or a `!command` is attached
-        # as the literal pasted value, never resolved like a stored api_key.
-        for pasted in ("GITHUB_PAT_TOKEN", "!sh -c secret", "  spaced-token  "):
-            cred = {"type": "mcp_static_token", "endpoint": "https://api.example/mcp", "bearer": pasted}
-            with mock.patch.dict(os.environ, {"GITHUB_PAT_TOKEN": "env-resolved-token"}, clear=False):
-                with mock.patch.object(mcp, "_read_auth", return_value=cred):
-                    headers = asyncio.run(mcp._headers("github", config))
-                    identity = asyncio.run(mcp._auth_identity("github", config))
-            expected = pasted.strip()
-            self.assertEqual(headers["Authorization"], f"Bearer {expected}")
-            self.assertEqual(identity, hashlib.sha256(expected.encode()).hexdigest())
-            self.assertNotIn("env-resolved-token", headers["Authorization"])
+        with mock.patch.dict(os.environ, {"GITHUB_PAT_TOKEN": "env-resolved-token"}, clear=False):
+            with self._no_auth_read():
+                headers = asyncio.run(mcp._headers("github", config))
+        self.assertNotIn("env-resolved-token", json.dumps(headers))
 
     def test_static_token_auth_identity_hashes_the_bound_bearer(self):
         config = {"type": "http", "url": "https://api.example/mcp", "credentialSource": "static-token"}
-        cred = {"type": "mcp_static_token", "endpoint": "https://api.example/mcp", "bearer": "pasted-token"}
-        with mock.patch.object(mcp, "_read_auth", return_value=cred):
+        with self._no_auth_read():
             identity = asyncio.run(mcp._auth_identity("github", config))
-        self.assertEqual(identity, hashlib.sha256(b"pasted-token").hexdigest())
-        with mock.patch.object(mcp, "_read_auth", return_value=None):
-            with self.assertRaises(RuntimeError):
-                asyncio.run(mcp._auth_identity("github", config))
+        self.assertEqual(identity, "relay")
 
     def test_diagnostics_do_not_contain_headers_or_env_secrets(self):
         async def host_request(*_args):

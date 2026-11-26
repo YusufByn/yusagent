@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from . import host_request
+from .ya_relay import relay_client  # yusAgent (YA-11, ticket 41)
 
 __all__ = ["McpIntegration", "McpToolError", "NotEnabled"]
 
@@ -211,6 +212,12 @@ class McpIntegration:
             raise ValueError(
                 f"{type(self).__name__} must set `url` or override `_open_session`"
             )
+        # yusAgent (YA-11, ticket 41): no token in the kernel; the worker adds it (mcp.http).
+        client = await stack.enter_async_context(relay_client(self.server, 300.0, extra_headers, send=host_request))
+        read, write, *_ = await stack.enter_async_context(_resolve_streamable_http()(url, http_client=client))
+        session = await stack.enter_async_context(ClientSession(read, write))
+        await session.initialize()
+        return session
         token = await self._resolve_token()
         transport = _resolve_streamable_http()
         # Extra configured headers first, Authorization last so it always wins.

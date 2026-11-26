@@ -1123,3 +1123,22 @@ Run `ya-extension` 45795404847, job 139824660006 :
   - Script de comptage, lancé d'abord par Claude Code puis par Yusuf : `journaux : 4`, et 0 pour `state=`, `code_challenge`, `oauth/authorize`, `auth.openai.com`, `claude.ai/oauth`, `access_token`, `refresh_token`, `Bearer `, `sk-`. Il ne lit que les journaux de l'Output yusAgent écrits depuis le début du contrôle et n'affiche que des comptes.
   - Cmd+F dans Output › yusAgent : rien pour `state=` ni pour `http`.
 - **Push A de b)** (`fb55988e8`, décision extraite sans changement, avec le test), run `ci` 45822159161 : **seul rouge**, `a_cancelled_mcp_sign_in_answers_cancelled` (shard 8/8, job 139917113255, `ya_acp_providers.rs:361`, « cancel asked, nothing stored », `left: Failed("Sign-in failed. Try again.")`, `right: Cancelled`).
+
+### 22.12 Court contrôle de b) et D6, étape 9, fin du contrôle
+
+- **Court contrôle conforme** (binaire `e7cd09922`, `.vsix` du run `ya-extension` 45824622126).
+  - **D6** : A = [1], « salut » donne `turn 1 failed: Not signed in, or the sign-in has expired.` (14:35:01). Login ChatGPT dans B = [2] : une tentative annulée (14:36:04), puis `done` (14:37:20), et [1] est mis à jour (14:37:20.507). Retour à A par l'historique, sans `session: opened` : le texte sous « salut » reste « Not signed in, or the sign-in has expired. », sans « Amazon Bedrock ».
+  - **b)** : `sign-in to mcp:linear: started` (14:38:16.906), `cancel requested` (14:38:28.338), **`cancelled`** (14:38:28.847). Retour à Settings, aucune URL dans l'Output.
+- **CI de `e7cd09922`** :
+  - le shard 8/8 a échoué une fois sur `rpc_compact_flush_is_bounded_against_a_stalled_reader`, test listé comme instable, avec le même symptôme ;
+  - relance du job seul, sans push, notée sur la PR #92. Elle est verte (job 139933317263), avec `a_cancelled_mcp_sign_in_answers_cancelled` ;
+  - les 16 checks requis sont verts.
+  - Binaire `~/.cache/yusagent-bin/e7cd09922834b8f157096620a6e4359cabed66dc/yusagent` (build 45824614436).
+  - Captures `runs/20261126T132406Z` : trames de l'extension « fixture : oui », TOUT IDENTIQUE ; chemins du préfixe CONFORME ; acp-resume et acp-live CONFORME ; `compare.py --all` contre `main` TOUT IDENTIQUE ; `compare_frames.py` : 0 écart.
+- **Étape 9 : faite.**
+  - `auth.json` d'origine remis (`-rw-------`, 2091 octets).
+  - `settings.json` d'origine remis (`diff -q` : identiques).
+  - Copies des logins du contrôle (`auth.json.chatgpt-x5`, `…-x5b`) supprimées par Yusuf.
+  - Nouvelle conversation : `model openai-codex/gpt-6-luna (17 choices)`, `providers: 34 listed, connected: openai-codex (subscription)`.
+- **Contrôle de X5 conforme sur toutes les étapes** (6 sautée). Décision de Yusuf : merge (PR #92, `--match-head-commit e7cd09922834b8f157096620a6e4359cabed66dc`).
+

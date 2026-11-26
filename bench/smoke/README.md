@@ -20,6 +20,8 @@ PRIME_AGENT_CODING_AGENT_DIR=~/.cache/yusagent-smoke/agent HOME=~/.cache/yusagen
 
 puis le panneau d'authentification, provider « ChatGPT Plus/Pro (Codex Subscription) » (`openai-codex`). Le runner ne lit jamais `auth.json` sauf pour une chose : rechercher ses valeurs dans le dossier de run à la fin (le rapport ne donne que des noms de fichiers et des comptes). Il réécrit `models.json` et `settings.json` de ce dossier à chaque session : ne rien y mettre à la main.
 
+**Le modèle peut lire ce login pendant un run** (ticket 41, réponse 12). En mode `-p`, la session tourne dans le processus du binaire (`crates/pa-cli/src/print_runtime.rs:1288-1291`), lancé sous `sandbox-agent.sb` (`run.py:347-357`). Ce profil doit laisser lire `AGENT_DIR` au binaire, et le kernel en hérite. Le code du modèle peut donc lire l'`auth.json` du banc, avec le login des runs à vrai modèle. Il en va de même pour le bras Codex et son `CODEX_HOME`. Refuser ce fichier dans `sandbox-agent.sb` casserait les runs, donc il n'est pas refusé.
+
 ## Hôtes autorisés (une fois par provider)
 
 Le proxy CONNECT n'accepte que les hôtes de `hosts/openai-codex.txt` (rafraîchissement du jeton). La liste s'établit au run de chauffe, pas de mémoire :
