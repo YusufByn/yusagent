@@ -995,6 +995,43 @@ Réponses de Yusuf aux écarts du push 1 :
 - `crates/pa-core/src/tools/ya_exec.rs:317` est un fichier du fork, hors de ce décompte.
 - Code du fork : le module de l'enveloppe (profil, deux variantes, contexte des chemins, interrupteur, contrôle des URL, refus au lancement si `sandbox-exec` manque), `env_allowlist.rs` (`PRIME_AGENT_SECRET_GUARD` jamais transmise au kernel), les bancs (variable posée, README).
 
+## V. PR A (PR #95) : relevé du push 1 et push 2 (26/11/2026)
+
+### V.1 Push 1 : tests seuls (`bc31006e8`, `02d974186`, `5f9a00e03`)
+
+- `02d974186` (push 1 bis) : squelette de `profile`, qui rend une chaîne vide, et test 1 ; catégories d'exemption du scan ; socket hors du dossier par défaut dans le test 2 ; `--no-fail-fast` dans le job macOS (au push 1, `cargo test` s'arrêtait au premier binaire en échec).
+- `5f9a00e03` (push 1 ter) : extension `.rs` comparée par `Path::extension`, un lint de clippy relevé au run `ci` 45882785163.
+
+**Run `secret guard (macos-15)` 45884801495** : chaque test échoue sur son assertion.
+
+| Test | Assertion en échec |
+|---|---|
+| Test 1, deux tests (`ya_secret_guard_profile.rs:42`, `:77`) | `not a Seatbelt profile` (le squelette rend une chaîne vide) |
+| Test 2 (`ya_secret_guard_kernel.rs:202`) | `the kernel reached what the guard refuses`, les 11 accès en `ok` : lecture d'`auth.json`, de `models.json` et d'`auth.json.tmp123`, lecture par symlink, remplacement de `models.json`, socket du dossier par défaut, socket hors du dossier par défaut, écriture du binaire en cours, écriture de son `package.json`, `bash cat auth.json`, renommage du dossier agent |
+| Test 3 (`ya_secret_guard_acp_e2e.rs:210`) | `a session cell read auth.json: {"read auth.json":"ok","connect to the daemon socket":"ok"}` |
+| Test 7 (`ya_secret_guard_hardlink_e2e.rs:68`) | `auth.json still shares its inode with a link made before the guard` (3618419 des deux côtés) |
+| Scan (`ya_process_launch_scan.rs:233`) | `34 process launch(es) outside the guard` |
+| Navigateur (`ya_browser_scheme.rs:76`) | `the opener launched what it must refuse` : les 7 cibles interdites |
+| `every_crate_of_the_lockfile_was_reviewed` | passe (garde-fou, vert dès le départ) |
+
+**Run `ci` 45884801558 (Linux)** : clippy, `fmt` et la suite Python passent. Les seules unités en échec sont les rouges attendus, chacun sur son assertion :
+- `pa-core#test:ya_process_launch_scan` (shard 2) ;
+- `pa-core#test:ya_browser_scheme` (shard 6) ;
+- `pa-cli#test:ya_secret_guard_hardlink_e2e` (shard 7) ;
+- `pa-types#test:ya_secret_guard_profile` (shard 8).
+
+### V.2 Réponses de Yusuf (26/11/2026) et écarts
+
+1. **Exemption Windows** : un marqueur explicite précède chaque lancement, et le scan vérifie qu'il est à l'intérieur d'un élément `#[cfg(windows)]`. Commit `911f1bed0`, 6 lignes dans 5 fichiers, avec un test d'auto-contrôle (marqueur retiré, `cfg` retiré, `cfg` posé sur un autre élément).
+   - **Écart** : `crates/pa-core/src/platform/process.rs` (site `taskkill`) n'était pas dans la liste du §U.2. Ce commit est compté à part du push 2.
+2. **Push 2** validé d'avance à trois conditions : au plus 52 lignes upstream, un seul appel par site, aucun fichier hors du §U.2. **Les trois sont tenues** (V.3).
+
+Choix faits pour tenir ces conditions :
+- **Module renommé `ya_guard`**, pour que chaque site reste sur une ligne de 100 caractères au plus. Fonctions : `command`, `tokio`, `model_tokio`, `browser(program, url)`, `sockets`, `supervisor_start`, `warn_if_off`.
+- **Navigateur** : le contrôle de l'URL est fait dans `browser(program, url)`, sans ligne de plus. Une URL refusée reçoit un programme inexistant, et rien ne s'ouvre.
+- **Sans mécanisme** (Linux avant la PR C) : seuls le kernel et `exec_command` refusent de démarrer (réponse 8, « refus de lancer le kernel »). Les autres lancements passent tels quels. Sans kernel, aucun code du modèle ne tourne.
+- **Contrôles de cycle de vie** : lancés hors de `cargo`, la variable de `.cargo/config.toml` ne leur parvient pas. Ils posent donc `PRIME_AGENT_SECRET_GUARD=off` dans l'environnement qu'ils donnent au binaire, une ligne par fichier, sans toucher `ci.yml`.
+
 ## Annexe : mesures macOS
 
 Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des sorties de sandbox du §R.2, 48 essais) :
