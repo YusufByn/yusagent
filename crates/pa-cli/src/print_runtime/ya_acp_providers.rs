@@ -170,14 +170,18 @@ impl SignIn {
 }
 
 /// An MCP sign-in's outcome: its flow answers its failures as a status too, so the store tells.
+/// X5 (§22.11): a cancel the client asked for ends the flow on its own error (the cancelled
+/// paste: `pa-core`'s `mcp/oauth.rs`, "Missing authorization code"), which answers `Cancelled`
+/// when nothing was stored.
 fn mcp_settled(
     outcome: &ProviderAuthOutcome,
-    _cancel_requested: bool,
+    cancel_requested: bool,
     stored: bool,
 ) -> SignInOutcome {
     match outcome {
         ProviderAuthOutcome::Cancelled => SignInOutcome::Cancelled,
         _ if stored => SignInOutcome::Done,
+        _ if cancel_requested => SignInOutcome::Cancelled,
         _ => SignInOutcome::Failed(SIGN_IN_FAILED.to_string()),
     }
 }
