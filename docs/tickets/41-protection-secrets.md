@@ -17,7 +17,7 @@ Unharnessed (lu à `bb55464`) n'a rien sur ce point : aucun choix à reprendre, 
 - **Variables d'environnement (G)** : sur macOS, `sysctl(KERN_PROCARGS2)` lit depuis la sandbox l'environnement de tout processus parent (mesuré). Aucune règle Seatbelt essayée ne l'empêche. Je recommande une limite documentée.
 - **Recommandation** : macOS d'abord (PR A : Seatbelt et socket), puis les jetons MCP hors du kernel (PR B), puis Linux après la sonde (PR C). Les questions sont au §L.
 - **Mise à jour du 26/11/2026** : réponses de Yusuf (§N), plan révisé (§M : B, puis A, puis C). Compléments au §O : inventaire F.4, exécution différée, smoke bench, vérifications de la PR B. **Question bloquante au §P** : `packages`/`npmCommand` font exécuter le worker sans action de l'utilisateur.
-- **Mise à jour du 26/11/2026 (suite)** : réponses 11 à 13 (§Q). **Nouveau constat bloquant au §Q.2** (suite au §R : inventaire complet, sorties de sandbox mesurées, comparaison X1/X4, questions 17 à 20) : le worker lance sans action de l'utilisateur des programmes que le kernel peut changer (`git` du `PATH` à chaque tour, `npm root -g` même avec P1, `exec_command` de la variante shell natif, binaire `yusagent`). Une protection posée sur le kernel seul ne tient pas.
+- **Mise à jour du 26/11/2026 (suite)** : réponses 11 à 13 (§Q). **Nouveau constat bloquant au §Q.2** (suite au §R : inventaire complet, sorties de sandbox mesurées, comparaison X1/X4 ; réponses et garantie au §S : X1, plan B, puis A, puis C) : le worker lance sans action de l'utilisateur des programmes que le kernel peut changer (`git` du `PATH` à chaque tour, `npm root -g` même avec P1, `exec_command` de la variante shell natif, binaire `yusagent`). Une protection posée sur le kernel seul ne tient pas.
 
 ## A. Inventaire
 
@@ -294,7 +294,9 @@ Ce document n'existe pas encore dans le dépôt (recherche dans `docs/`) ; la li
   - `shellCommandPrefix`/`shellPath` exécutés par le `!commande` du TUI (réponse 9) ;
   - `npmCommand` exécuté par une installation de paquet lancée par l'utilisateur (selon le §P).
 - **Exécution différée hors de yusAgent** (réponse du 26/11, question 14) : VS Code et `yusagent.binaryPath` de ses réglages utilisateur (ou un `yusagent` placé plus tôt dans le `PATH`), les fichiers de démarrage du shell, launchd (`~/Library/LaunchAgents`). Le kernel peut les écrire. Ils s'exécutent plus tard, hors de toute protection, au prochain lancement de VS Code, du shell ou de la session.
-- **Services locaux non protégés** (§R.2, mesuré avec `screen`) : un serveur lancé par l'utilisateur hors sandbox, qui exécute une commande à la demande, la fait tourner hors protection. Exemples : `screen`, tmux, Docker, sockets IPC de VS Code, serveurs de développement en TCP. Ce n'est pas différé : c'est immédiat, sans action, dès qu'un tel serveur tourne. Selon la question 19.
+- **Services locaux hors de yusAgent** (limite documentée, réponse 19) : un service lancé hors de yusAgent qui exécute une commande ou lit un fichier pour un client peut lire les identifiants à la demande du kernel. C'est immédiat, sans action de l'utilisateur, dès qu'un tel service tourne.
+  - **Docker** en premier : `docker run -v ~/.yusagent:/x … cat /x/auth.json` monte le dossier agent dans un conteneur, et le démon Docker le lit pour le client. Déduit, non mesuré.
+  - `screen` (mesuré, §R.2), tmux, IPC de VS Code, serveurs TCP locaux, autres (déduits).
 - Clés passées par variable d'environnement : lisibles par le code du modèle sur macOS, et sous Linux sans espace de noms PID. Texte de l'avertissement (réponse 3) : « une clé passée par variable d'environnement reste lisible par le code du modèle ; pour la protéger, connectez le fournisseur par l'écran Providers ou `/login` ».
 - Clés rangées sous forme `!commande` (trousseau, gestionnaire de mots de passe) : le kernel peut relancer la même commande.
 - Identifiants de l'utilisateur hors de yusAgent : `~/.aws`, identifiants Google par défaut (`GOOGLE_APPLICATION_CREDENTIALS`, `env_allowlist.rs:128`), `~/.ssh`, identifiants git, trousseau via `/usr/bin/security`.
@@ -732,6 +734,49 @@ Questions :
 18. Avec X4, **`-p` et `--mode rpc` refusés** sous la protection, avec le message qui nomme la variable ?
 19. **Services locaux** (§R.2) : limite documentée, ou refus des connexions de socket Unix sauf une liste (DNS `mDNSResponder`, à mesurer) ? Ce refus casserait Docker, ssh-agent, gpg-agent et les bases locales depuis le kernel.
 20. **Refus LaunchServices** dans le profil, au prix de tout `open` depuis le kernel (le navigateur s'ouvre par le pont) ?
+
+## S. Réponses 17 à 20 et garantie (26/11/2026)
+
+### S.1 Garantie de la protection (décision de Yusuf, reportée au journal du CDC)
+
+- **Ni le kernel ni aucun processus lancé par yusAgent ne peut lire ou écrire les fichiers d'identifiants.** Cela vaut pour ce que lancent le worker, le démon, le pont, les modes ACP, le TUI, `-p` et `rpc`.
+- Restent en limites documentées (§J) :
+  - les services locaux hors de yusAgent qui exécutent une commande ou lisent un fichier pour un client (Docker, `screen`, tmux, IPC de VS Code, serveurs TCP locaux, autres) ;
+  - l'exécution différée.
+- Plus de recherche de nouveaux canaux au constat. Un canal trouvé pendant le code est signalé et classé, sans élargir le ticket.
+
+### S.2 Réponses
+
+17. **X1.**
+    - Le test CI qui parcourt le code et `Cargo.lock` est obligatoire. Il échoue dès qu'un lancement de processus apparaît hors de l'enveloppe dans les crates du worker, du démon et du pont, avec une liste d'exceptions commentée (aucune attendue).
+    - Refus d'écriture sur le binaire en cours, sur son `package.json` et sur leurs dossiers parents.
+    - **Écart à signaler (S.3) : deux lancements ne peuvent pas être enveloppés par construction.**
+18. Sans objet (X1).
+19. Limite documentée. Docker est nommé en premier au §J et marqué déduit.
+20. Oui : refus de `com.apple.coreservices.*` et `com.apple.lsd.*` dans le profil (effets en S.4).
+
+Plan : PR B (relais MCP et websearch), puis PR A (enveloppe du kernel et des lancements du worker, du démon et du pont selon X1, socket, LaunchServices, binaire, `st_nlink`), puis PR C (Linux) après la sonde.
+
+### S.3 Écart : les relances du binaire yusAgent
+
+Deux lancements doivent rester hors de l'enveloppe, parce que le processus lancé est yusAgent lui-même et lit les identifiants :
+- le worker, lancé par le superviseur (`crates/pa-daemon/src/supervisor/supervision.rs:583`) ;
+- le superviseur, lancé par le pont ou le TUI (`crates/pa-cli/src/interactive_mode/daemon.rs:170`).
+
+Les deux lancent `current_exe()`, protégé en écriture par le profil (S.2, réponse 17).
+
+**Proposition** : le test CI les traite comme une catégorie à part, « relance du binaire yusAgent ». Il l'admet seulement si le programme est `current_exe()`, ce qu'il vérifie à la lecture du site, et refuse toute autre exception. **À confirmer par Yusuf avant la PR A.**
+
+Le navigateur (`crates/pa-core/src/platform/browser.rs:36`) n'est **pas** une exception. Il passe par l'enveloppe avec une variante du profil, qui refuse les fichiers d'identifiants mais laisse LaunchServices ouvert, puisqu'il sert justement à lancer le navigateur. Le processus `open` ne peut pas lire les identifiants, et le navigateur, lancé par LaunchServices, n'est pas un processus de yusAgent.
+
+### S.4 Ce que casse le refus LaunchServices
+
+Le profil complet s'applique au kernel, à ses descendants et aux lancements enveloppés du worker, du démon et du pont, sauf la variante du navigateur.
+
+- **Cassé depuis le kernel** : `open` d'un fichier, d'une URL ou d'une application (`bash("open index.html")`), `webbrowser.open()` en Python, `osascript` (bloqué, §R.2), et tout outil en ligne de commande qui passe par LaunchServices pour trouver ou lancer une application.
+- **Navigateur ouvert par le worker sur une demande du kernel** (`mcp.begin_login`, `crates/pa-daemon/src/mcp_login.rs:49`) : **pas touché**. Le worker ouvre le navigateur par `browser.rs`, sous la variante sans refus LaunchServices.
+- **Login MCP depuis l'extension** : **pas touché**. Le flux tourne dans le pont (`crates/pa-cli/src/print_runtime/ya_acp_providers.rs:106-166`), qui ouvre le navigateur par `login_open` (`crates/pa-daemon/src/acp/daemon/ya_providers.rs:42`, `:436`), sous la même variante.
+- **À mesurer à la PR A** : une valeur `!…` ou un `credential_process` qui s'appuie sur une application de bureau, par exemple un gestionnaire de mots de passe dont la CLI lancerait l'application par LaunchServices si elle ne tourne pas. `security` (trousseau) passe par un autre service ; c'est déduit, non mesuré.
 
 ## Annexe : mesures macOS
 
