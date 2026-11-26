@@ -61,10 +61,7 @@ async fn fake_server(path: &str, content_type: &'static str, body: &'static str)
 async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
-    loop {
-        let Ok(read) = socket.read(&mut chunk).await else {
-            break;
-        };
+    while let Ok(read) = socket.read(&mut chunk).await {
         if read == 0 {
             break;
         }
