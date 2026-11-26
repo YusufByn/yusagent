@@ -235,7 +235,7 @@ async fn bearer_for(
                 None
             };
             if stored.is_none() && (*oauth || env.is_some()) {
-                return Ok(None); // MUTATION M2 (ticket 41): fail-closed dropped
+                return Err(credentials_unavailable(server));
             }
             Ok(stored)
         }
@@ -292,7 +292,11 @@ async fn mcp_http(
         Some(_) => bearer_for(&route, auth, server, url).await?,
         // Outside the settings, the bound credential is the only proof that this URL is the
         // server's: without one, nothing is sent.
-        None => bearer_for(&route, auth, server, url).await?, // MUTATION M4 (ticket 41): unconfigured server sent anyway
+        None => Some(
+            bearer_for(&route, auth, server, url)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("MCP server '{server}' is not configured"))?,
+        ),
     };
 
     let mut headers = reqwest::header::HeaderMap::new();
