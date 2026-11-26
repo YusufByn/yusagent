@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from . import host_request
+from .ya_relay import relay_client, relayed  # yusAgent (YA-11, ticket 41)
 from .mcp_base import McpToolError
 
 __all__ = [
@@ -280,6 +281,10 @@ class _Generation:
             raise ValueError(f"MCP server '{self.server}' requires a URL")
         headers = await _headers(self.server, self.config)
         transport = _resolve_streamable_http()
+        if relayed(self.config):  # yusAgent (YA-11, ticket 41): the worker adds the credential (mcp.http).
+            client = await self.stack.enter_async_context(relay_client(self.server, max(300.0, self.call_timeout + 30.0), send=host_request))
+            streams = await self.stack.enter_async_context(transport(url, http_client=client))
+            return streams[0], streams[1]
         # SDK signatures vary: some take headers=, others only http_client=.
         if "headers" in inspect.signature(transport).parameters:
             streams = await self.stack.enter_async_context(transport(url, headers=headers))
@@ -912,6 +917,8 @@ def _credentials_unavailable(server: str) -> McpCredentialsUnavailable:
 
 
 async def _auth_identity(server: str, config: dict[str, Any]) -> str:
+    if relayed(config):  # yusAgent (YA-11, ticket 41): no token in the kernel.
+        return "relay"
     if config.get("credentialSource") == "static-token":
         # A pasted static token has no refresh concept: it either resolves from
         # the bound stored credential or the connection fails closed.
@@ -958,6 +965,8 @@ async def _headers(server: str, config: dict[str, Any]) -> dict[str, str]:
     if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
         raise ValueError("MCP HTTP headers must contain strings")
     headers = dict(raw)
+    if relayed(config):  # yusAgent (YA-11, ticket 41): the worker adds the credential.
+        return headers
     if config.get("credentialSource") == "acp":
         return headers
     if config.get("credentialSource") == "static-token":

@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 
+from rlm import host_request  # yusAgent (YA-11, ticket 41): the worker holds the Serper key.
+
 # httpx is imported inside `_fetch_serper` on first call: importing it at
 # module level would put its full import cost on every kernel bootstrap, in
 # every session, even when no search is ever run. `find_spec` keeps the
@@ -155,8 +157,18 @@ async def run(
     Returns:
         Formatted search results.
     """
-    api_key = _resolve_api_key()
-    if not api_key:
+    # yusAgent (YA-11, ticket 41): no key in the kernel; the worker calls Serper (websearch.search).
+    if timeout is None:
+        timeout = _env_int("PRIME_AGENT_WEBSEARCH_TIMEOUT", 45)
+    if num_results is None:
+        num_results = _env_int("PRIME_AGENT_WEBSEARCH_NUM_RESULTS", 5)
+    try:
+        data = await host_request("websearch.search", {"query": query, "timeout": timeout})
+        result = _format_serper_results(data, query, num_results=num_results)
+    except Exception as e:
+        if "no Serper key" not in str(e):
+            result = f"Error searching for '{query}': {e}"
+            return _clip(f'Results for query "{query}":\n\n{result}', max_output)
         return (
             "Web search is not set up yet: no Serper API key is configured.\n"
             "Tell the user how to enable it:\n"
@@ -165,17 +177,11 @@ async def run(
             "Do not ask the user to set environment variables. Once the key is saved, web search works automatically."
         )
 
-    if timeout is None:
-        timeout = _env_int("PRIME_AGENT_WEBSEARCH_TIMEOUT", 45)
-    if num_results is None:
-        num_results = _env_int("PRIME_AGENT_WEBSEARCH_NUM_RESULTS", 5)
+    return _clip(f'Results for query "{query}":\n\n{result}', max_output)
 
-    try:
-        result = await _fetch_serper(query, api_key, timeout=timeout, num_results=num_results)
-    except Exception as e:
-        result = f"Error searching for '{query}': {e}"
-    output = f'Results for query "{query}":\n\n{result}'
 
+def _clip(output: str, max_output: int) -> str:
+    """Truncate in the middle to ``max_output`` chars, with a marker."""
     if len(output) > max_output:
         total = len(output)
         marker = f"\n... [output truncated, {total} chars total] ...\n"

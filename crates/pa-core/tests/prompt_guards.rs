@@ -182,6 +182,9 @@ const INTERNAL_HOST_REQUESTS: &[&str] = &[
     "mcp.config",
     "mcp.refresh",
     "mcp.begin_login",
+    // yusAgent (YA-11, ticket 41): the kernel's MCP HTTP and web search relays.
+    "mcp.http",
+    "websearch.search",
     // The runtime's detached-bash notice pair (the kernel's bash module
     // fires them; the model never calls them).
     "bash.completed",

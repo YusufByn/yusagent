@@ -376,3 +376,107 @@ fn serper_api_key_never_reaches_the_kernel_even_when_named() {
         "SERPER_API_KEY reached the kernel environment"
     );
 }
+
+// The rules the kernel-side tests of `test_mcp.py` used to check, now held by the relay
+// (ticket 41, listed in docs/fork-changes.md).
+
+#[tokio::test]
+async fn mcp_http_relay_never_attaches_a_token_bound_elsewhere_or_unbound() {
+    let (url, seen) = fake_server("/mcp", "application/json", INITIALIZED).await;
+    let servers = HashMap::from([("svc".to_string(), http_server(&url, Some(true), None))]);
+    // Exact match only: a trailing-slash difference is a changed entry (re-login required).
+    let elsewhere = bound_oauth(&format!("{url}/"));
+    let mut unbound = bound_oauth(&url);
+    unbound.as_object_mut().unwrap().remove("endpoint");
+    for credential in [elsewhere, unbound] {
+        let (handlers, _manager) =
+            handlers_for(servers.clone(), &json!({ "mcp:svc": credential })).await;
+        let refused = call(
+            &handlers,
+            "mcp.http",
+            json!({ "server": "svc", "method": "POST", "url": url, "headers": {}, "body": INITIALIZE }),
+        )
+        .await;
+        let error = refused.expect_err("no usable credential: the relay fails closed");
+        assert!(error.to_string().contains("are not available"), "{error}");
+    }
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reaches the server without a bound token"
+    );
+}
+
+#[tokio::test]
+async fn mcp_http_relay_fails_closed_with_the_unavailable_message() {
+    let (url, seen) = fake_server("/mcp", "application/json", INITIALIZED).await;
+    let servers = HashMap::from([("github".to_string(), http_server(&url, Some(true), None))]);
+    let (handlers, _manager) = handlers_for(servers, &json!({})).await;
+    let error = call(
+        &handlers,
+        "mcp.http",
+        json!({ "server": "github", "method": "POST", "url": url, "headers": {}, "body": INITIALIZE }),
+    )
+    .await
+    .expect_err("no credential");
+    assert_eq!(
+        error.to_string(),
+        "MCP credentials for 'github' are not available. Ask the user to connect it \
+         (/plugins or /mcp login github); do not ask them to set environment variables."
+    );
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn mcp_http_relay_attaches_a_pasted_token_literally() {
+    std::env::set_var("YA41_PAT_TOKEN", "env-resolved-token");
+    for pasted in ["YA41_PAT_TOKEN", "!sh -c secret", "  spaced-token  "] {
+        let (url, seen) = fake_server("/mcp", "application/json", INITIALIZED).await;
+        // A server outside the settings (a Python `McpIntegration`): the bound credential is the
+        // only proof that the URL is its endpoint.
+        let auth = json!({ "mcp:github": { "type": "mcp_static_token", "bearer": pasted, "endpoint": url } });
+        let (handlers, _manager) = handlers_for(HashMap::new(), &auth).await;
+        let response = call(
+            &handlers,
+            "mcp.http",
+            json!({ "server": "github", "method": "POST", "url": url, "headers": {}, "body": INITIALIZE }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["status"], 200);
+        let head = seen.lock().unwrap()[0].clone();
+        let expected = format!("authorization: Bearer {}", pasted.trim());
+        assert!(
+            head.lines()
+                .any(|line| line.eq_ignore_ascii_case(&expected)),
+            "the pasted bearer is attached as is: {head}"
+        );
+        assert!(
+            !head.contains("env-resolved-token"),
+            "never resolved as an env var"
+        );
+        assert!(
+            !response.to_string().contains(pasted.trim()),
+            "no token handed back"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_http_relay_refuses_a_server_outside_the_settings_without_a_bound_credential() {
+    let (url, seen) = fake_server("/mcp", "application/json", INITIALIZED).await;
+    let (handlers, _manager) = handlers_for(HashMap::new(), &json!({})).await;
+    let refused = call(
+        &handlers,
+        "mcp.http",
+        json!({ "server": "anything", "method": "POST", "url": url, "headers": {}, "body": INITIALIZE }),
+    )
+    .await;
+    assert!(
+        refused.is_err(),
+        "an unknown server with no bound credential is refused"
+    );
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "the kernel cannot point the relay anywhere"
+    );
+}

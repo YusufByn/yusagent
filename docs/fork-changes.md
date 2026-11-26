@@ -1658,6 +1658,62 @@ Limites (§16.2) :
 - double onglet possible : les fonctions de login ouvrent la page elles-mêmes, et « Open » la rouvre ;
 - texte de `token` générique (`<label> token`), le pont n'ayant pas le champ du catalogue.
 
+## Identifiants hors du kernel, PR B (YA-11, ticket 41)
+
+Constat, décisions et plan : `docs/tickets/41-protection-secrets.md` (§C, §T). Le kernel ne lit plus `auth.json` et ne tient plus de jeton.
+- Ses requêtes HTTP vers un serveur MCP qui demande un identifiant ou un en-tête configuré passent par le worker (`host_request("mcp.http")`). Le worker ajoute les en-têtes configurés et le jeton lié à l'adresse configurée, et rend la réponse complète. Le flux GET des messages lancés par le serveur reçoit un 405.
+- Une recherche web passe par `host_request("websearch.search")`. Le worker ajoute la clé Serper : son propre `SERPER_API_KEY`, sinon `serper` d'`auth.json`.
+- `mcp.config` ne donne plus d'en-tête littéral au kernel, mais `relay: true`.
+- `SERPER_API_KEY` n'atteint plus le kernel, même nommée dans `kernel.envAllowlist`.
+
+**Préfixe de prompt inchangé.** Les deux requêtes sont internes (`prompt_guards.rs`), et ni `SKILL.md` ni les descriptions de skills ne changent. Seuls des textes d'erreur dans le résultat d'une cellule peuvent changer.
+
+**Lignes upstream hors tests : +46, −12** (`git diff --numstat`, variante à diff minimal retenue, ticket 41 §T.3) :
+- `mcp/mod.rs` : +10, −1 ;
+- `mcp.py` : +9 ;
+- `mcp_base.py` : +7 ;
+- `websearch.py` : +17, −11 ;
+- `prompt_guards.rs` : +3.
+
+Le code devenu inutile côté kernel n'est pas retiré (`_read_auth`, `_bound_auth`, `_static_token`, `_token`, `_resolve_token`, `_resolve_api_key`, `_fetch_serper`), pour faciliter les reprises upstream.
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-core/src/mcp/ya_relay.rs` | nouveau | Relais `mcp.http` : URL de la configuration (ACP, réglages, catalogue) ou, hors réglages, `endpoint` de l'identifiant lié ; en-têtes configurés ; jeton lié (jeton collé pris tel quel, OAuth par `get_api_key`, variable d'environnement du worker) ; refus net avec le message fixe ; GET répondu par un 405 ; en-têtes d'authentification, de connexion et d'encodage du kernel jamais relayés ; pas de redirection. Relais `websearch.search` (URL fixe, `PRIME_AGENT_TEST_SERPER_URL` pour les tests). `strip_headers` pour `mcp.config`. | YA-11 (ticket 41) |
+| `crates/pa-core/src/mcp/mod.rs` | modif. (fichier upstream, +10, −1) | `mod ya_relay;` (`:22-23`) ; `strip_headers` aux trois retours de `mcp.config` (ACP `:709`, catalogue `:735`, réglages `:744-747`) ; `ya_relay::register` avant `mcp.list_plugins` (`:774-775`). | YA-11 (ticket 41) |
+| `crates/pa-core/src/kernel/env_allowlist.rs` | modif. (fichier du fork, +3) | `SERPER_API_KEY` dans `EXTRA_HARNESS_CREDENTIALS`. Le retrait final au lancement (`strip_harness_credentials`, `crates/pa-core/src/kernel/manager/startup.rs:546`) écarte l'injection du câblage sans toucher `runtime_wiring.rs` ni `engine.rs`. | YA-11 (ticket 41) |
+| `crates/pa-core/tests/prompt_guards.rs` | modif. (test upstream, +3) | `mcp.http` et `websearch.search` dans `INTERNAL_HOST_REQUESTS` : plomberie interne, que le prompt ne documente pas. | YA-11 (ticket 41) |
+| `crates/pa-core/tests/ya_secret_relay.rs` | nouveau | Tests 4 et 5 (partie) du ticket, relais websearch, `SERPER_API_KEY`, et les règles reprises des tests Python réécrits (tableau ci-dessous). | YA-11 (ticket 41) |
+| `prime-agent-runtime/src/rlm/ya_relay.py` | nouveau | `relayed(config)` (`relay`, `oauth`, `credentialSource` `static-token` ou `acp`, `bearerTokenEnvVar`) ; `relay_client` : client `httpx2` dont le transport envoie chaque requête par `mcp.http`, sans `Authorization`. | YA-11 (ticket 41) |
+| `prime-agent-runtime/src/rlm/mcp.py` | modif. (fichier upstream, +9) | Import (`:35`) ; `_open_http` passe par le client relais pour un serveur relayé (`:284-287`) ; `_auth_identity` rend `"relay"` (`:920-921`) et `_headers` n'ajoute rien (`:968-969`) pour un serveur relayé. | YA-11 (ticket 41) |
+| `prime-agent-runtime/src/rlm/mcp_base.py` | modif. (fichier upstream, +7) | Import (`:28`) ; `_open_session` ouvre la session par le client relais, sans jeton (`:215-220`). | YA-11 (ticket 41) |
+| `skills/websearch/src/websearch/websearch.py` | modif. (fichier upstream, +17, −11) | `run` appelle `websearch.search` et garde son message d'aide quand aucune clé n'est configurée ; découpe de la sortie extraite en `_clip`. | YA-11 (ticket 41) |
+| `prime-agent-runtime/test/test_ya_secret_relay.py` | nouveau | Client MCP générique, intégration `mcp_base` et skill websearch : pas de lecture d'`auth.json`, pas d'`Authorization`, passage par le relais. | YA-11 (ticket 41) |
+| `prime-agent-runtime/test/test_mcp.py`, `test_mcp_base.py` | modif. (tests upstream) | Sept tests réécrits (tableau ci-dessous). | YA-11 (ticket 41) |
+
+**Tests upstream dont l'assertion change**
+
+Aucun test n'est supprimé. Les règles qu'ils vérifiaient côté kernel sont reprises par les tests Rust du relais (`crates/pa-core/tests/ya_secret_relay.rs`).
+
+| Test (avant, côté kernel) | Nouvelle assertion | Règle reprise par |
+|---|---|---|
+| `test_mcp.py` `test_endpoint_bound_credential_never_attaches_to_another_url` | `_headers` sans `Authorization`, sans lecture d'`auth.json` | `mcp_http_relay_never_attaches_a_token_bound_elsewhere_or_unbound` (correspondance exacte, une barre finale suffit à refuser) ; `mcp_http_relay_refuses_a_url_other_than_the_configured_one` |
+| `test_mcp.py` `test_unbound_credential_requires_relogin` | idem | `mcp_http_relay_never_attaches_a_token_bound_elsewhere_or_unbound` (identifiant sans `endpoint`) |
+| `test_mcp.py` `test_static_token_headers_attach_only_from_the_bound_credential` | idem | `mcp_http_relay_attaches_a_pasted_token_literally` (jeton lié attaché) ; `…_bound_elsewhere_or_unbound` (autre adresse) ; `mcp_http_relay_refuses_a_server_outside_the_settings_without_a_bound_credential` (absent, refus net). Le jeton collé d'un serveur du catalogue n'accepte que la forme `mcp_static_token` (`ya_relay.rs`, `bound_token`, `static_only`) |
+| `test_mcp.py` `test_static_token_failure_is_the_kernel_unavailable_error` | `_headers` rend `{}`, `_auth_identity` rend `"relay"` | `mcp_http_relay_fails_closed_with_the_unavailable_message` (même texte) |
+| `test_mcp.py` `test_static_token_bearer_is_never_env_or_command_resolved` | aucune valeur d'environnement dans les en-têtes du kernel | `mcp_http_relay_attaches_a_pasted_token_literally` (nom de variable, `!commande`, espaces) |
+| `test_mcp.py` `test_static_token_auth_identity_hashes_the_bound_bearer` | `_auth_identity` rend `"relay"` | **Règle retirée** : l'identité de génération ne dépend plus du jeton. Le worker lit le jeton à chaque requête, donc un jeton changé s'applique sans reconnexion |
+| `test_mcp_base.py` `test_open_session_uses_headers_signature` | un SDK qui ne prend que `headers=` est refusé (`TypeError`) et ne reçoit aucun jeton | `mcp_http_relay_adds_the_bound_token_and_returns_no_secret` (le worker ajoute le jeton) |
+
+Le test `a_stored_serper_key_reaches_the_kernel_env` (`crates/pa-core/src/kernel/provisioner.rs:1442`) garde son assertion. Il lit l'environnement préparé par le provisionneur, avant le retrait final du lancement, que vérifie `serper_api_key_never_reaches_the_kernel_even_when_named`.
+
+Limites :
+- les messages lancés par le serveur hors d'une requête ne sont pas relayés ;
+- une réponse arrive en une fois à la fin de l'appel ;
+- un serveur relayé exige un SDK qui accepte `http_client=` (celui du venv du kernel le fait) ;
+- `bearerTokenEnvVar` se lit désormais dans l'environnement du worker, plus dans celui du kernel ;
+- les `env` des serveurs MCP stdio fournis par le client ACP restent dans le kernel (limite documentée, ticket 41, réponse 4).
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

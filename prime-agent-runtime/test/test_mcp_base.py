@@ -255,8 +255,11 @@ class McpIntegrationTest(unittest.TestCase):
             captured["headers"] = headers
             return _CM()
 
-        self._run_open_session_with_transport(transport)
-        self.assertEqual(captured["headers"], {"Authorization": "Bearer tok-xyz"})
+        # yusAgent (YA-11, ticket 41): the relay needs `http_client=`; a headers-only SDK never
+        # receives a token from the kernel (the worker adds it, `crates/pa-core/tests/ya_secret_relay.rs`).
+        with self.assertRaises(TypeError):
+            self._run_open_session_with_transport(transport)
+        self.assertNotIn("headers", captured)
 
     def test_open_session_uses_http_client_signature(self):
         # streamable_http_client(url, *, http_client=...) — must NOT pass headers=

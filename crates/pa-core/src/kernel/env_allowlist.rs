@@ -128,6 +128,9 @@ const EXTRA_HARNESS_CREDENTIALS: &[&str] = &[
     "GOOGLE_APPLICATION_CREDENTIALS",
     "PRIME_AGENT_TRACES_API_KEY",
     "PRIME_AGENT_INTERNAL_DAEMON_WORKER_TOKEN",
+    // Ticket 41 (YA-11, answer 13): the websearch relay reads it in the worker; never the kernel,
+    // even named in `kernel.envAllowlist` (the final spawn strip drops the wiring's injection).
+    "SERPER_API_KEY",
 ];
 
 /// Every provider credential var (upper-cased): the env key names of each
