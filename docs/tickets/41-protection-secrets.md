@@ -767,6 +767,18 @@ Les deux lancent `current_exe()`, protégé en écriture par le profil (S.2, ré
 
 **Proposition** : le test CI les traite comme une catégorie à part, « relance du binaire yusAgent ». Il l'admet seulement si le programme est `current_exe()`, ce qu'il vérifie à la lecture du site, et refuse toute autre exception. **À confirmer par Yusuf avant la PR A.**
 
+**Conditions posées par Yusuf (26/11/2026), à tenir dans la PR A :**
+
+1. **Navigateur ouvert par le worker sur une demande du kernel** (`mcp.begin_login`, `crates/pa-daemon/src/mcp_login.rs:49`) :
+   - seules les URL `https://` sont acceptées, plus `http://` vers localhost si un login en a besoin ;
+   - tout autre schéma, chemin de fichier ou application est refusé avec un message fixe ;
+   - sinon, le kernel ferait ouvrir hors protection une application qu'il a créée, ce qui rouvrirait le canal de la réponse 20 ;
+   - **test rouge au push 1 de la PR A** : une demande avec un chemin de fichier, une application ou un schéma autre que `https://` n'ouvre rien et rend le message fixe ;
+   - aujourd'hui, seule l'URL d'autorisation découverte est forcée en https (`crates/pa-core/src/mcp/oauth_discovery.rs:120`), pas l'appel d'ouverture lui-même.
+2. **Exception « relance du binaire yusAgent »** :
+   - le refus d'écriture vise le chemin canonique renvoyé par `current_exe()` : le binaire, le `package.json` à côté de lui et leurs dossiers parents ;
+   - **un test vérifie qu'une écriture sur ce chemin échoue sous l'enveloppe.**
+
 Le navigateur (`crates/pa-core/src/platform/browser.rs:36`) n'est **pas** une exception. Il passe par l'enveloppe avec une variante du profil, qui refuse les fichiers d'identifiants mais laisse LaunchServices ouvert, puisqu'il sert justement à lancer le navigateur. Le processus `open` ne peut pas lire les identifiants, et le navigateur, lancé par LaunchServices, n'est pas un processus de yusAgent.
 
 ### S.4 Ce que casse le refus LaunchServices
