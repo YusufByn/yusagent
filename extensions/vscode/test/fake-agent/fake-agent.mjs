@@ -472,8 +472,21 @@ const mcpView = () => ({
       signedIn: false,
     })),
     { id: "linear", label: "Linear", source: "catalog", status: "not_connected", signIn: true, signedIn: false },
+    // Ticket 40 (R5) : un service du catalogue ajouté par jeton porte `token`, le libellé du champ
+    // (`ya_resources.rs`, `server_row`).
+    {
+      id: "zoom",
+      label: "Zoom",
+      source: "catalog",
+      status: tokens.has("zoom") ? "connected" : "not_connected",
+      signIn: false,
+      signedIn: tokens.has("zoom"),
+      token: "Zoom token",
+    },
   ],
 });
+/** Ticket 40 : les services ajoutés par jeton (`_yus/mcp/set_token`). */
+const tokens = new Set();
 const RESOURCE_METHODS = new Set([
   "_yus/settings/get",
   "_yus/settings/set",
@@ -521,10 +534,106 @@ function resources(id, method, params = {}) {
     case "_yus/skills/add_folder":
     case "_yus/skills/remove_folder":
       return respond(id, skillsView());
-    case "_yus/mcp/list":
     case "_yus/mcp/set_token":
+      if (typeof params.token !== "string" || !params.token.trim()) return invalid(id, "token must be a non-empty string");
+      tokens.add(params.id);
+      return respond(id, mcpView());
+    case "_yus/mcp/list":
     case "_yus/mcp/logout":
       return respond(id, mcpView());
+  }
+}
+
+// Ticket 40 (X5) : l'écran Providers et le login, aux formes du pont de R5
+// (`crates/pa-daemon/src/acp/daemon/ya_providers.rs`, `row_value`, `Logins`) : réponses
+// `{providers, outcome, message?}`, trames `_yus/providers/login_update` `{providerId, update}`,
+// un login à la fois. `scenario.providers` : `"none"`, aucun fournisseur connecté.
+const notify = (method, params) => send({ method, params });
+/** Le `state` de l'URL de login, repérable dans les tests (aucun vrai fournisseur). */
+const LOGIN_STATE = "x5-state-7d41c2";
+const providerRows = [
+  { id: "capture", name: "Capture", method: "apiKey", login: "apiKey", connected: scenario.providers !== "none", removable: scenario.providers !== "none" },
+  { id: "openai-codex", name: "ChatGPT Plus/Pro (Codex Subscription)", method: "subscription", login: "browser", connected: false, removable: false },
+  { id: "anthropic", name: "Anthropic", method: "apiKey", login: "apiKey", connected: false, removable: false },
+  // Le pont ne l'envoie jamais (décision 5) ; l'agent factice si, pour la défense de l'extension (test 11).
+  { id: "anthropic", name: "Anthropic (Claude Pro/Max)", method: "subscription", login: "browser", connected: false, removable: false },
+];
+const providersView = () => providerRows.map((row) => ({ ...row }));
+/** Le login en cours : l'id de la requête `login`, le fournisseur, l'invite ouverte. */
+let signIn = null;
+const settled = (outcome, message) => ({ providers: providersView(), outcome, ...(message ? { message } : {}) });
+const endSignIn = (outcome) => {
+  const { id, providerId } = signIn;
+  signIn = null;
+  if (outcome === "done") {
+    const row = providerRows.find((candidate) => candidate.id === providerId && candidate.login === "browser");
+    if (row) Object.assign(row, { connected: true, removable: true });
+  }
+  respond(id, settled(outcome));
+};
+
+function providers(id, method, params = {}) {
+  const providerId = typeof params.providerId === "string" ? params.providerId.trim() : "";
+  switch (method) {
+    case "_yus/providers/list":
+    case "_yus/providers/reload":
+      return respond(id, { providers: providersView() });
+    case "_yus/providers/set_api_key": {
+      const apiKey = typeof params.apiKey === "string" ? params.apiKey.trim() : "";
+      if (!providerId || !apiKey) return invalid(id, "providerId and apiKey must be non-empty strings");
+      const row = providerRows.find((candidate) => candidate.id === providerId && candidate.method === "apiKey");
+      if (!row) return respond(id, settled("failed", "The key was not saved."));
+      Object.assign(row, { connected: true, removable: true });
+      return respond(id, settled("done"));
+    }
+    case "_yus/providers/logout": {
+      if (!providerId) return invalid(id, "providerId must be a non-empty string");
+      for (const row of providerRows.filter((candidate) => candidate.id === providerId && candidate.removable)) {
+        Object.assign(row, { connected: false, removable: false });
+      }
+      return respond(id, settled("done"));
+    }
+    case "_yus/providers/login":
+      if (!providerId) return invalid(id, "providerId must be a non-empty string");
+      if (signIn) return fail(id, -32603, "Internal error", { details: "a sign-in is already running" });
+      if (providerId !== "openai-codex") return respond(id, settled("failed", "This provider cannot be signed in to here."));
+      signIn = { id, providerId, promptId: 1 };
+      // Comme le flux Codex : l'URL (son `state`), puis le collage qui fait la course au navigateur.
+      notify("_yus/providers/login_update", {
+        providerId,
+        update: { kind: "url", url: `https://auth.example.test/oauth/authorize?client_id=fake&state=${LOGIN_STATE}`, instructions: null },
+      });
+      notify("_yus/providers/login_update", {
+        providerId,
+        update: {
+          kind: "prompt",
+          promptId: 1,
+          message: "Paste redirect URL below, or complete login in browser:",
+          secret: false,
+          allowEmpty: false,
+          optional: true,
+        },
+      });
+      return;
+    case "_yus/providers/login_answer": {
+      if (typeof params.promptId !== "number") return invalid(id, "promptId must be a number");
+      if (!signIn) return invalid(id, "no sign-in is running");
+      if (params.promptId !== signIn.promptId) return invalid(id, "no such prompt");
+      const kind = params.answer?.kind;
+      if (kind === "text" && !String(params.answer.value ?? "").trim()) return invalid(id, "the answer is empty");
+      if (kind !== "text" && kind !== "dismiss") return invalid(id, "the answer does not fit the prompt");
+      respond(id, {});
+      return endSignIn(kind === "text" ? "done" : "cancelled");
+    }
+    case "_yus/providers/login_open":
+      if (!signIn) return invalid(id, "no sign-in page to open");
+      return respond(id, {});
+    case "_yus/providers/login_cancel":
+      if (signIn) endSignIn("cancelled");
+      return;
+    default:
+      // `local_*` : le pont ne les sert pas (décision 6).
+      if (id !== undefined) fail(id, -32601, "Method not found");
   }
 }
 
@@ -613,6 +722,7 @@ function onMessage(message) {
       return respond(id, {});
     default:
       if (RESOURCE_METHODS.has(method) && id !== undefined) return resources(id, method, params);
+      if (method.startsWith("_yus/providers/") && method !== "_yus/providers/login_update") return providers(id, method, params);
       if (id !== undefined) fail(id, -32601, "Method not found");
   }
 }
