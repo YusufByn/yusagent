@@ -17,6 +17,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SB = "/usr/bin/sandbox-exec"
@@ -216,6 +217,64 @@ def socket_probe(base: Path) -> None:
     server.close()
 
 
+LS_DENY = ('(deny mach-lookup (global-name-prefix "com.apple.coreservices.") '
+           '(global-name-prefix "com.apple.lsd."))\n')
+
+
+def escape_probes(base: Path) -> None:
+    """Sorties vers un processus non protégé (ticket 41, §R.2) : LaunchServices, launchd,
+    serveur local. Chaque essai demande à un processus hors sandbox de copier le faux secret."""
+    (base / "evasion").mkdir()
+    root = (base / "evasion").resolve()
+    secret = root / "secret"
+    secret.mkdir()
+    (secret / "auth.json").write_text("FAUX-SECRET\n")
+    prof = f'(version 1)(allow default)\n(deny file-read* file-write* (subpath "{secret}"))\n'
+
+    def marker_after(name: str, wait: float) -> str:
+        time.sleep(wait)
+        path = root / name
+        return "secret lu" if path.exists() and "FAUX-SECRET" in path.read_text() else "rien"
+
+    # Application locale sans fenêtre, lancée par `open` (LaunchServices).
+    app = root / "Esc.app" / "Contents"
+    (app / "MacOS").mkdir(parents=True)
+    (app / "Info.plist").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
+        "<key>CFBundleExecutable</key><string>esc</string>"
+        "<key>CFBundleIdentifier</key><string>local.ya41.esc</string>"
+        "<key>LSUIElement</key><true/><key>CFBundlePackageType</key><string>APPL</string>"
+        "</dict></plist>")
+    exe = app / "MacOS" / "esc"
+    for label, extra, out in (("sans refus LaunchServices", "", "ls1"),
+                              ("avec refus LaunchServices", LS_DENY, "ls2")):
+        exe.write_text(f"#!/bin/sh\ncat {secret}/auth.json > {root / out} 2>&1\n")
+        exe.chmod(0o755)
+        run([SB, "-p", prof + extra, "/usr/bin/open", "-g", "-n", str(root / "Esc.app")])
+        row(f"open d'une application locale, {label}",
+            "secret lu" if not extra else "rien", marker_after(out, 3))
+    # launchd.
+    run([SB, "-p", prof, "/bin/launchctl", "submit", "-l", "local.ya41.sub", "--",
+         "/bin/sh", "-c", f"cat {secret}/auth.json > {root / 'lc1'}"])
+    got = marker_after("lc1", 2)
+    run(["/bin/launchctl", "remove", "local.ya41.sub"])
+    row("launchctl submit depuis la sandbox", "rien", got)
+    # Serveur local non protégé : `screen` lancé hors sandbox, commande envoyée depuis la sandbox.
+    screens = root / "screens"
+    screens.mkdir(mode=0o700)
+    env = {**os.environ, "SCREENDIR": str(screens)}
+    run(["/usr/bin/screen", "-dmS", "ya41", "/bin/sleep", "60"], env=env)
+    time.sleep(1)
+    run([SB, "-p", prof + LS_DENY, "/usr/bin/screen", "-S", "ya41", "-X", "screen", "/bin/sh", "-c",
+         f"cat {secret}/auth.json > {root / 'sc1'}"], env=env)
+    got = marker_after("sc1", 2)
+    run(["/usr/bin/screen", "-S", "ya41", "-X", "quit"], env=env)
+    row("serveur screen hors sandbox, commande envoyée depuis la sandbox", "secret lu", got)
+    for cmd in (["/usr/bin/git", "--version"], ["/usr/bin/python3", "-I", "-c", "print(1)"]):
+        p = run([SB, "-p", prof + LS_DENY, *cmd])
+        row(f"sous refus LaunchServices : {cmd[0]}", "permis (rc=0)", denied(p))
+
+
 def main() -> int:
     if sys.platform != "darwin":
         print("macOS seulement")
@@ -226,6 +285,7 @@ def main() -> int:
         seatbelt(base)
         parent_probes(base)
         socket_probe(base)
+        escape_probes(base)
     width = max(len(r[0]) for r in ROWS)
     bad = 0
     for name, expected, got in ROWS:

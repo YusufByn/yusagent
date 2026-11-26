@@ -17,7 +17,7 @@ Unharnessed (lu à `bb55464`) n'a rien sur ce point : aucun choix à reprendre, 
 - **Variables d'environnement (G)** : sur macOS, `sysctl(KERN_PROCARGS2)` lit depuis la sandbox l'environnement de tout processus parent (mesuré). Aucune règle Seatbelt essayée ne l'empêche. Je recommande une limite documentée.
 - **Recommandation** : macOS d'abord (PR A : Seatbelt et socket), puis les jetons MCP hors du kernel (PR B), puis Linux après la sonde (PR C). Les questions sont au §L.
 - **Mise à jour du 26/11/2026** : réponses de Yusuf (§N), plan révisé (§M : B, puis A, puis C). Compléments au §O : inventaire F.4, exécution différée, smoke bench, vérifications de la PR B. **Question bloquante au §P** : `packages`/`npmCommand` font exécuter le worker sans action de l'utilisateur.
-- **Mise à jour du 26/11/2026 (suite)** : réponses 11 à 13 (§Q). **Nouveau constat bloquant au §Q.2** : le worker lance sans action de l'utilisateur des programmes que le kernel peut changer (`git` du `PATH` à chaque tour, `npm root -g` même avec P1, `exec_command` de la variante shell natif, binaire `yusagent`). Une protection posée sur le kernel seul ne tient pas.
+- **Mise à jour du 26/11/2026 (suite)** : réponses 11 à 13 (§Q). **Nouveau constat bloquant au §Q.2** (suite au §R : inventaire complet, sorties de sandbox mesurées, comparaison X1/X4, questions 17 à 20) : le worker lance sans action de l'utilisateur des programmes que le kernel peut changer (`git` du `PATH` à chaque tour, `npm root -g` même avec P1, `exec_command` de la variante shell natif, binaire `yusagent`). Une protection posée sur le kernel seul ne tient pas.
 
 ## A. Inventaire
 
@@ -293,6 +293,8 @@ Ce document n'existe pas encore dans le dépôt (recherche dans `docs/`) ; la li
   - scripts du projet lancés ensuite par l'utilisateur ;
   - `shellCommandPrefix`/`shellPath` exécutés par le `!commande` du TUI (réponse 9) ;
   - `npmCommand` exécuté par une installation de paquet lancée par l'utilisateur (selon le §P).
+- **Exécution différée hors de yusAgent** (réponse du 26/11, question 14) : VS Code et `yusagent.binaryPath` de ses réglages utilisateur (ou un `yusagent` placé plus tôt dans le `PATH`), les fichiers de démarrage du shell, launchd (`~/Library/LaunchAgents`). Le kernel peut les écrire. Ils s'exécutent plus tard, hors de toute protection, au prochain lancement de VS Code, du shell ou de la session.
+- **Services locaux non protégés** (§R.2, mesuré avec `screen`) : un serveur lancé par l'utilisateur hors sandbox, qui exécute une commande à la demande, la fait tourner hors protection. Exemples : `screen`, tmux, Docker, sockets IPC de VS Code, serveurs de développement en TCP. Ce n'est pas différé : c'est immédiat, sans action, dès qu'un tel serveur tourne. Selon la question 19.
 - Clés passées par variable d'environnement : lisibles par le code du modèle sur macOS, et sous Linux sans espace de noms PID. Texte de l'avertissement (réponse 3) : « une clé passée par variable d'environnement reste lisible par le code du modèle ; pour la protéger, connectez le fournisseur par l'écran Providers ou `/login` ».
 - Clés rangées sous forme `!commande` (trousseau, gestionnaire de mots de passe) : le kernel peut relancer la même commande.
 - Identifiants de l'utilisateur hors de yusAgent : `~/.aws`, identifiants Google par défaut (`GOOGLE_APPLICATION_CREDENTIALS`, `env_allowlist.rs:128`), `~/.ssh`, identifiants git, trousseau via `/usr/bin/security`.
@@ -576,9 +578,164 @@ Questions :
 15. **P1** : abandonné (X1 couvre l'exécution de `npm`), ou gardé sous la forme P1' ? P1' : les résolutions faites pour une session ignorent `packages`, sans `npm root -g` ni installation.
 16. **Inventaire complet** des lancements du worker et du démon (lignes « à vérifier » du tableau, autres crates) au constat de la PR qui fera X1, avant son code : d'accord ?
 
+## R. Inventaire des lancements, sorties de la sandbox, comparaison X1 / X4 (26/11/2026)
+
+Réponses de Yusuf du 26/11/2026 : P1 abandonné (question 15) ; inventaire complet avant tout code, au ticket (question 16) ; comparer X1 à X4 avant de choisir (question 14). Rien n'est codé.
+
+### R.1 Inventaire des lancements de processus
+
+- Méthode : recherche de `Command::new`, `process::Command`, `exec`, `fork` et `posix_spawn`, plus les assistants (`packages/process.rs`, `platform/browser.rs`, `resolve_config_value.rs`), dans toutes les crates liées à `pa-cli`, hors modules de test.
+- Fait par un agent, puis les lignes qui fondent une conclusion ont été relues : `session/manager/git.rs`, `session_engine/mod.rs:480-491`, `packages/*`, `probe.rs`, `venv.rs`, `catalog_chain.rs`, `launch_env.rs`, `supervision.rs`.
+- **Crates tierces** : aucune crate qui lance un processus ou charge du code (`open`, `opener`, `webbrowser`, `keyring`, `libloading`, moteurs WASM, JS ou Lua, `dotenvy`, `pyo3` : absents de `Cargo.lock`).
+
+**Worker** (le mode `-p` exécute les mêmes chemins dans son propre processus) :
+
+| Site | Programme (origine) | Déclencheur |
+|---|---|---|
+| `crates/pa-core/src/kernel/manager/startup.rs:168` | Python du venv du kernel, chemin absolu (`kernel/bootstrap/venv/layout.rs:22-28`), ou `PRIME_AGENT_KERNEL_PYTHON` | Sans action : démarrage ou redémarrage du kernel |
+| `crates/pa-core/src/kernel/bootstrap/venv/probe.rs:14` | Le même Python, `-c "import <nom>"`, **sans `-I`**, dans le dossier de la session | Sans action : au démarrage du kernel. Mémorisée sur disque dans le venv (`probe.rs:158-182`), que le kernel peut écrire |
+| `crates/pa-core/src/kernel/bootstrap/venv.rs:82` | `uv` du `PATH`, sinon `~/.local/bin/uv` (`venv/uv.rs:82-95`) : `python install`, `venv`, `pip install`, puis `--editable <skill>` (`venv.rs:214-236`) | Sans action : venv absent ou périmé, skill Python ajoutée ou modifiée |
+| `crates/pa-core/src/packages/process.rs:19`, `:45` | `npmCommand`, sinon `npm` du `PATH` ; `git` du `PATH` | Sans action : chaque résolution (§P, §Q.2.1) |
+| `crates/pa-core/src/session/manager/git.rs:24` | `git` du `PATH` (`rev-parse`, `branch --show-current`, `remote get-url origin`) | Sans action : début et fin de chaque tour (`session_engine/mod.rs:480-491`), création de session |
+| `crates/pa-core/src/autonomous/gates.rs:403` | `/bin/bash -c <gate>` ; `git status`, `git diff` | Sans action : fin de tour en mode autonome. Les gates viennent de la CLI, du payload de création ou des **descripteurs persistés** (`crates/pa-daemon/src/supervisor/worker_lifecycle.rs:280-292`) |
+| `crates/pa-core/src/tools/ya_exec.rs:317` | `shellPath`, sinon `/bin/sh` | Sans action : chaque `exec_command` du modèle (variante `shellTool: "native"`) |
+| `crates/pa-core/src/auth/resolve_config_value.rs:70` | `bash -c` du `PATH` | Sans action : résolution d'une valeur `!…` (`auth/manager/lookup.rs:54-57`, `models/registry.rs:314`, `:827`, `runtime_wiring.rs:352`) |
+| `crates/pa-ai/src/providers/google_vertex.rs:104` ; `crates/pa-ai/src/providers/bedrock/credential_process.rs:131` | `gcloud` du `PATH` ; `sh -c` sur la commande de `~/.aws/config` | Sans action : requête Vertex ou Bedrock |
+| `crates/pa-core/src/platform/browser.rs:36` | `open` (macOS), `xdg-open` | Sans action : `mcp.begin_login`, **demandé par le kernel** (`crates/pa-daemon/src/mcp_login.rs:49`). L'URL est forcée en https (`mcp/oauth_discovery.rs:120`) |
+| `crates/pa-daemon/src/user_bash.rs:586` | `shellPath`, sinon `/bin/bash -c` | Après action : `!commande` du TUI (n'importe quel client du socket peut l'envoyer) |
+| `crates/pa-daemon/src/saved_session_commands.rs:117` | `trash` du `PATH` | Après action : suppression d'une session |
+| `ps`, `taskkill`, `which`, `where` (`pa-types/src/platform/process.rs:41`, `:352`, `pa-core/src/platform/process.rs:266`, `platform/shell.rs:118`, `:134`) | Linux, Windows, ou `/bin/bash` absent | Interne ; rien sur macOS |
+
+Les trois lignes « à vérifier » du §Q.2.2 :
+- `persistent_shells.rs:366`, `:394` et `boot_reap.rs:809` sont dans des modules de test (`persistent_shells.rs:286-287`, `boot_reap.rs:693-694`) ;
+- la sonde et les portes sont dans le tableau ci-dessus ;
+- `workspace_snapshot/git.rs:121` n'a aucun appelant.
+
+**Superviseur** (`daemon_mode.rs:8-18`) :
+
+| Site | Programme | Déclencheur |
+|---|---|---|
+| `crates/pa-daemon/src/supervisor/supervision.rs:583` | `current_exe() worker` | Création par un client ; relance des workers depuis les descripteurs au démarrage (`adoption.rs:109`) ; relance après plantage |
+| `crates/pa-core/src/auth/resolve_config_value.rs:70`, via `prime_credentials_for_dir` (`models/catalog_chain.rs:63-65`) | `bash -c` du `PATH`, pour une clé Prime Inference rangée en `!…` | **Sans action** : au démarrage, puis à chaque rafraîchissement horaire du catalogue (`crates/pa-daemon/src/supervisor.rs:328-329`, `:339-340`) |
+| `crates/pa-daemon/src/saved_session_commands.rs:117` | `trash` du `PATH` | Commande client de suppression |
+
+- Pas de mise à jour automatique : `SELF_UPDATE=false` (`crates/pa-cli/src/ya_update_off.rs:12`).
+- **Environnement du worker** : l'environnement de lancement de n'importe quel client du socket, filtré du seul préfixe `PRIME_AGENT_INTERNAL_` (`crates/pa-types/src/daemon/launch_env.rs:36-44`, `supervision.rs:62-72`). Cela comprend `PATH`, `BASH_ENV` et `DYLD_*`.
+
+**Pont ACP** :
+
+| Site | Programme | Déclencheur |
+|---|---|---|
+| `crates/pa-cli/src/interactive_mode/daemon.rs:170` | `current_exe --mode daemon` | Sans action : lancement du pont sans démon (`print_runtime.rs:106`) |
+| `platform/browser.rs:36` (via `ya_providers.rs:436`, `:615-621`) | `open` | Après action : `login_open` |
+| `packages/process.rs` via `acp/ya_resources.rs:178` | `npmCommand`, `npm`, `git` | `_yus/skills/list` : écran Réglages ouvert, ou retour en « ready » pendant qu'il est ouvert (`extensions/vscode/src/settings.ts:43-54`) |
+| `resolve_config_value.rs:70` | `bash -c` | Listes de connexion et de modèles (déduit) |
+
+**Code chargé ou interprété sans lancement** :
+- aucun `dlopen` ni moteur de script ;
+- les `packages` sont lus comme texte, mais leur installation exécute les scripts npm, et les skills Python passent par le build `uv` ;
+- les gabarits de prompts sont une simple substitution (`skills/prompt_templates.rs:57-110`) ;
+- les `!…` n'existent qu'à `resolve_config_value.rs:14`, `:22` ;
+- `bash -c` lit `BASH_ENV` hérité (déduit) ;
+- la sonde Python, lancée sans `-I` dans le dossier de la session, peut importer un module du projet portant le nom demandé (sémantique de Python, déduit). Le `site` du venv exécute les lignes `import` des fichiers `.pth` (documentation de `site`).
+
+**Lancements sans action dont le programme ou les arguments viennent de ce que le kernel peut écrire** (lu ou déduit, rien mesuré de bout en bout) :
+- `packages`/`npmCommand` ;
+- `git` du `PATH` à chaque tour ;
+- `uv --editable` d'une skill créée par le kernel ;
+- **un `.pth` ou un module de même nom pour la sonde Python** (le kernel écrit dans son venv et dans le projet) ;
+- `bash` du `PATH` pour les `!…` (worker, et superviseur toutes les heures) ;
+- `credential_process` de `~/.aws/config` ;
+- les gates des descripteurs, rejouées par le superviseur ;
+- l'environnement de lancement d'un client du socket ;
+- `exec_command`.
+
+### R.2 Sorties de la sandbox vers un processus non protégé (mesuré, annexe)
+
+- **LaunchServices** : `open` lance une application créée sous la sandbox. Elle tourne hors sandbox et lit le faux secret, **sans action de l'utilisateur**.
+  - `(deny mach-lookup (global-name-prefix "com.apple.coreservices.") (global-name-prefix "com.apple.lsd."))` ferme ce canal (`open` échoue, rien n'est lu), et `git` comme `python3` fonctionnent encore.
+  - Ce qui casse : tout `open` depuis la sandbox, y compris l'ouverture d'un navigateur.
+- **launchd** : `launchctl submit` et `launchctl bootstrap gui/<uid>` échouent depuis la sandbox.
+- **AppleEvents** : non concluant. Un `osascript` vers le Finder sous `(deny appleevent-send)` et le refus LaunchServices est resté bloqué et a été arrêté. Retiré du script.
+- **Services locaux** : un `screen` lancé hors sandbox exécute une commande envoyée depuis la sandbox, qui lit le faux secret. C'est toute une classe : tmux, Docker (`docker run -v ~/.yusagent:…`), IPC de VS Code, serveurs en TCP (déduit pour ceux-là).
+  - Seul un refus large des connexions de socket Unix la fermerait, et il casserait Docker, ssh-agent, gpg-agent, une base locale et la résolution DNS si elle n'est pas exceptée.
+  - Le TCP local reste ouvert tant que le réseau est libre.
+  - Question 19.
+
+Ces sorties valent pour K1, X1 et X4 : elles partent de tout processus sous l'enveloppe.
+
+### R.3 X1 et X4
+
+**X1, enveloppe à chaque lancement** :
+- Sites à envelopper :
+  - worker : `startup.rs:168`, `probe.rs:14`, `venv.rs:82`, `packages/process.rs:19`, `:45`, `session/manager/git.rs:24`, `gates.rs:403`, `ya_exec.rs:317`, `user_bash.rs:586`, `resolve_config_value.rs:70` (et `:84`), `google_vertex.rs:104`, `credential_process.rs:131` ;
+  - superviseur : `saved_session_commands.rs:117`.
+- Hors enveloppe, avec leur raison : le worker lui-même et le superviseur (`current_exe`, binaire protégé en écriture) ; `browser.rs:36`, URL https seulement, qui serait cassé par le refus LaunchServices ; les sites Linux et Windows.
+- Environ **14 sites, de l'ordre de 20 à 40 lignes upstream** (estimation), plus un module du fork d'environ 150 lignes.
+- Les sites partagés couvrent aussi le pont, le superviseur et le mode `-p`.
+- **Détection d'un lancement ajouté plus tard** : un test CI du fork parcourt les sources des crates liées (hors modules de test) à la recherche des API de lancement (`Command::new`, `process::Command`, `CommandExt::exec`, `pre_exec`, `libc::{fork,vfork,execv*,posix_spawn*}`). Chaque occurrence doit figurer dans une liste revue, marquée enveloppée ou exclue avec sa raison. Toute occurrence nouvelle fait échouer le test.
+  - Le même test fait échouer toute nouvelle crate de `Cargo.lock` absente d'une liste revue, puisqu'une crate tierce peut lancer un processus.
+  - Limites :
+    - un alias ou une macro qui cache l'API, sauf à élargir les motifs ;
+    - un comportement d'une crate déjà admise qui change ;
+    - un lancement manqué donne un contournement complet, puisque le worker n'est pas protégé.
+
+**X4, enveloppe au lancement du worker** (`supervision.rs:583-600`) :
+- **Écriture des identifiants par le worker** (rafraîchissement OAuth, login MCP, `persist_provider_change`) : tout passe par `AuthStorage`, construit à un seul endroit (`auth/manager.rs:270-278`). Un stockage du fork qui relaie `read` et `with_lock` au superviseur (`AuthStorageBackend`, `auth/storage.rs:15-40`) garde la logique d'upstream intacte. Le superviseur écrit, sous son verrou.
+- Autres lectures directes à rediriger :
+  - `models.json`, lu à un seul endroit (`models/registry.rs:454-458`) ;
+  - `auth.json` lu par `websearch_enabled_by_credential` (`packages/manager.rs:203`).
+- **Canal** : le jeton du worker est aujourd'hui dans son environnement (`descriptor.rs:63-70`, lu par `worker/config.rs:46` et `worker.rs:358`) et sur disque dans les descripteurs (`pa-types/src/daemon/worker.rs:233`, `descriptor.rs:203-208`), donc lisible par le kernel.
+  - Il faut le passer par un descripteur hérité, lu puis fermé par le worker, et refuser les descripteurs `daemon-workers/**` sous l'enveloppe. Que le worker ne les lise pas est à vérifier.
+  - Le profil doit laisser le worker joindre le socket du superviseur et créer le sien : le kernel le peut donc aussi.
+  - Toute commande qui fait lancer quelque chose au superviseur doit alors être enveloppée (`trash`, `!…` de `catalog_chain`).
+  - L'interrupteur `PRIME_AGENT_SECRET_GUARD` ne doit jamais être pris dans l'environnement de lancement d'un client.
+- **Mémoire du worker** : elle contient les identifiants, mais elle n'est pas lisible depuis le kernel. Sur macOS, `task_for_pid` est refusé (mesuré). Sous Linux, Yama 1 interdit à un descendant de tracer son ancêtre (déduit, ptrace(2)).
+- **`ExecuteBash`** et **`shellTool: "native"`** : protégés par construction (descendants du worker).
+- **Relais de la PR B** : il reste dans le worker. Le worker obtient le jeton par `AuthStorage` comme aujourd'hui, et le stockage relayé est transparent. Le code de la PR B ne change pas ; seule la source du jeton change sous X4.
+- **Login MCP** : le worker ouvre le navigateur (`mcp_login.rs:49`). Sous X4 avec le refus LaunchServices, il ne le peut plus. L'ouverture doit passer par le pont (`login_open` existe) ou par le superviseur.
+- **E-C** : un seul détenteur sérialise les écritures, ce qui supprime la course entre processus qui motivait le verrou de `dad2232cc`. Les lectures relayées voient tout de suite un jeton rafraîchi.
+  - Le rafraîchissement à l'expiration (`a05bcb695`) reste à reprendre, et la clé capturée à la construction de la session (H1, ticket 40 §4.2) n'est pas réglée.
+  - Aide partielle.
+- **Mode `-p` et `--mode rpc`** : la session tourne dans le processus (`print_runtime.rs:1288-1291`), sans worker. X4 ne les couvre pas : il faudrait les sites de X1, ce qui revient à X1 en entier.
+  - Proposition : sous la protection, ces modes refusent de démarrer avec le message qui nomme la variable. Les bancs et les tests la posent déjà (question 18).
+- **Lignes upstream (estimation)** :
+  - `supervision.rs:583-600` : 3 à 5 lignes ;
+  - `auth/manager.rs:274-276` : 2 à 3 ;
+  - `models/registry.rs:458` : 2 à 3 ;
+  - `packages/manager.rs:203` : 2 à 3 ;
+  - jeton par descripteur hérité (`descriptor.rs:63-70`, `worker/config.rs:46`, `worker.rs:358`, `supervision.rs`) : 10 à 15 ;
+  - lancements du superviseur et du pont enveloppés (`resolve_config_value.rs:70`, `saved_session_commands.rs:117`, `packages/process.rs:19`, `:45`) : 4 à 8 ;
+  - navigateur du login MCP (`mcp_login.rs:49`) : 3 à 5 ;
+  - refus de `-p` et de `rpc` (`print_runtime.rs`) : 3 à 5.
+  - Soit **30 à 45 lignes**, plus des modules du fork : relais des identifiants (environ 300 lignes) et enveloppe (environ 150).
+- **Détection** : un lancement ajouté dans le worker est protégé par construction. Le test CI de X1 reste utile pour les sites joignables depuis le superviseur et le pont, mais on ne sait pas par lecture du source quel rôle exécute un site partagé. La liste revue l'annote, et une erreur humaine reste possible.
+
+**Dans les deux cas** :
+- Refus d'écriture, dans le profil, sur le binaire en cours (chemin canonique de `current_exe()`) et sur son manifeste. Le manifeste est `package.json` dans `package_dir()` (`crates/pa-cli/src/config.rs:62-75`), ou `PI_PACKAGE_DIR` du démon.
+- Refus `file-write-unlink` sur leurs dossiers parents, comme pour le dossier agent.
+- Refus LaunchServices (§R.2).
+- Ce que lance le pont : `npm`, `git` et `bash -c` passent par les sites partagés enveloppés. Le lancement du démon utilise `current_exe`, binaire protégé. Le navigateur s'ouvre après une action, sur l'URL du flux. Le pont n'a besoin d'aucun lancement propre en plus.
+
+### R.4 Recommandation
+
+**X4**, avec le refus de `-p` et de `rpc` sous la protection, et le refus LaunchServices :
+- L'inventaire montre que le worker lance beaucoup, souvent sans action : kernel, sonde, `uv`, paquets, `git` à chaque tour, portes, `exec_command`, `!…`, `gcloud`, `credential_process`, navigateur. Upstream en ajoute régulièrement.
+- X4 ramène la surface non protégée au superviseur et au pont, qui lancent peu : `current_exe`, `trash`, `!…`, `npm` par l'écran Réglages, navigateur.
+- Il protège par construction tout lancement futur du worker.
+- X1 coûte un peu moins de lignes, mais un seul lancement oublié, chez nous ou dans une reprise upstream, rouvre tout.
+- Si le refus de `-p` et de `rpc` est inacceptable, X4 ne fait pas l'économie de X1 pour ces modes. Dans ce cas, X1 seul est plus simple.
+
+Questions :
+
+17. **X1 ou X4** ?
+18. Avec X4, **`-p` et `--mode rpc` refusés** sous la protection, avec le message qui nomme la variable ?
+19. **Services locaux** (§R.2) : limite documentée, ou refus des connexions de socket Unix sauf une liste (DNS `mDNSResponder`, à mesurer) ? Ce refus casserait Docker, ssh-agent, gpg-agent et les bases locales depuis le kernel.
+20. **Refus LaunchServices** dans le profil, au prix de tout `open` depuis le kernel (le navigateur s'ouvre par le pont) ?
+
 ## Annexe : mesures macOS
 
-Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des essais d'exécution différée, arbre à `1eed69ebc` plus ce commit) :
+Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des sorties de sandbox du §R.2, 48 essais) :
 
 ```
 ProductName:		macOS ; ProductVersion:		27.0.1 ; BuildVersion:		26A434
@@ -624,7 +781,13 @@ ok  (deny process-info* (target others)) : env par sysctl                       
 ok  connexion au socket hors sandbox                                                   attendu : permis          obtenu : permis
 ok  connexion au socket sous le profil                                                 attendu : refusé          obtenu : refusé
 ok  faux socket dans le dossier des sockets                                            attendu : refusé          obtenu : refusé
-42 essais, 0 écart(s)
+ok  open d'une application locale, sans refus LaunchServices                           attendu : secret lu       obtenu : secret lu
+ok  open d'une application locale, avec refus LaunchServices                           attendu : rien            obtenu : rien
+ok  launchctl submit depuis la sandbox                                                 attendu : rien            obtenu : rien
+ok  serveur screen hors sandbox, commande envoyée depuis la sandbox                    attendu : secret lu       obtenu : secret lu
+ok  sous refus LaunchServices : /usr/bin/git                                           attendu : permis (rc=0)   obtenu : permis (rc=0)
+ok  sous refus LaunchServices : /usr/bin/python3                                       attendu : permis (rc=0)   obtenu : permis (rc=0)
+48 essais, 0 écart(s)
 ```
 
 La recherche sur les mécanismes (essais sur ce Mac : sandbox imbriquée, trousseau jetable, `/.vol`, `setsid`) a été faite par un agent pendant le constat. Les essais dont dépend une conclusion de ce document sont refaits par le script ci-dessus, sauf ceux du trousseau (E.2) et du `curl` (E.1), qui ne sont pas repris.
