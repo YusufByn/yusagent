@@ -363,10 +363,8 @@ async fn refresh_session(link: &Arc<DaemonLink>, state: &Arc<Mutex<DaemonAcpStat
             .await
             .iter()
             .any(|available| model_value(&available.provider, &available.id) == value);
-        // DIAGNOSTIC D3, provisoire (ticket 40, §22.8) : retiré avant le merge.
-        eprintln!("ya-providers d3: shown {shown:?}, announced {value}, usable {usable}");
         if usable && shown.as_deref() != Some(value.as_str()) {
-            let answer = link
+            let _ = link
                 .request(DaemonCommand::SetModel {
                     id: None,
                     active_session_id: session_id.clone(),
@@ -375,17 +373,7 @@ async fn refresh_session(link: &Arc<DaemonLink>, state: &Arc<Mutex<DaemonAcpStat
                     rest: Map::new(),
                 })
                 .await;
-            eprintln!(
-                "ya-providers d3: set_model {}",
-                match &answer {
-                    Ok(response) if response.success => "ok".to_string(),
-                    Ok(response) => format!("refused: {:?}", response.error),
-                    Err(error) => format!("failed: {error}"),
-                }
-            );
         }
-    } else {
-        eprintln!("ya-providers d3: no announced model");
     }
     let _ = refresh_wire_config(link, &session_id, &config, &producer).await;
 }

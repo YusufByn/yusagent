@@ -156,9 +156,9 @@ impl Home {
         Home::build(with_openai, true)
     }
 
-    /// No credential anywhere (D3): `ya40` without its `models.json` fallback key, and the
-    /// built-in `openai` with the local `ya40-extra` model, saved as the settings default (a
-    /// `models.json` provider without a key is not offered a key sign-in; `openai` is).
+    /// No credential anywhere (D3): no `ya40` (a custom provider needs its key), and the built-in
+    /// `openai` with the local `ya40-extra` model, saved as the settings default (`openai` is
+    /// offered a key sign-in).
     fn without_fallback() -> Home {
         let home = Home::build(true, false);
         std::fs::write(
@@ -187,10 +187,12 @@ impl Home {
             "models": [model("ya40-model")]
         }});
         if !fallback {
-            providers["ya40"]
+            // A custom provider needs its `apiKey` (`pa-core`'s `models/custom.rs`): without a
+            // fallback key, `ya40` goes, and `models.json` stays valid.
+            providers
                 .as_object_mut()
-                .expect("the ya40 provider")
-                .remove("apiKey");
+                .expect("the providers")
+                .remove("ya40");
         }
         if with_openai {
             providers["openai"] = json!({
@@ -641,14 +643,9 @@ fn a_key_moves_a_session_opened_without_credentials_off_the_fallback_model() {
         home.server.authorizations(),
         [String::from("Bearer sk-ya40-moved")],
         "the prompt after the key reaches openai/ya40-extra with it; requests: {:?}; announced \
-         after the key: {announced}; model_change rows: {:?}; bridge: {:?}",
+         after the key: {announced}; model_change rows: {:?}",
         labels(&home),
-        model_changes(&home),
-        std::fs::read_to_string(home.stderr_file())
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| line.contains("ya-providers d3"))
-            .collect::<Vec<_>>()
+        model_changes(&home)
     );
 }
 
