@@ -159,14 +159,26 @@ impl SignIn {
             }
         };
         if provider_id.starts_with("mcp:") {
-            // An MCP sign-in answers its failures as a status too: the store tells.
-            return match outcome {
-                ProviderAuthOutcome::Cancelled => SignInOutcome::Cancelled,
-                _ if stored(&self.agent_dir, provider_id) => SignInOutcome::Done,
-                _ => SignInOutcome::Failed(SIGN_IN_FAILED.to_string()),
-            };
+            return mcp_settled(
+                &outcome,
+                cancel_flag.load(Ordering::Relaxed),
+                stored(&self.agent_dir, provider_id),
+            );
         }
         settled(outcome)
+    }
+}
+
+/// An MCP sign-in's outcome: its flow answers its failures as a status too, so the store tells.
+fn mcp_settled(
+    outcome: &ProviderAuthOutcome,
+    _cancel_requested: bool,
+    stored: bool,
+) -> SignInOutcome {
+    match outcome {
+        ProviderAuthOutcome::Cancelled => SignInOutcome::Cancelled,
+        _ if stored => SignInOutcome::Done,
+        _ => SignInOutcome::Failed(SIGN_IN_FAILED.to_string()),
     }
 }
 
@@ -338,6 +350,34 @@ mod tests {
             .expect("the OpenAI API key row");
         assert!(openai.connected && !openai.removable);
         assert_eq!(openai.note.as_deref(), Some("env: TEST_KEY"));
+    }
+
+    /// X5 (§22.11): an MCP sign-in the client cancelled answers `Cancelled`, even when its flow
+    /// ended on its own error (a cancelled paste: `pa-core`'s `mcp/oauth.rs`, "Missing
+    /// authorization code"); a stored credential still answers `Done`.
+    #[test]
+    fn a_cancelled_mcp_sign_in_answers_cancelled() {
+        let flow_error = ProviderAuthOutcome::Status("Missing authorization code".to_string());
+        assert_eq!(
+            mcp_settled(&flow_error, true, false),
+            SignInOutcome::Cancelled,
+            "cancel asked, nothing stored"
+        );
+        assert_eq!(
+            mcp_settled(&flow_error, false, false),
+            SignInOutcome::Failed(SIGN_IN_FAILED.to_string()),
+            "no cancel: a failure"
+        );
+        assert_eq!(
+            mcp_settled(&flow_error, true, true),
+            SignInOutcome::Done,
+            "a stored credential wins"
+        );
+        assert_eq!(
+            mcp_settled(&ProviderAuthOutcome::Cancelled, false, false),
+            SignInOutcome::Cancelled,
+            "the flow's own cancel"
+        );
     }
 
     /// Test 8: a failed flow never hands the screen its own text, which can echo a token
