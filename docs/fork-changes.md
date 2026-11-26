@@ -1647,6 +1647,7 @@ Constat, décisions et plan : `docs/tickets/40-login-extension.md` (§10, §15, 
 | `crates/pa-cli/tests/ya_providers_acp_e2e.rs` | nouveau | Vrai binaire en ACP, modèle intercepté par un serveur local : tests 1a, 1b (H1), 2, 3, 4, 5, 8, 8b (URL de login et `state`, faux ouvreur) ; 8c (le même pour Claude, X5). | YA-10 (ticket 40) |
 | `bench/tools/sim40.sh` | nouveau | Simulation P-A / P-B et cherry-pick de `a05bcb695`, `dad2232cc` (§11), pour E-C. | YA-10 (ticket 40) |
 | `bench/tools/capture/run.py` | modif. (outil du fork) | Cas `acp-extension` : le fixture de l'extension a 4 trames depuis X5 ; `_yus/providers/list` rejouée entre `session/new` et `session/prompt` (`:307`, `:372-374`). Écart au périmètre accepté par Yusuf (ticket 40, §21.4). | YA-10 (ticket 40, X5) |
+| `bench/tools/capture/extension_frames_check.py` | modif. (outil du fork) | La trame `session/prompt` cherchée par sa méthode, plus par son indice (`:45-47`) : le fixture a 4 trames depuis X5. Écart au périmètre accepté par Yusuf (ticket 40, §21.4). | YA-10 (ticket 40, X5) |
 
 Limites (§16.2) :
 - un login MCP en attente du navigateur ne s'arrête qu'à sa prochaine invite ou à sa fin (`FlowCancel::mark` est `pub(crate)` dans `pa-tui`) ;

@@ -938,6 +938,7 @@ Run `ya-extension` 45783371002, job 139784004356 :
   - Le fixture `test/fixtures/acp-frames.json` passe à 4 trames, ids décalés.
   - Les deux tests « rien d'autre à l'ouverture » (unitaire et e2e) sont adaptés.
   - `bench/tools/capture/run.py` rejoue la trame en plus (`:307`, `:372-374`).
+  - `bench/tools/capture/extension_frames_check.py` cherche la trame `session/prompt` par sa méthode, plus par son indice (`:45-47`). Avant ce changement, il supposait 3 trames et s'arrêtait sur les captures de `main` et de la branche (`runs/20261126T090834Z`, `runs/20261126T090940Z`), alors que les trames envoyées étaient bien égales au fixture. Accord de Yusuf du 26/11/2026.
 - **Test d'identité** : une exception est ajoutée à `extensions/vscode/test/unit/identity.test.ts` pour la citation `Unharnessed's \`_unharnessed/providers/*\`` de `crates/pa-daemon/src/acp/daemon/ya_providers.rs:3` (R5). La même forme est déjà admise pour `ya_resources.rs`.
 - **À traiter dans un ticket à part, pas ici** : le test d'identité était rouge sur `main` sans être vu.
   - Il parcourt `crates/` (`identity.test.ts:24-31`), mais `ya-extension.yml` se termine en succès sans lancer les tests quand `extensions/vscode/` ne change pas (`.github/workflows/ya-extension.yml:5`, `:46`). C'était le cas de la PR #91.
