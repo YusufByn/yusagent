@@ -669,14 +669,14 @@ fn a_key_set_through_the_bridge_is_nowhere_but_auth_json() {
 fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
     let home = Home::new(false);
     home.write_auth(&json!({}));
-    let opener = tempfile::TempDir::new().unwrap();
+    let fake_bin = tempfile::TempDir::new().unwrap();
     assert!(
-        !opener.path().starts_with(home.path()),
+        !fake_bin.path().starts_with(home.path()),
         "the fake opener is outside the home"
     );
-    let opened = opener.path().join("opened.txt");
+    let opened = fake_bin.path().join("opened.txt");
     for name in ["open", "xdg-open"] {
-        let script = opener.path().join(name);
+        let script = fake_bin.path().join(name);
         std::fs::write(
             &script,
             format!(
@@ -689,7 +689,7 @@ fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
     }
     let path = std::env::var_os("PATH").unwrap_or_default();
     let path = std::env::join_paths(
-        std::iter::once(opener.path().to_path_buf()).chain(std::env::split_paths(&path)),
+        std::iter::once(fake_bin.path().to_path_buf()).chain(std::env::split_paths(&path)),
     )
     .unwrap();
     let mut client = Client::spawn_with(&home, |command| {
@@ -730,7 +730,7 @@ fn a_sign_in_url_and_its_state_are_nowhere_under_the_home() {
     assert_eq!(answer["result"]["outcome"], "cancelled", "{answer}");
     drop(client);
     assert_eq!(
-        files_containing(opener.path(), &state),
+        files_containing(fake_bin.path(), &state),
         [opened],
         "positive control: the search finds the state in the fake opener's file"
     );
