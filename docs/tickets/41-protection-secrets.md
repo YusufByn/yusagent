@@ -929,6 +929,72 @@ Mutations, dans `crates/pa-core/src/mcp/ya_relay.rs` :
 
 **Conclusion** : chacun des quatre tests échoue sur son assertion sous la mutation de sa propre règle, et seulement lui.
 
+## U. PR A (PR #95) : classement des lancements et lignes du push 2 (26/11/2026)
+
+Réponses de Yusuf aux écarts du push 1 :
+1. Test 1 : squelette de la fonction de profil au push 1, qui rend une chaîne vide (`crates/pa-types/src/platform/ya_secret_guard.rs`), plutôt qu'une preuve par mutation.
+2. Lancements : classés comme ci-dessous, et chaque site upstream ne change qu'en un appel à une fonction du fork.
+3. Sockets : le profil refuse les chemins exacts des sockets en usage (superviseur et worker, enregistrés par `register_sockets`), plus les dossiers par défaut. Le test 2 couvre un socket hors du dossier par défaut.
+
+**Emplacement de l'enveloppe** : `pa-types` (`crates/pa-types/src/platform/ya_secret_guard.rs`, fichier du fork). C'est la seule crate dont dépendent toutes les autres : `pa-ai` et `pa-tui` ne dépendent pas de `pa-core`. Chaque site passe de `Command::new(x)` à `pa_types::platform::ya_secret_guard::command(x)`, ou à `tokio::process::Command::from(…command(x))`, sur la même ligne.
+
+### U.1 Classement des 44 lancements trouvés par le scan
+
+**Exemptés** (`crates/pa-core/tests/ya_secret_guard/launch_exceptions.txt`, chaque preuve vérifiée par le test) :
+
+| Catégorie | Sites | Preuve vérifiée |
+|---|---|---|
+| Relance du binaire yusAgent (2, hors des 44) | `pa-daemon/src/supervisor/supervision.rs:583`, `pa-cli/src/interactive_mode/daemon.rs:170` | `current_exe()` dans le fichier (`supervision.rs:573`, `daemon.rs:64`) |
+| Propre à Windows (6) | `pa-ai/.../bedrock/credential_process.rs:123`, `pa-core/src/auth/resolve_config_value.rs:84`, `:100`, `pa-core/src/platform/process.rs:266`, `pa-core/src/platform/shell.rs:134`, `pa-tui/src/external_editor.rs:67` | `cfg(windows)` dans les 40 lignes avant (`:120`, `:80`, `:80`, `:255`, `:132`, `:65`) |
+| Propre à Linux, jusqu'à la PR C (3) | `pa-types/src/platform/process.rs:41`, `:352` (`ps`), `pa-tui/src/clipboard.rs:284` (`which wl-copy`) | `not(target_vendor = "apple")` (`:36`, `:350`) ; `copy_on_linux` (`:277`) |
+| Inatteignable (1) | `pa-cli/src/client_update.rs:51` | `/update` du TUI rendu avant tout lancement : `client_update.rs:17` (`SELF_UPDATE`, ticket 19) |
+
+**Enveloppés** (34 sites, une ligne chacun) :
+- Les flux de mise à jour (`update_flow/*`, `pa-core/src/update/*`) sont enveloppés, faute de preuve d'inatteignabilité : `run_coordinator_mode` est appelé par `pa-cli/src/package_command.rs:460`, hors du verrou `SELF_UPDATE` (`public_command.rs:666`).
+- Les deux ouvreurs de navigateur (`pa-core/src/platform/browser.rs:36`, `pa-tui/src/browser.rs:55`) passent par la variante sans refus de `LaunchServices` et par le contrôle `https://`, ou `http://` vers localhost (une ligne de plus chacun).
+
+### U.2 Lignes upstream du push 2 (estimation, à confirmer au compte rendu)
+
+| Fichier | Sites | Lignes |
+|---|---|---|
+| `crates/pa-ai/src/providers/bedrock/credential_process.rs` | `:131` | 1 |
+| `crates/pa-ai/src/providers/google_vertex.rs` | `:104` | 1 |
+| `crates/pa-cli/src/daemon_discovery/scan.rs` | `:152` | 1 |
+| `crates/pa-cli/src/factory_command.rs` | `:270` | 1 |
+| `crates/pa-cli/src/update_flow/successor.rs` | `:51` | 1 |
+| `crates/pa-cli/src/update_flow/swap.rs` | `:156` | 1 |
+| `crates/pa-cli/src/update_flow/update_command.rs` | `:176` | 1 |
+| `crates/pa-cli/src/print_runtime.rs` | avertissement « protection coupée » sur stderr du pont, recopié dans l'Output | 1 |
+| `crates/pa-core/src/auth/resolve_config_value.rs` | `:70` | 1 |
+| `crates/pa-core/src/autonomous/gates.rs` | `:403` | 1 |
+| `crates/pa-core/src/kernel/bootstrap/venv/probe.rs` | `:14` | 1 |
+| `crates/pa-core/src/kernel/bootstrap/venv.rs` | `:82` | 1 |
+| `crates/pa-core/src/kernel/manager/startup.rs` | `:168` | 1 |
+| `crates/pa-core/src/packages/process.rs` | `:19`, `:45` | 2 |
+| `crates/pa-core/src/platform/browser.rs` | `:36`, plus le contrôle du schéma | 2 |
+| `crates/pa-core/src/platform/shell.rs` | `:118` | 1 |
+| `crates/pa-core/src/session/manager/git.rs` | `:24` | 1 |
+| `crates/pa-core/src/update/download.rs` | `:133` | 1 |
+| `crates/pa-core/src/update/installer.rs` | `:626`, `:761` | 2 |
+| `crates/pa-core/src/workspace_snapshot/git.rs` | `:121` | 1 |
+| `crates/pa-daemon/src/saved_session_commands.rs` | `:117` | 1 |
+| `crates/pa-daemon/src/user_bash.rs` | `:586` | 1 |
+| `crates/pa-daemon/src/worker.rs` | `register_sockets` (socket du superviseur et du worker) | 1 |
+| `crates/pa-daemon/src/supervisor.rs` | `register_sockets` de son socket ; contrôle `st_nlink` d'`auth.json` au démarrage ; avertissement « protection coupée » | 3 |
+| `crates/pa-tui/src/browser.rs` | `:55`, plus le contrôle du schéma | 2 |
+| `crates/pa-tui/src/clipboard.rs` | `:60`, `:229` | 2 |
+| `crates/pa-tui/src/clipboard_image.rs` | `:50` | 1 |
+| `crates/pa-tui/src/external_editor.rs` | `:61` | 1 |
+| `crates/pa-tui/src/export_share.rs` | `:149`, `:156`, `:164`, `:171` | 4 |
+| `crates/pa-tui/src/interactive/render.rs` | `:51` | 1 |
+| `.cargo/config.toml` | `PRIME_AGENT_SECRET_GUARD = "off"` dans `[env]` | 1 |
+| `scripts/lifecycle_lib.py` et contrôles qui filtrent l'environnement (liste de `docs/fork-changes.md:1114`) | `PRIME_AGENT_SECRET_GUARD` ajoutée à leur liste blanche | 1 à 8 |
+
+- **Total estimé : environ 45 à 52 lignes upstream dans 31 à 38 fichiers**, presque toutes des remplacements d'une ligne.
+- Déjà au push 1 : `crates/pa-types/src/platform/mod.rs` (+2, déclaration du module).
+- `crates/pa-core/src/tools/ya_exec.rs:317` est un fichier du fork, hors de ce décompte.
+- Code du fork : le module de l'enveloppe (profil, deux variantes, contexte des chemins, interrupteur, contrôle des URL, refus au lancement si `sandbox-exec` manque), `env_allowlist.rs` (`PRIME_AGENT_SECRET_GUARD` jamais transmise au kernel), les bancs (variable posée, README).
+
 ## Annexe : mesures macOS
 
 Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des sorties de sandbox du §R.2, 48 essais) :
