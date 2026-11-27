@@ -6,6 +6,9 @@
 //! - The bridge still stores a key (`_yus/providers/set_api_key`) and the daemon still serves
 //!   the session: the credential processes keep their access (positive control).
 //! - A `python_repl` cell of that session cannot read `auth.json` nor reach the daemon's socket.
+//! - yusAgent (YA-18, ticket 43, PR 3a, T27 under the guard): the workspace snapshots' git runs
+//!   under its profile variant, the agent directory inside the workspace and a link to `auth.json`
+//!   in it: the snapshots are taken and no object holds the credential.
 //!
 //! Harness of `ya_resources_acp_e2e.rs`. Listed in `docs/fork-changes.md`.
 
@@ -19,6 +22,9 @@ use serde_json::{json, Value};
 
 const TIMEOUT: Duration = Duration::from_mins(2);
 const SENTINEL: &str = "ya41-sentinel-acp-auth-91c0";
+const META: &str = "ai.primeintellect.prime-agent";
+/// How long the test waits for a snapshot written off the turn.
+const SNAPSHOT_WAIT: Duration = Duration::from_secs(20);
 
 fn kernel_python() -> PathBuf {
     if let Some(explicit) = std::env::var_os("PA_E2E_KERNEL_PYTHON") {
@@ -214,5 +220,116 @@ print(json.dumps(results))"#,
     assert_eq!(
         outcome["connect to the daemon socket"], "denied",
         "a session cell reached the daemon socket: {outcome}"
+    );
+}
+
+/// `git` on the shadow repository `repo` (the test's own, outside the guard).
+fn shadow(repo: &std::path::Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg(format!("--git-dir={}", repo.display()))
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The shadow repository of `workspace` (`<agent>/checkpoints/<digest>/`, whose `workspace` file
+/// names it) once it holds `name`.
+fn wait_snapshot(workspace: &std::path::Path, name: &str) -> PathBuf {
+    let root = workspace.join(".yusagent/checkpoints");
+    let deadline = Instant::now() + SNAPSHOT_WAIT;
+    loop {
+        let found = std::fs::read_dir(&root).ok().and_then(|dir| {
+            dir.filter_map(Result::ok)
+                .map(|entry| std::fs::DirEntry::path(&entry))
+                .find(|repo| {
+                    std::fs::read_to_string(repo.join("workspace"))
+                        .is_ok_and(|named| std::path::Path::new(named.trim()) == workspace)
+                        && shadow(repo, &["rev-parse", "-q", "--verify", name]).is_some()
+                })
+        });
+        if let Some(repo) = found {
+            return repo;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no snapshot {name} for {} under {}",
+            workspace.display(),
+            root.display()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// T27 under the guard (ticket 43, PR 3a).
+#[test]
+fn the_snapshots_hold_no_credential_under_the_guard() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let home = dir.path().canonicalize().unwrap();
+    let agent = home.join(".yusagent");
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::write(
+        agent.join("auth.json"),
+        format!(r#"{{"serper":{{"type":"api_key","key":"{SENTINEL}"}}}}"#),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(".yusagent/auth.json", home.join("auth-link")).unwrap();
+    std::fs::write(home.join("code.py"), "print(1)").unwrap();
+    let socket = home.join("daemon.sock");
+    let script = home.join("worker-script.json");
+    std::fs::write(
+        &script,
+        json!({
+            "engine": "faux",
+            "responses": [
+                { "content": [ { "type": "toolCall", "name": "python_repl",
+                    "arguments": { "code": "open('code.py', 'w').write('print(2)')\nprint('ok')" } } ] },
+                { "text": "done" },
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let mut client = Client::spawn(&home, &socket, &script);
+    let _ = client.call(
+        "initialize",
+        &json!({ "protocolVersion": 1, "clientCapabilities": {} }),
+    );
+    let new = client.call("session/new", &json!({ "mcpServers": [] }));
+    let session = new["result"]["sessionId"]
+        .as_str()
+        .expect("a session")
+        .to_string();
+    let file = PathBuf::from(
+        new["result"]["_meta"][META]["saved"]["path"]
+            .as_str()
+            .unwrap_or_else(|| panic!("saved.path: {new}")),
+    );
+    let header: Value = serde_json::from_str(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .next()
+            .expect("a header"),
+    )
+    .unwrap();
+    let file_id = header["id"].as_str().expect("a session id").to_string();
+    let reply = client.call(
+        "session/prompt",
+        &json!({ "sessionId": session, "prompt": [{ "type": "text", "text": "change code.py" }] }),
+    );
+    assert!(reply.get("result").is_some(), "{reply}");
+    let repo = wait_snapshot(&home, &format!("refs/ya/{file_id}/fin"));
+    let objects = shadow(&repo, &["cat-file", "--batch-all-objects", "--batch"])
+        .expect("the objects are readable");
+    assert!(
+        !objects.contains(SENTINEL),
+        "a credential reached the snapshots"
     );
 }

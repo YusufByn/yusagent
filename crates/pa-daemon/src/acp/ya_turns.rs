@@ -32,6 +32,8 @@ use super::types::AcpSessionUpdate;
 pub(super) mod steer;
 // yusAgent (YA-18, ticket 43): `_yus/session/rewind`, back to before a prompt.
 pub(super) mod rewind;
+// yusAgent (YA-18, ticket 43, PR 3a): workspace snapshots, their preview and their restore.
+mod checkpoints;
 
 /// How often a prompt of this client checks whether a turn it did not start ended (the
 /// Unharnessed admission retry, `prompt.rs:38-61`).

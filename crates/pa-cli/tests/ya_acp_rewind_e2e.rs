@@ -28,6 +28,9 @@
 //!     starts the conversation again.
 //! T13, T14. The goal follows the rewind (push 9): the goal of the point is published before the
 //!     rewind answers, cleared (T13) or back (T14).
+//! T30. (PR 3a, L-b, answer Q-P4) A resume right after a rewind, no prompt in between: the fixed
+//!     text is in the file from the rewind on, the child of the point; the replay shows the new
+//!     branch with no wake turn, and the next request has the fixed text once.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -137,6 +140,18 @@ fn last_id(file: &Path) -> String {
         .last()
         .and_then(|entry| entry["id"].as_str())
         .unwrap_or_else(|| panic!("an entry in {}", file.display()))
+        .to_string()
+}
+
+/// The id in the session file's header (the conversation's id for `session/load`).
+fn file_id(file: &Path) -> String {
+    let text =
+        std::fs::read_to_string(file).unwrap_or_else(|error| panic!("{}: {error}", file.display()));
+    let header: Value =
+        serde_json::from_str(text.lines().next().expect("a header line")).expect("a JSON header");
+    header["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a session id in {header}"))
         .to_string()
 }
 
@@ -610,6 +625,32 @@ impl Client {
         (id, PathBuf::from(path))
     }
 
+    /// `initialize` then `session/load` of the conversation `id` (a process started with
+    /// `--resume`): the frames of the replay, sent before the answer.
+    fn load_session(&mut self, id: &str) -> Vec<Value> {
+        let init = self.request(
+            "initialize",
+            &json!({
+                "protocolVersion": 1,
+                "clientCapabilities": {},
+                "clientInfo": { "name": "ya-acp-rewind-e2e", "version": "0.0.1" },
+            }),
+        );
+        let _ = self.wait_response(init);
+        let from = self.seen.len();
+        let load = self.request(
+            "session/load",
+            &json!({ "sessionId": id, "mcpServers": [] }),
+        );
+        let at = self.wait_response(load);
+        assert!(
+            self.seen[at].get("result").is_some(),
+            "the conversation loads: {}",
+            self.seen[at]
+        );
+        self.seen[from..at].to_vec()
+    }
+
     fn prompt(&mut self, session_id: &str, text: &str) -> u64 {
         self.request(
             "session/prompt",
@@ -1036,6 +1077,58 @@ fn a_resume_after_a_rewind_keeps_the_new_branch() {
         at(fourth, "CHARLIE") < at(fourth, "ECHO") && !sent(fourth).contains("BRAVO"),
         "the resumed prompt follows the new branch: {}",
         sent(fourth)
+    );
+}
+
+/// T30 (PR 3a, L-b, answer Q-P4). A resume right after a rewind, the daemon restarted with no
+/// prompt in between: the fixed text is written at the rewind, the child of the point, so the
+/// replay shows the new branch with no wake turn and the next request has the fixed text once.
+#[test]
+fn a_resume_right_after_a_rewind_keeps_the_new_branch_and_the_fixed_text() {
+    let server = ModelServer::start();
+    let mut client = Client::spawn_model(&server);
+    let (session_id, file) = client.open_session();
+    client.ask_start(&session_id, "ALPHA");
+    let bravo = client.ask_start(&session_id, "BRAVO");
+    client.rewind_to(&session_id, &bravo);
+    let point = bravo["rewindTo"].clone();
+    let last = entries(&file).last().cloned().expect("an entry");
+    assert!(
+        last["type"] == "custom_message"
+            && last["customType"] == REWOUND_TYPE
+            && last["parentId"] == point,
+        "the fixed text is in the file from the rewind on, the child of {point}: {last}"
+    );
+    client.close();
+    shutdown_daemon(&client.socket);
+    let id = file_id(&file);
+    let mut resumed = client.resume(&file);
+    let replay = resumed.load_session(&id);
+    let replayed = Value::Array(replay.clone()).to_string();
+    assert!(
+        !replayed.contains("BRAVO"),
+        "the replay shows the new branch: {replayed}"
+    );
+    assert!(
+        !replay.iter().any(|frame| origin_is(frame, "wake")),
+        "no wake turn in the replay: {replayed}"
+    );
+    resumed.ask_start(&id, "CHARLIE");
+    let request = server
+        .requests()
+        .last()
+        .cloned()
+        .expect("the resumed request");
+    assert_eq!(
+        sent(&request).matches(REWOUND).count(),
+        1,
+        "the fixed text, once: {}",
+        sent(&request)
+    );
+    assert!(
+        !sent(&request).contains("BRAVO") && sent(&request).contains("ALPHA"),
+        "the request follows the new branch: {}",
+        sent(&request)
     );
 }
 

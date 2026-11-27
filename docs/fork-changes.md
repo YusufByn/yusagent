@@ -1807,6 +1807,24 @@ Constat, décisions et plan : `docs/tickets/43-retour-arriere.md` (§H, §I, §I
 | `bench/tools/capture/ya43_rewindto_cost.py`, `ya43_rewind_check.py` | nouveaux (outils du fork) | Coût de `rewindTo` par prompt (`main` contre branche, blocs alternés) ; requêtes reçues avant et après un retour en arrière (préfixe, texte fixe, invalidation). | YA-18 (ticket 43) |
 | `extensions/vscode/test/unit/agent.test.ts`, `test/fake-agent/fake-agent.mjs`, `test/e2e/suite-real.ts` | modif. (tests du fork) | E1, E2 (agent factice : `rewindTo` dans `turnStart`, `_yus/session/rewind` accepté) ; E3 (vrai binaire) ; le cas « méthode non servie » passe sur `_yus/kernel/tail`. | YA-18, YA-10 (ticket 43) |
 
+## Instantanés du workspace, PR 3a (YA-18, ticket 43)
+
+Constat, décisions et plan : `docs/tickets/43-retour-arriere.md` (§P à §P.13). Instantanés du workspace dans un dépôt git shadow par workspace (`<dossier agent>/checkpoints/<empreinte>/`), pris par le pont avant l'envoi d'un prompt et à la fin de chaque tour ; aperçu et restauration (`_yus/session/restore_preview`, `_yus/session/restore`). Push A : tests et squelette (les deux méthodes répondues comme non servies, `-32601`, comportement de `main`) ; push B : implémentation.
+
+**Lignes upstream : aucune de plus.** Dans `daemon.rs`, 2 lignes du fork (bras de la PR 1) modifiées : l'écart du fichier pour le ticket 43 reste +5 / −1 (ligne de la PR 1 ci-dessus).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (lignes du fork dans un fichier upstream, 2 lignes modifiées) | Le bras de `_yus/session/rewind` (`:1176-1177`) devient une garde, `other if super::ya_turns::rewind::serves(other)`, et passe la méthode à `rewind::serve` : il couvre aussi les deux méthodes des instantanés (réponse Q-P1, §P.11). | YA-18 (ticket 43) |
+| `crates/pa-daemon/src/acp/ya_turns.rs` | modif. (fichier du fork) | `mod checkpoints;`. | YA-18 (ticket 43) |
+| `crates/pa-daemon/src/acp/ya_turns/rewind.rs` | modif. (fichier du fork) | `serves` (rewind et instantanés) ; `serve` prend la méthode et passe les deux méthodes des instantanés à `checkpoints`. | YA-18 (ticket 43) |
+| `crates/pa-daemon/src/acp/ya_turns/checkpoints.rs` | nouveau | Push A : squelette, `_yus/session/restore` et `_yus/session/restore_preview` répondues `-32601` comme une méthode inconnue. | YA-18 (ticket 43) |
+| `crates/pa-cli/tests/ya_acp_checkpoints_e2e.rs` | nouveau (test du fork) | T20 à T35 du §P.12.7 (sauf T30), vrai binaire, fournisseur factice, kernel réel, défauts du produit (prompt version 2) ; T23 sur un modèle local qui garde les corps. Variable de test `PRIME_AGENT_TEST_CHECKPOINTS_GIT` (chemin du git du pont, réponse Q-3a-1), lue seulement par le code des instantanés du pont, jamais transmise au kernel (liste blanche, `env_allowlist.rs`). | YA-18 (ticket 43) |
+| `crates/pa-cli/tests/ya_acp_rewind_e2e.rs` | modif. (test du fork) | T30 : reprise juste après un retour, sans prompt entre les deux (L-b, réponse Q-P4). | YA-18 (ticket 43) |
+| `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs` | modif. (test du fork) | T27 sous l'enveloppe : aucun identifiant dans les objets du dépôt shadow. | YA-18 (ticket 43) |
+| `crates/pa-types/tests/ya_secret_guard_profile.rs` | modif. (test du fork) | T19 : les profils `Full` et `Browser` refusent l'écriture de `<dossier agent>/checkpoints`. | YA-18 (ticket 43) |
+| `crates/pa-core/tests/ya_secret_guard_kernel.rs` | modif. (test du fork) | T19b : le kernel réel ne peut pas écrire dans `<dossier agent>/checkpoints`. | YA-18 (ticket 43) |
+
 Limites (§I.9) : pas de `rewindTo` au rejeu de `session/load` (ticket à part) : après « Relancer » ou une reprise depuis l'historique, seuls les nouveaux messages sont modifiables ; feuille non inscrite avant le prompt suivant (comme Unharnessed, à rouvrir avec les instantanés du workspace).
 
 ## Code repris d'Unharnessed

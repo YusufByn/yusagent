@@ -28,6 +28,12 @@ use crate::ya_permissions::COMMAND;
 /// The method's name.
 pub(crate) const METHOD: &str = "_yus/session/rewind";
 
+/// yusAgent (YA-18, ticket 43, PR 3a): the methods the bridge's arm routes here, the rewind and
+/// the workspace snapshots' (`super::checkpoints`), so that the bridge keeps one arm.
+pub(crate) fn serves(method: &str) -> bool {
+    method == METHOD || super::checkpoints::serves(method)
+}
+
 /// The refusal when another window answers this session (answer 9, text of Q-I3).
 const OTHER_WINDOW: &str =
     "This conversation is open in another window: close it there before going back.";
@@ -90,14 +96,20 @@ pub(super) async fn other_window_refusal(
     }
 }
 
-/// Serves one `_yus/session/rewind` request.
+/// Serves one request of [`serves`]: `_yus/session/rewind` here, the snapshots' in
+/// `super::checkpoints`.
 pub(crate) async fn serve(
+    method: &str,
     id: &Value,
     params: &Value,
     link: &Arc<DaemonLink>,
     state: &Arc<Mutex<DaemonAcpState>>,
     tx: &FrameSink,
 ) {
+    if super::checkpoints::serves(method) {
+        super::checkpoints::serve(method, id, tx);
+        return;
+    }
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
