@@ -30,6 +30,8 @@ use super::types::AcpSessionUpdate;
 
 // yusAgent (YA-19, ticket 39): `_yus/session/steer`, a message into the running prompt turn.
 pub(super) mod steer;
+// yusAgent (YA-18, ticket 43): `_yus/session/rewind`, back to before a prompt.
+pub(super) mod rewind;
 
 /// How often a prompt of this client checks whether a turn it did not start ended (the
 /// Unharnessed admission retry, `prompt.rs:38-61`).
@@ -243,6 +245,18 @@ pub(crate) async fn publish_turn_start(
 /// `turnStart` of a prompt of this client.
 pub(crate) fn prompt_start() -> TurnStartMeta {
     TurnStartMeta::new("prompt", None)
+}
+
+/// yusAgent (YA-18, ticket 43): publishes the `turnStart` of a prompt of this client, with
+/// `rewindTo`, the session's leaf before the prompt (Unharnessed's `prompt.rs:320-350`).
+/// Push 1 (skeleton): no `rewindTo` yet, the frame `main` publishes.
+pub(crate) async fn publish_prompt_start(
+    producer: &UpdateProducer,
+    turn_id: u64,
+    _link: &Arc<DaemonLink>,
+    _state: &Arc<Mutex<DaemonAcpState>>,
+) {
+    publish_turn_start(producer, turn_id, prompt_start()).await;
 }
 
 /// A prompt of this client takes its turn id once no turn it did not start runs (T3, E7); the

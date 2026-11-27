@@ -379,6 +379,10 @@ pub const CAUSE_THINKING_LEVEL_CHANGE: &str = "thinking_level_change";
 /// ["system", "tools"]}`.
 pub const CAUSE_RESUME_PREFIX_CHANGE: &str = "resume_prefix_change";
 
+/// yusAgent (YA-18, ticket 43): `invalidation` cause of the first agent-loop call after the
+/// conversation went back to before a prompt (`_yus/session/rewind`): `{"cause": "rewind"}`.
+pub const CAUSE_REWIND: &str = "rewind";
+
 /// yusAgent (YA-10, ticket 24): one `invalidation` value from the entries of one call: absent
 /// without entry, the entry itself when there is one (the T05 shape), an array otherwise.
 fn merge_invalidations(mut entries: Vec<Value>) -> Option<Value> {

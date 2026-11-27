@@ -695,7 +695,8 @@ function onMessage(message) {
     case "session/prompt": {
       promptTurnId += 1;
       eventSequence = 0;
-      turnStart({ origin: "prompt" });
+      // Ticket 43 : `rewindTo`, la feuille avant le prompt (`ya_turns.rs`, `publish_prompt_start`) ; opaque.
+      turnStart({ origin: "prompt", rewindTo: `entry-before-${promptTurnId}` });
       announce();
       const text = (params?.prompt ?? []).map((block) => block.text ?? "").join("");
       void onPrompt(id, text);
@@ -703,6 +704,9 @@ function onMessage(message) {
     }
     case "_yus/session/steer":
       return onSteer(id, params);
+    // Ticket 43 : le retour en arrière (`crates/pa-daemon/src/acp/ya_turns/rewind.rs`), accepté hors tour.
+    case "_yus/session/rewind":
+      return respond(id, {});
     case "session/cancel":
       if (cancelled) {
         const resolve = cancelled;

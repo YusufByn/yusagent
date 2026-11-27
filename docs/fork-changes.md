@@ -1781,6 +1781,23 @@ Limites (§H.1, §J.1) :
 - Un commit qui touche `resolve_request_key_and_headers_and_store_health` (`model.rs`) ou la création du flux dans `build_session` (`lifecycle.rs`) entre en conflit de façon visible.
 - Si `a05bcb695` est repris un jour : retirer le module, ses trois points de branchement et ses tests (la résolution à chaque appel d'upstream les remplace).
 
+## Retour en arrière de la conversation, PR 1 (YA-18, YA-10, ticket 43)
+
+Constat, décisions et plan : `docs/tickets/43-retour-arriere.md` (§H, §I, §I.9). Retour de la conversation comme Unharnessed : `rewindTo` (feuille avant le prompt) dans le `turnStart` d'un prompt, `_yus/session/rewind { sessionId, to }`, feuille déplacée par les actions `rewind` et `leaf` de la commande du fork `ya_permissions` (R-b0), texte fixe D2 en fin d'historique, annonces `ya-resources-changed` abandonnées remises en file, `invalidation: rewind` au journal d'usage. **Push 1 : tests et squelette** (le comportement de `main` est gardé : `turnStart` sans `rewindTo`, méthode répondue comme non servie).
+
+**Lignes upstream : +5 / −1 dans 1 fichier** (§I.2).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, +5 / −1) | Aiguillage de `_yus/session/rewind` après celui de `steer` (`:1175-1178`, +4) ; le `turnStart` d'un prompt passe par `ya_turns::publish_prompt_start(&producer, turn_id, link, state)` (`:1637`, −1 +1). | YA-18 (ticket 43) |
+| `crates/pa-daemon/src/acp/ya_turns.rs` | modif. (fichier du fork) | `mod rewind;`, `publish_prompt_start`. | YA-18 (ticket 43) |
+| `crates/pa-daemon/src/acp/ya_turns/rewind.rs` | nouveau | Méthode `_yus/session/rewind`, refus « autre fenêtre » (réponse 9) ; tests T6 (`scripted_link`). | YA-18 (ticket 43) |
+| `crates/pa-core/src/session_engine/usage_log.rs`, `usage_log/tests.rs` | modif. (fichiers du fork) | Cause `rewind` (`CAUSE_REWIND`) ; test de la fusion des notes (§I.9). | YA-18 (ticket 43) |
+| `crates/pa-cli/tests/ya_acp_rewind_e2e.rs` | nouveau (test du fork) | T1 à T5, T7 à T9, T11 (§I.5), vrai binaire, fournisseur factice, kernel réel. | YA-18 (ticket 43) |
+| `extensions/vscode/test/unit/agent.test.ts`, `test/fake-agent/fake-agent.mjs`, `test/e2e/suite-real.ts` | modif. (tests du fork) | E1, E2 (agent factice : `rewindTo` dans `turnStart`, `_yus/session/rewind` accepté) ; E3 (vrai binaire) ; le cas « méthode non servie » passe sur `_yus/kernel/tail`. | YA-18, YA-10 (ticket 43) |
+
+Limites (§I.9) : pas de `rewindTo` au rejeu de `session/load` (ticket à part) : après « Relancer » ou une reprise depuis l'historique, seuls les nouveaux messages sont modifiables ; feuille non inscrite avant le prompt suivant (comme Unharnessed, à rouvrir avec les instantanés du workspace).
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

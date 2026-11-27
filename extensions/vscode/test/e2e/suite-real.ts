@@ -814,7 +814,50 @@ const steerTests: [string, () => Promise<void>][] = [
     },
   ],
 ];
-tests.push(...x3Tests, ...resumeTests, ...steerTests);
+// Ticket 43 (PR 1) : retour en arrière (`_yus/session/rewind`), après les autres (conversation neuve).
+const rewindTests: [string, () => Promise<void>][] = [
+  [
+    "retour en arrière (ticket 43) : modifier le deuxième message, la branche repart de là, texte fixe avant le renvoi",
+    async () => {
+      writeScript([{ text: "un" }, { text: "deux" }, { text: "deux bis" }]);
+      await post({ type: "newChat", draft: { text: "", images: [] } });
+      await ready();
+      await post({ type: "send", text: "premier", images: [] });
+      await idle();
+      await post({ type: "send", text: "second", images: [] });
+      await idle();
+      const second = (await turns()).find((turn) => turn.prompt?.text === "second");
+      assert.ok(second?.rewindTo, `rewindTo du deuxième tour (turnStart) : ${JSON.stringify(second)}`);
+      await post({ type: "send", text: "second modifié", images: [], edit: second.id });
+      await idle();
+      await shows("deux bis", "réponse au renvoi");
+      const path = (await state()).saved?.path;
+      assert.ok(path, "fichier de la conversation");
+      // La branche : de la dernière entrée à la racine, par `parentId`.
+      type Entry = { type?: string; id?: string; parentId?: string | null; customType?: string; message?: { role?: string; content?: unknown } };
+      const entries = readFileSync(path, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Entry)
+        .filter((entry) => entry.type !== "session" && typeof entry.id === "string");
+      const branch: Entry[] = [];
+      for (let entry: Entry | undefined = entries.at(-1); entry; entry = entries.find((other) => other.id === entry?.parentId)) branch.unshift(entry);
+      const rows = branch.flatMap((entry) => {
+        if (entry.type === "custom_message") return [`custom:${entry.customType}`];
+        if (entry.type !== "message") return [];
+        const content = entry.message?.content;
+        const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((block: { text?: string }) => block.text ?? "").join("") : "";
+        return [`${entry.message?.role}:${text}`];
+      });
+      assert.deepEqual(rows, ["user:premier", "assistant:un", "custom:ya-conversation-rewound", "user:second modifié", "assistant:deux bis"], "la branche repart d'avant le deuxième message");
+      const shown = await turns();
+      assert.deepEqual(shown.map((turn) => turn.prompt?.text), ["premier", "second modifié"], "le tour modifié est remplacé");
+      assert.equal(shown.at(-1)?.state, "done");
+      assert.ok(!shown.some((turn) => textOf(turn).includes("[conversation-rewound]")), "le texte fixe n'est pas affiché");
+    },
+  ],
+];
+tests.push(...x3Tests, ...resumeTests, ...steerTests, ...rewindTests);
 
 /** Après un échec : chaque cellule de la conversation (statut, sortie, fichiers), et le workspace. */
 async function diagnose(): Promise<void> {
