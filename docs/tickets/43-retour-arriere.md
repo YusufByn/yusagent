@@ -875,10 +875,10 @@ Préparation (deux pièces de la PR : le binaire **et** l'extension, car `src/ya
    extensions/vscode/scripts/install-vsix.sh <id du run ya-extension du dernier commit>
    ```
 
-   - Au dernier commit (`467c8e19c`), c'est le run **46005389185**. Son artefact s'appelle `yusagent-vsix-8468813…` : c'est le sha du commit de merge de la PR, normal pour un run `pull_request`.
+   - Au push 9b (`84fecf29d`), c'est le run **46010873742**. Son artefact porte le sha du commit de merge de la PR, normal pour un run `pull_request`. Avant lui : 46005389185 (`467c8e19c`).
    - Le script vérifie la taille (< 5 Mo) et le contenu attendu avant d'installer.
 2. **Binaire** : télécharger le build macOS du dernier commit de code, vérifier `SHA256SUMS` et extraire :
-   - `gh run download 46002975887 --repo YusufByn/yusagent --dir <dossier>` (`ba5c1eb96` ; les commits suivants ne changent que ce ticket) ;
+   - `gh run download 46010862163 --repo YusufByn/yusagent --dir <dossier>` (`84fecf29d`, push 9b ; binaire `0.10.2-continuous.84fecf29d…`) ;
    - dans VS Code, régler `yusagent.binaryPath` sur ce binaire, puis recharger la fenêtre ;
    - un démon d'un autre build est remplacé s'il ne tient rien ; sinon, `yusagent shutdown` d'abord (ticket 29).
 3. Vérifier que l'édition est servie : un clic sur un message envoyé doit le remettre dans la boîte, avec le bandeau « Editing an earlier message ». Si l'envoi répond « It could not go back to the message: _yus/session/rewind : méthode pas encore servie par yusAgent », c'est l'ancienne extension.
@@ -886,9 +886,9 @@ Préparation (deux pièces de la PR : le binaire **et** l'extension, car `src/ya
 Lancement préalable par Claude Code (règle 13), dans un dossier d'extensions isolé, pour ne pas toucher au VS Code de Yusuf :
 
 ```
-$ sh extensions/vscode/scripts/install-vsix.sh 46005389185 <dossier isolé>
+$ sh extensions/vscode/scripts/install-vsix.sh 46010873742 <dossier isolé>
 taille : 202181 octets (limite 5000000)
-sha256 : 27564a15dcd97322f2f6672404f9d72db02c34aaa8b5f1e102acd1ef96e4e01e
+sha256 : 43acc6f6a0a8e61d01551b5e70709b872956b71ca2e1bffa057d12e1f662fd52
 contenu :
   [Content_Types].xml
   extension.vsixmanifest
@@ -930,6 +930,69 @@ installé
     - Cas inverse (facultatif) : goal posé, puis `/goal clear` (la ligne disparaît), puis modifier le message `/goal clear` : la ligne du goal revient, dans son état d'avant (`ya_acp_rewind_e2e`, T14).
 
 Ce que le contrôle manuel ne peut pas voir : la requête elle-même. Le texte fixe une fois et le préfixe sont vérifiés par `ya43_rewind_check.py` et par les e2e T7, T5b, T5c et T9.
+
+## N. Push 9 : goal republié et pause de file d'upstream (27/11/2026)
+
+### N.1 L'écart et sa correction
+
+- **L'écart** : le §I.3, étape 5, validé, prévoyait de republier le goal après un retour, comme Unharnessed (`rewind.rs:64`). Au push 2, je l'ai retiré :
+  - j'avais seulement vu que `fetch_autonomous_status` attend la fin d'un travail sans tête, et j'en avais conclu « le pont n'a pas de lecture du goal à republier » ;
+  - je l'ai noté dans une phrase d'un message d'attente et dans `docs/fork-changes.md`, mais pas posé comme changement au plan à valider, ni écrit dans un relevé ; le §I.3 disait toujours l'inverse.
+- **La conclusion était fausse** : le worker avait déjà le mécanisme, utilisé par `navigate_tree` :
+  - la reconstruction recharge le goal depuis la branche et met de côté le `goal_update` (`agent_engine.rs:221-223`, `session_engine_impl.rs:815-835`) ;
+  - `handle_navigate_tree` le publie avant la réponse (`worker/commands.rs:199-215`) ;
+  - le pont le passe en `_meta.goal` (`acp/wire_events.rs:260`).
+- **Effet pour l'utilisateur, sans la correction** :
+  - la ligne du goal des tours abandonnés restait affichée, minuteur et boutons compris ;
+  - la conversation restait « occupée » (`conversations.ts:58-60`) et ne se mettait pas en veille en arrière-plan (`:262-266`).
+- **Correction (push 9b)** : comme `handle_navigate_tree`, dans `ya_permissions/rewind.rs` (fichier du fork), aucune ligne upstream :
+  - `goal_update_after_rebuild()`, puis un événement `goal_update` émis avant la réponse au retour ;
+  - et la pause de file d'upstream (§N.3) ;
+  - §I.3 (étapes 2, 5 et 7) et §I.9 corrigés et barrés ; ligne de `docs/fork-changes.md` corrigée.
+
+### N.2 Le goal après un retour
+
+- **Forme quand le goal disparaît** (établie au code) :
+  - c'est l'état vide, `empty_goal_state()` (`crates/pa-types/src/goal.rs:78-90`) : `{"active": false, "status": "idle", "tokensUsed": 0, "timeUsedSeconds": 0, "continuationsUsed": 0}`, sans `objective` ;
+  - il vient de `reload_from_branch` (`goal_driver.rs:125`, `latest_persisted_state` → `empty_goal_state` sans entrée de goal sur la branche) ;
+  - il est publié par `publish_goal_state` (`goal_continuation.rs:413-429`), qui déduplique contre le dernier publié ;
+  - le pont donne `_meta.goal` avec `status: "idle"`, et l'extension efface la ligne (`chat.ts:734-737`).
+- **T13** : `/goal --budget 5 …` dans un tour, puis retour avant ce tour. La trame `_meta.goal` (`idle`, sans objectif) arrive avant la réponse au retour.
+- **T14, cas inverse, sans course** :
+  - le goal du point est `budget_limited`, effacé par `/goal clear` dans le tour abandonné ; après le retour, `budget_limited` revient, avec son objectif, avant la réponse ;
+  - **le cas « goal actif au point de retour » n'est pas testé** : il n'est pas faisable sans course. Un goal actif enchaîne seul ses tours de suite, et la levée de la pause réévalue la suite due (`session_input_pause.rs:163-165`) : un tour de goal peut partir pendant qu'on relève les trames. `budget_limited` est un état stable, que le goal ne quitte pas seul.
+
+### N.3 Q-I5 : la pause de file d'upstream à la place de la bascule
+
+- **Avant** : l'action posait `core.queued_input_suspended` et le remettait à la fin, ce qui pouvait lever la suspension d'un abort reçu pendant la fenêtre (limite du §I.9).
+- **Maintenant** : `let _queued_work = self.hold_queued_work_pause("navigate");` du début à la réponse, comme `handle_navigate_tree`.
+- **Pourquoi la limite du §I.9 est retirée**, prouvé au code (pas par un test : un abort dans la fenêtre du retour serait une course) :
+  - `ya_permissions/rewind.rs` n'écrit plus `queued_input_suspended` (le nom n'y figure que dans un commentaire) ;
+  - la garde d'admission du runner bloque si une pause est tenue **ou** si la suspension est posée, deux conditions indépendantes (`worker/turn.rs:59`) ;
+  - quand la garde de la pause tombe (`Drop`, `session_input_pause.rs:247-255`), elle retire seulement sa pause de la table, puis réveille le runner (`work_notify.notify_one()`) et réévalue la suite de goal (`:156-170`) ; elle ne touche pas la suspension.
+- **T11 vert** : l'avis `[bash-done]` d'une commande du tour abandonné réveille la session après le retour. La file reprend quand la pause tombe.
+
+### N.4 Rouges puis verts
+
+- **Push 9a** (`7eb4d9859`, tests seuls, code du push 8), run `ci` 46008919359, shard 8/8 :
+  - T13 (`ya_acp_rewind_e2e.rs:1171`) « the goal frame clears the goal before the rewind answers: None », `left: None`, `right: Some(("idle", Null))` ;
+  - T14 (`:1211`) `left: None`, `right: Some(("budget_limited", "reply with exactly: GOAL-PROGRESS"))` ;
+  - préconditions vertes (goal affiché après son tour, effacé par `/goal clear`) ; les 11 autres e2e verts, T11 compris.
+- **Push 9b** (`84fecf29d`, correctif et doc), run `ci` 46010873856 : les 13 e2e de `ya_acp_rewind_e2e` verts, T11, T13 et T14 compris.
+
+### N.5 Relevé
+
+- **Checks requis** (`gh pr checks 97 --required`, ruleset `protect-main`) : **17/17 verts**, `test summary` compris.
+- **Lignes upstream** (`git diff --numstat origin/main...HEAD`) : `crates/pa-daemon/src/acp/daemon.rs` +5 −1 et `crates/pa-cli/tests/acp_mode_e2e.rs` +4 −2, soit **+9 −3**, inchangé.
+- **Runs du push 9b** :
+  - `ya-extension` **46010873742** (unitaires, e2e contre l'agent factice, e2e vrai binaire, `.vsix`) ;
+  - `ya-build-macos-arm64` **46010862163** (binaire `0.10.2-continuous.84fecf29dde96888e0305001c093d2704823a90a`).
+- **Sur ce binaire** (`DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I …`) :
+  - `bench/tools/capture/ya43_rewind_check.py` : **CONFORME** (C1 à C6) ;
+  - `bench/tools/capture/ya43_control.py` : **CONFORME** (G1, G2, G3, I1, I2) ;
+  - `bench/tools/capture/run.py --binary <branche 84fecf29d>` puis `compare.py <run main f7c4b3fb7> <run branche> --all` : **TOUT IDENTIQUE** (17 cas, chaque requête identique).
+- **`.vsix` du push 9b** : `install-vsix.sh 46010873742` lancé dans un dossier d'extensions isolé (règle 13), sortie au §M.3 ; `extension.js` installé sert `_yus/session/rewind`.
+- **Contrôle manuel** : étape 10 (goal) ajoutée au §M.3, et préparation sur les runs du push 9b.
 
 ## Annexe : mesure préliminaire, git seul
 
