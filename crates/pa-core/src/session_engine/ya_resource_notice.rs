@@ -23,6 +23,9 @@
 //! The comparison's duration goes to the compaction trace (`PA_COMPACTION_TRACE`), phase
 //! [`TRACE_PHASE`], `detail.micros`. Listed in `docs/fork-changes.md`.
 
+// yusAgent (YA-18, ticket 43): the rows of a rewind, to the engine's next-turn mailbox.
+pub mod rewind;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

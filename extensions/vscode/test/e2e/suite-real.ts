@@ -23,7 +23,8 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import * as vscode from "vscode";
@@ -815,45 +816,97 @@ const steerTests: [string, () => Promise<void>][] = [
   ],
 ];
 // Ticket 43 (PR 1) : retour en arrière (`_yus/session/rewind`), après les autres (conversation neuve).
+// Ticket 43 (§L) : ce test lit ce que le modèle reçoit. Le modèle est un serveur `anthropic-messages`
+// local qui garde le corps de chaque requête ; le script du fournisseur factice est retiré pour la
+// conversation (sans fichier, le worker prend le vrai moteur, `worker/config.rs:62-67`), et
+// `models.json` et les réglages le désignent. La première version lisait le fichier de session, où le
+// worker écrit le texte fixe sans que le modèle le reçoive : elle passait à tort.
+const REWOUND =
+  "[conversation-rewound] The conversation went back to an earlier point; the turns after it are gone from your context. The Python kernel kept its state: variables, imports and background commands from those turns may still exist.";
+
+/** Le modèle local : chaque corps de requête gardé, une réponse texte `answer <n>` en flux SSE. */
+async function modelServer(): Promise<{ port: number; bodies: { tools?: unknown[]; messages?: unknown[] }[]; close: () => Promise<void> }> {
+  const bodies: { tools?: unknown[]; messages?: unknown[] }[] = [];
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      try {
+        bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as { tools?: unknown[]; messages?: unknown[] });
+      } catch {
+        bodies.push({});
+      }
+      const n = bodies.length;
+      const usage = { input_tokens: 10, output_tokens: 2 };
+      const events: [string, unknown][] = [
+        ["message_start", { type: "message_start", message: { id: `msg_ya43_${n}`, type: "message", role: "assistant", model: "ya43-model", content: [], stop_reason: null, stop_sequence: null, usage } }],
+        ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }],
+        ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `answer ${n}` } }],
+        ["content_block_stop", { type: "content_block_stop", index: 0 }],
+        ["message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage }],
+        ["message_stop", { type: "message_stop" }],
+      ];
+      const payload = events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join("");
+      response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Content-Length": Buffer.byteLength(payload) });
+      response.end(payload);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return { port, bodies, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+}
+
 const rewindTests: [string, () => Promise<void>][] = [
   [
-    "retour en arrière (ticket 43) : modifier le deuxième message, la branche repart de là, texte fixe avant le renvoi",
+    "retour en arrière (ticket 43) : modifier le deuxième message, la troisième requête reçue par le modèle porte le texte fixe une fois, puis le renvoi",
     async () => {
-      writeScript([{ text: "un" }, { text: "deux" }, { text: "deux bis" }]);
-      await post({ type: "newChat", draft: { text: "", images: [] } });
-      await ready();
-      await post({ type: "send", text: "premier", images: [] });
-      await idle();
-      await post({ type: "send", text: "second", images: [] });
-      await idle();
-      const second = (await turns()).find((turn) => turn.prompt?.text === "second");
-      assert.ok(second?.rewindTo, `rewindTo du deuxième tour (turnStart) : ${JSON.stringify(second)}`);
-      await post({ type: "send", text: "second modifié", images: [], edit: second.id });
-      await idle();
-      await shows("deux bis", "réponse au renvoi");
-      const path = (await state()).saved?.path;
-      assert.ok(path, "fichier de la conversation");
-      // La branche : de la dernière entrée à la racine, par `parentId`.
-      type Entry = { type?: string; id?: string; parentId?: string | null; customType?: string; message?: { role?: string; content?: unknown } };
-      const entries = readFileSync(path, "utf8")
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as Entry)
-        .filter((entry) => entry.type !== "session" && typeof entry.id === "string");
-      const branch: Entry[] = [];
-      for (let entry: Entry | undefined = entries.at(-1); entry; entry = entries.find((other) => other.id === entry?.parentId)) branch.unshift(entry);
-      const rows = branch.flatMap((entry) => {
-        if (entry.type === "custom_message") return [`custom:${entry.customType}`];
-        if (entry.type !== "message") return [];
-        const content = entry.message?.content;
-        const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((block: { text?: string }) => block.text ?? "").join("") : "";
-        return [`${entry.message?.role}:${text}`];
-      });
-      assert.deepEqual(rows, ["user:premier", "assistant:un", "custom:ya-conversation-rewound", "user:second modifié", "assistant:deux bis"], "la branche repart d'avant le deuxième message");
-      const shown = await turns();
-      assert.deepEqual(shown.map((turn) => turn.prompt?.text), ["premier", "second modifié"], "le tour modifié est remplacé");
-      assert.equal(shown.at(-1)?.state, "done");
-      assert.ok(!shown.some((turn) => textOf(turn).includes("[conversation-rewound]")), "le texte fixe n'est pas affiché");
+      const model = await modelServer();
+      const models = join(home, ".yusagent", "models.json");
+      const settingsBefore = existsSync(SETTINGS()) ? readFileSync(SETTINGS(), "utf8") : null;
+      try {
+        writeFileSync(
+          models,
+          JSON.stringify({
+            providers: {
+              ya43: {
+                baseUrl: `http://127.0.0.1:${model.port}`,
+                apiKey: "ya43-dummy",
+                api: "anthropic-messages",
+                models: [{ id: "ya43-model", name: "ya43", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 32000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+              },
+            },
+          }),
+        );
+        const settings = settingsBefore ? (JSON.parse(settingsBefore) as Record<string, unknown>) : {};
+        writeFileSync(SETTINGS(), JSON.stringify({ ...settings, defaultProvider: "ya43", defaultModel: "ya43-model" }));
+        rmSync(script, { force: true });
+        await post({ type: "newChat", draft: { text: "", images: [] } });
+        await ready();
+        await post({ type: "send", text: "ALPHA", images: [] });
+        await idle();
+        await post({ type: "send", text: "BRAVO", images: [] });
+        await idle();
+        const second = (await turns()).find((turn) => turn.prompt?.text === "BRAVO");
+        assert.ok(second?.rewindTo, `rewindTo du deuxième tour (turnStart) : ${JSON.stringify(second)}`);
+        await post({ type: "send", text: "CHARLIE", images: [], edit: second.id });
+        await idle();
+        const requests = model.bodies.filter((body) => Array.isArray(body.tools) && body.tools.length > 0);
+        assert.equal(requests.length, 3, `trois requêtes de la boucle : ${requests.length}`);
+        const third = JSON.stringify(requests[2].messages);
+        assert.equal(third.split(REWOUND).length - 1, 1, `le texte fixe une fois dans la troisième requête : ${third}`);
+        assert.ok(third.indexOf(REWOUND) < third.indexOf("CHARLIE"), "le texte fixe avant le renvoi");
+        assert.ok(!third.includes("BRAVO"), `rien du tour abandonné : ${third}`);
+        const shown = await turns();
+        assert.deepEqual(shown.map((turn) => turn.prompt?.text), ["ALPHA", "CHARLIE"], "le tour modifié est remplacé");
+        assert.equal(shown.at(-1)?.state, "done");
+        assert.ok(!shown.some((turn) => textOf(turn).includes("[conversation-rewound]")), "le texte fixe n'est pas affiché");
+      } finally {
+        if (settingsBefore === null) rmSync(SETTINGS(), { force: true });
+        else writeFileSync(SETTINGS(), settingsBefore);
+        rmSync(models, { force: true });
+        await model.close();
+      }
     },
   ],
 ];

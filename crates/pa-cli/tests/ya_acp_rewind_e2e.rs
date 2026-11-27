@@ -5,18 +5,23 @@
 //! prompt, to send it again changed (`docs/tickets/43-retour-arriere.md`, §I.5). The real binary
 //! serves ACP over stdio on its own sandboxed daemon; the worker runs the real engine on the faux
 //! provider (`"engine": "faux"`) and a real kernel, as `ya_acp_steer_e2e.rs`. The conversation the
-//! model is sent is the session file's branch, from its last entry back to the root.
+//! model is sent is checked where it matters (ticket 43, §L): T7, T5b, T5c and T9 run on a loopback
+//! `anthropic-messages` model that keeps each request's body ([`ModelServer`]), so they read what
+//! the model received; the session file's branch (from its last entry back to the root) is what a
+//! resumed worker rebuilds, not what the running turn sends (the worker writes prefix rows that the
+//! model never gets, §L).
 //! T1. A prompt's `turnStart` carries `rewindTo`, the session's leaf before the prompt.
-//! T2, T7. A rewind then a prompt: the branch runs to the point, then the fixed text (D2), then
-//!     the new prompt; the abandoned turn stays in the file, off the branch.
+//! T7 (and T2). A rewind then a prompt: the model's request runs to the point, then the fixed
+//!     text (D2), then the new prompt; the abandoned turn stays in the file, off the branch.
 //! T3. Refused while a turn runs (`-32603`, Unharnessed's text); the turn runs to its end.
 //! T4. An entry off the branch: `-32602`, `data.details` "… is not in the conversation".
 //! T5. (a) A leaf before the prompt that is a custom row written outside a turn stays (Unharnessed
 //!     stays on `to`; `navigate_tree` would go to its parent). (b) The `[skills-changed]` row of
-//!     the abandoned turn comes back, once, before the new prompt. (c) The fixed text of an earlier
-//!     rewind in the abandoned turn, then two rewinds in a row: one fixed text.
+//!     the abandoned turn reaches the next request again, once. (c) Two rewinds in a row: one
+//!     fixed text in the next request.
 //! T8. The usage journal: `invalidation: {"cause": "rewind"}` on the next agent-loop call only.
-//! T9. A resume after a rewind and a prompt (daemon restarted): the branch resumed is the new one.
+//! T9. A resume after a rewind and a prompt (daemon restarted): the branch resumed is the new one,
+//!     and the next request has the fixed text and the announcement once (not doubled by the file).
 //! T11. A `[bash-done]` of a command started in the abandoned turn is delivered after the rewind
 //!     (K-a), on the new branch.
 //! T12. The first prompt of a session: `rewindTo` is the creation's last entry; a rewind there
@@ -24,11 +29,14 @@
 //!
 //! Listed in `docs/fork-changes.md`.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -244,6 +252,176 @@ fn shutdown_daemon(socket: &Path) {
     }
 }
 
+/// The model of the request-level tests (ticket 43, §L): a loopback `anthropic-messages` server
+/// that keeps each request's JSON body and answers each with one text block, `answer <n>`.
+struct ModelServer {
+    port: u16,
+    bodies: Arc<Mutex<Vec<Value>>>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ModelServer {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let port = listener.local_addr().expect("local addr").port();
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let bodies = Arc::clone(&bodies);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut socket, _)) => answer_request(&mut socket, &bodies),
+                        Err(_) => std::thread::sleep(Duration::from_millis(20)),
+                    }
+                }
+            })
+        };
+        Self {
+            port,
+            bodies,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    /// The bodies of the agent-loop requests (those with tools), in order.
+    fn requests(&self) -> Vec<Value> {
+        self.bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|body| {
+                body["tools"]
+                    .as_array()
+                    .is_some_and(|tools| !tools.is_empty())
+            })
+            .cloned()
+            .collect()
+    }
+}
+
+impl Drop for ModelServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// One request: its body kept, a text stream answered (the events of `server.py`).
+fn answer_request(socket: &mut TcpStream, bodies: &Mutex<Vec<Value>>) {
+    let _ = socket.set_nonblocking(false);
+    let _ = socket.set_read_timeout(Some(Duration::from_secs(10)));
+    let mut data = Vec::new();
+    let mut buffer = [0_u8; 65_536];
+    let head_end = loop {
+        if let Some(at) = data.windows(4).position(|window| window == b"\r\n\r\n") {
+            break at + 4;
+        }
+        match socket.read(&mut buffer) {
+            Ok(0) | Err(_) => return,
+            Ok(read) => data.extend_from_slice(&buffer[..read]),
+        }
+    };
+    let head = String::from_utf8_lossy(&data[..head_end]).into_owned();
+    let length = head
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+    while data.len() < head_end + length {
+        match socket.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => data.extend_from_slice(&buffer[..read]),
+        }
+    }
+    let body: Value = serde_json::from_slice(&data[head_end..]).unwrap_or(Value::Null);
+    let count = {
+        let mut bodies = bodies.lock().unwrap();
+        bodies.push(body);
+        bodies.len()
+    };
+    let usage = json!({ "input_tokens": 10, "output_tokens": 2 });
+    let events = [
+        (
+            "message_start",
+            json!({ "type": "message_start", "message": {
+            "id": format!("msg_ya43_{count}"), "type": "message", "role": "assistant",
+            "model": "ya43-model", "content": [], "stop_reason": null, "stop_sequence": null,
+            "usage": usage } }),
+        ),
+        (
+            "content_block_start",
+            json!({ "type": "content_block_start", "index": 0,
+            "content_block": { "type": "text", "text": "" } }),
+        ),
+        (
+            "content_block_delta",
+            json!({ "type": "content_block_delta", "index": 0,
+            "delta": { "type": "text_delta", "text": format!("answer {count}") } }),
+        ),
+        (
+            "content_block_stop",
+            json!({ "type": "content_block_stop", "index": 0 }),
+        ),
+        (
+            "message_delta",
+            json!({ "type": "message_delta",
+            "delta": { "stop_reason": "end_turn", "stop_sequence": null }, "usage": usage }),
+        ),
+        ("message_stop", json!({ "type": "message_stop" })),
+    ];
+    let payload: String = events
+        .iter()
+        .map(|(event, data)| format!("event: {event}\ndata: {data}\n\n"))
+        .collect();
+    let _ = write!(
+        socket,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+}
+
+/// The value without its `cache_control` marks (they follow the end of each request).
+fn without_cache_marks(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(key, _)| key.as_str() != "cache_control")
+                .map(|(key, item)| (key.clone(), without_cache_marks(item)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(without_cache_marks).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The messages of a request as JSON text, for counting what the model got.
+fn sent(body: &Value) -> String {
+    body["messages"].to_string()
+}
+
+/// The position of `needle` in what the request sent, for the order of its rows.
+fn at(body: &Value, needle: &str) -> usize {
+    sent(body)
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not sent: {}", sent(body)))
+}
+
+/// The announcement header of a `[skills-changed]` row (ticket 31, §3.2).
+const SKILLS_CHANGED: &str = "[skills-changed]";
+
 /// The ACP child on its own home and daemon socket (as `ya_acp_steer_e2e.rs`); every frame it
 /// wrote is kept, in order.
 struct Client {
@@ -260,6 +438,31 @@ impl Client {
     fn spawn(script: &Value) -> Client {
         let home = tempfile::TempDir::new().unwrap();
         std::fs::write(home.path().join("worker-script.json"), script.to_string()).unwrap();
+        Client::launch(Rc::new(home), &[])
+    }
+
+    /// On the loopback model `server` (`models.json`, settings): no faux script, the real engine
+    /// (a missing script file leaves the worker on it, `worker/config.rs:62-67`).
+    fn spawn_model(server: &ModelServer) -> Client {
+        let home = tempfile::TempDir::new().unwrap();
+        let agent_dir = home.path().join(".yusagent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let model = json!({
+            "id": "ya43-model", "name": "ya43", "reasoning": false, "input": ["text"],
+            "contextWindow": 200_000, "maxTokens": 32_000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        });
+        let providers = json!({ "providers": { "ya43": {
+            "baseUrl": format!("http://127.0.0.1:{}", server.port), "apiKey": "ya43-dummy",
+            "api": "anthropic-messages", "models": [model]
+        } } });
+        std::fs::write(agent_dir.join("models.json"), providers.to_string()).unwrap();
+        std::fs::write(
+            agent_dir.join("settings.json"),
+            json!({ "defaultProvider": "ya43", "defaultModel": "ya43-model", "permissions": "auto" })
+                .to_string(),
+        )
+        .unwrap();
         Client::launch(Rc::new(home), &[])
     }
 
@@ -420,6 +623,33 @@ impl Client {
         );
     }
 
+    /// A prompt answered `end_turn`: its `turnStart`.
+    fn ask_start(&mut self, session_id: &str, text: &str) -> Value {
+        let from = self.seen.len();
+        let id = self.prompt(session_id, text);
+        let at = self.wait_for(from, "the prompt's turnStart", |frame| {
+            origin_is(frame, "prompt")
+        });
+        let start = turn_start(&self.seen[at]).cloned().unwrap();
+        let answered = self.wait_response(id);
+        assert_eq!(
+            self.seen[answered]["result"]["stopReason"], "end_turn",
+            "the prompt {text:?} is answered: {}",
+            self.seen[answered]
+        );
+        start
+    }
+
+    /// A rewind to `start`'s `rewindTo`, accepted.
+    fn rewind_to(&mut self, session_id: &str, start: &Value) {
+        let to = start["rewindTo"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a rewindTo: {start}"))
+            .to_string();
+        let rewind = self.rewind(session_id, &to);
+        self.accepted(rewind);
+    }
+
     fn rewind(&mut self, session_id: &str, to: &str) -> u64 {
         self.request(REWIND, &json!({ "sessionId": session_id, "to": to }))
     }
@@ -508,39 +738,56 @@ fn a_prompt_turn_start_carries_the_leaf_before_it() {
     );
 }
 
-/// T2, T7. A rewind then a prompt continues from before the rewound prompt.
+/// T7 (and T2). A rewind then a prompt: the model's request runs to the point, then the fixed
+/// text, then the new prompt; nothing of the abandoned turn.
 #[test]
 fn a_rewind_then_a_prompt_continues_from_before_the_prompt() {
-    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
-        { "text": "one" },
-        { "text": "two" },
-        { "text": "three" },
-    ] }));
+    let server = ModelServer::start();
+    let mut client = Client::spawn_model(&server);
     let (session_id, file) = client.open_session();
-    client.ask(&session_id, "first");
-    let to = last_id(&file);
-    client.ask(&session_id, "second");
-    let rewind = client.rewind(&session_id, &to);
-    client.accepted(rewind);
-    client.ask(&session_id, "second, changed");
-    let custom = format!("custom:{REWOUND_TYPE}");
+    client.ask_start(&session_id, "ALPHA");
+    let bravo = client.ask_start(&session_id, "BRAVO");
+    client.rewind_to(&session_id, &bravo);
+    client.ask_start(&session_id, "CHARLIE");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3, "three agent-loop requests");
+    let (second, third) = (&requests[1], &requests[2]);
+    let point = second["messages"].as_array().expect("messages").len() - 1;
+    let before = |body: &Value| {
+        without_cache_marks(&Value::Array(
+            body["messages"].as_array().expect("messages")[..point].to_vec(),
+        ))
+    };
     assert_eq!(
-        conversation(&file),
-        vec![
-            "user:first",
-            "assistant:one",
-            custom.as_str(),
-            "user:second, changed",
-            "assistant:three",
-        ],
-        "the branch runs to the point, then the fixed text, then the new prompt"
+        before(third),
+        before(second),
+        "the request runs to the point as before"
     );
-    assert_eq!(rewound_texts(&file), vec![REWOUND.to_string()]);
+    assert_eq!(
+        sent(third).matches(REWOUND).count(),
+        1,
+        "the fixed text, once: {}",
+        sent(third)
+    );
+    assert!(
+        at(third, REWOUND) < at(third, "CHARLIE"),
+        "the fixed text before the new prompt"
+    );
+    assert!(
+        !sent(third).contains("BRAVO"),
+        "nothing of the abandoned turn: {}",
+        sent(third)
+    );
+    assert_eq!(
+        rewound_texts(&file),
+        vec![REWOUND.to_string()],
+        "one row in the file"
+    );
     assert!(
         entries(&file)
             .iter()
             .filter_map(shown)
-            .any(|row| row == "user:second"),
+            .any(|row| row == "user:BRAVO"),
         "the abandoned turn stays in the file, off the branch"
     );
 }
@@ -635,19 +882,36 @@ fn a_custom_row_before_the_prompt_stays_after_the_rewind() {
     );
 }
 
-/// T5 (b). The `[skills-changed]` row of the abandoned turn comes back once, before the prompt.
+/// T5 (b). The `[skills-changed]` row of the abandoned turn reaches the next request again, once,
+/// before the fixed text and the new prompt.
 #[test]
 fn a_skills_announcement_of_the_abandoned_turn_comes_back_once() {
-    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
-        { "text": "one" },
-        { "text": "two" },
-        { "text": "three" },
-    ] }));
+    let server = ModelServer::start();
+    let mut client = Client::spawn_model(&server);
     let (session_id, file) = client.open_session();
-    client.ask(&session_id, "first");
-    let to = last_id(&file);
+    client.ask_start(&session_id, "ALPHA");
     write_skill(client.home.path());
-    client.ask(&session_id, "second");
+    let bravo = client.ask_start(&session_id, "BRAVO");
+    assert_eq!(
+        sent(&server.requests()[1]).matches(SKILLS_CHANGED).count(),
+        1,
+        "precondition: the skill is announced with the second prompt"
+    );
+    client.rewind_to(&session_id, &bravo);
+    client.ask_start(&session_id, "CHARLIE");
+    let third = &server.requests()[2];
+    assert_eq!(
+        sent(third).matches(SKILLS_CHANGED).count(),
+        1,
+        "the announcement reaches the next request again, once: {}",
+        sent(third)
+    );
+    assert_eq!(sent(third).matches(REWOUND).count(), 1, "{}", sent(third));
+    assert!(
+        at(third, SKILLS_CHANGED) < at(third, REWOUND) && at(third, REWOUND) < at(third, "CHARLIE"),
+        "the announcement, the fixed text, then the new prompt: {}",
+        sent(third)
+    );
     let resources = format!("custom:{RESOURCES_TYPE}");
     assert_eq!(
         conversation(&file)
@@ -655,61 +919,42 @@ fn a_skills_announcement_of_the_abandoned_turn_comes_back_once() {
             .filter(|row| **row == resources)
             .count(),
         1,
-        "the skill is announced with the second prompt"
-    );
-    let rewind = client.rewind(&session_id, &to);
-    client.accepted(rewind);
-    client.ask(&session_id, "second, changed");
-    let custom = format!("custom:{REWOUND_TYPE}");
-    assert_eq!(
-        conversation(&file),
-        vec![
-            "user:first",
-            "assistant:one",
-            resources.as_str(),
-            custom.as_str(),
-            "user:second, changed",
-            "assistant:three",
-        ],
-        "the announcement comes back once, then the fixed text"
+        "one announcement row on the branch"
     );
 }
 
-/// T5 (c). The fixed text of an earlier rewind in the abandoned turn, then two rewinds in a row:
-/// one fixed text before the prompt.
+/// T5 (c). Two rewinds in a row, after a turn that already had a fixed text: one fixed text in
+/// the next request.
 #[test]
 fn rewinds_in_a_row_leave_one_fixed_text() {
-    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
-        { "text": "one" },
-        { "text": "two" },
-        { "text": "three" },
-        { "text": "four" },
-    ] }));
+    let server = ModelServer::start();
+    let mut client = Client::spawn_model(&server);
     let (session_id, file) = client.open_session();
-    client.ask(&session_id, "first");
-    let to = last_id(&file);
-    client.ask(&session_id, "second");
-    let rewind = client.rewind(&session_id, &to);
-    client.accepted(rewind);
-    client.ask(&session_id, "second, again");
-    assert_eq!(rewound_texts(&file).len(), 1, "{:?}", conversation(&file));
-    for _ in 0..2 {
-        let rewind = client.rewind(&session_id, &to);
-        client.accepted(rewind);
-    }
-    client.ask(&session_id, "second, once more");
-    let custom = format!("custom:{REWOUND_TYPE}");
+    client.ask_start(&session_id, "ALPHA");
+    let bravo = client.ask_start(&session_id, "BRAVO");
+    client.rewind_to(&session_id, &bravo);
+    let charlie = client.ask_start(&session_id, "CHARLIE");
     assert_eq!(
-        conversation(&file),
-        vec![
-            "user:first",
-            "assistant:one",
-            custom.as_str(),
-            "user:second, once more",
-            "assistant:four",
-        ],
-        "one fixed text"
+        sent(&server.requests()[2]).matches(REWOUND).count(),
+        1,
+        "the first rewind's fixed text reaches its request"
     );
+    client.rewind_to(&session_id, &charlie);
+    client.rewind_to(&session_id, &charlie);
+    client.ask_start(&session_id, "DELTA");
+    let fourth = &server.requests()[3];
+    assert_eq!(
+        sent(fourth).matches(REWOUND).count(),
+        1,
+        "one fixed text: {}",
+        sent(fourth)
+    );
+    assert!(
+        !sent(fourth).contains("CHARLIE") && !sent(fourth).contains("BRAVO"),
+        "nothing of the abandoned turns: {}",
+        sent(fourth)
+    );
+    assert_eq!(rewound_texts(&file).len(), 1, "{:?}", conversation(&file));
 }
 
 /// T8. The usage journal: `invalidation: {"cause": "rewind"}` on the next agent-loop call only.
@@ -742,41 +987,50 @@ fn the_call_after_a_rewind_journals_the_invalidation() {
     assert!(mains[3].get("invalidation").is_none(), "{lines:?}");
 }
 
-/// T9. A resume after a rewind and a prompt, the daemon restarted: the branch is the new one.
+/// T9. A resume after a rewind and a prompt, the daemon restarted: the branch resumed is the new
+/// one, and the next request has the fixed text and the announcement once (the resumed worker
+/// rebuilds them from the file; the mailbox does not add them again).
 #[test]
 fn a_resume_after_a_rewind_keeps_the_new_branch() {
-    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
-        { "text": "one" },
-        { "text": "two" },
-        { "text": "three" },
-    ] }));
+    let server = ModelServer::start();
+    let mut client = Client::spawn_model(&server);
     let (session_id, file) = client.open_session();
-    client.ask(&session_id, "first");
-    let to = last_id(&file);
-    client.ask(&session_id, "second");
-    let rewind = client.rewind(&session_id, &to);
-    client.accepted(rewind);
-    client.ask(&session_id, "second, changed");
+    client.ask_start(&session_id, "ALPHA");
+    write_skill(client.home.path());
+    let bravo = client.ask_start(&session_id, "BRAVO");
+    client.rewind_to(&session_id, &bravo);
+    client.ask_start(&session_id, "CHARLIE");
+    let third = &server.requests()[2];
+    assert_eq!(
+        (
+            sent(third).matches(REWOUND).count(),
+            sent(third).matches(SKILLS_CHANGED).count()
+        ),
+        (1, 1),
+        "before the restart, the fixed text and the announcement once: {}",
+        sent(third)
+    );
     client.close();
     shutdown_daemon(&client.socket);
     let mut resumed = client.resume(&file);
     let (resumed_id, resumed_file) = resumed.open_session();
     assert_eq!(resumed_file, file, "the same conversation");
-    // A new worker reads the script from its start.
-    resumed.ask(&resumed_id, "after");
-    let rows = conversation(&file);
-    let changed = rows
-        .iter()
-        .position(|row| row == "user:second, changed")
-        .unwrap_or_else(|| panic!("the new prompt on the branch: {rows:?}"));
-    assert!(
-        !rows.iter().any(|row| row == "user:second"),
-        "the abandoned prompt is off the branch: {rows:?}"
-    );
+    resumed.ask_start(&resumed_id, "ECHO");
+    let requests = server.requests();
+    let fourth = requests.last().expect("the resumed request");
     assert_eq!(
-        rows.get(changed + 2).map(String::as_str),
-        Some("user:after"),
-        "the resumed prompt follows the new branch: {rows:?}"
+        (
+            sent(fourth).matches(REWOUND).count(),
+            sent(fourth).matches(SKILLS_CHANGED).count()
+        ),
+        (1, 1),
+        "after the restart, once each, not doubled: {}",
+        sent(fourth)
+    );
+    assert!(
+        at(fourth, "CHARLIE") < at(fourth, "ECHO") && !sent(fourth).contains("BRAVO"),
+        "the resumed prompt follows the new branch: {}",
+        sent(fourth)
     );
 }
 
