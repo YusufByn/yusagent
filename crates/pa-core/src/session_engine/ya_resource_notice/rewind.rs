@@ -74,12 +74,9 @@ mod tests {
                 ..Default::default()
             },
             stream_fn: Some(provider.stream_fn()),
-            // The engine's view of custom rows (user text turns), as `engine.rs` wires it; the
-            // agent's default conversion drops them.
-            convert_to_llm: Some(Arc::new(|messages: Vec<pa_agent::types::AgentMessage>| {
-                let converted = crate::session_engine::messages::convert_to_llm(&messages);
-                pa_agent::agent_loop::AgentLoopConfig::default_convert_to_llm()(converted)
-            })),
+            // The engine's view of custom rows (user text turns); the agent's default conversion
+            // drops them.
+            convert_to_llm: Some(crate::session_engine::messages::engine_convert_to_llm()),
             ..Default::default()
         });
         let tmp = tempfile::tempdir().unwrap();
