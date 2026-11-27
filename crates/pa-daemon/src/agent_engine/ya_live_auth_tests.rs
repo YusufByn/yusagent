@@ -1,5 +1,5 @@
 //! yusAgent (YA-02, YA-10, ticket 42): the request auth of a live session, re-resolved before each
-//! provider call (`docs/tickets/42-jeton-session-vivante.md`, §G, tests 9 to 14).
+//! provider call (`docs/tickets/42-jeton-session-vivante.md`, §G, tests 9 to 14; §J, test 16).
 //!
 //! No network: the `ChatGPT` refresh runs `pa-ai`'s own code (`refresh_openai_codex_token`) over a
 //! scripted token endpoint (`ProviderOAuth::with_http`), registered for the test's agent
@@ -105,6 +105,16 @@ fn chatgpt_model() -> pa_types::ai::Model {
         .next()
         .cloned()
         .expect("a compiled ChatGPT model")
+}
+
+/// The model the agent loop hands the stream function (the slot's model is what the call serves).
+fn agent_model() -> pa_agent::types::Model {
+    serde_json::from_value(json!({
+        "id": "ya42",
+        "api": "openai-codex-responses",
+        "provider": "openai-codex",
+    }))
+    .unwrap()
 }
 
 /// `auth.json` with an expired `ChatGPT` credential whose access token is `access`.
@@ -255,12 +265,7 @@ fn a_stop_during_a_refresh_settles_the_call_at_once() {
         signal: controller.signal(),
         ..StreamRequestOptions::default()
     };
-    let model: pa_agent::types::Model = serde_json::from_value(json!({
-        "id": "ya42",
-        "api": "openai-codex-responses",
-        "provider": "openai-codex",
-    }))
-    .unwrap();
+    let model = agent_model();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -285,6 +290,71 @@ fn a_stop_during_a_refresh_settles_the_call_at_once() {
         "the call settles at the Stop, not after the refresh: {elapsed:?}"
     );
     assert!(failed, "the stopped call fails");
+}
+
+/// Test 16: a Stop during a refresh lets the refresh finish and release the cross-process lock;
+/// the next call serves the refreshed token without a second exchange.
+#[test]
+fn a_stopped_refresh_still_serves_the_next_call() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let agent_dir = dir.path().join("agent");
+    write_expired_chatgpt(&agent_dir, OLD);
+    let exchanges = token_endpoint(&agent_dir, 200, Duration::from_secs(1), None);
+    let engine = engine_serving(dir.path(), None, OLD);
+    let sent: Arc<std::sync::Mutex<Vec<Option<String>>>> = Arc::default();
+    let inner: StreamFn = {
+        let sent = Arc::clone(&sent);
+        let engine = Arc::clone(&engine);
+        Arc::new(move |_model, _context, _options| {
+            sent.lock().unwrap().push(slot_key(&engine));
+            Box::pin(async move { Err(anyhow::anyhow!("the provider request")) })
+        })
+    };
+    let stream = stream_fn(&engine, inner);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let controller = pa_agent::abort::AbortController::new();
+        let stopped = StreamRequestOptions {
+            signal: controller.signal(),
+            ..StreamRequestOptions::default()
+        };
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            controller.abort();
+        });
+        let _ = stream(agent_model(), LlmContext::default(), stopped).await;
+        // The refresh runs on after the Stop: wait for the stored token (at most 5 s).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while stored_access(&agent_dir) != json!(FRESH) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let _ = stream(
+            agent_model(),
+            LlmContext::default(),
+            StreamRequestOptions::default(),
+        )
+        .await;
+    });
+    runtime.shutdown_background();
+    assert_eq!(
+        *sent.lock().unwrap(),
+        [Some(FRESH.to_string())],
+        "the stopped call sends nothing, the next call serves the refreshed token"
+    );
+    assert_eq!(exchanges.load(Ordering::SeqCst), 1, "one token exchange");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(agent_dir.join("auth.json.ya-refresh.openai-codex.lock"))
+        .unwrap();
+    assert!(
+        pa_core::platform::try_lock_exclusive(&lock).is_ok(),
+        "the refresh released the cross-process lock"
+    );
 }
 
 /// Test 13 (child): one worker's refresh, in its own process (`CHILD_AGENT_DIR`, `CHILD_LOG`);

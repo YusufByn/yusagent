@@ -464,3 +464,32 @@ Runs :
 - Commande prévue : un script `bench/tools/capture/ya42_cost.py`. Il lance le binaire `main` puis le binaire de la branche en ACP (pas en `-p`, non couvert), contre le serveur local du banc, avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short PI_REQUEST_TIMING=1`. Il fait N = 200 requêtes par binaire, avec un identifiant `api_key` rangé dans un `auth.json` factice, et rend médiane et p95 de `phaseMs` pour chacun, puis la différence.
 - **Règle** : différence des médianes < 10 ms, on garde la résolution à chaque appel.
 - Script lancé par Claude Code sur les deux binaires (règle 13), sortie au ticket.
+
+## J. Réponses de Yusuf avant le push 2 (27/11/2026)
+
+1. **Lignes upstream +6 / −1 validées** : `agent_engine.rs:81-82`, `lifecycle.rs:1013-1014`, `model.rs:457`.
+2. **Stop** : la proposition du §I.4. Résolution synchrone sans attente dans le cas courant ; un vrai rafraîchissement passe sur un fil à part. Deux ajouts :
+   - **test 16** (`a_stopped_refresh_still_serves_the_next_call`) : un Stop pendant un rafraîchissement laisse le fil finir et libérer le verrou, et l'appel suivant envoie le nouveau jeton sans second échange. Le cas est nouveau : il part seul au push 2a, sur le squelette, pour être vu rouge sur son assertion avant le code (push 2b) ;
+   - **limite** (§J.1).
+3. **Mesure du coût** par `bench/tools/capture/ya42_cost.py`, à deux conditions :
+   - chaque requête mesurée passe par la résolution : pas de clé imposée à la création, une entrée dans `auth.json` pour le fournisseur utilisé, et une preuve ;
+   - lancements de `main` et de la branche alternés.
+   - Règle inchangée : surcoût médian < 10 ms. Médiane, p95 et différence, avec la commande au ticket.
+
+### J.1 Limite : un Stop pendant un vrai rafraîchissement
+
+- Pendant un vrai rafraîchissement (une fois par durée de vie du jeton, et seulement si l'identifiant rangé est un OAuth expiré, ou qui expire dans les 30 s), l'appel au flux attend le fil du rafraîchissement.
+- Si un Stop tombe à ce moment, la boucle d'agent abandonne l'appel (`crates/pa-agent/src/agent_loop/response.rs:151`) :
+  - la requête reste « commencée » sans fin dans le registre `semantic_edges` (`crates/pa-core/src/session_engine/semantic_edges/stream.rs:21-45`) ;
+  - la ligne de timing de cette requête ne part pas (`crates/pa-core/src/session_engine/request_timing.rs:343-403`).
+- Le registre n'est lu par rien dans le produit (`semantic_edges.rs:10-12`), et la ligne de timing n'existe qu'avec `PI_REQUEST_TIMING` ou le réglage.
+- Upstream corrige ce cas par des gardes dans ces deux fichiers, dans `a05bcb695` (« settle requests dropped mid-resolution », +77 / −10 hors tests). Non repris.
+- Dans le cas courant (pas de rafraîchissement), la résolution est synchrone et sans attente : la fenêtre n'existe pas.
+
+### J.2 Preuve que chaque requête mesurée passe par la résolution
+
+- Ni un compteur visible seulement en test, qui n'existe pas dans le binaire mesuré, ni le nombre de lectures d'`auth.json`, qui demanderait `fs_usage` ou `dtruss` en root.
+- **Preuve retenue** : avant chaque requête, le script réécrit `auth.json` (dossier de mesure, clé factice) avec une clé neuve, `ya42-<binaire>-<bloc>-<n>`, et relève la clé que le serveur reçoit pour cette requête (en-tête `x-api-key`, format `anthropic-messages`).
+  - Sur la branche, chaque requête doit porter la clé écrite juste avant elle. Une requête qui ne serait pas passée par la résolution porterait la clé précédente.
+  - Sur `main`, la clé reste celle de la construction de la session (H1), ce qui montre la différence.
+- La réécriture fait manquer le cache de lecture d'`auth.json` à chaque appel. La mesure prend donc le cas le plus lent de la lecture, ce qui est prudent.
