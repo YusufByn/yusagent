@@ -493,3 +493,27 @@ Runs :
   - Sur la branche, chaque requête doit porter la clé écrite juste avant elle. Une requête qui ne serait pas passée par la résolution porterait la clé précédente.
   - Sur `main`, la clé reste celle de la construction de la session (H1), ce qui montre la différence.
 - La réécriture fait manquer le cache de lecture d'`auth.json` à chaque appel. La mesure prend donc le cas le plus lent de la lecture, ce qui est prudent.
+
+## K. Push 2a et push 2b (27/11/2026)
+
+### K.1 Push 2a (`f102b9378`) : test 16 seul, sur le squelette
+
+Run `ci` 45971061847 :
+- **test 16 rouge sur son assertion** (shard 3/8, `ya_live_auth_tests.rs`) : « the stopped call sends nothing, the next call serves the refreshed token », `left: [Some("tok-ya42-old"), Some("tok-ya42-old")]`, `right: [Some("***")]` (jeton factice masqué par GitHub) ;
+- les 6 rouges du push 1 inchangés (1a, 1b, 15 au shard 4/8 ; 9, 12, 13 au shard 3/8) ;
+- **shard 2/8** : un échec, `request_timing::payload::tests::concurrent_producers_drop_at_the_reserve_when_the_queue_is_full`, « no storm body may land: every storm producer dropped at the reserve » à `tests.rs:626`.
+  - C'est le test listé comme instable dans `docs/fork-changes.md` (« Instabilité probable : `request_timing::payload` »), avec le même symptôme.
+  - **Pas de relance** : le run du push 2a est rouge par construction, et le push 2b relance tout. Même cas que la PR #92. Ligne ajoutée au tableau de `fork-changes.md`.
+
+### K.2 Push 2b : le code
+
+- `ya_live_auth.rs` : `refresh_slot`, `resolve_into_slot`, `refresh_provider`, `refresh_lock`, `auth_storage`. Forme du §I.3 et du §J.
+- `model.rs:457-458` : la couture validée (+2 / −1).
+- `docs/fork-changes.md` : section du ticket 42 ; fragment `.changes/ya-42-jeton-session-vivante.md`.
+- `bench/tools/capture/ya42_cost.py` : outil de mesure (§J.2).
+
+**Écarts au §I.3, signalés** :
+1. **Chemin synchrone et `reload_lock` déjà pris.** Au lieu d'abandonner la résolution (l'appel serait parti avec l'ancien jeton), l'appel passe par le chemin asynchrone, qui attend le verrou sur un fil à part, en course avec le Stop. C'est le cas d'un appel qui suit de près un rafraîchissement interrompu par un Stop (test 16), ou un `Reload` en cours.
+2. **`refresh_provider` lit `auth.json` pour tout fournisseur** avant de regarder s'il est rafraîchissable. Une lecture de plus par appel pour un fournisseur à clé, pour que la mesure (fournisseur à clé `capture`) couvre le même chemin que ChatGPT.
+3. **Test 16** : après le second appel, le test attend jusqu'à 2 s que le verrou de fichier soit libre. Le fil du rafraîchissement le lâche juste après l'écriture de l'emplacement.
+4. **Verrou de fichier** : `std::fs::File::try_lock` plutôt que `pa_core::platform::try_lock_exclusive`. Il faut distinguer « déjà pris » (attendre) d'« impossible » (système de fichiers sans verrou : on continue sans verrou, comme aujourd'hui), et la fonction de `pa-core` confond les deux dans une `io::Error`.
