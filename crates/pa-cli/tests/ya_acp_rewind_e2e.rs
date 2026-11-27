@@ -820,8 +820,9 @@ fn a_bash_notice_of_the_abandoned_turn_comes_after_the_rewind() {
 }
 
 /// T12. The first prompt of a session: its `rewindTo` is the last entry the worker writes at the
-/// creation (`service_tier_change`, `crates/pa-daemon/src/worker/create.rs:838-853`), the parent of
-/// the prompt's row; a rewind there starts the conversation again, with the fixed text only.
+/// creation of a session with a file (`session_state` `active`, after the creation prefix,
+/// `crates/pa-daemon/src/worker/create.rs:444-452`), the parent of the prompt's row; a rewind there
+/// starts the conversation again, with the fixed text only.
 #[test]
 fn a_rewind_to_before_the_first_prompt_starts_the_conversation_again() {
     let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
@@ -852,7 +853,7 @@ fn a_rewind_to_before_the_first_prompt_starts_the_conversation_again() {
     );
     assert_eq!(
         parent_type,
-        Some(json!("service_tier_change")),
+        Some(json!("session_state")),
         "the last entry of the creation"
     );
     let rewind = client.rewind(&session_id, &parent);
