@@ -994,6 +994,33 @@ Ce que le contrôle manuel ne peut pas voir : la requête elle-même. Le texte f
 - **`.vsix` du push 9b** : `install-vsix.sh 46010873742` lancé dans un dossier d'extensions isolé (règle 13), sortie au §M.3 ; `extension.js` installé sert `_yus/session/rewind`.
 - **Contrôle manuel** : étape 10 (goal) ajoutée au §M.3, et préparation sur les runs du push 9b.
 
+## O. Contrôle manuel de Yusuf et merge de la PR #97 (27/11/2026)
+
+**Contrôle manuel** (§M.3), sur le binaire `84fecf29d` (run `ya-build-macos-arm64` 46010862163) et le `.vsix` du run `ya-extension` 46010873742 :
+- **étapes 1 à 8 et 10 : conformes** ;
+- **étape 6** : faite avec un calcul long (`sum(i*i for i in range(400_000_000))`), car le modèle a refusé deux fois une cellule bloquante `time.sleep(60)` / `time.sleep(90)` (« Je ne peux pas bloquer le tour ») ;
+- **étape 8** : un second refus juste après la fermeture du TUI, puis le retour passe. C'est le délai de détachement d'un client, comme pour C12 (ticket 28) ;
+- **étape 9 sautée** : `/refine` est désactivé dans les réglages de Yusuf (« Harness refinements are disabled in /settings ») ; le cas est couvert par T5a (`ya_acp_rewind_e2e`) et I1 (`ya43_control.py`).
+
+Compte rendu en commentaire de la PR : https://github.com/YusufByn/yusagent/pull/97#issuecomment-7221537488.
+
+**CI avant le merge** :
+- sur `e1b6c4d34` (commit de doc), `runtime suite (python 3.11)` a échoué une fois sur `test_harness.HarnessStateTest.test_concurrent_subprocess_creates_all_land` (`prime-agent-runtime/test/test_harness.py:555`, verrou de l'état du harness non obtenu entre sous-processus) ;
+- relance unique du job par Yusuf, en exception à la règle (option 1), notée en commentaire de la PR avec le journal (https://github.com/YusufByn/yusagent/pull/97#issuecomment-7220753143) ;
+- relance verte (job 140561850267), et 17/17 checks requis verts (https://github.com/YusufByn/yusagent/pull/97#issuecomment-7220790528).
+
+**Merge** : PR #97 mergée le 27/11/2026 à 15:01:38 UTC, avec `--match-head-commit e1b6c4d347ffca7e8a69d0c21beb4040b1d118d9`. Le premier essai a reçu une erreur GraphQL de GitHub (`E2E3:C8AC8:142083D:1E2CE52:6B099B40`) sans effet ; le second a mergé. **`main` = `c6f0b82785618f0e92e7fcc731e24d3bb8ef0749`.**
+
+**Build macOS de `main`** : run `ya-build-macos-arm64` **46021226712**, lancé à la main (`workflow_dispatch`) sur `c6f0b8278`.
+
+**Tickets à part ouverts par ce ticket** :
+1. **Le modèle refuse une cellule bloquante** (`time.sleep(60)`, « Je ne peux pas bloquer le tour ») : observation du contrôle manuel. Constat à faire : texte du prompt (règles du kernel sur les attentes longues) ou garde du runtime qui rejette les longs `sleep` (upstream `3085b841d` « async L1: reject long sleeps and direct process calls before a cell runs », et `b0c4359df` « sleep re-allowed » dans `upstream/main`). Non mesuré.
+2. **`test_concurrent_subprocess_creates_all_land`** (test upstream du runtime) : un échec sur onze runs de la branche, même code vert avant et après. À surveiller ; s'il échoue de nouveau, candidat à « Instabilité probable » de `docs/fork-changes.md`.
+3. **`rewindTo` au rejeu de `session/load`** (Q-I4) : après « Relancer » ou une reprise depuis l'historique, seuls les nouveaux messages sont modifiables.
+4. **`ab_stats.py:339`** : `.get("cause")` échoue sur un tableau d'invalidations (forme possible depuis le ticket 24), défaut existant du banc.
+
+**Suite du ticket 43** : PR 3 (instantanés du workspace dans un dépôt git shadow, YA-18), puis PR 4 (panneau du kernel), selon les décisions du §H.
+
 ## Annexe : mesure préliminaire, git seul
 
 Script : `docs/tickets/43-retour-arriere/shadow_git_mesure.sh`.
