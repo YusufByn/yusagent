@@ -78,6 +78,8 @@ mod session_engine_impl;
 pub(crate) mod ya_frozen_tools;
 // yusAgent (YA-19, ticket 39): a message into the running agent run.
 mod ya_steer;
+// yusAgent (YA-02, YA-10, ticket 42): request auth re-resolved before each provider call.
+mod ya_live_auth;
 
 mod turn;
 

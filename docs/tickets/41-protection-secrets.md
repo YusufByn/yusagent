@@ -1033,6 +1033,48 @@ Choix faits pour tenir ces conditions :
 - **Sans mécanisme** (Linux avant la PR C) : seuls le kernel et `exec_command` refusent de démarrer (réponse 8, « refus de lancer le kernel »). Les autres lancements passent tels quels. Sans kernel, aucun code du modèle ne tourne.
 - **Contrôles de cycle de vie** : lancés hors de `cargo`, la variable de `.cargo/config.toml` ne leur parvient pas. Ils posent donc `PRIME_AGENT_SECRET_GUARD=off` dans l'environnement qu'ils donnent au binaire, une ligne par fichier, sans toucher `ci.yml`.
 
+### V.3 Push 2 : relevé de la CI et lignes upstream finales (26/11/2026)
+
+Commits : `887d0ffef` (push 2), `41afec829` (push 2 bis, clippy), `27fbd7329` (fragment de changelog `.changes/ya-41-macos.md`). Les commits de doc `5aaa62639` (§V) et `6faedfd4e` (§J) sont partis avec le push 2.
+
+| Tête | Run | Résultat |
+|---|---|---|
+| `5aaa62639` (avec `887d0ffef`) | `ci` 45886707680, `secret guard` 45886707608 | annulés par le push suivant ; build macOS 45886701533 vert |
+| `6faedfd4e` | `ci` 45886819633 | tout passe sauf « check + clippy (workspace) » et « windows cross-check + clippy » : `crates/pa-types/src/platform/ya_guard.rs:280`, `:292`, `:306`, `:307` (`format_push_string`, corrigé par `writeln!` en `41afec829`) |
+| `6faedfd4e` | `secret guard (macos-15)` 45886819539 | vert : les tests de l'enveloppe passent sous macOS |
+| `41afec829` | `ci` 45888568757, `secret guard` 45888568761 | verts ; « Changelog fragment » 45888568770 en échec (aucun fragment, ajouté en `27fbd7329`) |
+| `27fbd7329` | `ci` 45890472974, `secret guard` 45890475324, `ya-extension` 45890473111, « Changelog fragment » 45890473074 | tous verts ; build macOS 45890484595 vert |
+
+**Lignes upstream** (fichiers venus d'upstream ; `git diff --numstat` restreint aux fichiers de `upstream/main`, plus `crates/pa-core/src/workspace_snapshot/git.rs`, venu d'upstream par #3157, `172bd84f5`, et absent depuis de `upstream/main` à `6e4b69da2`, +1 −1) :
+
+| Lot | Commit | Lignes |
+|---|---|---|
+| Push 1 : déclaration du module | `02d974186` (`crates/pa-types/src/platform/mod.rs`) | +2 |
+| Marqueurs Windows (§V.2, 1) | `911f1bed0` | +6, dans 5 fichiers |
+| Push 2 | `887d0ffef` | +51, −49, dans 40 fichiers (dont `mod.rs` +1 −1 : renommage du module en `ya_guard`) |
+| Push 2 bis, fragment | `41afec829`, `27fbd7329` | 0 |
+| **PR A, depuis `main` à `f8c3fa34d`** | | **+58, −48** |
+
+Conditions du §V.2, 2 : 51 lignes ajoutées au push 2, pour 52 au plus. Aucun fichier upstream du push 2 n'est hors du §U.2 : les sept `scripts/check_*.py` relèvent de la ligne « contrôles qui filtrent l'environnement » et `mod.rs` y figure au titre du push 1.
+
+### V.4 Contrôle manuel de Yusuf et merge (27/11/2026)
+
+**Contrôle manuel** fait par Yusuf le 27/11/2026, de 08h50 à 08h55, avec le binaire du run 45890484595 (`0.10.2-continuous.27fbd7329…`), dans l'extension, depuis un dépôt jetable :
+
+| Cellule | Attendu | Relevé |
+|---|---|---|
+| 1. `open()` sur `~/.yusagent/auth.json` | `PermissionError` | `PermissionError: [Errno 1] Operation not permitted` |
+| 2. `bash("cat ~/.yusagent/auth.json")` | code non nul, `Operation not permitted` | code 1, « cat: …/auth.json: Operation not permitted » |
+| 3. `bash("git status; ls; ps aux \| head -3")` | code 0 | code 0, `git status` propre, `a.txt`, `ps` fonctionne |
+| 4. Tour normal avec le modèle | réponse | tours normaux |
+| 5. Appel MCP avec jeton (facultatif) | réussi par le relais | sautée : aucun MCP connecté |
+
+Remise en état faite. `yusagent.binaryPath` reste sur le binaire de la branche jusqu'au build de `main`.
+
+**Merge** : PR #95 mergée le 27/11/2026 à 07:56:26 UTC (`gh pr merge 95 --merge --match-head-commit 27fbd73290806c14104b102c7b0cb16899f16254`). Avant le merge : tête inchangée, 16 checks requis en succès (`gh pr checks 95 --required`). `main` = `51bef376cf9a5b72433d3c03ea51f1470739c986`. Build macOS de `main` : run 45961939645.
+
+**Ruleset** : Yusuf rend `secret guard (macos-15)` requis sur `main` lui-même (contexte `secret guard (macos-15)`, app GitHub Actions, `integration_id` 15368). Le saut du job sur une PR en brouillon ne laisse rien passer, puisqu'une PR en brouillon ne peut pas être mergée.
+
 ## Annexe : mesures macOS
 
 Commande : `python3 -I docs/tickets/41-protection-secrets/mesure_macos.py`. Elle travaille dans un dossier temporaire avec des secrets factices, sans lire `~/.yusagent` ni appeler de modèle. Sortie du lancement par Claude Code (26/11/2026, relancé après l'ajout des sorties de sandbox du §R.2, 48 essais) :

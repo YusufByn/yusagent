@@ -454,7 +454,8 @@ impl AgentSessionEngine {
         Option<std::collections::BTreeMap<String, String>>,
         bool,
     ) {
-        let auth = pa_core::auth::AuthStorage::create(&self.config.agent_dir);
+        // yusAgent (YA-02, YA-10, ticket 42): the OAuth integration of the refresh (`ya_live_auth`).
+        let auth = super::ya_live_auth::auth_storage(&self.config.agent_dir);
         let store_healthy = auth.load_error().is_none();
         let mut registry =
             pa_core::models::ModelRegistry::create(auth, self.config.agent_dir.join("models.json"));

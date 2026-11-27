@@ -10,3 +10,6 @@ fmt-*.log
 tests-*.log
 test-compile-*.log
 
+
+# macOS
+.DS_Store
