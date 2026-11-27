@@ -1,60 +1,145 @@
 //! yusAgent (YA-18, ticket 43): `_yus/session/rewind { sessionId, to }`, the conversation back to
 //! where it stood before a prompt (its turn's `turnStart.rewindTo`), to send that prompt again,
-//! changed (`docs/tickets/43-retour-arriere.md`, §I). Unharnessed's method
-//! (`crates/uh-daemon/src/acp/rewind.rs`) under the yusAgent prefix (ticket 32).
+//! changed (`docs/tickets/43-retour-arriere.md`, §I.3, §I.9). Unharnessed's method
+//! (`crates/uh-daemon/src/acp/rewind.rs`) under the yusAgent prefix (ticket 32). It answers `{}`,
+//! or is refused:
+//! - an unknown session: `-32603`, "Unknown ACP session: {id}" (Unharnessed's text);
+//! - a turn running (a prompt of this client, a turn the agent started): `-32603`, Unharnessed's
+//!   text; the worker refuses too while a turn or a compaction runs;
+//! - another client that answers this session's permission requests attached (answer 9, the C12
+//!   check of `ya_history`): `-32603`, the text validated by Yusuf (Q-I3);
+//! - `to` off the branch: `-32602`, `data.details` "{to} is not in the conversation".
 //!
-//! Push 1 (skeleton): the method answers as an unserved one; the tests of
-//! `crates/pa-cli/tests/ya_acp_rewind_e2e.rs` are red on their assertions.
-//!
-//! Listed in `docs/fork-changes.md`.
+//! The worker moves the leaf (`crate::ya_permissions::rewind`); the fixed text and the
+//! invalidation ride the next turn. Listed in `docs/fork-changes.md`.
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use pa_types::daemon::DaemonCommand;
+use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
 
 use super::super::daemon::{DaemonAcpState, DaemonLink};
 use super::super::jsonrpc;
 use super::super::producer::FrameSink;
+use crate::ya_permissions::rewind::{NOT_IN_CONVERSATION, WORKING};
+use crate::ya_permissions::COMMAND;
 
 /// The method's name.
 pub(crate) const METHOD: &str = "_yus/session/rewind";
 
-/// Serves one `_yus/session/rewind` request.
-// Push 1: nothing awaited yet (the worker's action comes with push 2).
-#[allow(clippy::unused_async)]
-pub(crate) async fn serve(
-    id: &Value,
-    _params: &Value,
-    _link: &Arc<DaemonLink>,
-    _state: &Arc<Mutex<DaemonAcpState>>,
-    tx: &FrameSink,
-) {
-    let _ = tx.send(jsonrpc::error_response(
+/// The refusal when another window answers this session (answer 9, text of Q-I3).
+const OTHER_WINDOW: &str =
+    "This conversation is open in another window: close it there before going back.";
+
+fn invalid(id: &Value, details: &str) -> Value {
+    jsonrpc::error_response(
         id,
-        jsonrpc::METHOD_NOT_FOUND,
-        &format!("\"Method not found\": {METHOD}"),
-        Some(&json!({ "method": METHOD })),
-    ));
+        jsonrpc::INVALID_PARAMS,
+        "Invalid params",
+        Some(&json!({ "details": details })),
+    )
+}
+
+/// One action of the worker's fork command (`leaf`, `rewind`).
+async fn worker_action(
+    link: &DaemonLink,
+    daemon_session_id: &str,
+    action: &str,
+    rest: Map<String, Value>,
+) -> Result<Value, String> {
+    let response = link
+        .request(DaemonCommand::YaPermissions {
+            id: None,
+            active_session_id: daemon_session_id.to_string(),
+            action: action.to_string(),
+            rest,
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    if response.success {
+        Ok(response.data.unwrap_or(Value::Null))
+    } else {
+        Err(response
+            .error
+            .unwrap_or_else(|| format!("{COMMAND} {action} failed")))
+    }
+}
+
+/// The session's leaf (`rewindTo` of a prompt's `turnStart`); `None` when the worker cannot tell.
+pub(super) async fn leaf(link: &DaemonLink, daemon_session_id: &str) -> Option<String> {
+    let data = worker_action(link, daemon_session_id, "leaf", Map::new())
+        .await
+        .ok()?;
+    data.get("leafId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 /// Answer 9 (ticket 43, §H): the refusal when another client that answers this session's
-/// permission requests is attached (the C12 check, `ya_history::other_askers`); `None` when the
-/// rewind may go on.
-/// Push 1 (skeleton): never refuses.
-#[allow(clippy::unused_async)]
-#[cfg_attr(not(test), allow(dead_code))]
+/// permission requests is attached (the C12 check, `ya_history::other_askers`), or when the daemon
+/// cannot tell (its C12 refusal); `None` when the rewind may go on.
 pub(super) async fn other_window_refusal(
-    _link: &DaemonLink,
-    _daemon_session_id: &str,
+    link: &DaemonLink,
+    daemon_session_id: &str,
 ) -> Option<String> {
-    None
+    match super::super::ya_history::other_askers(link, daemon_session_id).await {
+        Ok(0) => None,
+        Ok(_) => Some(OTHER_WINDOW.to_string()),
+        Err(refusal) => Some(refusal),
+    }
+}
+
+/// Serves one `_yus/session/rewind` request.
+pub(crate) async fn serve(
+    id: &Value,
+    params: &Value,
+    link: &Arc<DaemonLink>,
+    state: &Arc<Mutex<DaemonAcpState>>,
+    tx: &FrameSink,
+) {
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let to = params.get("to").and_then(Value::as_str).unwrap_or_default();
+    let daemon_session_id = {
+        let guard = state.lock().await;
+        let Some(hosted) = guard
+            .session
+            .as_ref()
+            .filter(|hosted| hosted.acp_session_id == session_id)
+        else {
+            let _ = tx.send(super::super::internal_error(
+                id,
+                &format!("Unknown ACP session: {session_id}"),
+            ));
+            return;
+        };
+        if hosted.producer.active_prompt_turn().await != 0 || hosted.ya_turns.running.is_some() {
+            let _ = tx.send(super::super::internal_error(id, WORKING));
+            return;
+        }
+        hosted.daemon_active_session_id.clone()
+    };
+    if let Some(refusal) = other_window_refusal(link, &daemon_session_id).await {
+        let _ = tx.send(super::super::internal_error(id, &refusal));
+        return;
+    }
+    let mut rest = Map::new();
+    rest.insert("to".to_string(), json!(to));
+    let frame = match worker_action(link, &daemon_session_id, "rewind", rest).await {
+        Ok(_) => jsonrpc::response(id, &json!({})),
+        Err(error) if error.ends_with(NOT_IN_CONVERSATION) => invalid(id, &error),
+        Err(error) => super::super::internal_error(id, &error),
+    };
+    let _ = tx.send(frame);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pa_types::daemon::{DaemonCommand, DaemonResponse};
+    use pa_types::daemon::DaemonResponse;
 
     fn answer(data: Option<Value>) -> DaemonResponse {
         DaemonResponse {

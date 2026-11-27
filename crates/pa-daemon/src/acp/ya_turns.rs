@@ -46,7 +46,7 @@ pub struct TurnStartMeta {
     /// The wake's kind: `bash`, `quota`, `goal`, `heartbeat`; absent when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake: Option<String>,
-    /// Unharnessed's rewind point; the bridge has no rewind yet and never sets it.
+    /// Unharnessed's rewind point: the session's leaf before a prompt of this client (ticket 43).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewind_to: Option<String>,
 }
@@ -248,15 +248,26 @@ pub(crate) fn prompt_start() -> TurnStartMeta {
 }
 
 /// yusAgent (YA-18, ticket 43): publishes the `turnStart` of a prompt of this client, with
-/// `rewindTo`, the session's leaf before the prompt (Unharnessed's `prompt.rs:320-350`).
-/// Push 1 (skeleton): no `rewindTo` yet, the frame `main` publishes.
+/// `rewindTo`, the session's leaf before the prompt (Unharnessed's `prompt.rs:320-350`), read by
+/// the worker's action `leaf`. Without the leaf (a worker that does not serve it, a failed read),
+/// the turn starts without `rewindTo`: its message cannot be changed.
 pub(crate) async fn publish_prompt_start(
     producer: &UpdateProducer,
     turn_id: u64,
-    _link: &Arc<DaemonLink>,
-    _state: &Arc<Mutex<DaemonAcpState>>,
+    link: &Arc<DaemonLink>,
+    state: &Arc<Mutex<DaemonAcpState>>,
 ) {
-    publish_turn_start(producer, turn_id, prompt_start()).await;
+    let daemon_session_id = state
+        .lock()
+        .await
+        .session
+        .as_ref()
+        .map(|hosted| hosted.daemon_active_session_id.clone());
+    let mut start = prompt_start();
+    if let Some(daemon_session_id) = daemon_session_id {
+        start.rewind_to = rewind::leaf(link, &daemon_session_id).await;
+    }
+    publish_turn_start(producer, turn_id, start).await;
 }
 
 /// A prompt of this client takes its turn id once no turn it did not start runs (T3, E7); the
