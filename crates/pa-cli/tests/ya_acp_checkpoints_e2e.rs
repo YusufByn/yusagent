@@ -499,8 +499,19 @@ impl Client {
     fn launch(home: Rc<tempfile::TempDir>, env: &[(&str, &str)]) -> Client {
         let socket = home.path().join("daemon.sock");
         let script_path = home.path().join("worker-script.json");
+        // The bundled `edit` skill on the kernel's import path, as `ya_prompt_v2_e2e.rs` (a test
+        // binary has no packaged `skills/` next to it).
+        let skills = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
+        let mut python_paths = vec![skills.join("edit/src")];
+        if let Some(existing) = std::env::var_os("PYTHONPATH") {
+            python_paths.extend(std::env::split_paths(&existing));
+        }
         let mut command = Command::new(env!("CARGO_BIN_EXE_prime-agent"));
         command
+            .env(
+                "PYTHONPATH",
+                std::env::join_paths(python_paths).expect("skill import paths"),
+            )
             .args(["--mode", "acp", "--daemon-socket"])
             .arg(&socket)
             .env("HOME", home.path())
