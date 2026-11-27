@@ -1038,7 +1038,7 @@ Branche `ya-43-instantanes`, depuis `main` à `c6f0b8278`. Premier commit : `b3b
   - `git log c83ac68b3..upstream/main | grep -iE 'checkpoint|snapshot|undo|rewind|restore|shadow|revert|rollback'` ;
   - `git grep -il -E 'shadow.?(git|repo)|checkpoint' upstream/main` ;
   - aux deux, seulement les points de reprise de compaction et de file, le noyau rechargé, `workspace_snapshot` (supprimé, `20b4ad74b`) et l'empreinte des gates autonomes.
-- **À reprendre : `a3e261c27`** (11/11/2026, après la base du fork, absent chez nous : `grep fsmonitor crates/pa-core/src/autonomous/gates.rs` ne trouve rien). Il protège les appels git d'upstream contre les programmes que la config d'un dépôt peut lancer (`upstream/main:crates/pa-core/src/autonomous/gates.rs:1-9`, `:284-299`, `:354-367`) :
+- **À reprendre : `a3e261c27`** (précisé au §P.11 : ses options git sont reprises dans le module du fork, sans cherry-pick du commit) (11/11/2026, après la base du fork, absent chez nous : `grep fsmonitor crates/pa-core/src/autonomous/gates.rs` ne trouve rien). Il protège les appels git d'upstream contre les programmes que la config d'un dépôt peut lancer (`upstream/main:crates/pa-core/src/autonomous/gates.rs:1-9`, `:284-299`, `:354-367`) :
   - `-c core.fsmonitor=false` ;
   - pas de hook (`diff.autoRefreshIndex=false`, `--no-optional-locks`) ;
   - `GIT_ALLOW_PROTOCOL=""` et `GIT_NO_LAZY_FETCH=1`.
@@ -1144,9 +1144,9 @@ Six `.gitignore` sont suivis (`git ls-files '*.gitignore'`). Aucun dépôt imbri
 | `.gitignore` | ceux du workspace, à tous les niveaux (git natif) | Réponse 6. Le `.git/info/exclude` du dépôt de l'utilisateur et l'`excludesFile` global ne sont pas lus (`core.excludesFile=/dev/null`) : le résultat ne dépend que du workspace |
 | Liste par défaut | seulement si le workspace **n'a pas de `.gitignore` à sa racine** : `node_modules/ target/ .venv/ venv/ __pycache__/ .mypy_cache/ .pytest_cache/ .ruff_cache/ .tox/ .gradle/ .next/ .nuxt/ .cache/ dist/ build/ coverage/ .DS_Store *.pyc` | Couvre `node_modules`, `target` et `.venv` mesurés ici (environ 21 000 fichiers et 1,2 Go à eux trois) |
 | Toujours exclus (`info/exclude` du dépôt shadow) | le dossier agent s'il est dans le workspace (chemin relatif), et le dossier `checkpoints` | Ligne `[4]` : sans exclusion, `git add` **échoue en entier** sur `auth.json` refusé par le profil |
-| Par fichier | **8 Mio** : un fichier plus gros n'est ni capturé ni supprimé par une restauration. L'aperçu le liste comme « non suivi (trop gros) » | Le plus gros fichier ici fait 1,9 Mo. Sans `.gitignore`, 119 fichiers dépassent 8 Mio. Les 64 Mio d'upstream coûteraient jusqu'à 64 Mio d'objets par tour pour un fichier modifié à chaque tour (estimation) |
+| Par fichier | **8 Mio** : un fichier plus gros n'est ni capturé ni supprimé par une restauration. ~~L'aperçu le liste comme « non suivi (trop gros) »~~ **Corrigé (réponse Q-P3)** : l'aperçu le liste comme « non couvert » (`uncovered`) | Le plus gros fichier ici fait 1,9 Mo. Sans `.gitignore`, 119 fichiers dépassent 8 Mio. Les 64 Mio d'upstream coûteraient jusqu'à 64 Mio d'objets par tour pour un fichier modifié à chaque tour (estimation) |
 | Nombre de fichiers candidats | **20 000** (borne d'upstream, deux fois le critère du CDC) : au-delà, instantanés désactivés pour ce workspace, avec un message | Ici 2 285. Sans `.gitignore`, 47 736 : désactivé, ce qui est voulu. Le compte se fait par `git ls-files -z --cached --others --exclude-standard` avant le premier instantané, coût mesuré au §P.6 |
-| Taille totale | pas de plafond à part | Le plafond par fichier et celui du nombre de fichiers la bornent à 160 Gio en théorie (estimation). Q-P3 : faut-il ajouter les 512 Mio d'upstream ? Les compter demande de lire la taille de chaque candidat |
+| Taille totale | ~~pas de plafond à part~~ **Corrigé (réponse Q-P3) : 512 Mio** (borne d'upstream) ; au-delà, instantanés désactivés avec un message | Ici 41,0 Mio. Le compte demande la taille de chaque candidat : listage et `lstat` mesurés à 17 + 4 ms ici (§P.12), tenus à jour de façon incrémentale ensuite (§P.12) |
 | Conservation | 30 jours (CDC) | §P.5 |
 
 Le plafond par fichier se vérifie avant `git add` :
@@ -1245,11 +1245,11 @@ La ligne `[4]` du §P.3 montre le mécanisme : `touch` dans `checkpoints` est re
 **Méthodes** (noms du §G.2), servies par un nouveau module du fork, `crates/pa-daemon/src/acp/ya_turns/checkpoints.rs`, déclaré dans `ya_turns.rs` comme `steer` et `rewind` (`:32-34`) :
 
 - **`_yus/session/restore_preview { sessionId, to, path? }`** :
-  - **sans `path`** : `{ available, reason?, files: [{ path, status }], modifiedOutside: [path], skipped: [path] }` ;
+  - **sans `path`** : `{ available, reason?, files: [{ path, status }], modifiedOutside: [path], uncovered: [path] }` (~~`skipped`~~ renommé, réponse Q-P3) ;
     - un instantané temporaire `T` de l'état actuel (le même que `avant-restauration`, non gardé) ;
     - `files` = `diff-tree -r --name-status T <debut>` : ce que la restauration changerait. `M` modifié, `A` recréé, `D` supprimé ;
     - `modifiedOutside` = `diff-tree -r --name-only <fin> T` ;
-    - `skipped` = les fichiers au-delà du plafond, et les dépôts imbriqués ;
+    - `uncovered` (« non couverts ») = les fichiers au-delà du plafond par fichier, et les dépôts imbriqués ;
     - sans instantané pour `to` (tour d'un binaire antérieur, ou feuille illisible) : `available: false`, avec la raison ;
   - **avec `path`** : `{ before: <texte> | null, binary }` par `cat-file blob <debut>:<path>`, sous la variante. L'extension ouvre `vscode.diff` entre ce texte et le fichier sur disque. Elle réutilise `DiffDocuments` et `showDiff` (`extensions/vscode/src/ya/diff-files-vscode.ts:15-36`, `:64-72`, ticket 24).
 - **`_yus/session/restore { sessionId, to, files, conversation, force? }`** :
@@ -1260,7 +1260,7 @@ La ligne `[4]` du §P.3 montre le mécanisme : `touch` dans `checkpoints` est re
      
      Si `files` est demandé sans instantané : `-32602`, `data.details` « no snapshot for {to} ». Si les instantanés sont désactivés : `-32603`, avec la raison.
   2. Si `files` :
-     - dans la file du workspace, instantané `avant-restauration/<n>` (gardé 30 jours : c'est l'annulation possible de la restauration) ;
+     - dans la file du workspace, instantané `avant-restauration/<n>` (gardé 30 jours : c'est l'annulation possible de la restauration). **Rangement (réponse Q-P6)** : ref `refs/ya/<session>/avant-restauration/<n>` du dépôt shadow `<dossier agent>/checkpoints/<empreinte>/`, `n` croissant par session, pris dans la file du workspace juste avant **chaque** restauration, même sans `force` ;
      - si `modifiedOutside` n'est pas vide et que `force` est absent : refus `-32603`, « Files changed outside the agent since its last turn. », `data.modifiedOutside` ;
      - sinon `read-tree -u --reset <debut>` avec l'index de la session ;
      - les fichiers ignorés, hors plafond ou non suivis au moment du contrôle ne sont pas touchés : `--reset` ne retire que ce qui est dans l'index.
@@ -1268,17 +1268,17 @@ La ligne `[4]` du §P.3 montre le mécanisme : `touch` dans `checkpoints` est re
   4. **Fichiers seuls** : nouvelle action `restored` du worker, qui range un texte pour le modèle. Proposition, Q-P5 :
      > `[workspace-restored]` The user restored the workspace files to how they were before an earlier turn; files may no longer match what this conversation shows.
   5. **Ordre** : les fichiers d'abord, puis la conversation. Si le retour de la conversation échoue après la restauration des fichiers (course avec un réveil), le pont range le texte « fichiers seuls », pour que le modèle sache que les fichiers ont changé. La réponse porte l'erreur avec `data.filesRestored: true`.
-  6. Réponse : `{ restored: [path], skipped: [path] }`.
+  6. Réponse : `{ restored: [path], uncovered: [path] }`.
 - **Contrôle « modifié hors de l'agent »** : il compare l'état actuel à la **dernière fin de tour**, celle de n'importe quel tour (§P.2). La ligne `[3]` le mesure à 64 à 108 ms (1 fichier détecté sur 1).
 
-**Aiguillage : +4 lignes upstream** dans `crates/pa-daemon/src/acp/daemon.rs`, après le bras de `rewind` (`:1175-1178`), sur le modèle de `ya_history` (`:1149`) :
+~~**Aiguillage : +4 lignes upstream**~~ **Corrigé (réponse Q-P1) : zéro ligne upstream de plus**, le bras de `rewind` devient une garde (§P.11, §P.12.1). Proposition initiale, abandonnée : +4 lignes dans `crates/pa-daemon/src/acp/daemon.rs`, après le bras de `rewind` (`:1175-1178`), sur le modèle de `ya_history` (`:1149`) :
 ```rust
         // yusAgent (YA-18, ticket 43): workspace snapshots, preview and restore.
         other if super::ya_turns::checkpoints::serves(other) => {
             super::ya_turns::checkpoints::serve(other, &id, &params, link, state, &tx).await;
         }
 ```
-Variante à zéro ligne (Q-P1) : des paramètres facultatifs `files`, `force` et `preview` sur `_yus/session/rewind`, déjà aiguillé. C'est moins clair pour l'extension, et ça s'écarte des noms du §G.2.
+~~Variante à zéro ligne (Q-P1) : des paramètres facultatifs `files`, `force` et `preview` sur `_yus/session/rewind`, déjà aiguillé. C'est moins clair pour l'extension, et ça s'écarte des noms du §G.2.~~
 
 **Nettoyage (30 jours)**, dans le pont, sans ligne upstream :
 - au premier travail de la file d'un processus, une tâche de fond parcourt `<dossier agent>/checkpoints/*` ;
@@ -1351,7 +1351,7 @@ Capture : `compare.py --all` contre `main` donne `TOUT IDENTIQUE` (les instantan
 | Fichier | Statut | Changement |
 |---|---|---|
 | `crates/pa-types/src/platform/ya_guard.rs` | fork | §P.5, environ +17 −1 |
-| `crates/pa-daemon/src/acp/daemon.rs` | **upstream** | **+4** (aiguillage, §P.6) ; 0 avec la variante de Q-P1 |
+| `crates/pa-daemon/src/acp/daemon.rs` | **upstream** | ~~**+4**~~ **Corrigé (Q-P1)** : 2 lignes du fork (bras de la PR 1) modifiées, aucune ligne upstream de plus (§P.12.1) |
 | `crates/pa-daemon/src/acp/ya_turns.rs` | fork | `mod checkpoints;` ; instantané de début dans `publish_prompt_start`, de fin dans `close` |
 | `crates/pa-daemon/src/acp/ya_turns/checkpoints.rs` et `checkpoints/{git,refs,restore}.rs` | nouveaux | file série, lancement de git, refs, purge, méthodes |
 | `crates/pa-daemon/src/acp/ya_turns/rewind.rs` | fork | contexte `{ leafId, sessionId, cwd }` lu par `leaf` |
@@ -1363,7 +1363,7 @@ Capture : `compare.py --all` contre `main` donne `TOUT IDENTIQUE` (les instantan
 | `bench/tools/capture/ya43_restore_bench.py`, `server.py` (scénario `ya43-restore`) | nouveau / fork | §P.6 |
 | `docs/fork-changes.md`, `docs/usage.md` si besoin | doc | une ligne par fichier, lignes upstream numérotées |
 
-**Lignes upstream : +4** dans `daemon.rs` (ou 0, Q-P1). Rien dans la couche providers, rien dans le worker upstream.
+~~**Lignes upstream : +4** dans `daemon.rs` (ou 0, Q-P1).~~ **Corrigé (Q-P1)** : aucune ligne upstream de plus ; 2 lignes du fork modifiées dans `daemon.rs` (total du fichier depuis la PR 1 inchangé, +5 −1). Rien dans la couche providers, rien dans le worker upstream.
 
 **Préfixe** : prompt système, tools et `yaRequest` inchangés. Rien de volatil n'entre dans le prompt (ni chemin, ni date, ni état git). Les seuls textes nouveaux arrivent en fin d'historique, après une restauration (D2 avec sa phrase, ou `[workspace-restored]`).
 
@@ -1382,6 +1382,60 @@ Capture : `compare.py --all` contre `main` donne `TOUT IDENTIQUE` (les instantan
 - **Q-P7** : premier instantané d'un workspace au premier prompt (1,2 à 1,5 s ici, environ 3 s sur 10 000 fichiers, une seule fois par workspace grâce à la copie d'index) : accepté ? L'alternative, le lancer à l'ouverture de la session, demande une accroche dans `handle_session_new` (upstream).
 - **Q-P8** : une seule PR (pont et extension, comme la PR 1), ou 3a (pont) puis 3b (extension) ?
 - **Q-P9** : écart au §G.2 : refs sous la clé du `rewindTo`, une seule ref `fin`, et l'instantané d'un point remplacé par un nouveau prompt depuis ce point (§P.4) ?
+
+### P.11 Réponses de Yusuf au §P.10 (27/11/2026)
+
+- **Q-P1 : zéro ligne upstream de plus si possible.** Le bras `_yus/session/rewind` de `daemon.rs` (lignes du fork, PR 1) devient une garde qui couvre les trois méthodes ; l'aiguillage se fait dans le module du fork. Sinon, +4 accepté. **Résultat : la garde tient, zéro ligne upstream de plus** (détail ci-dessous).
+- **Q-P2 : instantané de début attendu avant l'envoi du prompt.** Surcoût mesuré au bench (médiane et p95), seuil de 150 ms en médiane sur 10 000 fichiers.
+- **Q-P3** :
+  - 8 Mio par fichier ;
+  - 20 000 fichiers ;
+  - liste par défaut seulement sans `.gitignore` à la racine ;
+  - **plafond total de 512 Mio** ;
+  - au-delà d'un plafond de workspace : instantanés désactivés avec un message ;
+  - fichiers exclus par le plafond par fichier : listés comme **« non couverts »** dans l'aperçu.
+  
+  §P.3 et §P.6 corrigés.
+- **Q-P4 : L-b**, avec ces tests : D2 une seule fois dans la requête au modèle, en session vivante **et** après reprise ; préfixe intact (`compare.py`).
+- **Q-P5 : texte validé** : « `[workspace-restored]` The user restored the workspace files to how they were before an earlier turn; files may no longer match what this conversation shows. »
+- **Q-P6 : mention dans la boîte de confirmation** (3b), à condition qu'un instantané de l'état courant soit pris juste avant chaque restauration. **Rangement** : ref `refs/ya/<session>/avant-restauration/<n>` du dépôt shadow `<dossier agent>/checkpoints/<empreinte du workspace>/`, gardée 30 jours, prise dans la file du workspace avant chaque `read-tree`, avec ou sans `force` (§P.6, corrigé). « Annuler la restauration » : ticket à part.
+- **Q-P7 : accepté** (premier instantané payé au premier prompt, une fois par workspace).
+- **Q-P8 : 3a (pont) puis 3b (extension).** Contrôle manuel à 3b.
+- **Q-P9 : accepté.** Écart au §G.2 noté : refs sous la clé du `rewindTo`, une seule ref `fin`, et l'instantané d'un point remplacé par un nouveau prompt depuis ce point (§P.4).
+
+**Q-P1, la garde** (`crates/pa-daemon/src/acp/daemon.rs:1175-1178`, lignes de la PR 1) :
+```rust
+        // yusAgent (YA-18, ticket 43): going back to before a prompt.
+-        super::ya_turns::rewind::METHOD => {
+-            super::ya_turns::rewind::serve(&id, &params, link, state, &tx).await;
++        other if super::ya_turns::rewind::serves(other) => {
++            super::ya_turns::rewind::serve(other, &id, &params, link, state, &tx).await;
+         }
+```
+- La deuxième ligne fait 88 caractères : rustfmt la garde sur une ligne (largeur 100).
+- La garde reste à la même place, avant `"session/set_config_option"`. Les gardes placées avant elle sont des listes exactes de méthodes, et aucune ne contient `_yus/session/restore*` :
+  - `ya_history::serves` : `session/list` et la suppression (`ya_history.rs:582-584`) ;
+  - `ya_resources::serves` : les constantes des skills, du MCP et des réglages (`ya_resources.rs:58`) ;
+  - `ya_providers::serves` : `REQUESTS.contains` (`daemon/ya_providers.rs:168-170`).
+- `rewind::serves` couvre `_yus/session/rewind`, `_yus/session/restore` et `_yus/session/restore_preview`. `rewind::serve(method, …)` aiguille les deux dernières vers `ya_turns/checkpoints.rs`.
+- Le commentaire de `:1175` n'est pas touché.
+- **Bilan** : dans `daemon.rs`, deux lignes du fork modifiées. L'écart du fichier à upstream reste celui de la PR 1 (+5 −1 pour le ticket 43). `docs/fork-changes.md` (ligne du ticket 43 sur `daemon.rs`) est mis à jour en conséquence.
+
+**`a3e261c27`, les faits demandés** :
+- **Ce que le §P.1 voulait dire par « à reprendre »** : reprendre ses **options git** dans le module du fork des instantanés, pas cherry-picker le commit. Elles portent sur le git des gates autonomes, une autre fonction. Lignes exactes dans `a3e261c27:crates/pa-core/src/autonomous/gates.rs` :
+  - `:293-299`, `SNAPSHOT_GIT_OVERRIDES` : `-c core.fsmonitor=false` (`:295`), `-c diff.autoRefreshIndex=false` (`:297`), `--no-optional-locks` (`:298`) ;
+  - `:366` : `GIT_ALLOW_PROTOCOL=""` et `GIT_NO_LAZY_FETCH=1` ;
+  - `:319-324`, propres au `diff` des gates : `--no-ext-diff`, `--no-textconv`, `--submodule=short`, `--ignore-submodules=none`. Sans objet ici : les instantanés ne lancent pas de `diff` vers le worktree, seulement `diff-tree` entre deux arbres du dépôt shadow, sans textconv puisque aucune config n'en déclare.
+  
+  Le module des instantanés reprend `core.fsmonitor=false`, `GIT_ALLOW_PROTOCOL=""` et `GIT_NO_LAZY_FETCH=1`, et ajoute `core.hooksPath=/dev/null`, `core.excludesFile=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null` et `env_clear()` (§P.1). `diff.autoRefreshIndex` et `--no-optional-locks` ne s'appliquent pas : les instantanés **écrivent** leur propre index, dans le dépôt shadow, et il n'y a aucun hook.
+- **Le commit lui-même, s'il était cherry-pické** :
+  - fichiers : `.changes/security-autonomous-gates-git-safe-path.md` (nouveau, +1) et `crates/pa-core/src/autonomous/gates.rs` (+304 −32 : +77 −32 hors du module de tests, +227 dans `mod tests`), mesuré par `git show --numstat a3e261c27` ;
+  - il ne s'applique pas tel quel : `git show a3e261c27 | git apply --check` échoue à `gates.rs:393`, sur le seul hunk qui touche la ligne du fork du ticket 41 (`ya_guard::tokio(program)`, `gates.rs:403`). La résolution garde cette ligne et ajoute `.envs(envs.iter().copied())` ;
+  - aucun commit d'upstream sur `gates.rs` entre la base du fork et lui (`git log c83ac68b3..a3e261c27 -- gates.rs` ne montre que lui). Un seul commit après (`2eebeb4f9`, dépendances, +14 −2 sur ce fichier), non requis.
+- **Total upstream de la PR 3a** :
+  - **sans le cherry-pick** (plan) : 0 ligne upstream de plus, 2 lignes du fork modifiées dans `daemon.rs` ;
+  - **avec le cherry-pick** : en plus, le diff d'upstream lui-même dans `gates.rs` (+304 −32) et `.changes/…` (+1), qui **rapproche** le fork d'upstream au lieu de l'en écarter. L'écart propre au fork dans `gates.rs` reste 1 ligne (`ya_guard`).
+  - **Recommandation** : pas dans 3a. Les instantanés n'en dépendent pas, et la règle 1 limite le périmètre au ticket. Cherry-pick dans un ticket à part, comme `20b4ad74b` (réponse 11). À trancher (Q-P10).
 
 ## Annexe : mesure préliminaire, git seul
 
