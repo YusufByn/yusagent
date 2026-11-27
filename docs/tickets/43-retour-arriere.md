@@ -847,7 +847,7 @@ Visibilité (sans ligne upstream) : `pending_next_turn_rows` est un champ privé
     - `pa-core` `the_rows_of_a_rewind_reach_the_next_request_once` et `notes_of_different_causes_are_journaled_together` (shard 2/8) ;
     - T6 (shard 3/8) ;
     - `acp_mode_e2e` corrigés (`acp_prompt_stream_completion_envelope_and_stop_reason_match_ts`, `acp_daemon_attached_cancels_mid_turn`) ;
-    - les 12 e2e de `ya_acp_rewind_e2e` : T1, T3, T4, T5a, T5b, T5c, T7, T8, T9, T11, T12 (shard 8/8).
+    - les 11 e2e de `ya_acp_rewind_e2e` : T1, T3, T4, T5a, T5b, T5c, T7, T8, T9, T11, T12 (shard 8/8).
   - `ya-extension` : unitaires et e2e contre l'agent factice verts ; e2e vrai binaire vert, E3 compris.
 
 ### M.2 Contrôles sur le binaire de la branche
