@@ -1665,6 +1665,57 @@ Banc et capture (règle 13, lancés par Claude Code sur le binaire de la branche
 
 **Branche** : `ya-43-instantanes-3a` part de `ya-43-instantanes`, c'est-à-dire de `main` (`c6f0b8278`) avec les commits de doc du ticket, dont ce §P.13.
 
+### P.14 PR 3a (PR #98) : relevé du push A (27/11/2026)
+
+Push A : `0deef11f0` sur `ya-43-instantanes-3a` (depuis `ya-43-instantanes` : `main` à `c6f0b8278` et les commits de doc du ticket). PR #98 ouverte prête (non brouillon), comme la PR #97 au push 1, pour que la CI complète tourne. Tests et squelette : `_yus/session/restore` et `_yus/session/restore_preview` arrivent à `ya_turns/checkpoints.rs` par le bras de `rewind` et sont répondues `-32601`, comme sur `main`.
+
+**Lignes upstream réelles : aucune de plus.** Le seul fichier upstream touché est `crates/pa-daemon/src/acp/daemon.rs`, 2 lignes modifiées (`git diff main..0deef11f0 -- crates/pa-daemon/src/acp/daemon.rs`) :
+```
+-        super::ya_turns::rewind::METHOD => {
+-            super::ya_turns::rewind::serve(&id, &params, link, state, &tx).await;
++        other if super::ya_turns::rewind::serves(other) => {
++            super::ya_turns::rewind::serve(other, &id, &params, link, state, &tx).await;
+```
+Ce sont des lignes du fork : `git blame -L 1175,1178 main` les attribue à `53a0b6ebf` (PR 1, push 1). L'écart du fichier pour le ticket 43 reste +5 −1. Les autres fichiers (`git diff --stat main..0deef11f0 -- crates`, 9 fichiers, +1 615 −5) sont des fichiers du fork ou des tests du fork.
+
+| Run | Résultat |
+|---|---|
+| `ci` 46056573461 | `fmt`, `check + clippy (workspace)` (tests compris, Clippy pédant), `windows cross-check + clippy`, `deny`, `historical upgrade packaging` verts. Shards 1, 3, 4, 5, 6 et 7 verts. **Shard 2/8** : `ya_acp_checkpoints_e2e`, 0 réussi, 15 en échec. **Shard 8/8** : `ya_acp_rewind_e2e`, 13 réussis, 1 en échec ; `ya_secret_guard_profile`, 2 réussis, 1 en échec. **`runtime suite (python 3.11)`** : 1 erreur, **inattendue** (ci-dessous) |
+| `ya-secret-guard-macos` 46056573442 | 3 rouges attendus (ci-dessous) ; `ya_process_launch_scan`, `ya_browser_scheme` et le premier test de `ya_secret_guard_acp_e2e` verts |
+| `ya-extension` 46056573627 | vert (le push ne touche pas l'extension) |
+| `ya-build-macos-arm64` 46056566834 | vert |
+| `windows-runtime-triage`, `codebase-health`, `Contribution gate` | verts |
+| `Changelog fragment` 46056573453 | en échec, attendu : le fragment arrive au push B |
+
+**Rouges, chacun sur son assertion** :
+
+| Test | Job | Ligne | Assertion |
+|---|---|---|---|
+| T20, T22, T27, T28, T29, T32, T34, T35 | shard 2/8 | `ya_acp_checkpoints_e2e.rs:194` (`wait_repo`) | « no checkpoints repository for /tmp/.tmp… under /tmp/.tmp…/.yusagent/checkpoints » : aucun dépôt shadow |
+| T21, T23, T24 | shard 2/8 | `:250` (`result_of`) | « the restore … is answered: {… "code":-32601, "message":"\"Method not found\": _yus/session/restore" …} » |
+| T26, T31 (a) et (b) | shard 2/8 | `:250` | « the preview is answered: {… "code":-32601 … _yus/session/restore_preview …} » |
+| T33 | shard 2/8 | `:1258` | `left == right` : `-32601` au lieu de `-32603` |
+| T30 | shard 8/8 | `ya_acp_rewind_e2e.rs:1096` | « the fixed text is in the file from the rewind on, the child of "df48ad79": {"type":"message", … "role":"assistant", … "answer 2" …} » : la dernière entrée est encore la réponse du tour abandonné |
+| T19 | shard 8/8 et macOS | `ya_secret_guard_profile.rs:35` | « missing "(deny file-write* (subpath \"/Users/u/.yus+agent/checkpoints\"))" in the profile » |
+| T19b | macOS | `ya_secret_guard_kernel.rs:211` | « the kernel reached what the guard refuses: write into the checkpoints dir: "ok" » : seule ligne non refusée, les autres accès restent `denied` |
+| T27 sous l'enveloppe | macOS | `ya_secret_guard_acp_e2e.rs:259` | « no snapshot refs/ya/01a21e81-3ed3-77e2-96b1-886795ea2298/fin for /private/var/folders/… » |
+
+**Préconditions passées** :
+- T21 : la cellule a tourné (`keep.txt` vaut `v2` avant la restauration). Que `edit()` et `bash()` aient écrit n'est pas encore observé : le test s'arrête au refus de la restauration.
+- T33 : le refus arrive pendant la cellule lente (fichier `started` écrit).
+- T26, T31 : deux prompts répondus avant l'aperçu.
+
+**Verts attendus, verts** : les 13 tests existants de `ya_acp_rewind_e2e` (T1 à T14, dont T5a, T5b, T5c, T7 et T9, contrôles de L-b), les 2 tests existants du profil, les autres contrôles de l'enveloppe macOS, et tous les autres tests de la CI.
+
+**Inattendu, bloquant d'après la règle** : `runtime suite (python 3.11)`, job 140700477478.
+- Échec : `test_bash.BashTest.test_journal_partial_writes_complete_the_record` (`prime-agent-runtime/test/test_bash.py:1370`, `json.decoder.JSONDecodeError: Extra data: line 2 column 1 (char 132)`) ; 823 tests, 1 erreur.
+- Le push ne touche aucun fichier Python (`git diff --stat c6f0b8278 0deef11f0 -- prime-agent-runtime` : vide).
+- Ce test n'est pas listé en « Instabilité probable » dans `docs/fork-changes.md`, et l'échec n'est pas une panne d'infrastructure.
+- **Pas de relance** (règle de la boucle de dev) : à trancher par Yusuf.
+- Pour mémoire, sans lien avec ce test : le run `ci` de `main` sur `c6f0b8278` (46021181469, après le merge de la PR #97) est rouge sur 7 shards. Ils ont échoué à l'amorçage du kernel venv (`lxml 6.2.0` construit sans `libxml2`, « Failed to set up the Python kernel runtime »), avant tout test.
+
+**Écart au plan, signalé** : T33 ne couvre que le refus pendant un tour. Le refus « autre fenêtre » passe par le même code que `rewind` (factorisé, §P.12.4). Le provoquer en e2e demande un second client qui répond aux permissions. Il sera couvert par un test unitaire au push B (`scripted_link`, comme T6 de la PR 1).
+
 ## Annexe : mesure préliminaire, git seul
 
 Script : `docs/tickets/43-retour-arriere/shadow_git_mesure.sh`.
