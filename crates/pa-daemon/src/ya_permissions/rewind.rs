@@ -1,17 +1,21 @@
-//! yusAgent (YA-18, ticket 43, R-b0): the worker side of `_yus/session/rewind`, two actions of the
-//! fork's command [`COMMAND`] (`docs/tickets/43-retour-arriere.md`, §I.3, §I.9):
-//! - `leaf`: `{ leafId }`, the session's leaf; the ACP bridge reads it before a prompt's
-//!   `turnStart` (`rewindTo`);
+//! yusAgent (YA-18, ticket 43, R-b0): the worker side of `_yus/session/rewind` and of the
+//! workspace restore, actions of the fork's command [`COMMAND`]
+//! (`docs/tickets/43-retour-arriere.md`, §I.3, §I.9, §P.12.5):
+//! - `leaf`: `{ leafId, sessionId, cwd }`, the session's leaf, its file's id and its working
+//!   directory; the ACP bridge reads it before a prompt's `turnStart` (`rewindTo`) and for the
+//!   workspace snapshots;
 //! - `rewind { to }`: the conversation goes back to `to`, an entry of the current branch, where
 //!   it stood before a prompt. As Unharnessed's `rewind_to` (`compaction_arms.rs:433-449`): the
-//!   leaf moves in memory (written by the next append, answer 10), the engine's context is
-//!   rebuilt from the branch, what came after stays in the file on a branch of its own, and the
-//!   kernel keeps what it holds. Then (D2) the fixed text rides the next turn; an announcement
-//!   row (`ya-resources-changed`) of the abandoned turns rides it again first (the tracker of what
-//!   the model was told lives in memory, Q-I2). As ticket 31's announcement, the rows go to the
-//!   core session's next-turn mailbox, which reaches the model, and to the worker's parked rows,
-//!   which the turn writes to the session file (§L: parked rows alone never reach the model). The
-//!   next agent-loop call journals `invalidation: {"cause": "rewind"}`.
+//!   leaf moves, the engine's context is rebuilt from the branch, what came after stays in the
+//!   file on a branch of its own, and the kernel keeps what it holds. The announcement rows
+//!   (`ya-resources-changed`) of the abandoned turns come back first (the tracker of what the
+//!   model was told lives in memory, Q-I2), then the fixed text (D2). PR 3a, L-b (answer Q-P4,
+//!   answer 10 reopened): these rows are written to the session file at the rewind, children of
+//!   `to`, without a broadcast, so the leaf is written and survives a resume; the rebuilt context
+//!   carries them to the model. The next agent-loop call journals
+//!   `invalidation: {"cause": "rewind"}`;
+//! - `restored` (PR 3a, answer Q-3a-3): the bridge restored the workspace files only; the row of
+//!   Q-P5 is written the same way.
 //!
 //! Refused while a turn runs or a compaction is going on, and for an entry off the branch. As
 //! `navigate_tree` (`worker/commands.rs:199-215`, push 9 of the ticket):
@@ -26,6 +30,9 @@
 
 use std::sync::Arc;
 
+use pa_core::session_engine::ya_resource_notice::rewind::{
+    FILES_RESTORED, RESTORED_TEXT, RESTORED_TYPE,
+};
 use pa_types::session::CustomMessage;
 use serde_json::{json, Value};
 
@@ -88,65 +95,139 @@ fn failure(error: &str) -> DaemonResponse {
 }
 
 impl Worker {
-    /// The action `leaf`: `{ leafId }`.
+    /// The action `leaf`: `{ leafId, sessionId, cwd }`. The session file's id and the session's
+    /// working directory serve the bridge's workspace snapshots (ticket 43, PR 3a, §P.12.5).
     pub(crate) fn ya_leaf(&self) -> DaemonResponse {
         let core = self.core.lock().unwrap();
         match core.store.as_ref() {
-            Some(store) => {
-                response_success(None, COMMAND, Some(json!({ "leafId": store.leaf_id() })))
-            }
+            Some(store) => response_success(
+                None,
+                COMMAND,
+                Some(json!({
+                    "leafId": store.leaf_id(),
+                    "sessionId": store.session_id(),
+                    "cwd": core.cwd,
+                })),
+            ),
             None => failure("Session is still initializing"),
         }
     }
 
-    /// The action `rewind { to }`.
+    /// The action `rewind { to, files? }`: `files` says the bridge restored the workspace files
+    /// too (D2 then carries the files sentence).
     pub(crate) async fn ya_rewind(&self, payload: &Value) -> DaemonResponse {
         let to = payload
             .get("to")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        let files = payload
+            .get("files")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         // Held to the answer: dropped on every return, which wakes the runner.
         let _queued_work = self.hold_queued_work_pause("navigate");
-        let (branch, session_id, rows) = {
+        let (branch, session_id) = {
             let mut guard = self.core.lock().unwrap();
-            let core = &mut *guard;
-            if core.busy || core.compacting {
+            if guard.busy || guard.compacting {
                 return failure(WORKING);
             }
-            let Some(store) = core.store.as_mut() else {
+            let (requeued, to_is_rewound) = {
+                let Some(store) = guard.store.as_mut() else {
+                    return failure("Session is still initializing");
+                };
+                // The current branch, root to leaf; the abandoned entries come after `to`.
+                let (requeued, to_is_rewound) = {
+                    let branch = store.branch();
+                    let Some(at) = branch.iter().position(|entry| entry.id == to) else {
+                        return failure(&format!("{to} {NOT_IN_CONVERSATION}"));
+                    };
+                    let is_rewound = branch[at].type_ == "custom_message"
+                        && branch[at].fields.get("customType").and_then(Value::as_str)
+                            == Some(REWOUND_TYPE);
+                    let requeued: Vec<CustomMessage> = branch[at + 1..]
+                        .iter()
+                        .filter(|entry| {
+                            entry.type_ == "custom_message"
+                                && entry.fields.get("customType").and_then(Value::as_str)
+                                    == Some(
+                                        pa_core::session_engine::ya_resource_notice::CUSTOM_TYPE,
+                                    )
+                        })
+                        .map(|entry| row_of(&entry.fields))
+                        .collect();
+                    (requeued, is_rewound)
+                };
+                if let Err(error) = store.branch_to(Some(to.as_str())) {
+                    return failure(&error.to_string());
+                }
+                (requeued, to_is_rewound)
+            };
+            // L-b (ticket 43, PR 3a, answer Q-P4): the rows are written to the file now, children
+            // of `to`, without a broadcast (the announcement is not shown again); the last one is
+            // the leaf written. A rewind to a fixed text's row (twice from the same point) writes
+            // no second one.
+            let mut rows = requeued;
+            if !to_is_rewound {
+                let text = if files {
+                    format!("{REWOUND_TEXT} {FILES_RESTORED}")
+                } else {
+                    REWOUND_TEXT.to_string()
+                };
+                rows.push(custom_row(REWOUND_TYPE, text, None));
+            } else if files {
+                rows.push(custom_row(RESTORED_TYPE, RESTORED_TEXT.to_string(), None));
+            }
+            for row in rows.iter().filter_map(parked) {
+                crate::worker::persist_custom_row(&mut guard, &row);
+            }
+            let Some(store) = guard.store.as_ref() else {
                 return failure("Session is still initializing");
             };
-            // The current branch, root to leaf; the abandoned entries come after `to`.
-            let requeued: Vec<CustomMessage> = {
-                let branch = store.branch();
-                let Some(at) = branch.iter().position(|entry| entry.id == to) else {
-                    return failure(&format!("{to} {NOT_IN_CONVERSATION}"));
-                };
-                branch[at + 1..]
-                    .iter()
-                    .filter(|entry| {
-                        entry.type_ == "custom_message"
-                            && entry.fields.get("customType").and_then(Value::as_str)
-                                == Some(pa_core::session_engine::ya_resource_notice::CUSTOM_TYPE)
-                    })
-                    .map(|entry| row_of(&entry.fields))
-                    .collect()
-            };
-            if let Err(error) = store.branch_to(Some(to.as_str())) {
-                return failure(&error.to_string());
-            }
-            let branch = store.branch_file_entries();
-            let session_id = store.session_id().to_string();
-            let mut rows = requeued;
-            rows.push(custom_row(REWOUND_TYPE, REWOUND_TEXT.to_string(), None));
-            // One fixed text: the one of an earlier rewind still waiting goes.
-            core.pending_next_turn
-                .retain(|row| row.get("customType").and_then(Value::as_str) != Some(REWOUND_TYPE));
-            core.pending_next_turn
-                .extend(rows.iter().filter_map(parked));
-            (branch, session_id, rows)
+            (store.branch_file_entries(), store.session_id().to_string())
         };
+        if let Err(error) = self.ya_rebuild(branch).await {
+            return failure(&error);
+        }
+        if let Some(journal) = pa_core::session_engine::usage_log::lookup(&session_id) {
+            journal.note_invalidation(
+                json!({ "cause": pa_core::session_engine::usage_log::CAUSE_REWIND }),
+            );
+        }
+        response_success(None, COMMAND, Some(json!({})))
+    }
+
+    /// The action `restored` (ticket 43, PR 3a, answer Q-3a-3): the bridge restored the workspace
+    /// files only; the row of Q-P5 is written to the file, then the context is rebuilt from the
+    /// branch, so that it reaches the model and survives a resume. The prefix does not change: no
+    /// invalidation note.
+    pub(crate) async fn ya_restored(&self) -> DaemonResponse {
+        let _queued_work = self.hold_queued_work_pause("navigate");
+        let branch = {
+            let mut guard = self.core.lock().unwrap();
+            if guard.busy || guard.compacting {
+                return failure(WORKING);
+            }
+            if guard.store.is_none() {
+                return failure("Session is still initializing");
+            }
+            if let Some(row) = parked(&custom_row(RESTORED_TYPE, RESTORED_TEXT.to_string(), None)) {
+                crate::worker::persist_custom_row(&mut guard, &row);
+            }
+            let Some(store) = guard.store.as_ref() else {
+                return failure("Session is still initializing");
+            };
+            store.branch_file_entries()
+        };
+        if let Err(error) = self.ya_rebuild(branch).await {
+            return failure(&error);
+        }
+        response_success(None, COMMAND, Some(json!({})))
+    }
+
+    /// The engine's context rebuilt from `branch` off the runtime threads, then the goal of the
+    /// branch announced before the answer (`handle_navigate_tree`).
+    async fn ya_rebuild(&self, branch: Vec<pa_types::session::FileEntry>) -> Result<(), String> {
         let engine = Arc::clone(&self.engine);
         let rebuilt = tokio::task::spawn_blocking(move || {
             engine.rebuild_session_context(
@@ -157,22 +238,12 @@ impl Worker {
         .await;
         match rebuilt {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => return failure(&format!("{error:#}")),
-            Err(error) => return failure(&format!("context rebuild failed: {error}")),
+            Ok(Err(error)) => return Err(format!("{error:#}")),
+            Err(error) => return Err(format!("context rebuild failed: {error}")),
         }
-        // The goal of the point, announced before the answer (`handle_navigate_tree`).
         if let Some(goal) = self.engine.goal_update_after_rebuild() {
             self.emit_worker_event(json!({ "type": "goal_update", "goal": goal }));
         }
-        // The same rows to the model, through the core session's mailbox (§L).
-        if let Some(agent_engine) = self.agent_engine.as_ref() {
-            agent_engine.ya_queue_rewind_rows(rows).await;
-        }
-        if let Some(journal) = pa_core::session_engine::usage_log::lookup(&session_id) {
-            journal.note_invalidation(
-                json!({ "cause": pa_core::session_engine::usage_log::CAUSE_REWIND }),
-            );
-        }
-        response_success(None, COMMAND, Some(json!({})))
+        Ok(())
     }
 }

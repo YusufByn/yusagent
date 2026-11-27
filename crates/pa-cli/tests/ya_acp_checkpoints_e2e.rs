@@ -30,6 +30,8 @@
 //! T31. Workspace caps at the first snapshot: 20 000 files, then the total size (`512 MiB`).
 //! T32. The workspace's and the user's git configuration start no program.
 //! T33. A restore is refused while a turn runs; the turn runs to its end.
+//! T33b. (push B, accepted change of §P.14) A restore is refused while another client that
+//!      answers the session's permission requests is attached (the I2 control's attach).
 //! T34. A nested repository is neither captured nor touched by a restore.
 //! T35. The count kept up to date from the changed paths: a folder created by hand between two
 //!      turns takes the workspace over a cap; snapshots go off with the message (answer of §P.13).
@@ -65,6 +67,9 @@ const FILES_RESTORED: &str = "Workspace files were restored to how they were at 
 const WORKSPACE_RESTORED: &str = "[workspace-restored] The user restored the workspace files to how they were before an earlier turn; files may no longer match what this conversation shows.";
 /// Unharnessed's refusal while the agent works.
 const WORKING: &str = "The agent is working: stop it before going back.";
+/// The refusal while another window answers the session (answer 9, Q-I3).
+const OTHER_WINDOW: &str =
+    "This conversation is open in another window: close it there before going back.";
 const MODIFIED_OUTSIDE: &str = "Files changed outside the agent since its last turn.";
 const NO_GIT: &str = "Workspace snapshots are off: git was not found.";
 const TOO_MANY_FILES: &str = "Workspace snapshots are off in this folder: more than 20000 files.";
@@ -762,6 +767,14 @@ fn a_restore_brings_the_files_back_and_leaves_the_rest() {
     let (session_id, _) = client.open_session();
     let to = client.ask(&session_id, "change the files");
     assert_eq!(read(&client.path("keep.txt")), "v2", "the cell ran");
+    // Push B (Yusuf's request): the writes of `bash()` and `edit()` in a version-2 cell, seen
+    // before the restore.
+    assert_eq!(read(&client.path("shell.txt")), "shell\n", "bash() wrote");
+    assert_eq!(read(&client.path("notes.txt")), "beta\n", "edit() wrote");
+    assert!(
+        !client.path("gone.txt").exists(),
+        "the cell removed gone.txt"
+    );
     let answer = client.restore(&session_id, &to, true, false, false);
     let result = result_of(&answer, "the restore");
     assert_eq!(read(&client.path("keep.txt")), "v1", "open() undone");
@@ -1263,6 +1276,73 @@ fn a_restore_is_refused_while_a_turn_runs() {
         "the turn was not stopped: {answered}"
     );
     assert!(client.path("ended").exists(), "the cell ran to its end");
+}
+
+/// The daemon's id of the only live session on `socket`.
+fn daemon_session_id(socket: &Path) -> String {
+    let (_, list) = daemon_command(socket, &json!({ "type": "list" }));
+    list["data"]["sessions"][0]["sessionId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a live session: {list}"))
+        .to_string()
+}
+
+/// One daemon command on `socket`: the open connection and the response frame.
+fn daemon_command(
+    socket: &Path,
+    command: &Value,
+) -> (
+    Box<dyn pa_types::platform::transport::BlockingTransportStream>,
+    Value,
+) {
+    let mut writer =
+        pa_types::platform::transport::connect_blocking(socket).expect("daemon socket");
+    let reader = writer.try_clone_box().expect("daemon socket clone");
+    let _ = reader.set_read_timeout(TIMEOUT);
+    let protocol = json!({ "name": "prime-agent.daemon", "version": pa_types::daemon::DAEMON_PROTOCOL_VERSION });
+    let frame =
+        json!({ "type": "command", "id": "ya43-test", "protocol": protocol, "command": command });
+    writeln!(writer, "{frame}").expect("daemon frame");
+    writer.flush().expect("daemon flush");
+    let answer = BufReader::new(reader)
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(&line.expect("daemon line")).expect("JSON"))
+        .find(|frame| frame["id"] == json!("ya43-test"))
+        .unwrap_or_else(|| panic!("the daemon closed without answering"));
+    (writer, answer)
+}
+
+/// T33b. While another client that answers the session's permission requests is attached (the
+/// I2 control of `ya43_control.py`), a restore is refused with the text of answer 9; once it
+/// leaves, the restore goes on.
+#[test]
+fn a_restore_is_refused_while_another_window_answers_the_session() {
+    let mut client = Client::spawn(
+        &json!({ "engine": "faux", "responses": [
+            { "text": "one" },
+            { "text": "two" },
+        ] }),
+        |_| {},
+    );
+    let (session_id, _) = client.open_session();
+    let to = client.ask(&session_id, "first");
+    client.ask(&session_id, "second");
+    let daemon_id = daemon_session_id(&client.socket);
+    let (other, attached) = daemon_command(
+        &client.socket,
+        &json!({ "type": "attach", "activeSessionId": daemon_id, "yaPermissionAsker": true }),
+    );
+    assert_eq!(attached["success"], true, "{attached}");
+    let refused = client.restore(&session_id, &to, true, true, true);
+    assert_eq!(refused["error"]["code"], -32603, "{refused}");
+    assert_eq!(
+        refused["error"]["data"]["details"], OTHER_WINDOW,
+        "{refused}"
+    );
+    drop(other);
+    std::thread::sleep(Duration::from_secs(1));
+    let accepted = client.restore(&session_id, &to, true, true, true);
+    let _ = result_of(&accepted, "the restore once the other window left");
 }
 
 /// T34. A nested repository is neither captured nor touched by a restore.

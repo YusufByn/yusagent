@@ -97,3 +97,20 @@ fn the_full_and_the_browser_profiles_refuse_writing_the_checkpoints() {
     assert_has(&profile(&paths(), Variant::Full), refusal);
     assert_has(&profile(&paths(), Variant::Browser), refusal);
 }
+
+/// T19, the variant: the checkpoints' git may write the checkpoints directory and keeps every
+/// other refusal of the full profile, `LaunchServices` included.
+#[test]
+fn the_checkpoints_variant_writes_the_checkpoints_and_keeps_the_other_refusals() {
+    let variant = profile(&paths(), Variant::Checkpoints);
+    assert!(
+        !variant.contains("checkpoints"),
+        "the checkpoints' git may write them:\n{variant}"
+    );
+    assert_has(&variant, r#"(regex #"^/Users/u/\.yus\+agent/auth\.json")"#);
+    assert_has(&variant, r#"(literal "/Users/u/bin/yusagent")"#);
+    assert_has(
+        &variant,
+        r#"(global-name-prefix "com.apple.coreservices.")"#,
+    );
+}

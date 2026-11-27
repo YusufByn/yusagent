@@ -10,6 +10,9 @@
 //!   browser), after [`browser_url_allowed`] (`https://`, `http://` to localhost).
 //! - Switch: `PRIME_AGENT_SECRET_GUARD=off` in the environment of the process that launches;
 //!   never passed to the kernel (`env_allowlist.rs`).
+//! - yusAgent (YA-18, ticket 43, answer 8): the workspace snapshots' directory
+//!   ([`CHECKPOINTS_DIR`] under the agent directory) is refused to write to every launch but the
+//!   checkpoints' git ([`checkpoints_tokio`], [`Variant::Checkpoints`]).
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -39,7 +42,14 @@ pub enum Variant {
     Full,
     /// The browser opener: the same refusals, `LaunchServices` left open (it launches the browser).
     Browser,
+    /// yusAgent (YA-18, ticket 43, answer 8): the checkpoints' `git`: the full profile with the
+    /// checkpoints directory left writable; every other launch (the kernel included) is refused
+    /// writing it.
+    Checkpoints,
 }
+
+/// The workspace snapshots' directory under the agent directory (ticket 43).
+pub const CHECKPOINTS_DIR: &str = "checkpoints";
 
 /// The paths the profile protects, canonical.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,6 +109,12 @@ pub fn model_command(program: impl AsRef<OsStr>) -> Command {
 #[must_use]
 pub fn tokio(program: impl AsRef<OsStr>) -> tokio::process::Command {
     tokio::process::Command::from(command(program))
+}
+
+/// The checkpoints' `git` (ticket 43, answer 8): [`Variant::Checkpoints`].
+#[must_use]
+pub fn checkpoints_tokio(program: impl AsRef<OsStr>) -> tokio::process::Command {
+    tokio::process::Command::from(wrapped(program.as_ref(), Variant::Checkpoints, false))
 }
 
 /// [`model_command`] as a `tokio` command (the kernel, `exec_command`).
@@ -284,6 +300,13 @@ pub fn profile(paths: &GuardPaths, variant: Variant) -> String {
         prefix_regex(&agent.join("auth.json")),
         prefix_regex(&agent.join("models.json"))
     );
+    if variant != Variant::Checkpoints {
+        let _ = writeln!(
+            text,
+            "(deny file-write* (subpath {}))",
+            quoted(&agent.join(CHECKPOINTS_DIR))
+        );
+    }
     let mut renames = vec![format!("(literal {})", quoted(agent))];
     if let Some(parent) = agent.parent() {
         renames.push(format!("(literal {})", quoted(parent)));
@@ -313,7 +336,7 @@ pub fn profile(paths: &GuardPaths, variant: Variant) -> String {
         quoted(&paths.binary),
         quoted(&paths.manifest)
     );
-    if variant == Variant::Full {
+    if variant != Variant::Browser {
         text.push_str(
             "(deny mach-lookup (global-name-prefix \"com.apple.coreservices.\") \
              (global-name-prefix \"com.apple.lsd.\"))\n",

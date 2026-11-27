@@ -15,6 +15,13 @@ use super::super::AgentSession;
 
 /// The custom type of the fixed text's row (D2).
 pub const REWOUND_TYPE: &str = "ya-conversation-rewound";
+/// yusAgent (YA-18, ticket 43, PR 3a): D2's sentence when the workspace files were restored too
+/// (§D of the ticket).
+pub const FILES_RESTORED: &str = "Workspace files were restored to how they were at that point.";
+/// The custom type of the row after a restore of the workspace files only (PR 3a).
+pub const RESTORED_TYPE: &str = "ya-workspace-restored";
+/// The text of that row (Q-P5, validated by Yusuf).
+pub const RESTORED_TEXT: &str = "[workspace-restored] The user restored the workspace files to how they were before an earlier turn; files may no longer match what this conversation shows.";
 
 impl AgentSession {
     /// yusAgent (YA-18, ticket 43): after a rewind, `rows` ride the next turn to the model, in
