@@ -1483,7 +1483,7 @@ Déclaré dans `ya_turns.rs` (`pub(super) mod checkpoints;`, à côté de `:32-3
   - premier `git` exécutable du `PATH` du pont ;
   - sous macOS, s'il est `/usr/bin/git`, `ya_guard::command("/usr/bin/xcode-select").arg("-p")` doit réussir ;
   - sinon : `Disabled(reason)`.
-  - Q-3a-1 : une variable de test, `YUSAGENT_CHECKPOINTS_GIT`, qui remplace la résolution (T26).
+  - Q-3a-1 : une variable de test, ~~`YUSAGENT_CHECKPOINTS_GIT`~~ **`PRIME_AGENT_TEST_CHECKPOINTS_GIT`** (corrigé, §P.13), qui remplace la résolution (T26).
 - **Commande** : `ya_guard::checkpoints_tokio(<git résolu>)` (§P.5), avec :
   - `env_clear()`, puis `HOME`, `PATH`, `TMPDIR` et `LANG=C` repris du pont ;
   - `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ALLOW_PROTOCOL=` (vide), `GIT_NO_LAZY_FETCH=1` ;
@@ -1598,8 +1598,8 @@ Push A, **tests seuls**. Chacun compile sur `main` et échoue sur son assertion 
 | T22b | idem | Aperçu juste après une restauration : `modifiedOutside` vide | `-32601` |
 | T23 | idem, `ModelServer` | `restore { files, conversation }` puis prompt : D2 avec la phrase des fichiers **une fois** dans la requête reçue (session vivante, Q-P4), rien des tours abandonnés, prompt système et tools identiques ; fichiers seuls : `[workspace-restored]` une fois | `-32601` |
 | T24 | idem | Workspace dépôt git (deux commits, une branche, un stash) : après deux prompts et une restauration, `rev-list --all --count`, `for-each-ref`, `stash list` identiques, et `status --porcelain` égal à celui d'avant le premier prompt | `-32601` |
-| T26 | idem | `YUSAGENT_CHECKPOINTS_GIT=/nonexistent` (Q-3a-1) : aperçu `available: false` avec le texte ; `_yus/session/rewind` passe | `-32601` |
-| T27 | idem (dossier agent dans le workspace, `auth.json` sentinelle et lien vers lui) et nouveau `crates/pa-cli/tests/ya_secret_guard_checkpoints_e2e.rs` (enveloppe forcée, ajouté à `.github/workflows/ya-secret-guard-macos.yml`) | Instantanés réussis ; aucun objet ne contient la sentinelle (`cat-file --batch-all-objects --batch`) ; une restauration n'écrit pas `auth.json` | dépôt absent |
+| T26 | idem | ~~`YUSAGENT_CHECKPOINTS_GIT`~~ `PRIME_AGENT_TEST_CHECKPOINTS_GIT=/nonexistent` (Q-3a-1, §P.13) : aperçu `available: false` avec le texte ; `_yus/session/rewind` passe | `-32601` |
+| T27 | idem (dossier agent dans le workspace, `auth.json` sentinelle et lien vers lui) et ~~nouveau `crates/pa-cli/tests/ya_secret_guard_checkpoints_e2e.rs` (enveloppe forcée, ajouté à `.github/workflows/ya-secret-guard-macos.yml`)~~ **corrigé (§P.13)** : un second test dans `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs` (enveloppe forcée, déjà lancé par le workflow macOS) | Instantanés réussis ; aucun objet ne contient la sentinelle (`cat-file --batch-all-objects --batch`) ; une restauration n'écrit pas `auth.json` | dépôt absent |
 | T28 | idem | Refs antidatées de 31 jours (`GIT_COMMITTER_DATE`, posées par le test) supprimées au premier prompt, refs récentes gardées, dossier d'un workspace disparu supprimé | refs encore là |
 | T29 | idem | `_yus/sessions/delete` d'une conversation : ses refs et son index supprimés | refs encore là |
 | T30 | `crates/pa-cli/tests/ya_acp_rewind_e2e.rs` (`ModelServer`) | **L-b, après reprise** : retour, puis `session/load` par un autre processus sans prompt entre les deux. Le rejeu montre la nouvelle branche, sans tour de réveil ; la requête suivante porte D2 **une fois** ; la dernière entrée du fichier est D2, enfant de `to` | ancienne branche rejouée |
@@ -1607,6 +1607,7 @@ Push A, **tests seuls**. Chacun compile sur `main` et échoue sur son assertion 
 | T32 | idem | `.gitattributes` `* filter=evil`, `.gitconfig` du `HOME` du test avec `filter.evil.clean` qui crée un témoin, et `.git/config` du projet avec `core.fsmonitor` vers un script témoin : l'instantané existe et aucun témoin n'est créé | dépôt absent |
 | T33 | idem | Refus pendant un tour et avec une autre fenêtre : textes de `rewind` | `-32601` |
 | T34 | idem | `sub/.git` avec un fichier : absent de l'arbre, `sub/` intact après une restauration | dépôt absent |
+| T35 (ajout de Yusuf, §P.13) | idem | Compte tenu à jour depuis les chemins changés : après un premier prompt (instantanés pris), le test crée à la main un dossier non ignoré qui fait passer le plafond de 20 000 fichiers ; au prompt suivant, pas d'instantané de début, aperçu `available: false` avec « Workspace snapshots are off in this folder: more than 20000 files. » | `-32601` |
 
 Contrôles, **verts avant et après** (non-régression de L-b, Q-P4) : T5a, T5b, T5c, T7 et T9 de `ya_acp_rewind_e2e.rs` (D2 une fois en session vivante, annonces remises une fois). Ils passent de la file au fichier sans changer d'assertion.
 
@@ -1644,10 +1645,25 @@ Banc et capture (règle 13, lancés par Claude Code sur le binaire de la branche
 
 #### P.12.9 Questions sur ce plan
 
-- **Q-3a-1** : variable de test `YUSAGENT_CHECKPOINTS_GIT` (chemin de git) pour T26, plutôt qu'un `PATH` sans git, qui casserait les autres lancements du démon ?
+- **Q-3a-1** : variable de test ~~`YUSAGENT_CHECKPOINTS_GIT`~~ (nommée `PRIME_AGENT_TEST_CHECKPOINTS_GIT`, §P.13) (chemin de git) pour T26, plutôt qu'un `PATH` sans git, qui casserait les autres lancements du démon ?
 - **Q-3a-2** : après une restauration des fichiers, la ref `fin` prend l'instantané restauré, pour que l'aperçu suivant ne liste pas les fichiers restaurés comme modifiés hors de l'agent ?
 - **Q-3a-3** : la restauration des fichiers seuls écrit `[workspace-restored]` dans le fichier et reconstruit le contexte, comme L-b (le texte survit à une reprise) ?
 - **Q-P10** : cherry-pick de `a3e261c27` dans un ticket à part (recommandé), ou dans 3a (§P.11) ?
+
+### P.13 Réponses de Yusuf au §P.12.9 (27/11/2026)
+
+- **Q-3a-1 : d'accord pour une variable de test**, nommée comme les variables du fork, listée dans `docs/fork-changes.md`, lue par le démon seulement.
+  - **Nom** : `PRIME_AGENT_TEST_CHECKPOINTS_GIT`, au format des variables du fork (`PRIME_AGENT_SECRET_GUARD`, `PRIME_AGENT_TEST_PERMISSIONS`, `docs/fork-changes.md`). Le plan est corrigé (§P.12.3, §P.12.7, §P.12.9).
+  - **Lecteur** : le code des instantanés, dans la crate `pa-daemon` (`acp/ya_turns/checkpoints/git.rs`), qui tourne dans le processus du pont ACP (réponse 3). **Précision à valider** : c'est le pont du démon, pas le worker.
+  - Le kernel ne la reçoit pas : son environnement est une liste blanche de noms explicites (`crates/pa-core/src/kernel/env_allowlist.rs:66-72`), qui ne la contient pas.
+- **Q-3a-2 : d'accord** (`fin` = l'instantané restauré).
+- **Q-3a-3 : d'accord** (fichiers seuls : ligne écrite et contexte reconstruit).
+- **Q-P10 : ticket à part pour `a3e261c27`.**
+- **Test ajouté au push A, T35** : compte et taille tenus à jour depuis les chemins changés. Un changement hors de l'agent entre deux tours (un gros dossier non ignoré créé à la main) fait passer un plafond de workspace et désactive les instantanés avec le message. Rouge sur son assertion avant le code (§P.12.7, ligne ajoutée).
+
+**Écart au plan, signalé** : T27 sous enveloppe va dans un second test de `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs`, déjà lancé par le workflow macOS (`.github/workflows/ya-secret-guard-macos.yml:56-58`), plutôt que dans un nouveau fichier ajouté au workflow : même harnais, pas de changement de workflow (§P.12.7 corrigé).
+
+**Branche** : `ya-43-instantanes-3a` part de `ya-43-instantanes`, c'est-à-dire de `main` (`c6f0b8278`) avec les commits de doc du ticket, dont ce §P.13.
 
 ## Annexe : mesure préliminaire, git seul
 
