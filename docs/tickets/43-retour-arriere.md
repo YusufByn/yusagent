@@ -40,7 +40,7 @@ Sources :
   3. instantanés du workspace par tour dans un dépôt git shadow (YA-18), avec restauration et extension ;
   4. panneau du kernel.
   
-  Détail au §G. Questions au §G.6.
+  Détail au §G. Questions au §G.7 ; réponses de Yusuf au §H ; plan de code de la PR 1 au §I.
 
 ## A. Ce qui existe déjà
 
@@ -407,6 +407,202 @@ Les scripts de contrôle seront d'abord lancés par Claude Code sur le binaire (
 9. **Autre client attaché** (TUI) pendant un retour en arrière : refuser, ou laisser faire comme pour un prompt ?
 10. **Feuille non inscrite avant le prompt suivant** (§A.2) : accepter comme Unharnessed, ou inscrire la feuille tout de suite (entrée ajoutée, qui changerait la forme du fichier de session) ?
 11. **`workspace_snapshot` mort chez nous** : le laisser (règle 2 : pas de changement upstream sans raison), ou reprendre `20b4ad74b` dans un ticket à part ? La ligne du ticket 41 (`git.rs:121`) disparaîtrait avec lui (`docs/fork-changes.md` à mettre à jour).
+
+## H. Réponses de Yusuf (27/11/2026)
+
+Reportées au journal du CDC (ligne du 27/11/2026, ticket 43).
+
+1. **D2**, texte validé tel quel (§D).
+2. **K-a** : les commandes `bash()` des tours abandonnés continuent.
+3. **Découpage** :
+   - PR 1 et 2 fusionnées en une seule PR (pont et extension), puis PR 3, puis PR 4 ;
+   - **écart au CDC accepté** : pas de restauration des fichiers avant la PR 3 ;
+   - pour la PR 3, instantanés pris dans le pont.
+4. **Un dépôt shadow par workspace**, avec un index par session.
+5. **Sans git** : instantanés désactivés, avec un message.
+6. **Exclusions** :
+   - `.gitignore` respecté, liste par défaut quand il n'y en a pas, plafonds ;
+   - valeurs à proposer au plan de code de la PR 3, mesurées sur `~/Desktop/yusagent` ;
+   - dépôts imbriqués : limite à documenter.
+7. **Pas de validation d'avance** pour le panneau du kernel : lignes upstream exactes au plan de code de la PR 4. Si c'est trop, la PR 4 se coupe (commandes et ports, puis variables).
+8. **Refus d'écriture du dossier des instantanés pour le kernel**, et git des instantanés lancé sous une variante du profil. Si cela coûte plus de quelques lignes, je m'arrête et je chiffre.
+9. **Retour en arrière refusé** quand un autre client est attaché.
+10. **Feuille non inscrite avant le prompt suivant** : acceptée pour la PR 1, à rouvrir à la PR 3.
+11. **`workspace_snapshot` laissé tel quel.**
+
+Ajouts :
+
+- **Test supplémentaire au point 5 du §G.5** : feuille avant le prompt = ligne custom (annonce `[skills-changed]` du ticket 31, texte D2 d'un retour précédent). `navigation_point` remonte au parent (`branch_navigation.rs:550-552`). Si le test est rouge : arrêt, et R-b proposé avec ses lignes exactes. **Résultat au §I.1 : rouge par lecture du code**, R-b proposé au §I.2.
+- **Mesure de l'aller-retour de `rewindTo`** par prompt, règle du ticket 42 : surcoût médian < 10 ms (§I.6).
+- Renvoi « Questions au §G.6 » corrigé en §G.7 (Résumé).
+
+## I. Plan de code de la PR 1 (pont et extension), sans code
+
+Branche de code : `ya-43-retour-arriere-pr1`, depuis `main`, avec les commits de doc de cette branche. Lignes citées : `main` à `f7c4b3fb7`.
+
+### I.1 Test ajouté (point 5) : rouge par lecture du code, R-a abandonnée
+
+Le test n'est pas lancé : aucun code n'est écrit à ce stade. Le résultat se lit dans le code.
+
+- **Les deux cas cités ne mettent pas la feuille sur une ligne custom** :
+  - les lignes rangées pour le tour suivant (`pending_next_turn`, où va le texte D2) et l'annonce `[skills-changed]` (`ya_resource_notice`) partent en « prefix rows » du tour du prompt lui-même, avant la ligne acceptée (`crates/pa-daemon/src/worker/turn.rs:1036-1047`) ;
+  - le pont lit la feuille avant d'envoyer `PromptAndWait` (`crates/pa-daemon/src/acp/daemon.rs:1633`, puis `:1637`) ;
+  - ces lignes sont donc **après** `rewindTo`. Elles partent avec le tour abandonné, comme chez Unharnessed.
+- **D'autres lignes `custom_message` s'écrivent hors d'un tour** :
+  - `append_custom_message` (`crates/pa-daemon/src/session_custom.rs:17-31`) ;
+  - `/refine` (`session_custom.rs:286`, `:296`) ;
+  - l'auto-refine en fin de tour (`crates/pa-daemon/src/worker/lifecycle.rs:591`, `:602`).
+  
+  Après l'une d'elles, la feuille avant le prompt suivant est une `custom_message`. `navigate_tree` irait alors à son parent (`branch_navigation.rs:550-552`) et la retirerait de la branche, alors qu'Unharnessed reste sur `to` (`uh:crates/uh-core/src/session_engine/compaction_arms.rs:442`). **Le test serait rouge sous R-a.**
+- Deuxième écart de R-a : `navigate_tree` **interrompt** un tour en cours (`branch_navigation.rs:178`, `:497-510`) au lieu de refuser. Un refus dans le pont laisse une course avec un tour de réveil qui démarre entre le refus et la commande.
+- **Défaut commun à R-a et R-b** : l'annonce `[skills-changed]` retirée par un retour en arrière ne serait pas refaite.
+  - Ce que le modèle sait des skills et des serveurs est tenu en mémoire (`Tracker.known`, `crates/pa-core/src/session_engine/ya_resource_notice.rs:87-97`), pas relu dans l'historique.
+  - Après le retour, le moteur croit le modèle informé ; le modèle ne l'est plus.
+  - Correction dans le plan : remettre l'annonce en file (§I.3, étape 5).
+
+### I.2 R-b : lignes exactes
+
+| Option | Worker | Lignes upstream |
+|---|---|---|
+| **R-b0** (recommandée) | Deux actions, `rewind` et `leaf`, de la commande du fork `ya_permissions`, comme `holds` au ticket 29 (`crates/pa-daemon/src/ya_permissions.rs:343-347`). Code dans un sous-module du fork, `crates/pa-daemon/src/ya_permissions/rewind.rs`, déclaré dans `ya_permissions.rs`. La variante `YaPermissions { action, rest }` existe déjà (`crates/pa-types/src/daemon/command.rs:671-678`) | **Worker : 0.** Pont : `daemon.rs` +5 −1 (ci-dessous). **Total : +5 −1** |
+| R-b1 | Commande dédiée `ya_rewind` | R-b0, plus : `crates/pa-types/src/daemon/command.rs` +8 (variante), `crates/pa-daemon/src/protocol.rs` +5 (`KNOWN_COMMAND_TYPES`, routage `command_active_session_id` sur 3 lignes, `command_type_name`, comme `ya_permissions`, `docs/fork-changes.md:1142`), `crates/pa-daemon/src/worker/commands.rs` +1 (aiguillage). **Total : environ +19 −1** |
+
+Le nom `ya_permissions` est trompeur pour un retour en arrière : c'est le prix des 0 ligne, et le ticket 29 a fait le même choix pour `holds`. Le doc-commentaire de la variante (`command.rs:668-670`, lignes du fork dans un fichier upstream) n'est pas touché : les actions sont décrites dans `ya_permissions.rs`, comme `holds` et `others`.
+
+**Lignes upstream de R-b0, toutes dans `crates/pa-daemon/src/acp/daemon.rs`** :
+
+1. Aiguillage de `_yus/session/rewind`, **+4**, inséré après le bras de `steer` (`:1171-1174`, bras à `:1172`), même forme :
+   ```rust
+           // yusAgent (YA-18, ticket 43): going back to before a prompt.
+           super::ya_turns::rewind::METHOD => {
+               super::ya_turns::rewind::serve(&id, &params, link, state, &tx).await;
+           }
+   ```
+2. `turnStart` d'un prompt avec `rewindTo`, **−1 +1** à `:1633` :
+   ```rust
+   -    super::ya_turns::publish_turn_start(&producer, turn_id, super::ya_turns::prompt_start()).await;
+   +    super::ya_turns::publish_prompt_start(&producer, turn_id, link, state).await;
+   ```
+   La ligne fait 82 caractères : rustfmt la garde sur une ligne (largeur 100 par défaut, pas de `rustfmt.toml` dans le dépôt). `publish_prompt_start` (fork, `ya_turns.rs`) lit l'identifiant de session du démon dans `state` et la feuille par l'action `leaf`, puis appelle `publish_turn_start`.
+
+Aucune autre ligne upstream : `ya_turns.rs`, `ya_history.rs`, `ya_permissions.rs`, `usage_log.rs`, l'extension et les outils du banc sont des fichiers du fork.
+
+### I.3 Comportement
+
+**Pont, `_yus/session/rewind { sessionId, to }`** (nouveau `crates/pa-daemon/src/acp/ya_turns/rewind.rs`, déclaré dans `ya_turns.rs` comme `steer`) :
+1. Session inconnue : `-32603`, « Unknown ACP session: {id} » (texte d'Unharnessed).
+2. Un tour en cours (prompt de ce client, tour de l'agent ou steer) : `-32603`, « The agent is working: stop it before going back. » (texte d'Unharnessed).
+3. **Réponse 9**, autre client attaché qui répond (même vérification que C12, `ya_history::other_askers`, `ya_history.rs:170-187`, passée en `pub(super)`) : `-32603`, « This conversation is open in another window: close it there before going back. » (proposition, sur le modèle de C12, `ya_history.rs:149`). Démon trop ancien : refus de C12 (`ya_history.rs:162`).
+4. Action `rewind` du worker. Réponse `{}`, ou erreur reportée (`-32602` avec `data.details` pour une entrée hors de la branche, `-32603` sinon).
+5. Après le succès : le goal est republié, comme Unharnessed (`rewind.rs:64`), par `fetch_autonomous_status` (déjà `pub(super)`). Rien pour l'usage : l'indicateur de contexte est reporté (ligne du 21/11/2026).
+
+**Worker, action `rewind { to }`** (sous-module `ya_permissions/rewind.rs`) :
+1. Sous le verrou du cœur :
+   - refus « The agent is working: stop it before going back. » si `core.busy` ou `core.compacting` ;
+   - refus « {to} is not in the conversation » si `to` n'est pas sur la branche active (`store.branch_file_entries()`, `session_tree.rs:210`).
+2. Toujours sous le verrou : `core.queued_input_suspended` est mis à vrai (`worker/session_core.rs:90-94`), en gardant l'ancienne valeur. Aucun tour (réveil, file) ne démarre pendant le déplacement. C'est l'équivalent du verrou d'Unharnessed (`rewind.rs:34-36`).
+3. `store.branch_to(Some(to))` (`session_tree.rs:140`), en mémoire comme Unharnessed (réponse 10) ; entrées de la branche relevées.
+4. Entrées abandonnées : celles de l'ancienne branche après `to`.
+5. **Remise en file** dans `core.pending_next_turn`, dans l'ordre :
+   - les lignes abandonnées de type `ya-resources-changed` (`ya_resource_notice.rs:36`), pour la cohérence de `Tracker.known` (§I.1) ;
+   - et `ipython_state_restored`, le kernel restauré restant vrai (`state_restore_notice.rs`), à valider (Q-I2) ;
+   - les lignes D2 déjà en file sont retirées (deux retours de suite : un seul texte) ;
+   - puis le texte D2.
+6. Verrou rendu. `engine.rebuild_session_context(entrées, GoalBranchReload::FaithfulBranch)` sur un fil bloquant (`engine.rs:170`, comme `branch_navigation.rs:532-542`).
+7. `queued_input_suspended` remis à son ancienne valeur. Le runner est réveillé si la file n'est pas vide (mécanisme exact à établir au code ; test T11).
+8. `usage_log::lookup(session_id)` (`usage_log.rs:728-732`), puis `note_invalidation({"cause": "rewind"})`.
+   - `note_invalidation` remplace aujourd'hui la note en attente (`:491-493`) : il fusionnera, pour que la note du masquage ne l'efface pas (fichier du fork).
+   - **À vérifier au code** : le journal du worker est-il enregistré dans le registre (`for_session`, `:451-470`) ? S'il ne l'est pas, je m'arrête et je propose une autre voie.
+
+**Écart au §D et au §A.5** : le texte D2 ne passe plus par la commande `restore_next_turn`. L'action `rewind` le range elle-même dans `core.pending_next_turn` (étape 5), dans le même passage sous le verrou que le déplacement : pas de seconde requête, pas de fenêtre entre les deux. C'est la même file : `restore_next_turn` y écrit aussi (`session_custom.rs:59`).
+
+**Ligne D2** : `{ role: "custom", customType: "ya-conversation-rewound", content: <texte validé>, display: true, details: null }`, même forme que l'annonce du ticket 31 (`ya_resource_notice.rs:435`).
+- Le pont ne montre pas les lignes custom (seules les annonces passent par `ya_notice.rs:18-27`) ; au rejeu, une ligne custom suivie d'un prompt n'ouvre pas de tour de réveil (`ya_history.rs:282`).
+- À prouver par l'e2e : rien d'affiché, pas de tour en plus.
+
+**Worker, action `leaf`** : `{ leafId }` sous le verrou du cœur. C'est plus léger que `get_state` (résumé complet, `worker/summary.rs:119`).
+
+**`rewindTo`** :
+- prompt de ce client : feuille lue par `leaf` juste avant `turnStart`. En cas d'échec de la lecture, `rewindTo` est absent et le tour part quand même ;
+- tour de l'agent : absent, comme Unharnessed (`uh:.../acp/prompt.rs:328`) ;
+- steer : absent, D3 du ticket 39 inchangé (écart déjà validé : Unharnessed le met) ;
+- rejeu de `session/load` : parent de l'entrée de chaque prompt rejoué.
+  - Les messages rejoués n'ont pas d'id d'entrée (`ya_history.rs:220-235`, `get_session_messages`) ;
+  - d'où un appel à `get_session_tree` au chargement (`branch_navigation.rs:63-75`) : branche active depuis `leafId`, puis le k-ième message user de la branche apparié au k-ième tour de prompt rejoué ;
+  - 0 ligne upstream ; une requête par chargement (Q-I4).
+
+**Extension** :
+- `"_yus/session/rewind"` ajouté aux méthodes servies (`src/ya/methods.ts:10-41`), d'où `features().rewind` vrai (`:57`) ;
+- le test du « méthode non servie » prend `_yus/kernel/tail` à la place de `_yus/session/rewind` (`test/unit/agent.test.ts:85-87`) ;
+- agent factice : sert `_yus/session/rewind` et envoie `rewindTo` (`test/fake-agent/fake-agent.mjs:113-119`) ;
+- aucun autre changement : le clic, l'appel et le renvoi existent (`src/chat.ts:600-612`, `:657-670`).
+
+### I.4 Fichiers
+
+| Fichier | Statut | Changement |
+|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | upstream | +5 −1 (§I.2) |
+| `crates/pa-daemon/src/acp/ya_turns.rs` | fork | `mod rewind;`, `publish_prompt_start`, `rewindTo` |
+| `crates/pa-daemon/src/acp/ya_turns/rewind.rs` | nouveau | méthode `_yus/session/rewind` |
+| `crates/pa-daemon/src/acp/ya_history.rs` | fork | `other_askers` en `pub(super)`, `rewindTo` au rejeu |
+| `crates/pa-daemon/src/ya_permissions.rs` | fork | `mod rewind;`, aiguillage des actions `rewind` et `leaf` |
+| `crates/pa-daemon/src/ya_permissions/rewind.rs` | nouveau | actions `rewind` et `leaf` |
+| `crates/pa-core/src/session_engine/usage_log.rs` | fork | `CAUSE_REWIND`, fusion dans `note_invalidation` |
+| `extensions/vscode/src/ya/methods.ts`, `test/unit/agent.test.ts`, `test/fake-agent/fake-agent.mjs`, `test/e2e/suite-real.ts` | fork | §I.3 |
+| `bench/tools/capture/ya43_rewind_check.py`, `ya43_rewindto_cost.py` | nouveaux | §I.5, §I.6 |
+| `docs/fork-changes.md` | doc | une ligne par fichier, la ligne upstream de `daemon.rs` avec ses numéros |
+
+### I.5 Tests (rouges sur leur assertion avant le code)
+
+Rust (`pa-daemon`, lien simulé du pont et worker de test) :
+- **T1** `turnStart` d'un prompt : `rewindTo` = feuille avant le prompt. Rouge : absent.
+- **T2** action `rewind` : feuille sur `to`, contexte reconstruit sans les tours abandonnés. Rouge : action inconnue.
+- **T3** refus pendant un tour (pont et worker) : texte exact, tour non interrompu. Rouge : `-32601`.
+- **T4** `to` hors de la branche : `-32602`, `data.details` « … is not in the conversation ». Rouge.
+- **T5** (ajout de Yusuf), trois volets :
+  - (a) feuille avant le prompt = `custom_message` écrite hors tour (`append_custom_message`, comme `/refine`) : après le retour, la feuille est cette ligne, elle reste dans la requête suivante. Sous R-a, le parent ;
+  - (b) `[skills-changed]` en ligne d'en-tête du tour abandonné : retirée avec le tour, puis remise en file, et présente une fois dans la requête suivante ;
+  - (c) D2 d'un retour précédent dans le tour abandonné, puis deux retours de suite : un seul D2 dans la requête suivante.
+  
+  Rouge : action inconnue.
+- **T6** (réponse 9) autre client attaché : refus avec le texte. Rouge.
+- **T7** requête au fournisseur factice après un retour et un prompt : messages = branche jusqu'à `to`, puis D2, puis le nouveau prompt ; rien des tours abandonnés ; prompt système et tools identiques à la requête d'avant. Rouge.
+- **T8** journal d'usage : `invalidation.cause == "rewind"` sur l'appel `main` suivant, et sur lui seul ; avec le masquage actif, les deux causes sont présentes. Rouge.
+- **T9** reprise (redémarrage du démon) après un retour et un prompt : branche reprise = nouvelle. Contrôle, pas forcément rouge.
+- **T10** `rewindTo` au rejeu de `session/load` = parent de l'entrée de chaque prompt. Rouge : absent.
+- **T11** avis `[bash-done]` arrivé pendant le retour : livré après, pas perdu (K-a). Contrôle de course.
+
+Extension :
+- **E1** `features().rewind` vrai ; le cas « méthode non servie » passe sur `_yus/kernel/tail`.
+- **E2** (agent factice) modifier le deuxième message puis le renvoyer : `_yus/session/rewind { sessionId, to }`, puis `session/prompt`, dans cet ordre, avec le `rewindTo` du tour. Rouge : la méthode est refusée sur place.
+- **E3** (e2e, vrai binaire, serveur scripté) trois prompts, modification du deuxième : la troisième requête reçue par le serveur suit T7 ; aucune ligne affichée pour D2.
+
+### I.6 Mesures et capture
+
+- **Aller-retour de `rewindTo`** (règle du ticket 42, surcoût médian < 10 ms) :
+  - `bench/tools/capture/ya43_rewindto_cost.py`, sur le modèle de `ya42_cost.py` : blocs alternés `main` et branche, session ACP neuve par bloc, scénario `smoke-warmup` ;
+  - métrique : délai côté client entre l'envoi de `session/prompt` et la réception du `turnStart` du tour. L'écart des médianes isole la lecture de `leaf` : sur `main`, `turnStart` part sans aller-retour ;
+  - médiane et p95 par binaire ; commande et sortie au ticket ;
+  - au-delà de 10 ms : je m'arrête et je propose de lire la feuille dans le résumé déjà renvoyé au pont, ou plus tôt.
+- **Préfixe** :
+  - `bench/tools/capture/ya43_rewind_check.py` (cas `rewind` : trois prompts, retour avant le troisième, renvoi modifié) ;
+  - plus `compare.py --all` contre `main` sur les scénarios existants : `TOUT IDENTIQUE` attendu, la PR ne change rien sans retour en arrière ;
+  - et `compare_frames.py --against <main> --expect` : seules les trames `turnStart` (champ `rewindTo`) diffèrent.
+- Toujours `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`.
+
+### I.7 Contrôle manuel pour Yusuf
+
+Celui du §G.6 (PR 1 et 2), d'abord lancé par Claude Code sur le binaire de la branche (règle 13), plus deux cas :
+1. `/refine` puis modification du message suivant : la ligne de refine reste.
+2. Conversation ouverte dans le TUI en même temps : refus avec le texte du point 3 du §I.3.
+
+### I.8 Questions sur ce plan
+
+- **Q-I1** : R-b0 (actions sur la commande du fork `ya_permissions`, 0 ligne upstream côté worker, précédent `holds`) ou R-b1 (commande dédiée, environ +19 −1 au total) ? Recommandé : R-b0.
+- **Q-I2** : remettre aussi en file `ipython_state_restored` quand il est retiré par un retour en arrière, ou seulement les annonces `ya-resources-changed` (nécessaires à la cohérence du `Tracker`) ?
+- **Q-I3** : texte du refus de la réponse 9 : « This conversation is open in another window: close it there before going back. »
+- **Q-I4** : `rewindTo` au rejeu de `session/load` (un `get_session_tree` par chargement) dans cette PR, ou reporté ? Sans lui, après « Relancer », seuls les nouveaux messages sont modifiables.
+- **Q-I5** : suspension de la file pendant le retour (`queued_input_suspended`, étape 2), ou course acceptée comme `navigate_tree` d'upstream ?
 
 ## Annexe : mesure préliminaire, git seul
 
