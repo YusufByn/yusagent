@@ -354,3 +354,32 @@ cd - && git worktree remove --force "$CLAUDE_JOB_DIR/tmp/wt42"
 ```
 
 Lancée par Claude Code le 27/11/2026. Sorties : `a05 exit=1`, conflit `crates/pa-daemon/src/agent_engine/tests.rs` (blocs aux lignes 15 et 52, 2 blocs résolus, 0 restant) ; `dad exit=0` ; `6e4 exit=0`. Tri du numstat : `test/doc 19 fichiers +3683 -749`, `prod 33 fichiers +2152 -535`.
+
+## H. Décisions de Yusuf (27/11/2026)
+
+1. Durée de vie du jeton ChatGPT : **inconnue**, `auth.json` de Yusuf non lu.
+2. **Option 2.**
+3. Rafraîchissement forcé sur un 401 d'un jeton encore valide localement : **hors de ce ticket** (limite, §H.1).
+4. **Couture de 3 lignes dans `model.rs`** pour passer l'intégration OAuth, pas de copie des 25 lignes : une seule implémentation de la résolution. Total upstream attendu : environ +7 / −1, **lignes exactes annoncées avant le push 2**.
+5. **Verrou entre processus dans cette PR.**
+6. **Coût par appel**, mesuré au push 2 : médiane et p95 du temps ajouté par appel, sur un nombre d'appels donné, commande au ticket. Règle fixée d'avance :
+   - surcoût médian < 10 ms : on garde la résolution à chaque appel ;
+   - sinon : une `AuthStorage` par moteur, proposée avant de coder.
+7. Extension inchangée.
+8. `-p` non couvert (limite, §H.1).
+
+Aussi : `extensions/vscode/.DS_Store` retiré du dépôt (commit à part, `bb7c662fe` étant déjà poussé), et une ligne au journal du CDC pour ces décisions.
+
+### H.1 Limites
+
+- **401 sur un jeton encore valide localement** (jeton révoqué côté serveur, horloge décalée) : pas de rafraîchissement forcé. Le tour échoue comme aujourd'hui (une relance, puis « Not signed in… or the sign-in has expired »), puis reconnexion par l'écran Providers.
+  - Upstream le traite dans `dad2232cc` (« force-refresh a rejected OAuth credential and end the turn with re-login guidance (#4041) »).
+  - Le reprendre demande de forcer le rafraîchissement, ce que `crates/pa-core/src/auth/manager/lookup.rs:65-82` ne fait qu'à `now >= expires` : il faudrait des lignes upstream dans la couche providers (règle 3).
+- **`-p`** : la clé y est résolue une fois au lancement (`crates/pa-cli/src/print_runtime.rs:694`), comme chez upstream après `a05bcb695`. Une exécution `-p` est courte.
+
+### H.2 Lignes upstream : ce qui part au push 1 et ce qui reste pour le push 2
+
+- **Push 1** (squelette branché, sans effet) :
+  - `crates/pa-daemon/src/agent_engine.rs` : +2 (commentaire + `mod ya_live_auth;`) ;
+  - `crates/pa-daemon/src/agent_engine/lifecycle.rs:1012` : +2 / −1 (le flux de la session passe par `ya_live_auth::stream_fn`).
+- **Push 2** : la couture de `model.rs`. Lignes exactes au §I, avant le push 2.
