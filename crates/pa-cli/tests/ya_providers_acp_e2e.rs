@@ -24,6 +24,8 @@
 //!     locally), then `login_cancel`: neither the URL nor its `state` is on the bridge's stderr
 //!     or in a file under the home; the fake browser outside the home got them.
 //! 8c. The same for the Claude subscription, whose `state` is its PKCE verifier.
+//! 15. Ticket 42: a token renewed on disk serves the running session and is found nowhere else
+//!     under the home.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -472,9 +474,9 @@ fn labels(home: &Home) -> Vec<&'static str> {
 
 /// Test 1a (H1): a key rewritten in `auth.json` outside the bridge, as `/login` in a terminal
 /// does, reaches the running session's next request. Red while the session keeps the key it
-/// was built with; outside the bridge, this is ticket E-C's.
+/// was built with (H1, ticket 40, §18); the request auth is re-resolved before each provider call
+/// since ticket 42 (`ya_live_auth`).
 #[test]
-#[ignore = "H1, confirmed red (ticket 40, §18): the running session keeps its build-time credential; ticket E-C (upstream a05bcb695, dad2232cc)"]
 fn h1_an_api_key_rewritten_on_disk_reaches_the_running_session() {
     let home = Home::new(false);
     home.write_auth(&json!({ "ya40": api_key("sk-ya40-old") }));
@@ -498,9 +500,9 @@ fn h1_an_api_key_rewritten_on_disk_reaches_the_running_session() {
 
 /// Test 1b (H1): an `OAuth` token renewed in `auth.json`, as another process's refresh would
 /// leave it, reaches the running session's next request. A token the agent refreshes itself is
-/// not testable offline (the token URLs are fixed); that is ticket E-C's.
+/// not testable offline here (the token URLs are fixed): `pa-daemon`'s `ya_live_auth_tests.rs`
+/// covers it over a scripted token endpoint (ticket 42).
 #[test]
-#[ignore = "H1, confirmed red (ticket 40, §18): the running session keeps its build-time credential; ticket E-C (upstream a05bcb695, dad2232cc)"]
 fn h1_an_oauth_token_renewed_on_disk_reaches_the_running_session() {
     let home = Home::new(false);
     let token = |access: &str| {
@@ -523,6 +525,38 @@ fn h1_an_oauth_token_renewed_on_disk_reaches_the_running_session() {
         "Bearer tok-ya40-renewed",
         "H1: the running session kept the token it was built with; requests: {:?}",
         labels(&home)
+    );
+}
+
+/// Test 15 (ticket 42, `docs/tickets/42-jeton-session-vivante.md` §G): an `OAuth` token renewed in
+/// `auth.json` serves the running session's next request, and is found nowhere else under the
+/// home: not on the bridge's stderr, not in the session files, not in the usage log.
+#[test]
+fn a_renewed_token_is_nowhere_but_auth_json() {
+    let home = Home::new(false);
+    let renewed = "tok-ya42-renewed-5b1e2d";
+    let token = |access: &str| {
+        json!({ "type": "oauth", "access": access, "refresh": "r-ya40",
+                "expires": now_ms() + 3_600_000 })
+    };
+    home.write_auth(&json!({ "ya40": token("tok-ya40-old") }));
+    let mut client = Client::spawn(&home);
+    let session = client.open();
+    let _ = client.prompt(&session, "first");
+    home.write_auth(&json!({ "ya40": token(renewed) }));
+    let _ = client.prompt(&session, "second");
+    let served = last_authorization(&home) == format!("Bearer {renewed}");
+    assert!(
+        served,
+        "precondition: the renewed token serves the second request; requests: {:?}",
+        labels(&home)
+    );
+    drop(client);
+    let found = files_containing(home.path(), renewed);
+    assert!(
+        found.is_empty(),
+        "the renewed token is in {found:?} (stderr: {})",
+        home.stderr_file().display()
     );
 }
 

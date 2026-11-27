@@ -1010,6 +1010,8 @@ impl AgentSessionEngine {
         // `set_model` swaps it so the built session follows without a
         // rebuild.
         let stream_fn = switchable_stream_fn(std::sync::Arc::clone(&self.provider_target));
+        // yusAgent (YA-02, YA-10, ticket 42): request auth re-resolved before each call.
+        let stream_fn = super::ya_live_auth::stream_fn(self, stream_fn);
         {
             // The build's resolve-and-install serializes with `/reload`'s
             // live-input refresh (the other slot writers' fence): a reload
