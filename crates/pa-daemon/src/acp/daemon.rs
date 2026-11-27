@@ -1172,6 +1172,10 @@ async fn handle_incoming(
         super::ya_turns::steer::METHOD => {
             super::ya_turns::steer::serve(&id, &params, link, state, &tx).await;
         }
+        // yusAgent (YA-18, ticket 43): going back to before a prompt.
+        super::ya_turns::rewind::METHOD => {
+            super::ya_turns::rewind::serve(&id, &params, link, state, &tx).await;
+        }
         "session/set_config_option" => {
             handle_set_config_option(id, params, link, state, tx).await;
         }
@@ -1630,7 +1634,7 @@ async fn prompt_turn(
         producer.finish_prompt(turn_id).await;
         return cancelled_response(&id);
     }
-    super::ya_turns::publish_turn_start(&producer, turn_id, super::ya_turns::prompt_start()).await;
+    super::ya_turns::publish_prompt_start(&producer, turn_id, link, state).await;
     // yusAgent (YA-10, ticket 24): this client answers the permission requests again, for a
     // worker relaunched since the last turn (the relaunch replays `create`, not `attach`).
     super::ya_permissions::rearm_asker(link, &hosted_daemon_session_id).await;

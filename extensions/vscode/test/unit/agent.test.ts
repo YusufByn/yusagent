@@ -82,9 +82,10 @@ test("méthode non servie : rejet sur place, aucune trame", async () => {
   const h = open();
   await ready(h);
   const before = received(h.dir, lastPid(h)).length;
-  // Ticket 28 : `session/list` est servie ; `_yus/session/rewind` ne l'est pas encore (noms du ticket 32).
+  // Ticket 28 : `session/list` est servie ; `_yus/kernel/tail` ne l'est pas encore (noms du ticket 32).
   // Ticket 39 : `_yus/session/steer` est servie (tests « message pendant un tour » plus bas).
-  await assert.rejects(shown(h).agent.request("_yus/session/rewind", {}), /pas encore servie/);
+  // Ticket 43 : `_yus/session/rewind` est servie (tests « retour en arrière » plus bas).
+  await assert.rejects(shown(h).agent.request("_yus/kernel/tail", {}), /pas encore servie/);
   shown(h).agent.notify("_yus/whatever", {});
   assert.equal(received(h.dir, lastPid(h)).length, before);
 });
@@ -575,3 +576,30 @@ test("deux messages pendant un tour (E2) : le second ne part qu'après la répon
   assert.deepEqual(promptTexts(h), ["longue"], "aucun doublon");
 });
 
+// Ticket 43 (PR 1) : retour en arrière (`_yus/session/rewind`), contre l'agent factice, qui publie
+// `rewindTo` dans le `turnStart` de chaque prompt et accepte le retour, comme le pont.
+test("retour en arrière : servi (features().rewind)", () => {
+  assert.equal(features().rewind, true);
+});
+
+test("retour en arrière : modifier un message envoyé, rewind avec son rewindTo puis le prompt, tours suivants retirés", async () => {
+  const h = open();
+  await ready(h);
+  shown(h).chat.send("bonjour", []);
+  await idle(h);
+  shown(h).chat.send("bonjour", []);
+  await idle(h);
+  const [first] = turnsOf(h);
+  assert.equal(first.rewindTo, "entry-before-1", "rewindTo lu dans turnStart");
+  shown(h).chat.send("bonjour", [], first.id);
+  await waitFor(() => framesOf(h, "session/prompt").length === 3 || lastTurn(h)?.kind === "turn" && lastTurn(h)?.state === "failed", "renvoi parti ou refusé");
+  await idle(h);
+  const rewinds = framesOf(h, "_yus/session/rewind");
+  assert.equal(rewinds.length, 1, `un rewind part sur le fil : ${JSON.stringify(lastTurn(h))}`);
+  assert.deepEqual(rewinds[0].params, { sessionId: "fake-session-1", to: "entry-before-1" });
+  const sent = received(h.dir, lastPid(h)).map((frame) => frame.method).filter((method) => method === "_yus/session/rewind" || method === "session/prompt");
+  assert.deepEqual(sent, ["session/prompt", "session/prompt", "_yus/session/rewind", "session/prompt"], "le rewind part avant le renvoi");
+  const turns = turnsOf(h);
+  assert.equal(turns.length, 1, "le tour modifié et le suivant sont retirés, le renvoi les remplace");
+  assert.equal(turns[0].state, "done");
+});

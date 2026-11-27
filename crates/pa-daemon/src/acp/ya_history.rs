@@ -167,7 +167,10 @@ pub(crate) fn older_daemon(link: &DaemonLink) -> String {
 
 /// The session's attached clients that answer, other than this bridge; `Err` is the refusal when
 /// the daemon cannot tell (defect 1 of the X1 check: it was read as `0`, and the load went on).
-async fn other_askers(link: &DaemonLink, daemon_session_id: &str) -> Result<u64, String> {
+pub(super) async fn other_askers(
+    link: &DaemonLink,
+    daemon_session_id: &str,
+) -> Result<u64, String> {
     let response = link
         .request(DaemonCommand::YaPermissions {
             id: None,

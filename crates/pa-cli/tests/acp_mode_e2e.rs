@@ -390,9 +390,10 @@ fn acp_prompt_stream_completion_envelope_and_stop_reason_match_ts() {
     assert_eq!(
         updates.first().map(|update| {
             update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["turnStart"]
+                ["origin"]
                 .clone()
         }),
-        Some(json!({ "origin": "prompt" }))
+        Some(json!("prompt"))
     );
     assert_eq!(
         shapes.get(1).map(|(tag, _, _, _)| tag.clone()),
@@ -910,7 +911,8 @@ fn acp_daemon_attached_cancels_mid_turn() {
     assert!(
         updates.iter().all(|update| {
             update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["turnStart"]
-                == json!({ "origin": "prompt" })
+                ["origin"]
+                == "prompt"
         }),
         "a cancelled turn publishes no boundary frames after the cancel: {updates:?}"
     );

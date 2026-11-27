@@ -51,6 +51,11 @@ pub use pa_types::daemon::ya_permissions::{
     ASKER_FIELD, COMMAND, MODE_EVENT, REQUEST_EVENT, RESOLVED_EVENT, STATE_FIELD,
 };
 
+// yusAgent (YA-18, ticket 43, Q-I1): this fork command also carries actions that are not about
+// permissions, so that they cost no upstream line: `holds` (ticket 29), `rewind` and `leaf`
+// (`_yus/session/rewind`, submodule `rewind`).
+pub(crate) mod rewind;
+
 /// Sends one session event to the attached clients.
 type Emit = Arc<dyn Fn(Value) + Send + Sync>;
 
@@ -345,6 +350,13 @@ impl Worker {
             let holds = holds_work(self.engine.as_ref()).await;
             return response_success(None, COMMAND, Some(json!({ "holds": holds })));
         }
+        // yusAgent (YA-18, ticket 43): the conversation back to before a prompt, and the leaf
+        // the bridge reads before a prompt (`rewind`).
+        match payload.get("action").and_then(Value::as_str) {
+            Some("rewind") => return self.ya_rewind(payload).await,
+            Some("leaf") => return self.ya_leaf(),
+            _ => {}
+        }
         let Some(engine) = self.agent_engine.as_ref() else {
             return response_failure(
                 None,
@@ -417,7 +429,7 @@ impl Worker {
             _ => response_failure(
                 None,
                 COMMAND,
-                "the action must be \"respond\", \"set_mode\", \"get\", \"asker\", \"others\" or \"holds\"",
+                "the action must be \"respond\", \"set_mode\", \"get\", \"asker\", \"others\", \"holds\", \"rewind\" or \"leaf\"",
                 None,
             ),
         }

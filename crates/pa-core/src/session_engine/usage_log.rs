@@ -379,6 +379,10 @@ pub const CAUSE_THINKING_LEVEL_CHANGE: &str = "thinking_level_change";
 /// ["system", "tools"]}`.
 pub const CAUSE_RESUME_PREFIX_CHANGE: &str = "resume_prefix_change";
 
+/// yusAgent (YA-18, ticket 43): `invalidation` cause of the first agent-loop call after the
+/// conversation went back to before a prompt (`_yus/session/rewind`): `{"cause": "rewind"}`.
+pub const CAUSE_REWIND: &str = "rewind";
+
 /// yusAgent (YA-10, ticket 24): one `invalidation` value from the entries of one call: absent
 /// without entry, the entry itself when there is one (the T05 shape), an array otherwise.
 fn merge_invalidations(mut entries: Vec<Value>) -> Option<Value> {
@@ -434,9 +438,9 @@ pub struct UsageJournal {
     session_id: String,
     parent_session_id: Option<String>,
     state: Mutex<JournalState>,
-    /// yusAgent (T05, YA-05): an invalidation noted by the context transform, taken by the
-    /// next agent-loop call.
-    pending_invalidation: Mutex<Option<Value>>,
+    /// yusAgent (T05, YA-05): the invalidations noted for the next agent-loop call (the context
+    /// transform; YA-18, ticket 43: a rewind), one per cause, in the order noted.
+    pending_invalidation: Mutex<Vec<Value>>,
 }
 
 impl UsageJournal {
@@ -482,20 +486,32 @@ impl UsageJournal {
             session_id,
             parent_session_id,
             state: Mutex::new(state),
-            pending_invalidation: Mutex::new(None),
+            pending_invalidation: Mutex::new(Vec::new()),
         }
     }
 
     /// yusAgent (T05, YA-05): notes that the request being built changed the prefix on
     /// purpose; the next agent-loop call carries it as its `invalidation` field.
+    /// yusAgent (YA-18, ticket 43, §I.9): a note replaces a pending note of the same `cause` in
+    /// place (a second masking step, a second rewind before the call) and joins the others.
     pub fn note_invalidation(&self, invalidation: Value) {
-        *lock(&self.pending_invalidation) = Some(invalidation);
+        let mut pending = lock(&self.pending_invalidation);
+        let cause = invalidation.get("cause").cloned();
+        let same = pending
+            .iter_mut()
+            .find(|noted| cause.is_some() && noted.get("cause") == cause.as_ref());
+        if let Some(noted) = same {
+            *noted = invalidation;
+        } else {
+            pending.push(invalidation);
+        }
     }
 
-    /// The invalidation noted for the call starting now, if any.
+    /// The invalidations noted for the call starting now: absent, the note itself, or an array
+    /// of the notes in the order noted.
     #[must_use]
     pub fn take_invalidation(&self) -> Option<Value> {
-        lock(&self.pending_invalidation).take()
+        merge_invalidations(std::mem::take(&mut *lock(&self.pending_invalidation)))
     }
 
     /// yusAgent (YA-10, ticket 24): the `invalidation` of the agent-loop call starting now with
@@ -543,7 +559,7 @@ impl UsageJournal {
             }
             changes
         };
-        entries.extend(self.take_invalidation());
+        entries.extend(std::mem::take(&mut *lock(&self.pending_invalidation)));
         merge_invalidations(entries)
     }
 

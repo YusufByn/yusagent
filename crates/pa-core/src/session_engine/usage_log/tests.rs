@@ -688,6 +688,33 @@ async fn simultaneous_causes_are_journaled_together() {
     );
 }
 
+// yusAgent (YA-18, ticket 43, §I.9): notes of different causes ride the next agent-loop call
+// together, in the order noted; a second note of the same cause replaces the first in place (a
+// second masking step, a second rewind before the call).
+#[tokio::test]
+async fn notes_of_different_causes_are_journaled_together() {
+    use pa_agent::types::ThinkingLevel::Medium;
+    let dir = tempfile::tempdir().unwrap();
+    let journal = Arc::new(journal(dir.path(), None));
+    ya_call(&journal, CallKind::Main, "claude-test", Medium).await;
+    let rewind = json!({ "cause": CAUSE_REWIND });
+    let masking = json!({"cause": "masking", "turn": 3, "frontier": 1, "masked": 1});
+    let later = json!({"cause": "masking", "turn": 5, "frontier": 2, "masked": 2});
+    journal.note_invalidation(rewind.clone());
+    journal.note_invalidation(masking);
+    journal.note_invalidation(later.clone());
+    journal.note_invalidation(rewind.clone());
+    ya_call(&journal, CallKind::Main, "claude-test", Medium).await;
+    ya_call(&journal, CallKind::Main, "claude-test", Medium).await;
+    let entries = lines(journal.path());
+    assert_eq!(
+        entries[1]["invalidation"],
+        json!([rewind, later]),
+        "both causes, in the order noted: {entries:?}"
+    );
+    assert!(entries[2].get("invalidation").is_none(), "journaled once");
+}
+
 #[tokio::test]
 async fn a_resumed_session_compares_with_the_last_journaled_main_call() {
     use pa_agent::types::ThinkingLevel::Medium;

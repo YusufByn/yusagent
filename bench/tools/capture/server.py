@@ -225,6 +225,9 @@ SCENARIOS: dict[str, list[str]] = {
     # quelques cellules, après la sonde réseau ; `smoke-fail` ne corrige rien.
     "smoke-probe": [NET_PROBE, READ_PROBE],
     "smoke-warmup": [],
+    # YA-18 (ticket 43) : contrôle du retour en arrière (`ya43_control.py`). La réponse dépend du
+    # texte du dernier prompt (voir `ya43_control_plan`), pas du nombre de résultats d'outils.
+    "ya43-control": [],
     # Préparation du venv du kernel, hors sandbox : aucune sortie réseau dans la cellule.
     "smoke-kernel": ["print('SMOKE_KERNEL_READY', 1)"],
     "smoke-py-example-001": [
@@ -387,6 +390,27 @@ def count_tool_results_anthropic(body: dict) -> int:
     return count
 
 
+YA43_CONTROL_CELLS = {
+    "pose x": "x = 1\nprint('X_SET', x)",
+    "x existe": "print('X_NOW', x)",
+    "lent": "import time\nopen('g2-started', 'w').write('x')\ntime.sleep(3)\nprint('G2_DONE')",
+}
+
+
+def ya43_control_plan(body: dict) -> str | None:
+    """YA-18 (ticket 43) : la cellule à jouer, d'après le texte du dernier message utilisateur ;
+    `None` après un résultat d'outil, ou sans mot clé (réponse texte)."""
+    messages = body.get("messages") or []
+    if not messages or messages[-1].get("role") != "user":
+        return None
+    content = messages[-1].get("content")
+    blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
+    if any(block.get("type") == "tool_result" for block in blocks if isinstance(block, dict)):
+        return None
+    text = " ".join(block.get("text", "") for block in blocks if isinstance(block, dict))
+    return next((code for key, code in YA43_CONTROL_CELLS.items() if key in text), None)
+
+
 def count_tool_results_responses(body: dict) -> int:
     items = body.get("input")
     if not isinstance(items, list):
@@ -524,6 +548,7 @@ class CaptureState:
         self.usage = UsageModel(prefix_cache)
         self.usage_split = usage_split
         self.wake_stop = scenario.startswith("wake-stop-")
+        self.ya43_control = scenario == "ya43-control"
         self.cells = [cell.replace(CONNECT_PROXY_PORT, str(connect_proxy_port or 9))
                       .replace(READ_PROBE_PATHS, repr(list(read_probe_paths)))
                       for cell in SCENARIOS[scenario]]
@@ -552,6 +577,11 @@ class CaptureState:
             if turn < len(self.codex_cells):
                 return Plan("tool", tool_name=CODEX_TOOL, code=self.codex_cells[turn],
                             freeform=True)
+            return Plan("final", text=FINAL_TEXT)
+        if self.ya43_control and not child:
+            code = ya43_control_plan(body or {})
+            if code is not None:
+                return Plan("tool", tool_name=first_tool_name(tools), code=code)
             return Plan("final", text=FINAL_TEXT)
         cells, final = (CHILD_CELLS, CHILD_FINAL_TEXT) if child else (self.cells, FINAL_TEXT)
         wake = wake_cell(body or {}) if self.wake_stop and not child else None
