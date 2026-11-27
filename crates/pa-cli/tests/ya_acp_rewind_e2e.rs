@@ -26,6 +26,8 @@
 //!     (K-a), on the new branch.
 //! T12. The first prompt of a session: `rewindTo` is the creation's last entry; a rewind there
 //!     starts the conversation again.
+//! T13, T14. The goal follows the rewind (push 9): the goal of the point is published before the
+//!     rewind answers, cleared (T13) or back (T14).
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -1121,5 +1123,99 @@ fn a_rewind_to_before_the_first_prompt_starts_the_conversation_again() {
         conversation(&file),
         vec![custom.as_str(), "user:first, changed", "assistant:two"],
         "the conversation starts again"
+    );
+}
+
+/// The goal of a bridge `_meta` frame (`session_info_update`, from the worker's `goal_update`).
+fn goal_of(frame: &Value) -> Option<&Value> {
+    Some(&meta(frame)["goal"]).filter(|goal| is_update(frame) && goal.is_object())
+}
+
+/// The last goal frame between `from` and `to` in `seen`.
+fn last_goal(seen: &[Value], from: usize, to: usize) -> Option<Value> {
+    seen[from..to].iter().rev().find_map(goal_of).cloned()
+}
+
+/// T13. A goal set in the abandoned turn: the rewind publishes the goal of the point, the empty
+/// state (`pa_types::goal::empty_goal_state`: `status` `idle`, no objective), before its answer, as
+/// `navigate_tree` does (`worker/commands.rs:199-215`).
+#[test]
+fn a_goal_of_the_abandoned_turn_is_cleared_before_the_rewind_answers() {
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        "one", "GOAL-PROGRESS", "WRAP-UP",
+    ] }));
+    let (session_id, _) = client.open_session();
+    client.ask(&session_id, "first");
+    let from = client.seen.len();
+    let goal = client.ask_start(
+        &session_id,
+        "/goal --budget 5 reply with exactly: GOAL-PROGRESS",
+    );
+    let shown = last_goal(&client.seen, from, client.seen.len());
+    assert_eq!(
+        shown.as_ref().map(|goal| goal["status"].clone()),
+        Some(json!("budget_limited")),
+        "precondition: the goal is shown after its turn: {shown:?}"
+    );
+    let from = client.seen.len();
+    let to = goal["rewindTo"].as_str().expect("a rewindTo").to_string();
+    let rewind = client.rewind(&session_id, &to);
+    let answered = client.wait_response(rewind);
+    assert_eq!(
+        client.seen[answered]["result"],
+        json!({}),
+        "{}",
+        client.seen[answered]
+    );
+    let published = last_goal(&client.seen, from, answered);
+    assert_eq!(
+        published
+            .as_ref()
+            .map(|goal| (goal["status"].clone(), goal["objective"].clone())),
+        Some((json!("idle"), Value::Null)),
+        "the goal frame clears the goal before the rewind answers: {published:?}"
+    );
+}
+
+/// T14. The other way: the goal of the point (`budget_limited`) was cleared in the abandoned turn
+/// (`/goal clear`); the rewind publishes it again before its answer.
+#[test]
+fn a_goal_cleared_in_the_abandoned_turn_comes_back_before_the_rewind_answers() {
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        "GOAL-PROGRESS", "WRAP-UP", "spare one", "spare two",
+    ] }));
+    let (session_id, _) = client.open_session();
+    client.ask_start(
+        &session_id,
+        "/goal --budget 5 reply with exactly: GOAL-PROGRESS",
+    );
+    let from = client.seen.len();
+    let clear = client.ask_start(&session_id, "/goal clear");
+    let cleared = last_goal(&client.seen, from, client.seen.len());
+    assert_eq!(
+        cleared.as_ref().map(|goal| goal["status"].clone()),
+        Some(json!("idle")),
+        "precondition: `/goal clear` clears the shown goal: {cleared:?}"
+    );
+    let from = client.seen.len();
+    let to = clear["rewindTo"].as_str().expect("a rewindTo").to_string();
+    let rewind = client.rewind(&session_id, &to);
+    let answered = client.wait_response(rewind);
+    assert_eq!(
+        client.seen[answered]["result"],
+        json!({}),
+        "{}",
+        client.seen[answered]
+    );
+    let published = last_goal(&client.seen, from, answered);
+    assert_eq!(
+        published
+            .as_ref()
+            .map(|goal| (goal["status"].clone(), goal["objective"].clone())),
+        Some((
+            json!("budget_limited"),
+            json!("reply with exactly: GOAL-PROGRESS")
+        )),
+        "the goal of the point comes back before the rewind answers: {published:?}"
     );
 }
