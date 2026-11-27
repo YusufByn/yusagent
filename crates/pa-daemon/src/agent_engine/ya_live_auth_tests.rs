@@ -351,10 +351,14 @@ fn a_stopped_refresh_still_serves_the_next_call() {
         .truncate(false)
         .open(agent_dir.join("auth.json.ya-refresh.openai-codex.lock"))
         .unwrap();
-    assert!(
-        pa_core::platform::try_lock_exclusive(&lock).is_ok(),
-        "the refresh released the cross-process lock"
-    );
+    // The refresh thread drops the lock right after the slot write: allow it a moment.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut locked = pa_core::platform::try_lock_exclusive(&lock).is_ok();
+    while !locked && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        locked = pa_core::platform::try_lock_exclusive(&lock).is_ok();
+    }
+    assert!(locked, "the refresh released the cross-process lock");
 }
 
 /// Test 13 (child): one worker's refresh, in its own process (`CHILD_AGENT_DIR`, `CHILD_LOG`);
