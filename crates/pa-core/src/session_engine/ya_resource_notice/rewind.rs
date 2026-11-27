@@ -19,9 +19,13 @@ pub const REWOUND_TYPE: &str = "ya-conversation-rewound";
 impl AgentSession {
     /// yusAgent (YA-18, ticket 43): after a rewind, `rows` ride the next turn to the model, in
     /// order; a fixed text still waiting from an earlier rewind goes first (one fixed text).
-    /// Push 5 (skeleton): queues nothing.
     pub fn ya_queue_rewind_rows(&self, rows: Vec<CustomMessage>) {
-        let _ = (&self.pending_next_turn_rows, rows);
+        let mut queued = self
+            .pending_next_turn_rows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        queued.retain(|row| row.custom_type != REWOUND_TYPE);
+        queued.extend(rows);
     }
 }
 

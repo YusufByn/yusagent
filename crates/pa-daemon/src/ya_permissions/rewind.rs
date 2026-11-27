@@ -6,10 +6,12 @@
 //!   it stood before a prompt. As Unharnessed's `rewind_to` (`compaction_arms.rs:433-449`): the
 //!   leaf moves in memory (written by the next append, answer 10), the engine's context is
 //!   rebuilt from the branch, what came after stays in the file on a branch of its own, and the
-//!   kernel keeps what it holds. Then (D2) the fixed text rides the next turn as a prefix row; an
-//!   announcement row (`ya-resources-changed`) of the abandoned turns rides it again first (the
-//!   tracker of what the model was told lives in memory, Q-I2); the next agent-loop call
-//!   journals `invalidation: {"cause": "rewind"}`.
+//!   kernel keeps what it holds. Then (D2) the fixed text rides the next turn; an announcement
+//!   row (`ya-resources-changed`) of the abandoned turns rides it again first (the tracker of what
+//!   the model was told lives in memory, Q-I2). As ticket 31's announcement, the rows go to the
+//!   core session's next-turn mailbox, which reaches the model, and to the worker's parked rows,
+//!   which the turn writes to the session file (§L: parked rows alone never reach the model). The
+//!   next agent-loop call journals `invalidation: {"cause": "rewind"}`.
 //!
 //! Refused while a turn runs or a compaction is going on, and for an entry off the branch. The
 //! queued input is suspended while the leaf moves (Q-I5): no wake or queued turn starts meanwhile;
@@ -18,6 +20,7 @@
 
 use std::sync::Arc;
 
+use pa_types::session::CustomMessage;
 use serde_json::{json, Value};
 
 use super::COMMAND;
@@ -29,34 +32,49 @@ pub(crate) const WORKING: &str = "The agent is working: stop it before going bac
 /// The end of the refusal for an entry off the branch; the bridge answers it with `-32602`.
 pub(crate) const NOT_IN_CONVERSATION: &str = "is not in the conversation";
 /// The custom type of the fixed text's row.
-pub(crate) const REWOUND_TYPE: &str = "ya-conversation-rewound";
+pub(crate) const REWOUND_TYPE: &str =
+    pa_core::session_engine::ya_resource_notice::rewind::REWOUND_TYPE;
 /// The fixed text the model gets after a rewind (D2, validated by Yusuf, ticket 43, §H).
 pub(crate) const REWOUND_TEXT: &str = "[conversation-rewound] The conversation went back to an earlier point; the turns after it are gone from your context. The Python kernel kept its state: variables, imports and background commands from those turns may still exist.";
 
-/// The custom row (`role: "custom"`) of the fixed text.
-fn rewound_row() -> Value {
-    json!({
-        "role": "custom",
-        "customType": REWOUND_TYPE,
-        "content": REWOUND_TEXT,
-        "display": true,
-        "timestamp": crate::util::now_ms(),
-    })
+fn custom_row(custom_type: &str, text: String, details: Option<Value>) -> CustomMessage {
+    CustomMessage {
+        custom_type: custom_type.to_string(),
+        content: pa_types::ai::UserContent::Text(text),
+        display: true,
+        details,
+        timestamp: crate::util::now_ms(),
+        rest: serde_json::Map::default(),
+    }
 }
 
-/// The custom row of an announcement entry of the abandoned turns, to ride the next turn again.
-fn row_of(fields: &Value) -> Value {
-    let mut row = json!({
-        "role": "custom",
-        "customType": pa_core::session_engine::ya_resource_notice::CUSTOM_TYPE,
-        "content": fields.get("content").cloned().unwrap_or(Value::Null),
-        "display": fields.get("display").and_then(Value::as_bool).unwrap_or(true),
-        "timestamp": crate::util::now_ms(),
-    });
-    if let Some(details) = fields.get("details").filter(|details| !details.is_null()) {
-        row["details"] = details.clone();
+/// The text of a persisted row's content (a string, or text blocks).
+fn text_of(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .collect(),
+        _ => String::new(),
     }
-    row
+}
+
+/// An announcement entry of the abandoned turns, to ride the next turn again.
+fn row_of(fields: &Value) -> CustomMessage {
+    custom_row(
+        pa_core::session_engine::ya_resource_notice::CUSTOM_TYPE,
+        text_of(fields.get("content")),
+        fields
+            .get("details")
+            .filter(|details| !details.is_null())
+            .cloned(),
+    )
+}
+
+/// A row as the worker parks it for the next turn's prefix rows (written to the session file).
+fn parked(row: &CustomMessage) -> Option<Value> {
+    serde_json::to_value(pa_types::session::AgentMessage::Custom(row.clone())).ok()
 }
 
 fn failure(error: &str) -> DaemonResponse {
@@ -82,7 +100,7 @@ impl Worker {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let (branch, suspended_before, session_id) = {
+        let (branch, suspended_before, session_id, rows) = {
             let mut guard = self.core.lock().unwrap();
             let core = &mut *guard;
             if core.busy || core.compacting {
@@ -92,7 +110,7 @@ impl Worker {
                 return failure("Session is still initializing");
             };
             // The current branch, root to leaf; the abandoned entries come after `to`.
-            let requeued: Vec<Value> = {
+            let requeued: Vec<CustomMessage> = {
                 let branch = store.branch();
                 let Some(at) = branch.iter().position(|entry| entry.id == to) else {
                     return failure(&format!("{to} {NOT_IN_CONVERSATION}"));
@@ -115,12 +133,14 @@ impl Worker {
             }
             let branch = store.branch_file_entries();
             let session_id = store.session_id().to_string();
+            let mut rows = requeued;
+            rows.push(custom_row(REWOUND_TYPE, REWOUND_TEXT.to_string(), None));
             // One fixed text: the one of an earlier rewind still waiting goes.
             core.pending_next_turn
                 .retain(|row| row.get("customType").and_then(Value::as_str) != Some(REWOUND_TYPE));
-            core.pending_next_turn.extend(requeued);
-            core.pending_next_turn.push(rewound_row());
-            (branch, suspended_before, session_id)
+            core.pending_next_turn
+                .extend(rows.iter().filter_map(parked));
+            (branch, suspended_before, session_id, rows)
         };
         let engine = Arc::clone(&self.engine);
         let rebuilt = tokio::task::spawn_blocking(move || {
@@ -138,6 +158,10 @@ impl Worker {
             Ok(Ok(())) => {}
             Ok(Err(error)) => return failure(&format!("{error:#}")),
             Err(error) => return failure(&format!("context rebuild failed: {error}")),
+        }
+        // The same rows to the model, through the core session's mailbox (§L).
+        if let Some(agent_engine) = self.agent_engine.as_ref() {
+            agent_engine.ya_queue_rewind_rows(rows).await;
         }
         if let Some(journal) = pa_core::session_engine::usage_log::lookup(&session_id) {
             journal.note_invalidation(

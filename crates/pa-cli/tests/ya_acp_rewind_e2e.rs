@@ -315,10 +315,11 @@ impl Drop for ModelServer {
 
 /// One request: its body kept, a text stream answered (the events of `server.py`).
 fn answer_request(socket: &mut TcpStream, bodies: &Mutex<Vec<Value>>) {
+    use std::fmt::Write as _;
     let _ = socket.set_nonblocking(false);
     let _ = socket.set_read_timeout(Some(Duration::from_secs(10)));
     let mut data = Vec::new();
-    let mut buffer = [0_u8; 65_536];
+    let mut buffer = vec![0_u8; 65_536];
     let head_end = loop {
         if let Some(at) = data.windows(4).position(|window| window == b"\r\n\r\n") {
             break at + 4;
@@ -382,10 +383,12 @@ fn answer_request(socket: &mut TcpStream, bodies: &Mutex<Vec<Value>>) {
         ),
         ("message_stop", json!({ "type": "message_stop" })),
     ];
-    let payload: String = events
+    let payload = events
         .iter()
-        .map(|(event, data)| format!("event: {event}\ndata: {data}\n\n"))
-        .collect();
+        .fold(String::new(), |mut payload, (event, data)| {
+            let _ = write!(payload, "event: {event}\ndata: {data}\n\n");
+            payload
+        });
     let _ = write!(
         socket,
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",

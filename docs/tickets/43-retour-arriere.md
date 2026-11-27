@@ -755,6 +755,85 @@ C'est différent des +5 −1 annoncés : **arrêt, en attente de Yusuf** avant l
 
 Mesures et contrôles (`ya43_rewindto_cost.py`, `ya43_rewind_check.py`, `compare.py --all`, `compare_frames.py`, scripts des §G.6 et §I.7) : pas lancés, en attente du push 3.
 
+## L. Push 3 à 5 : T9, premier prompt, défaut du texte fixe (27/11/2026)
+
+### L.1 Push 3 (`3a22a6f5c`) et push 4 (`623f15bae`)
+
+- **T9 vert** au push 3 (aide d'arrêt corrigée).
+- **T12** (premier prompt d'une session) :
+  - `rewindTo` est le parent de la ligne du premier prompt (assertion verte) ;
+  - **mon affirmation tirée du code était fausse** : cette entrée n'est pas `service_tier_change` mais `session_state` (`status: "active"`), que le worker écrit juste après le préfixe de création d'une session adossée à un fichier (`crates/pa-daemon/src/worker/create.rs:444-452`) ;
+  - type corrigé au push 4 ; un retour vers ce point fait repartir la conversation.
+- **Checks requis du push 4** (ruleset `protect-main`, `gh pr checks 97 --required`) : **17/17 verts**, `test summary` compris. Ils passaient avec le défaut du §L.3, que les tests ne voyaient pas.
+
+### L.2 Coût de `rewindTo` (binaire du push 3, code produit identique au push 4)
+
+Commande :
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/ya43_rewindto_cost.py --main <main f7c4b3fb7> --branch <branche 3a22a6f5c> --out <dossier>
+```
+
+10 blocs alternés de 20 prompts par binaire :
+
+| Binaire | Version | Échantillons | Avec rewindTo | Médiane (ms) | p95 (ms) |
+|---|---|---|---|---|---|
+| main | `0.10.2-continuous.f7c4b3fb79daaa9614dcffe78223cf548ab7f014` | 200 | 0 | 0.069 | 0.114 |
+| branch | `0.10.2-continuous.3a22a6f5c6d18f54c8051c20f87ea7a171594c06` | 200 | 200 | 0.111 | 0.174 |
+
+**Différence des médianes (branche − main) : 0.042 ms**, sous le seuil de 10 ms.
+
+Contrôle de vraisemblance (trames horodatées d'une session, branche) : le `turnStart` avec `rewindTo` arrive 0,1 à 0,4 ms après l'envoi du prompt, la réponse vers 30 ms.
+
+### L.3 Défaut : le texte fixe n'atteint pas le modèle
+
+`ya43_rewind_check.py` sur le binaire du push 3 donne **NON CONFORME** :
+- C4 « texte fixe une fois » et « avant le prompt modifié » : NON. La 4e requête ne porte, après le point de retour, que le prompt modifié ;
+- les autres contrôles sont conformes : quatre requêtes, hors `messages` identique, préfixe identique jusqu'au point (marques comprises), rien du prompt d'origine, `rewindTo` partout, retour accepté, `invalidation: rewind` sur la 4e seulement.
+
+**Cause** :
+- l'action `rewind` rangeait le texte fixe dans les lignes en attente du worker (`pending_next_turn`), que le tour écrit dans le fichier de session (`worker/turn.rs:1036-1047`), mais qui n'entrent pas dans le contexte du modèle ;
+- l'annonce du ticket 31 passe aussi par la file des lignes du tour suivant du moteur (`queue_next_turn_row`, `ya_resource_notice.rs:390-440`), que l'admission envoie au modèle (`admission.rs:143-149`) ;
+- même défaut pour l'annonce `[skills-changed]` remise en file.
+
+**Pourquoi T7 vérifiait le fichier** :
+- le fournisseur factice scripté des e2e (`"engine": "faux"`) ne garde pas les requêtes ;
+- j'ai pris la branche du fichier comme ce que reçoit le modèle, une hypothèse reprise de l'en-tête de l'e2e du ticket 39, « The session file is the conversation the model is sent » ;
+- elle tient pour les lignes que la boucle écrit, pas pour celles que le worker range lui-même ; je ne l'ai pas vérifiée.
+
+**Pourquoi E3 était vert** :
+- le §I.5 disait « la troisième requête reçue par le serveur », mais l'e2e de l'extension sur le vrai binaire tourne avec le fournisseur factice, sans serveur ;
+- j'ai lu le fichier de session à la place, sans le dire ; le worker y écrit bien le texte fixe.
+
+### L.4 Correctif (option C, décision de Yusuf) et tests au niveau de la requête
+
+**Correctif, aucune ligne upstream (total toujours +9 −3)** :
+- `crates/pa-core/src/session_engine/ya_resource_notice/rewind.rs` (sous-module du fichier du fork) : `AgentSession::ya_queue_rewind_rows` range les lignes dans la file des lignes du tour suivant du moteur ; un texte fixe en attente est remplacé ;
+- `crates/pa-daemon/src/agent_engine/ya_steer/rewind.rs` (sous-module du fichier du fork) : accès du worker à cette file ;
+- l'action `rewind` y range le texte fixe et les annonces abandonnées. Elle les garde aussi dans ses lignes en attente, pour le fichier, comme le ticket 31.
+
+Visibilité (sans ligne upstream) : `pending_next_turn_rows` est un champ privé d'`AgentSession` (`pa-core/src/session_engine/mod.rs:146-176`), visible depuis tout sous-module de `session_engine` ; `AgentSessionEngine.session` est `pub(crate)` (`agent_engine.rs:210`), et `session` du moteur cœur est `pub` (`engine.rs:115`).
+
+**Tests qui lisent la requête** :
+- **e2e Rust T7, T5b, T5c, T9** : sur un modèle `anthropic-messages` local (`ModelServer`) qui garde le corps de chaque requête. Sans fichier de script, le worker prend le vrai moteur (`worker/config.rs:62-67`). T9 lit la requête avant et après le redémarrage du démon ;
+- **test unitaire `pa-core`** sur `ScriptedProvider` : la requête porte les lignes une fois, avant le prompt ; deux retours, un seul texte fixe ;
+- **E3** : modèle `anthropic-messages` local en Node, script du fournisseur factice retiré pour la conversation ; la troisième requête porte le texte fixe une fois, avant le renvoi ;
+- **`ya43_control.py`** : sur le serveur de capture, scénario `ya43-control` ajouté à `server.py` (réponse selon le texte du dernier prompt) ; G1 lit la requête qui suit le retour. `ya43_rewind_check.py` la lisait déjà.
+
+**Vus rouges sur le binaire actuel, avant correctif** :
+- push 5 (`830e55a37`, tests seuls, `ya_queue_rewind_rows` en squelette sans effet), run `ci` 45997753953 :
+  - `pa-core` `the_rows_of_a_rewind_reach_the_next_request_once` (`rewind.rs:99`) : `left: 0`, `right: 1`, la requête ne porte que `THE-PROMPT` ;
+  - T7 (`:766`) : « the fixed text, once », `left: 0` ;
+  - T5b (`:903`) : « the announcement reaches the next request again, once », `left: 0` ;
+  - T5c (`:937`) : « the first rewind's fixed text reaches its request », `left: 0` ;
+  - T9 (`:1004`) : « before the restart, the fixed text and the announcement once », `left: (0, 0)`, `right: (1, 1)` ;
+- E3, run `ya-extension` du push 5 : « le texte fixe une fois dans la troisième requête », la requête ne porte que `ALPHA`, `answer 1`, `CHARLIE` ; « e2e vrai binaire : 19/20 réussis » ;
+- en local, sur le binaire du push 3 : `ya43_rewind_check.py` C4 NON ; `ya43_control.py` G1 « texte fixe une fois dans la requête » et « avant le renvoi » NON. Tous ses autres contrôles sont conformes (G1 à G3, G2, I1, I2).
+
+**Hors assertion au push 5** : `check + clippy` en échec sur le harnais HTTP du test (tableau de 64 Kio sur la pile, `format!` dans un `collect`). C'est du code de test seulement, corrigé au push 6.
+
+**Erreurs du script de contrôle, corrigées avant ce relevé** : G3 relançait sans `--resume` (« Relancer » passe par `--resume <fichier>`, ticket 28), et lisait mal le texte des messages rejoués (objet et non liste). Ce n'étaient pas des défauts du binaire.
+
 ## Annexe : mesure préliminaire, git seul
 
 Script : `docs/tickets/43-retour-arriere/shadow_git_mesure.sh`.
