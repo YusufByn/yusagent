@@ -456,11 +456,11 @@ Runs :
 - **Proposition** :
   - **Résolution sans rafraîchissement** (le cas de presque tous les appels) : synchrone, dans l'appel au flux, sans `await`. La fenêtre est fermée, et ce sont deux lectures de fichier, comme la résolution que `build_session` fait déjà sur le chemin asynchrone (`lifecycle.rs:1038`).
   - **Rafraîchissement réel** (une fois par durée de vie du jeton) : sur un fil bloquant (`spawn_blocking`), en course avec le Stop. Le test 12 tient : le Stop règle l'appel tout de suite. La fenêtre ne reste ouverte que pendant un rafraîchissement réel, avec l'effet ci-dessus.
-  - Aucune ligne upstream de plus. L'autre voie est de reprendre les gardes d'upstream dans `pa-core` (environ +87 lignes hors tests d'après `git show --stat a05bcb695`, fichiers upstream) : je ne la recommande pas.
+  - Aucune ligne upstream de plus. L'autre voie est de reprendre les gardes d'upstream dans `pa-core` (+77 / −10 hors tests dans ces deux fichiers upstream, `git show --numstat a05bcb695`) : je ne la recommande pas.
 
 ### I.5 Mesure du coût par appel (décision 6), méthode proposée
 
 - `PI_REQUEST_TIMING=1` écrit pour chaque requête la phase `request-sent` avec `phaseMs`, l'écart entre le prompt construit et la remise de la requête au client du fournisseur (`crates/pa-core/src/session_engine/request_timing/clock.rs:141-167`), dans `<agent_dir>/logs/agent.jsonl` (`request_timing.rs:71`). Notre résolution tombe dans cet écart.
-- Commande prévue : un script `bench/tools/capture/ya42_cost.py`. Il lance le binaire `main` puis le binaire de la branche, en mode `-p` d'abord écarté (non couvert), en ACP contre le serveur local du banc, avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short PI_REQUEST_TIMING=1`. Il fait N = 200 requêtes par binaire, avec un identifiant `api_key` rangé dans un `auth.json` factice, et rend médiane et p95 de `phaseMs` pour chacun, puis la différence.
+- Commande prévue : un script `bench/tools/capture/ya42_cost.py`. Il lance le binaire `main` puis le binaire de la branche en ACP (pas en `-p`, non couvert), contre le serveur local du banc, avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short PI_REQUEST_TIMING=1`. Il fait N = 200 requêtes par binaire, avec un identifiant `api_key` rangé dans un `auth.json` factice, et rend médiane et p95 de `phaseMs` pour chacun, puis la différence.
 - **Règle** : différence des médianes < 10 ms, on garde la résolution à chaque appel.
 - Script lancé par Claude Code sur les deux binaires (règle 13), sortie au ticket.
