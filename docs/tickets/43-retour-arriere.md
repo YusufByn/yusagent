@@ -1716,6 +1716,112 @@ Ce sont des lignes du fork : `git blame -L 1175,1178 main` les attribue à `53a0
 
 **Écart au plan, signalé** : T33 ne couvre que le refus pendant un tour. Le refus « autre fenêtre » passe par le même code que `rewind` (factorisé, §P.12.4). Le provoquer en e2e demande un second client qui répond aux permissions. Il sera couvert par un test unitaire au push B (`scripted_link`, comme T6 de la PR 1).
 
+### P.15 PR 3a (PR #98) : relevé des push B, B2 et B3, bench des 2 s, arrêt sur le surcoût (27/11/2026)
+
+**Commentaire sur la PR** (consigne de Yusuf) : `runtime suite` est passé sur `a26d528b4` (`Ran 823 tests`, `OK`, job 140706872002). Commentaire posté : https://github.com/YusufByn/yusagent/pull/98#issuecomment-7227014997 (échec unique au push A, test upstream, candidat à « Instabilité probable », à surveiller).
+
+**Run de `main` rouge** (question de Yusuf) :
+- run `ci` **46021181469** (push de `c6f0b8278`, 15:01 UTC) ;
+- 7 shards en échec (2 à 8), tous sur la même erreur à l'installation du kernel venv : `Building lxml version 6.2.0`, « Please make sure the libxml2 and libxslt development packages are installed », puis « Failed to set up the Python kernel runtime » ;
+- le shard 1 a installé `lxml==6.2.0` sans le construire (15:03:36). Les 7 autres ont échoué entre 15:03:20 et 15:03:32 ;
+- **depuis, aucun autre run ne montre cette erreur** : les 8 shards des runs du push A (46056573461, 19:27) installent `+ lxml==6.2.0` ; `grep` de « libxml2 and libxslt development packages » sur leurs journaux : 0 ;
+- les seuls runs `ci` depuis sont ceux de cette PR ;
+- **hypothèse non vérifiée** : la roue de `lxml 6.2.0` n'était pas encore disponible pour ces jobs.
+
+**Push B** (`02d819c6c`, implémentation du §P.12) :
+- run `ci` 46061223617 ;
+- Clippy rouge, 4 erreurs dans mon code : `format!` dans un `collect` (`checkpoints/repo.rs:405`, `checkpoints.rs:292`) et deux déréférencements explicites (`checkpoints.rs:205`, `:218`) ;
+- shard 2 : 15 tests sur 17 du fichier des instantanés verts, dont T33b. Rouges :
+  - T34 : `sub` encore dans l'arbre. `git rm --cached` n'avait pas retiré le gitlink ;
+  - T21 : `edit()` n'avait pas écrit ;
+- shard 8 vert (T30, T19), `ya-secret-guard-macos` vert (T19, T19b, T27 sous l'enveloppe), build macOS vert.
+
+**Push B2** (`749f22906`) :
+- Clippy corrigé ;
+- gitlinks et fichiers trop gros retirés de l'index par `update-index --force-remove -z --stdin` ;
+- exclusion des dépôts imbriqués écrite dès le listage, avant `add` ;
+- T21 note l'exception de `edit()`. Run `ci` 46063084195 : seul T21 rouge, avec « RuntimeError: Python skill edit is unavailable in this kernel. Import error: No module named 'edit' ».
+
+**Push B3** (`27a96578a`) :
+- T21 : le skill `edit` sur le `PYTHONPATH` du kernel, comme `ya_prompt_v2_e2e.rs:55-70`. Un binaire de test n'a pas de `skills/` empaqueté à côté de lui ; le binaire du bench en a un ;
+- run `ci` **46064701404 vert** (17 jobs) ; `gh pr checks 98` : 29 réussis, 4 sautés ;
+- T21 montre maintenant les écritures de `bash()` et `edit()` en prompt v2 jusqu'à la restauration (demande de Yusuf).
+
+**Lignes upstream réelles** : aucune de plus. Le seul fichier de la PR présent chez upstream est `crates/pa-daemon/src/acp/daemon.rs` (2 lignes du fork modifiées, §P.14). Vérifié par `git cat-file -e upstream/main:<fichier>` sur chaque fichier de `git diff --name-only main..HEAD -- crates`.
+
+**Écarts au plan, signalés** :
+- `ya_guard.rs` : +24 −1 au lieu d'environ +17 −1 (§P.5) : 3 lignes de doc de module et la doc des nouveaux éléments ;
+- T33b en e2e, avec un second client attaché par le socket du démon (comme I2), au lieu d'un test unitaire (§P.14). Un test unitaire de `admit` demanderait une fonction d'aide de test dans `daemon.rs` (upstream) : les champs de `HostedSession` ne sont pas visibles hors du fichier ;
+- retrait de l'index par `update-index --force-remove` au lieu de `rm --cached` (§P.12.3) ;
+- relais `ya_queue_rewind_rows` du démon supprimé (sans appelant avec L-b). Celui du moteur reste, public et testé.
+
+**Bench des 2 s sur le binaire** (`bench/tools/capture/ya43_restore_bench.py`, scénario `ya43-control` avec les cellules `BENCH-EDIT` et `BENCH-MANY` ajoutées à `server.py`) :
+- binaire de `749f22906`, run `ya-build-macos-arm64` 46063077474. Le code produit est identique à `27a96578a` : B3 ne change qu'un test (`git diff --stat 749f22906 27a96578a` : 1 fichier, le test) ;
+- `main` : run 46021226712 (`c6f0b8278`) ;
+- enveloppe active, lancé par Claude Code le 27/11/2026, macOS 27.0.1, Apple M5.
+
+```
+$ DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/ya43_restore_bench.py --binary <749f22906>/yusagent --main <c6f0b8278>/yusagent --out <dossier neuf> --files 10000 --reps 5 --blocks 2 --prompts 10
+rép. 1 : cellule a changé le workspace True ; aperçu 126 ms (80 fichiers) ; restauration 223 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. 2 : cellule a changé le workspace True ; aperçu 155 ms (79 fichiers) ; restauration 253 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. 3 : cellule a changé le workspace True ; aperçu 160 ms (80 fichiers) ; restauration 269 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. 4 : cellule a changé le workspace True ; aperçu 121 ms (80 fichiers) ; restauration 218 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. 5 : cellule a changé le workspace True ; aperçu 155 ms (80 fichiers) ; restauration 250 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. many : cellule a changé le workspace True ; aperçu 1607 ms (5000 fichiers) ; restauration 771 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+premier prompt (instantané à froid) : 3656 ms ; restauration BENCH-EDIT : médiane 250 ms, max 269 ms
+bloc 0 main : [33, 48, 65, 60, 50, 38, 31, 35, 34, 34]
+bloc 0 branche : [210, 211, 212, 212, 210, 211, 216, 212, 213, 213]
+bloc 1 main : [29, 28, 28, 28, 28, 27, 27, 27, 27, 27]
+bloc 1 branche : [210, 212, 212, 210, 222, 211, 211, 210, 212, 215]
+surcoût : main médiane 30 ms (p95 65) ; branche médiane 212 ms (p95 222) ; écart des médianes 182 ms
+restaurations_sous_2_s : oui
+restaurations_acceptees : oui
+cellules_ont_change_le_workspace : oui
+workspace_restaure_a_l_identique : oui
+depot_utilisateur_intact : oui
+surcout_median_sous_150_ms : NON
+```
+
+Diagnostic du surcoût, la même mesure avec 2 s entre les prompts (option `--pause`, ajoutée pour ce diagnostic) :
+
+```
+$ DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/ya43_restore_bench.py --binary <749f22906>/yusagent --main <c6f0b8278>/yusagent --out <dossier neuf> --files 10000 --blocks 2 --prompts 10 --pause 2 --overhead-only
+bloc 0 main : [56, 52, 54, 52, 55, 53, 43, 51, 27, 53]
+bloc 0 branche : [155, 140, 153, 154, 148, 138, 152, 163, 154, 140]
+bloc 1 main : [53, 53, 39, 52, 50, 52, 52, 52, 52, 46]
+bloc 1 branche : [147, 154, 153, 147, 148, 152, 152, 152, 155, 154]
+surcoût : main médiane 52 ms (p95 56) ; branche médiane 152 ms (p95 163) ; écart des médianes 100 ms
+surcout_median_sous_150_ms : oui
+CONFORME
+```
+
+Mesures d'appoint, git seul (lancées par Claude Code, scripts dans le dossier temporaire du job ; **ce sont des estimations** pour choisir la suite, pas la mesure du critère) :
+- coût d'un lancement : `git --version` 3,7 ms, sous `sandbox-exec` avec un profil du même type 8,8 ms (médianes sur 20) ;
+- 10 000 fichiers sans changement, sans enveloppe : `add -A` médiane 21 ms ; l'instantané entier (6 lancements : `write-tree`, `add`, `diff-index`, `write-tree`, `commit-tree`, `update-ref`) médiane 79 ms. Avec `core.untrackedCache=true` : 19 et 65 ms.
+
+**Ce que disent les chiffres** :
+- **Restauration : critère tenu largement.**
+  - 218 à 269 ms pour un tour de 80 fichiers (5 répétitions), 771 ms pour 5 000 fichiers changés, sur 10 000 fichiers et enveloppe active ;
+  - chaque fois, le workspace revient à l'identique (empreinte de chaque fichier) et le dépôt de l'utilisateur garde ses commits, refs, stash et statut ;
+  - aperçu : 121 à 160 ms (80 fichiers), 1 607 ms (5 000 fichiers) ;
+  - premier prompt d'un workspace neuf : 3 656 ms (premier instantané, à froid, une fois par workspace, Q-P7).
+- **Surcoût de l'instantané de début : seuil de Q-P2 (médiane inférieure à 150 ms) dépassé quand les prompts s'enchaînent sans pause, tenu avec une pause** :
+  - **sans pause** : écart des médianes 182 ms (branche 212, p95 222 ; `main` 30, p95 65) ;
+  - **avec 2 s de pause** : écart 100 ms (branche 152, p95 163 ; `main` 52, p95 56) ;
+  - les 82 ms de différence viennent de l'instantané de fin du tour précédent : il est dans la même file, et l'instantané de début l'attend quand le prompt suivant arrive tout de suite. Vérifié par la mesure avec pause ;
+  - les 100 ms restants sont l'instantané lui-même : 6 lancements de git sous l'enveloppe et le travail de git. **Estimation** à partir des mesures d'appoint.
+
+**Arrêt (règle du §P.12.7)** : seuil dépassé dans la mesure sans pause. Question Q-3a-4 ci-dessous.
+
+- **Q-3a-4** : quel cas fait foi pour le seuil de 150 ms ?
+  - (a) **Prompt envoyé après une pause** (2 s, cas d'un message tapé à la main) : tenu, 100 ms.
+  - (b) **Prompts enchaînés** : 182 ms. Pour le tenir :
+    - réduire les lancements de git de l'instantané (6 vers 3 ou 4 : arbre précédent gardé en mémoire ; chemins changés lus dans la sortie de `add -A -v` au lieu de `diff-index` et `cat-file`). Gain **estimé** de 20 à 40 ms par instantané, sur le début et sur la fin ;
+    - et/ou `core.untrackedCache=true` (−14 ms git seul, mesure d'appoint).
+    
+    À coder et à remesurer, sans garantie de passer sous 150 ms dans ce cas ; fichiers du fork seulement.
+  - (c) Seuil revu.
+
 ## Annexe : mesure préliminaire, git seul
 
 Script : `docs/tickets/43-retour-arriere/shadow_git_mesure.sh`.

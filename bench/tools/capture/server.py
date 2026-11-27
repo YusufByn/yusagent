@@ -394,6 +394,24 @@ YA43_CONTROL_CELLS = {
     "pose x": "x = 1\nprint('X_SET', x)",
     "x existe": "print('X_NOW', x)",
     "lent": "import time\nopen('g2-started', 'w').write('x')\ntime.sleep(3)\nprint('G2_DONE')",
+    # YA-18 (ticket 43, PR 3a) : bench de la restauration (`ya43_restore_bench.py`), sur un
+    # workspace de dossiers `dNNN/` : un tour qui modifie 50 fichiers, en crée 20 et en supprime 10,
+    # ou qui en modifie 5 000.
+    "BENCH-EDIT": (
+        "import os, random\nr = random.Random()\n"
+        "paths = [os.path.join(d, f) for d in sorted(os.listdir('.')) if d.startswith('d') "
+        "and os.path.isdir(d) for f in sorted(os.listdir(d))]\n"
+        "for p in r.sample(paths, 50):\n    open(p, 'a').write('edit\\n')\n"
+        "tag = str(r.random())[2:10]\n"
+        "for i in range(20):\n    open(os.path.join('d000', f'new_{tag}_{i}.txt'), 'w').write('new\\n')\n"
+        "for p in r.sample(paths, 10):\n    os.remove(p)\nprint('BENCH_EDIT_DONE')"
+    ),
+    "BENCH-MANY": (
+        "import os\n"
+        "paths = [os.path.join(d, f) for d in sorted(os.listdir('.')) if d.startswith('d') "
+        "and os.path.isdir(d) for f in sorted(os.listdir(d))]\n"
+        "for p in paths[:5000]:\n    open(p, 'a').write('many\\n')\nprint('BENCH_MANY_DONE')"
+    ),
 }
 
 

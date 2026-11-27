@@ -1830,6 +1830,7 @@ Constat, décisions et plan : `docs/tickets/43-retour-arriere.md` (§P à §P.13
 | `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs` | modif. (test du fork) | T27 sous l'enveloppe : aucun identifiant dans les objets du dépôt shadow. | YA-18 (ticket 43) |
 | `crates/pa-types/tests/ya_secret_guard_profile.rs` | modif. (test du fork) | T19 : les profils `Full` et `Browser` refusent l'écriture de `<dossier agent>/checkpoints`. | YA-18 (ticket 43) |
 | `crates/pa-core/tests/ya_secret_guard_kernel.rs` | modif. (test du fork) | T19b : le kernel réel ne peut pas écrire dans `<dossier agent>/checkpoints`. | YA-18 (ticket 43) |
+| `bench/tools/capture/ya43_restore_bench.py`, `server.py` | nouveau et modif. (outils du fork) | Bench des 2 s sur le binaire, enveloppe active : restaurations d'un tour de 80 fichiers et de 5 000 fichiers, workspace et dépôt de l'utilisateur vérifiés ; surcoût de l'instantané de début contre `main` (blocs alternés, `--pause`) ; cellules `BENCH-EDIT` et `BENCH-MANY` du scénario `ya43-control`. | YA-18 (ticket 43) |
 
 Limites (§I.9) : pas de `rewindTo` au rejeu de `session/load` (ticket à part) : après « Relancer » ou une reprise depuis l'historique, seuls les nouveaux messages sont modifiables ; feuille non inscrite avant le prompt suivant (comme Unharnessed, à rouvrir avec les instantanés du workspace).
 
