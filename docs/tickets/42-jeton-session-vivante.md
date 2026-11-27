@@ -591,3 +591,28 @@ Mesure : `git diff --numstat origin/main...HEAD`, restreint aux fichiers présen
 - **Code : +6 / −1**, comme validé au §J.
 - `docs/fork-changes.md` disait +2 pour `.gitignore` : corrigé en +3.
 - Aucun autre fichier upstream touché dans la PR.
+
+## M. Compte rendu du push 2, merge et suite (27/11/2026)
+
+### M.1 Compte rendu du push 2 (détail aux §K et §L)
+
+- **Push 2a** (`f102b9378`) : test 16 seul, rouge sur son assertion, sur le squelette (run `ci` 45971061847).
+- **Push 2b** (`30355bb36`), puis doc (`4488f458b`) : CI verte (runs `ci` 45973386239 et 45976021200), 16 checks requis en succès, aucun en « skipping ». Les 12 tests du ticket sont verts.
+- **Coût par appel** : +5,25 ms en médiane (branche 5,55 ms, `main` 0,3 ms ; p95 7,2 et 0,4 ms), sous le seuil de 10 ms, donc la résolution à chaque appel est gardée. Sur la branche, 200 requêtes sur 200 portent la clé écrite juste avant elles.
+- **Préfixe** : `compare.py --all` donne **TOUT IDENTIQUE** (seul `prompt_cache_key` change), et `compare_frames.py` donne **`écarts : 0`**.
+- **Lignes upstream** : code +6 / −1 (`agent_engine.rs:81-82`, `lifecycle.rs:1013-1014`, `model.rs:457-458`), plus `.gitignore` +3.
+
+### M.2 Merge
+
+- Merge sur le « merge » de Yusuf : PR #96 mergée le 27/11/2026 à 10:00:07 UTC (`gh pr merge 96 --merge --match-head-commit 4488f458ba4d727c8338ace7384621a8be3f0457`).
+- Avant le merge : tête vérifiée inchangée (`4488f458ba4d727c8338ace7384621a8be3f0457`), PR prête et `MERGEABLE`, 16 checks requis en succès (`gh pr checks 96 --required`).
+- **`main` = `f7c4b3fb79daaa9614dcffe78223cf548ab7f014`.**
+- **Build macOS de `main`** : run `ya-build-macos-arm64` 45978385575 (`workflow_dispatch` sur `main`, `f7c4b3fb7`).
+
+### M.3 Ticket à part, à ouvrir : verrou entre processus sur les autres résolutions (limite 4)
+
+- **Constat** : la construction de la session (`crates/pa-daemon/src/agent_engine/lifecycle.rs:1040`), `set_model` et la bascule de fournisseur (`session_engine_impl.rs:448`, `turn/model.rs:509`, `:552`) et `Reload` (`reload.rs:85-117`) résolvent la clé par `resolve_request_key_and_headers_and_store_health`. Elles peuvent rafraîchir un jeton expiré (`lookup.rs:65-82`) **sans** le verrou `auth.json.ya-refresh.<fournisseur>.lock` de `ya_live_auth`.
+- **Risque** : deux workers qui s'ouvrent ou se rechargent au même moment, avec un jeton expiré, peuvent dépenser deux fois le même jeton de rafraîchissement. OpenAI dit qu'une rotation par une tâche concurrente casse le rafraîchissement (§A.1).
+  - Le cas est rare : il faut que les deux tombent dans la même fenêtre.
+  - Le chemin principal (avant chaque appel) est déjà protégé.
+- **Piste** : prendre le verrou dans `auth_storage` ou autour de la résolution de `model.rs`, quand l'identifiant rangé est un OAuth expiré d'un fournisseur rafraîchissable. Constat d'abord : lignes upstream, et effet sur `build_session`, qui prend `reload_lock` en cédant la main.
