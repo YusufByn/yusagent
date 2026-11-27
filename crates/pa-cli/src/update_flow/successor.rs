@@ -48,7 +48,7 @@ pub fn spawn_supervisor(
     roster_path: Option<&Path>,
     cwd: &Path,
 ) -> Result<u64> {
-    let mut command = std::process::Command::new(exe);
+    let mut command = pa_types::platform::ya_guard::command(exe);
     command
         .args(["--mode", "daemon", "--daemon-socket"])
         .arg(socket_path)

@@ -118,7 +118,7 @@ pub(super) fn git_command(args: &[&str], cwd: &Path) -> tokio::process::Command 
         "GIT_COMMON_DIR",
         "GIT_NAMESPACE",
     ];
-    let mut command = tokio::process::Command::new("git");
+    let mut command = pa_types::platform::ya_guard::tokio("git");
     command.args(args).current_dir(cwd);
     for variable in GIT_SELECTION_VARS {
         command.env_remove(variable);

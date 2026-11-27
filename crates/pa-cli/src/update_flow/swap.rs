@@ -153,7 +153,7 @@ pub async fn validate_candidate(exe: &Path, version: &str) -> Result<()> {
 async fn probe(exe: &Path, args: &[&str], timeout: Duration) -> Result<String> {
     let output = tokio::time::timeout(
         timeout,
-        tokio::process::Command::new(exe)
+        pa_types::platform::ya_guard::tokio(exe)
             .args(args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())

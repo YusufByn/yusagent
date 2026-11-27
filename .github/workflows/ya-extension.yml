@@ -101,6 +101,9 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 45
+    # yusAgent (YA-11, ticket 41): no guard mechanism on Linux before PR C; the kernel would refuse.
+    env:
+      PRIME_AGENT_SECRET_GUARD: "off"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:

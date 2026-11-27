@@ -149,7 +149,7 @@ pub(crate) fn parse_ps_etimes(stdout: &str) -> HashMap<u32, u64> {
 /// Run one command, capturing stdout; a missing tool or failure yields
 /// `None`.
 fn capture_stdout(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program)
+    let output = pa_types::platform::ya_guard::command(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()

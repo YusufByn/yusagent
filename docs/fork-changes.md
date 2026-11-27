@@ -1717,6 +1717,40 @@ Limites :
 - `bearerTokenEnvVar` se lit désormais dans l'environnement du worker, plus dans celui du kernel ;
 - les `env` des serveurs MCP stdio fournis par le client ACP restent dans le kernel (limite documentée, ticket 41, réponse 4).
 
+## Enveloppe des lancements sur macOS, PR A (YA-11, ticket 41)
+
+Constat, décisions et plan : `docs/tickets/41-protection-secrets.md` (§R, §S, §U). Garantie : ni le kernel ni aucun processus lancé par yusAgent ne peut lire ou écrire les fichiers d'identifiants.
+- **Sous macOS**, chaque lancement passe par `sandbox-exec` avec un profil `(allow default)` qui refuse :
+  - `auth.json*` et `models.json*`, en lecture et en écriture ;
+  - le renommage du dossier agent, de son parent et du dossier du binaire ;
+  - les sockets en usage et les dossiers de sockets par défaut ;
+  - l'écriture du binaire en cours et de son `package.json` ;
+  - `LaunchServices`, sauf pour la variante du navigateur.
+  - `/bin/ps` et `/usr/bin/top` restent permis hors sandbox.
+- **Sans mécanisme** (Linux avant la PR C) : le kernel et `exec_command` refusent de démarrer, avec un message qui nomme l'interrupteur ; les autres lancements passent tels quels.
+- **Interrupteur** : `PRIME_AGENT_SECRET_GUARD=off`, jamais transmis au kernel ; avertissement sur stderr du superviseur et du pont.
+- **Navigateur** : `https://`, ou `http://` vers localhost, seulement.
+- **Au démarrage du superviseur** : un `auth.json` ou un `models.json` à plusieurs liens est réécrit dans un nouvel inode.
+
+**Préfixe de prompt inchangé.**
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-types/src/platform/ya_guard.rs` | nouveau | L'enveloppe : `command`, `tokio`, `model_command`, `model_tokio`, `browser` ; le profil Seatbelt (deux variantes) ; les chemins canoniques (dossier agent, sockets enregistrés, dossiers par défaut, binaire, manifeste) ; l'interrupteur ; le refus sans mécanisme ; `browser_url_allowed` ; `supervisor_start`, `sockets`, `warn_if_off` ; `break_credential_links`. Dans `pa-types`, dont dépendent `pa-ai`, `pa-tui`, `pa-core`, `pa-daemon` et `pa-cli`. | YA-11 (ticket 41) |
+| `crates/pa-types/src/platform/mod.rs` | modif. (fichier upstream, +2) | `pub mod ya_guard;`. | YA-11 (ticket 41) |
+| 34 sites de lancement dans `pa-ai`, `pa-cli`, `pa-core`, `pa-daemon` et `pa-tui` | modif. (fichiers upstream, une ligne chacun) | Liste fichier par fichier au ticket (§U.2, lignes finales au §V). `Command::new(x)` devient `pa_types::platform::ya_guard::command(x)` (ou `tokio`, `model_tokio`, `browser(program, url)`). Cinq imports devenus inutilisés sont ajustés, et une référence de test Windows passe à `std::process::Command` (`pa-core/src/platform/browser.rs`). | YA-11 (ticket 41) |
+| `crates/pa-daemon/src/supervisor.rs`, `crates/pa-daemon/src/worker.rs`, `crates/pa-cli/src/print_runtime.rs` | modif. (fichiers upstream, +1 chacun) | `ya_guard::supervisor_start` (avertissement, liens physiques, socket), `ya_guard::sockets` (socket du worker et du superviseur), `ya_guard::warn_if_off` (pont). | YA-11 (ticket 41) |
+| `crates/pa-ai/src/providers/bedrock/credential_process.rs`, `crates/pa-core/src/auth/resolve_config_value.rs`, `crates/pa-core/src/platform/process.rs`, `crates/pa-core/src/platform/shell.rs`, `crates/pa-tui/src/external_editor.rs` | modif. (fichiers upstream, un commentaire chacun, deux dans `resolve_config_value.rs`) | Marqueur `// yusAgent (YA-11, ticket 41): propre à Windows, …` juste avant les six lancements Windows exemptés, vérifié avec le `cfg(windows)` de l'élément par `ya_process_launch_scan.rs`. | YA-11 (ticket 41) |
+| `crates/pa-core/src/tools/ya_exec.rs`, `crates/pa-core/src/kernel/env_allowlist.rs` | modif. (fichiers du fork) | `exec_command` par `ya_guard::model_tokio` ; `PRIME_AGENT_SECRET_GUARD` jamais transmise au kernel. | YA-11 (ticket 41) |
+| `.cargo/config.toml` | modif. (+1) | `PRIME_AGENT_SECRET_GUARD = "off"` pour les tests : pas de mécanisme sous Linux avant la PR C. Les tests de l'enveloppe la retirent explicitement. | YA-11 (ticket 41) |
+| `scripts/lifecycle_lib.py` et les contrôles `check_custom_ca.py`, `check_kernel_env.py`, `check_live_mcp.py`, `check_local_harness.py`, `check_minimum_reasoning.py`, `check_observe_selectors.py`, `check_restore_notice.py` | modif. (scripts upstream, une ligne chacun) | `PRIME_AGENT_SECRET_GUARD=off` dans l'environnement donné au binaire, lancé hors de `cargo`. | YA-11 (ticket 41) |
+| `.github/workflows/ya-secret-guard-macos.yml` | nouveau | Job `secret guard (macos-15)` : build de debug, venv du kernel, tests de l'enveloppe. | YA-11 (ticket 41) |
+| `.github/workflows/ya-extension.yml` | modif. (workflow du fork) | `PRIME_AGENT_SECRET_GUARD=off` dans l'e2e « vrai binaire » sous Linux. | YA-11 (ticket 41) |
+| `bench/tools/capture/run.py`, `bench/smoke/run.py` et leurs README | modif. (outils du fork) | Les bancs posent `PRIME_AGENT_SECRET_GUARD=off` (leur `sandbox-exec` externe interdit la sandbox imbriquée) ; la différence avec le produit est notée dans les README. | YA-11 (ticket 41) |
+| `crates/pa-types/tests/ya_secret_guard_profile.rs`, `crates/pa-core/tests/ya_secret_guard_kernel.rs`, `ya_browser_scheme.rs`, `ya_process_launch_scan.rs` (et `ya_secret_guard/`), `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs`, `ya_secret_guard_hardlink_e2e.rs` | nouveau | Tests 1, 2, 3 et 7, conditions du §S.3, scan des lancements et de `Cargo.lock`. | YA-11 (ticket 41) |
+
+Limites : la classe « exécution différée », les services locaux hors de yusAgent et les clés passées par l'environnement (ticket, §J). Les lancements propres à Linux et le refus du kernel sous Linux sont levés à la PR C.
+
 ## Code repris d'Unharnessed
 
 Unharnessed (`https://github.com/unharnessed-agent/Unharnessed`, lu au commit `fe2cf2815f78463464b91c598fc0c31c0af98f4c` du 15/11/2026) est un fork de Prime Agent, sous licence MIT. Le réglage `bashWaitSeconds` est propre à yusAgent, et `bench/smoke/ab/ya09-bash-count.py` ne fait que lire leurs fichiers (prompt golden, description du tool) pour les compter. Les reprises du lot Unharnessed (YA-09, ticket 11) sont des reports à la main, sans cherry-pick (leurs crates sont renommées `uh-*`). Tout fichier ou extrait repris plus tard est listé dans le tableau ci-dessous, avec le commit source, et garde la notice suivante (fichier `LICENSE` d'Unharnessed au commit cité) :

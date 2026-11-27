@@ -623,7 +623,7 @@ fn installer_child(
     prefix: &Path,
     channel: Option<&'static str>,
 ) -> tokio::process::Command {
-    let mut command = tokio::process::Command::new(shell);
+    let mut command = pa_types::platform::ya_guard::tokio(shell);
     command.env(ENV_PREFIX, prefix);
     // The check knobs are the PRE-FLIGHT's alone: a user shell carrying
     // either would make the real run validate and exit without
@@ -758,7 +758,7 @@ async fn launcher_version(prefix: &Path) -> Option<String> {
         if !launcher.is_file() {
             continue;
         }
-        let probe = tokio::process::Command::new(&launcher)
+        let probe = pa_types::platform::ya_guard::tokio(&launcher)
             .arg("--version")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())

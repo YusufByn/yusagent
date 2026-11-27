@@ -309,6 +309,7 @@ Ce document n'existe pas encore dans le dépôt (recherche dans `docs/`) ; la li
 - Sur macOS, dépendance à `sandbox-exec`, déprécié mais présent.
 - Plateforme sans mécanisme (userns refusés, `sandbox-exec` absent) : le kernel ne démarre pas, sauf si la protection est coupée par la variable d'environnement (réponses 7 et 8) ; elle est alors entièrement absente.
 - Banc de capture et smoke bench : la protection y est coupée (réponse 7, §O.3).
+- **`apply_patch` du worker** (point ouvert, ajouté par Yusuf le 26/11/2026, ticket à part après le ticket 41) : avec `editTool: "native"`, `apply_patch` écrit depuis le worker, donc hors protection. Sa seule garde est le workspace de la session. Un workspace qui contient `~/.yusagent` (dossier personnel ouvert comme projet, par exemple) permet d'y écrire `models.json` ou `auth.json`, une `!commande` comprise.
 
 ## K. Options comparées
 
@@ -898,6 +899,139 @@ Lignes de l'arbre à `a91207b34`. Les nombres de lignes sont des estimations.
   - **Écart** : ce contrôle upstream n'était pas dans les lignes validées. Je l'ai traité comme un test dont l'assertion change (`serper: None`, +3, −2) et je l'ai listé dans `docs/fork-changes.md`.
 - `f49bff54f` (push 2 bis), run `ci` 45874752019 : **tous les jobs passent**, y compris le shard 1 (vérifications de cycle de vie et tests de `ya_secret_relay`), clippy et la suite Python.
   - Échec à part : « Check changelog fragment ». Il manquait le fragment `.changes/ya-41-protection-secrets.md`, ajouté au push suivant.
+
+### T.5 Preuve par mutation des quatre tests Rust arrivés avec le code (26/11/2026)
+
+Demande de Yusuf : avant le merge de la PR #93, casser d'une ligne chacune des quatre règles réelles et vérifier que chaque test échoue sur son assertion, et seulement lui.
+- Branche jetable `ya-41-mutation`, créée depuis `863e27b69`, dernier commit de la PR.
+- Commits de diagnostic hors PR : `dd8e142e3`, puis `821134510`.
+- `ci.yml` ne tourne que sur une PR vers `main` : PR temporaire **#94**, en mode prêt, fermée après le relevé, branche distante supprimée.
+
+Mutations, dans `crates/pa-core/src/mcp/ya_relay.rs` :
+
+| Mutation | Ligne cassée | Règle | Test |
+|---|---|---|---|
+| M1 | `bound_token`, bras OAuth : `endpoint == url` devient `!endpoint.is_empty()` | jeton OAuth lié à l'adresse exacte | T1 `mcp_http_relay_never_attaches_a_token_bound_elsewhere_or_unbound` |
+| M2 | `bearer_for`, `Stored` : `return Err(credentials_unavailable(server))` devient `return Ok(None)` | refus net, avec le message fixe | T2 `mcp_http_relay_fails_closed_with_the_unavailable_message` |
+| M3 | `bound_token`, jeton collé : `Some(bearer.trim().to_string())` devient `resolve_config_value(bearer.trim())` | jeton collé pris tel quel, jamais résolu par une variable d'environnement ni par une commande | T3 `mcp_http_relay_attaches_a_pasted_token_literally` |
+| M4 | `mcp_http`, serveur hors réglages : l'absence d'identifiant n'est plus une erreur | serveur hors réglages refusé sans identifiant lié | T4 `mcp_http_relay_refuses_a_server_outside_the_settings_without_a_bound_credential` |
+
+**Run 1** (`dd8e142e3`, M1 à M4, run `ci` 45877790177, shard 1) : exactement T1, T2, T3 et T4 échouent. Les 7 autres tests de `ya_secret_relay.rs` passent.
+- T2 (`:420`) : `no credential: Object {"status": Number(200), …}`. Seule M2 peut le produire (aucun identifiant, serveur configuré) : **attribué**.
+- T4 (`:474`) : `an unknown server with no bound credential is refused`. Seule M4 peut le produire : **attribué**.
+- T1 (`:400`) : `no usable credential: the relay fails closed: Object {"status": Number(200), …}`. M1 comme M2 laissent partir la requête : **ambigu**.
+- T3 (`:448`) : `the pasted bearer is attached as is: POST /mcp HTTP/1.1 / authorization: ***`. GitHub masque la valeur de l'en-tête dans le journal, donc la preuve n'est pas lisible.
+- Clippy échoue aussi (`match_same_arms`, causé par M4). C'est sans rapport avec les tests.
+
+**Run 2, isolement** (`821134510`, M1 et M3 seules, run `ci` 45879883671, shard 1) : **seuls T1 et T3 échouent**, avec les mêmes messages (`:400`, `:448`). T2, T4 et les 7 autres tests du relais passent.
+- T1 ne peut plus échouer que par M1, puisque M2 est retirée : **attribué**.
+- T3 ne peut échouer que par M3, puisque M1 ne touche que le bras OAuth et que T3 n'utilise qu'un jeton collé : **attribué**.
+- Clippy, `fmt` et la suite Python passent.
+
+**Conclusion** : chacun des quatre tests échoue sur son assertion sous la mutation de sa propre règle, et seulement lui.
+
+## U. PR A (PR #95) : classement des lancements et lignes du push 2 (26/11/2026)
+
+Réponses de Yusuf aux écarts du push 1 :
+1. Test 1 : squelette de la fonction de profil au push 1, qui rend une chaîne vide (`crates/pa-types/src/platform/ya_secret_guard.rs`), plutôt qu'une preuve par mutation.
+2. Lancements : classés comme ci-dessous, et chaque site upstream ne change qu'en un appel à une fonction du fork.
+3. Sockets : le profil refuse les chemins exacts des sockets en usage (superviseur et worker, enregistrés par `register_sockets`), plus les dossiers par défaut. Le test 2 couvre un socket hors du dossier par défaut.
+
+**Emplacement de l'enveloppe** : `pa-types` (`crates/pa-types/src/platform/ya_secret_guard.rs`, fichier du fork). C'est la seule crate dont dépendent toutes les autres : `pa-ai` et `pa-tui` ne dépendent pas de `pa-core`. Chaque site passe de `Command::new(x)` à `pa_types::platform::ya_secret_guard::command(x)`, ou à `tokio::process::Command::from(…command(x))`, sur la même ligne.
+
+### U.1 Classement des 44 lancements trouvés par le scan
+
+**Exemptés** (`crates/pa-core/tests/ya_secret_guard/launch_exceptions.txt`, chaque preuve vérifiée par le test) :
+
+| Catégorie | Sites | Preuve vérifiée |
+|---|---|---|
+| Relance du binaire yusAgent (2, hors des 44) | `pa-daemon/src/supervisor/supervision.rs:583`, `pa-cli/src/interactive_mode/daemon.rs:170` | `current_exe()` dans le fichier (`supervision.rs:573`, `daemon.rs:64`) |
+| Propre à Windows (6) | `pa-ai/.../bedrock/credential_process.rs:123`, `pa-core/src/auth/resolve_config_value.rs:84`, `:100`, `pa-core/src/platform/process.rs:266`, `pa-core/src/platform/shell.rs:134`, `pa-tui/src/external_editor.rs:67` | `cfg(windows)` dans les 40 lignes avant (`:120`, `:80`, `:80`, `:255`, `:132`, `:65`) |
+| Propre à Linux, jusqu'à la PR C (3) | `pa-types/src/platform/process.rs:41`, `:352` (`ps`), `pa-tui/src/clipboard.rs:284` (`which wl-copy`) | `not(target_vendor = "apple")` (`:36`, `:350`) ; `copy_on_linux` (`:277`) |
+| Inatteignable (1) | `pa-cli/src/client_update.rs:51` | `/update` du TUI rendu avant tout lancement : `client_update.rs:17` (`SELF_UPDATE`, ticket 19) |
+
+**Enveloppés** (34 sites, une ligne chacun) :
+- Les flux de mise à jour (`update_flow/*`, `pa-core/src/update/*`) sont enveloppés, faute de preuve d'inatteignabilité : `run_coordinator_mode` est appelé par `pa-cli/src/package_command.rs:460`, hors du verrou `SELF_UPDATE` (`public_command.rs:666`).
+- Les deux ouvreurs de navigateur (`pa-core/src/platform/browser.rs:36`, `pa-tui/src/browser.rs:55`) passent par la variante sans refus de `LaunchServices` et par le contrôle `https://`, ou `http://` vers localhost (une ligne de plus chacun).
+
+### U.2 Lignes upstream du push 2 (estimation, à confirmer au compte rendu)
+
+| Fichier | Sites | Lignes |
+|---|---|---|
+| `crates/pa-ai/src/providers/bedrock/credential_process.rs` | `:131` | 1 |
+| `crates/pa-ai/src/providers/google_vertex.rs` | `:104` | 1 |
+| `crates/pa-cli/src/daemon_discovery/scan.rs` | `:152` | 1 |
+| `crates/pa-cli/src/factory_command.rs` | `:270` | 1 |
+| `crates/pa-cli/src/update_flow/successor.rs` | `:51` | 1 |
+| `crates/pa-cli/src/update_flow/swap.rs` | `:156` | 1 |
+| `crates/pa-cli/src/update_flow/update_command.rs` | `:176` | 1 |
+| `crates/pa-cli/src/print_runtime.rs` | avertissement « protection coupée » sur stderr du pont, recopié dans l'Output | 1 |
+| `crates/pa-core/src/auth/resolve_config_value.rs` | `:70` | 1 |
+| `crates/pa-core/src/autonomous/gates.rs` | `:403` | 1 |
+| `crates/pa-core/src/kernel/bootstrap/venv/probe.rs` | `:14` | 1 |
+| `crates/pa-core/src/kernel/bootstrap/venv.rs` | `:82` | 1 |
+| `crates/pa-core/src/kernel/manager/startup.rs` | `:168` | 1 |
+| `crates/pa-core/src/packages/process.rs` | `:19`, `:45` | 2 |
+| `crates/pa-core/src/platform/browser.rs` | `:36`, plus le contrôle du schéma | 2 |
+| `crates/pa-core/src/platform/shell.rs` | `:118` | 1 |
+| `crates/pa-core/src/session/manager/git.rs` | `:24` | 1 |
+| `crates/pa-core/src/update/download.rs` | `:133` | 1 |
+| `crates/pa-core/src/update/installer.rs` | `:626`, `:761` | 2 |
+| `crates/pa-core/src/workspace_snapshot/git.rs` | `:121` | 1 |
+| `crates/pa-daemon/src/saved_session_commands.rs` | `:117` | 1 |
+| `crates/pa-daemon/src/user_bash.rs` | `:586` | 1 |
+| `crates/pa-daemon/src/worker.rs` | `register_sockets` (socket du superviseur et du worker) | 1 |
+| `crates/pa-daemon/src/supervisor.rs` | `register_sockets` de son socket ; contrôle `st_nlink` d'`auth.json` au démarrage ; avertissement « protection coupée » | 3 |
+| `crates/pa-tui/src/browser.rs` | `:55`, plus le contrôle du schéma | 2 |
+| `crates/pa-tui/src/clipboard.rs` | `:60`, `:229` | 2 |
+| `crates/pa-tui/src/clipboard_image.rs` | `:50` | 1 |
+| `crates/pa-tui/src/external_editor.rs` | `:61` | 1 |
+| `crates/pa-tui/src/export_share.rs` | `:149`, `:156`, `:164`, `:171` | 4 |
+| `crates/pa-tui/src/interactive/render.rs` | `:51` | 1 |
+| `.cargo/config.toml` | `PRIME_AGENT_SECRET_GUARD = "off"` dans `[env]` | 1 |
+| `scripts/lifecycle_lib.py` et contrôles qui filtrent l'environnement (liste de `docs/fork-changes.md:1114`) | `PRIME_AGENT_SECRET_GUARD` ajoutée à leur liste blanche | 1 à 8 |
+
+- **Total estimé : environ 45 à 52 lignes upstream dans 31 à 38 fichiers**, presque toutes des remplacements d'une ligne.
+- Déjà au push 1 : `crates/pa-types/src/platform/mod.rs` (+2, déclaration du module).
+- `crates/pa-core/src/tools/ya_exec.rs:317` est un fichier du fork, hors de ce décompte.
+- Code du fork : le module de l'enveloppe (profil, deux variantes, contexte des chemins, interrupteur, contrôle des URL, refus au lancement si `sandbox-exec` manque), `env_allowlist.rs` (`PRIME_AGENT_SECRET_GUARD` jamais transmise au kernel), les bancs (variable posée, README).
+
+## V. PR A (PR #95) : relevé du push 1 et push 2 (26/11/2026)
+
+### V.1 Push 1 : tests seuls (`bc31006e8`, `02d974186`, `5f9a00e03`)
+
+- `02d974186` (push 1 bis) : squelette de `profile`, qui rend une chaîne vide, et test 1 ; catégories d'exemption du scan ; socket hors du dossier par défaut dans le test 2 ; `--no-fail-fast` dans le job macOS (au push 1, `cargo test` s'arrêtait au premier binaire en échec).
+- `5f9a00e03` (push 1 ter) : extension `.rs` comparée par `Path::extension`, un lint de clippy relevé au run `ci` 45882785163.
+
+**Run `secret guard (macos-15)` 45884801495** : chaque test échoue sur son assertion.
+
+| Test | Assertion en échec |
+|---|---|
+| Test 1, deux tests (`ya_secret_guard_profile.rs:42`, `:77`) | `not a Seatbelt profile` (le squelette rend une chaîne vide) |
+| Test 2 (`ya_secret_guard_kernel.rs:202`) | `the kernel reached what the guard refuses`, les 11 accès en `ok` : lecture d'`auth.json`, de `models.json` et d'`auth.json.tmp123`, lecture par symlink, remplacement de `models.json`, socket du dossier par défaut, socket hors du dossier par défaut, écriture du binaire en cours, écriture de son `package.json`, `bash cat auth.json`, renommage du dossier agent |
+| Test 3 (`ya_secret_guard_acp_e2e.rs:210`) | `a session cell read auth.json: {"read auth.json":"ok","connect to the daemon socket":"ok"}` |
+| Test 7 (`ya_secret_guard_hardlink_e2e.rs:68`) | `auth.json still shares its inode with a link made before the guard` (3618419 des deux côtés) |
+| Scan (`ya_process_launch_scan.rs:233`) | `34 process launch(es) outside the guard` |
+| Navigateur (`ya_browser_scheme.rs:76`) | `the opener launched what it must refuse` : les 7 cibles interdites |
+| `every_crate_of_the_lockfile_was_reviewed` | passe (garde-fou, vert dès le départ) |
+
+**Run `ci` 45884801558 (Linux)** : clippy, `fmt` et la suite Python passent. Les seules unités en échec sont les rouges attendus, chacun sur son assertion :
+- `pa-core#test:ya_process_launch_scan` (shard 2) ;
+- `pa-core#test:ya_browser_scheme` (shard 6) ;
+- `pa-cli#test:ya_secret_guard_hardlink_e2e` (shard 7) ;
+- `pa-types#test:ya_secret_guard_profile` (shard 8).
+
+### V.2 Réponses de Yusuf (26/11/2026) et écarts
+
+1. **Exemption Windows** : un marqueur explicite précède chaque lancement, et le scan vérifie qu'il est à l'intérieur d'un élément `#[cfg(windows)]`. Commit `911f1bed0`, 6 lignes dans 5 fichiers, avec un test d'auto-contrôle (marqueur retiré, `cfg` retiré, `cfg` posé sur un autre élément).
+   - **Écart** : `crates/pa-core/src/platform/process.rs` (site `taskkill`) n'était pas dans la liste du §U.2. Ce commit est compté à part du push 2.
+2. **Push 2** validé d'avance à trois conditions : au plus 52 lignes upstream, un seul appel par site, aucun fichier hors du §U.2. **Les trois sont tenues** (V.3).
+
+Choix faits pour tenir ces conditions :
+- **Module renommé `ya_guard`**, pour que chaque site reste sur une ligne de 100 caractères au plus. Fonctions : `command`, `tokio`, `model_tokio`, `browser(program, url)`, `sockets`, `supervisor_start`, `warn_if_off`.
+- **Navigateur** : le contrôle de l'URL est fait dans `browser(program, url)`, sans ligne de plus. Une URL refusée reçoit un programme inexistant, et rien ne s'ouvre.
+- **Sans mécanisme** (Linux avant la PR C) : seuls le kernel et `exec_command` refusent de démarrer (réponse 8, « refus de lancer le kernel »). Les autres lancements passent tels quels. Sans kernel, aucun code du modèle ne tourne.
+- **Contrôles de cycle de vie** : lancés hors de `cargo`, la variable de `.cargo/config.toml` ne leur parvient pas. Ils posent donc `PRIME_AGENT_SECRET_GUARD=off` dans l'environnement qu'ils donnent au binaire, une ligne par fichier, sans toucher `ci.yml`.
 
 ## Annexe : mesures macOS
 

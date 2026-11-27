@@ -131,6 +131,9 @@ const EXTRA_HARNESS_CREDENTIALS: &[&str] = &[
     // Ticket 41 (YA-11, answer 13): the websearch relay reads it in the worker; never the kernel,
     // even named in `kernel.envAllowlist` (the final spawn strip drops the wiring's injection).
     "SERPER_API_KEY",
+    // Ticket 41 (PR A): the guard's switch; a kernel that could set it would turn the guard off
+    // for what it launches through a nested yusAgent.
+    "PRIME_AGENT_SECRET_GUARD",
 ];
 
 /// Every provider credential var (upper-cased): the env key names of each

@@ -16,7 +16,7 @@ pub fn run_command(
     args: &[&str],
     cwd: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
-    let mut command = Command::new(program);
+    let mut command: Command = pa_types::platform::ya_guard::command(program);
     command.args(args);
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
@@ -42,7 +42,7 @@ pub fn run_command_capture(
     timeout: Option<Duration>,
     env: &[(&str, &str)],
 ) -> anyhow::Result<String> {
-    let mut command = Command::new(program);
+    let mut command: Command = pa_types::platform::ya_guard::command(program);
     command.args(args);
     if let Some(cwd) = cwd {
         command.current_dir(cwd);

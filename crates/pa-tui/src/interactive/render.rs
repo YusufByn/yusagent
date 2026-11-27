@@ -48,7 +48,7 @@ pub(super) async fn check_tmux_keyboard_setup() -> Option<String> {
         tokio::time::timeout(
             Duration::from_secs(2),
             tokio::task::spawn_blocking(move || {
-                std::process::Command::new("tmux")
+                pa_types::platform::ya_guard::command("tmux")
                     .args(["show", "-gv", option])
                     // No inherited fds: a probe must never hold the terminal the TUI owns —
                     // no TUI child ever holds /dev/tty.

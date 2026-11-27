@@ -58,12 +58,13 @@ pub(crate) async fn edit(command: &str, text: &str) -> Result<Option<String>> {
         #[cfg(not(windows))]
         let mut editor = {
             let mut tokens = command.split(' ');
-            let mut editor = tokio::process::Command::new(tokens.next().unwrap_or_default());
+            let mut editor = pa_types::platform::ya_guard::tokio(tokens.next().unwrap_or_default());
             editor.args(tokens);
             editor
         };
         #[cfg(windows)]
         let mut editor = {
+            // yusAgent (YA-11, ticket 41): propre à Windows, hors enveloppe (pas d'exécution en Windows natif).
             let mut editor = tokio::process::Command::new("cmd");
             editor.arg("/C").arg(command);
             editor

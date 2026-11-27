@@ -4,6 +4,8 @@ Lance le binaire d'une branche sur quelques tâches courtes avec un vrai modèle
 
 Le premier run réel est lancé par Yusuf (CLAUDE.md, règle 6). Tout l'outillage se valide sans modèle, contre le serveur de capture (`--capture`).
 
+**Protection des secrets coupée dans le banc** (ticket 41, réponse 7) : le banc lance le binaire sous son propre `sandbox-exec`, et une sandbox imbriquée est refusée ; il pose donc `PRIME_AGENT_SECRET_GUARD=off`. Le kernel du banc n'est pas protégé comme celui du produit : le préfixe envoyé au modèle est le même, seuls les refus (fichiers d'identifiants, sockets, `LaunchServices`, setuid) diffèrent. Le kernel protégé est vérifié sans enveloppe externe par `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs` (test 3).
+
 ## Prérequis
 
 - macOS (`sandbox-exec`), `python3` ≥ 3.11 (bibliothèque standard seule), `uv`, `git`, `curl`, `node` ≥ 22 (tâches Node : `node --test` avec motif et rapport JUnit).

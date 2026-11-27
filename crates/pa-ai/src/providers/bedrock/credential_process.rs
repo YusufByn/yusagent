@@ -120,6 +120,7 @@ async fn run(command: &str) -> Option<Vec<u8>> {
     #[cfg(windows)]
     let mut process = {
         use std::os::windows::process::CommandExt as _;
+        // yusAgent (YA-11, ticket 41): propre à Windows, hors enveloppe (pas d'exécution en Windows natif).
         let mut process = tokio::process::Command::new("cmd");
         process
             .as_std_mut()
@@ -128,7 +129,7 @@ async fn run(command: &str) -> Option<Vec<u8>> {
     };
     #[cfg(not(windows))]
     let mut process = {
-        let mut process = tokio::process::Command::new("sh");
+        let mut process = pa_types::platform::ya_guard::tokio("sh");
         process.args(["-c", command]);
         process
     };

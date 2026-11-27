@@ -115,7 +115,7 @@ pub fn get_shell_config(_custom_shell_path: Option<&str>) -> anyhow::Result<Shel
 
 #[cfg(unix)]
 fn find_bash_on_path() -> Option<String> {
-    let out = std::process::Command::new("which")
+    let out = pa_types::platform::ya_guard::command("which")
         .arg("bash")
         .output()
         .ok()?;
@@ -131,6 +131,7 @@ fn find_bash_on_path() -> Option<String> {
 /// report non-existent paths), System32 candidates demoted to last.
 #[cfg(windows)]
 fn find_bash_on_path() -> Option<String> {
+    // yusAgent (YA-11, ticket 41): propre à Windows, hors enveloppe (pas d'exécution en Windows natif).
     let mut command = std::process::Command::new("where");
     command.arg("bash.exe");
     crate::platform::process::set_no_window(&mut command);

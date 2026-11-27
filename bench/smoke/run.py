@@ -288,6 +288,8 @@ def agent_env(cache: Cache, agent_dir: Path, connect_port: int | None, capture: 
         "TMPDIR": str(cache.tmp),
         "LANG": "en_US.UTF-8",
         "DO_NOT_TRACK": "1",
+        # Ticket 41: the bench runs under its own sandbox-exec (a nested one is refused).
+        "PRIME_AGENT_SECRET_GUARD": "off",
         "PI_OFFLINE": "1",
         "PI_SKIP_VERSION_CHECK": "1",
         "PI_CACHE_RETENTION": CACHE_RETENTION,

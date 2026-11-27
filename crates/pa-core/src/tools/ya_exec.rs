@@ -314,7 +314,7 @@ impl ExecManager {
             Some(prefix) => format!("{prefix}\n{cmd}"),
             None => cmd.to_string(),
         };
-        let mut command = tokio::process::Command::new(&self.config.shell);
+        let mut command = pa_types::platform::ya_guard::model_tokio(&self.config.shell);
         command
             .arg("-c")
             .arg(script)

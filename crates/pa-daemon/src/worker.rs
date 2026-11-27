@@ -1045,6 +1045,7 @@ pub async fn run_worker() -> Result<()> {
         return Err(anyhow!("worker mode requires {WORKER_ROLE_ENV}=1"));
     }
     let config = WorkerConfig::from_env()?;
+    pa_types::platform::ya_guard::sockets(&config.socket_path, &config.supervisor_socket_path);
     // Self-registration: the supervisor's roster survives its own restarts
     // because workers re-present their identity (liveness watch + backoff).
     let registration = crate::registration::start(&config);

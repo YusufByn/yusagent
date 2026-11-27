@@ -5,8 +5,6 @@
 
 use std::time::Duration;
 
-use tokio::process::Command;
-
 use crate::image_load::{LoadedImage, SUPPORTED_IMAGE_MIME_TYPES};
 
 const DEFAULT_LIST_TIMEOUT: Duration = Duration::from_secs(1);
@@ -47,7 +45,7 @@ fn select_supported_image_mime_type(types: &[String]) -> Option<String> {
 /// Run one command with a hard timeout; `None` on spawn failure, nonzero
 /// exit, or timeout.
 async fn run_command(program: &str, args: &[&str], timeout: Duration) -> Option<Vec<u8>> {
-    let child = Command::new(program)
+    let child = pa_types::platform::ya_guard::tokio(program)
         .args(args)
         // Without the drop-kill, a hung converter keeps running past the
         // deadline — an orphaned direct child of the TUI.
