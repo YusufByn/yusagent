@@ -383,3 +383,84 @@ Aussi : `extensions/vscode/.DS_Store` retiré du dépôt (commit à part, `bb7c6
   - `crates/pa-daemon/src/agent_engine.rs` : +2 (commentaire + `mod ya_live_auth;`) ;
   - `crates/pa-daemon/src/agent_engine/lifecycle.rs:1012` : +2 / −1 (le flux de la session passe par `ya_live_auth::stream_fn`).
 - **Push 2** : la couture de `model.rs`. Lignes exactes au §I, avant le push 2.
+
+## I. Push 1 : relevé des rouges, et lignes upstream exactes du push 2 (27/11/2026)
+
+### I.1 Push 1 (`f384e4879`, PR #96)
+
+Contenu :
+- `crates/pa-daemon/src/agent_engine/ya_live_auth.rs` (nouveau) : squelette branché. `stream_fn` appelle `refresh_slot` avant chaque appel, et `refresh_slot` ne fait rien ;
+- `ya_live_auth_tests.rs` (nouveau) : tests 9 à 14 ;
+- `crates/pa-cli/tests/ya_providers_acp_e2e.rs` : `#[ignore]` retiré de 1a et 1b, test 15 ajouté ;
+- lignes upstream : `agent_engine.rs` +2 (`:81-82`), `agent_engine/lifecycle.rs` +2 (`:1013-1014`).
+- `rustfmt --check` lancé en local sur les fichiers touchés (formateur seul, ni cargo ni compilation).
+
+Runs :
+
+| Run | Résultat |
+|---|---|
+| `ci` 45967819279 | `fmt`, `check + clippy (workspace)`, `windows cross-check + clippy` verts. Shards 1, 2, 5, 6, 7 et 8 verts. **Shard 3/8** : 1 263 réussis, 3 en échec. **Shard 4/8** : dans `ya_providers_acp_e2e`, 8 réussis, 3 en échec. Rien d'autre en échec |
+| `ya-secret-guard-macos` 45967819219 | vert : scan des lancements compris |
+| `Changelog fragment` 45967819224 | en échec, attendu (fragment au push 2) |
+| `ya-extension` 45967819196, `ya-build-macos-arm64` 45967786013 | verts |
+
+**Rouges, chacun sur son assertion** (GitHub masque le jeton factice `FRESH` en `***`, et les valeurs `Bearer …`) :
+
+| Test | Job | Ligne | Assertion |
+|---|---|---|---|
+| 1a `h1_an_api_key_rewritten_on_disk_reaches_the_running_session` | shard 4/8 | `ya_providers_acp_e2e.rs:493` | « H1: the running session kept the key it was built with; requests: ["old", "old"] » |
+| 1b `h1_an_oauth_token_renewed_on_disk_reaches_the_running_session` | shard 4/8 | `:523` | « … kept the token it was built with; requests: ["old", "old"] » |
+| 15 `a_renewed_token_is_nowhere_but_auth_json` | shard 4/8 | `:549` | précondition « the renewed token serves the second request; requests: ["old", "old"] » |
+| 9 `an_expired_chatgpt_token_is_refreshed_before_the_call` | shard 3/8 | `ya_live_auth_tests.rs:195` | « the next call serves the refreshed token; exchanges: 0 », `left: Some("tok-ya42-old")` |
+| 12 `a_stop_during_a_refresh_settles_the_call_at_once` | shard 3/8 | `:278` | « no provider request after the Stop », `left: 1, right: 0` |
+| 13 `two_workers_spend_the_refresh_token_once` | shard 3/8 | `:351` | « one token exchange between the two workers; exit codes: [Some(101), Some(101)] », `left: 0, right: 1`. Les deux enfants échouent à `:313` sur `Some("tok-ya42-old")` |
+
+**Verts attendus, verts** : 10 `a_failed_refresh_keeps_the_pair`, 11 `a_pinned_key_is_never_re_resolved`, 14 `an_unregistered_engine_streams_as_before`, et l'enfant du test 13 lancé seul (`a_worker_process_refreshes`, rien à faire hors du test 13).
+
+**Écart au §G, signalé** :
+- le test 15 a une précondition (le jeton renouvelé sert la 2e requête), donc il est rouge au push 1, et non vert comme prévu au §G. Sans elle, il passerait sans rien prouver ;
+- le test 13 attendait « deux échanges » au push 1 ; le squelette n'en fait aucun, d'où `left: 0`.
+
+### I.2 Lignes upstream exactes (push 1 et push 2)
+
+| Fichier | Ligne | Push | Changement |
+|---|---|---|---|
+| `crates/pa-daemon/src/agent_engine.rs` | `:81-82` | 1 (fait) | +2 : `// yusAgent (YA-02, YA-10, ticket 42): request auth re-resolved before each provider call.` et `mod ya_live_auth;` |
+| `crates/pa-daemon/src/agent_engine/lifecycle.rs` | `:1013-1014`, après `let stream_fn = switchable_stream_fn(…)` (`:1012`) | 1 (fait) | +2 : `// yusAgent (YA-02, YA-10, ticket 42): request auth re-resolved before each call.` et `let stream_fn = super::ya_live_auth::stream_fn(self, stream_fn);` |
+| `crates/pa-daemon/src/agent_engine/model.rs` | `:457`, dans `resolve_request_key_and_headers_and_store_health` | 2 | +2 / −1 : `let auth = pa_core::auth::AuthStorage::create(&self.config.agent_dir);` devient `// yusAgent (YA-02, YA-10, ticket 42): the OAuth integration of the refresh (\`ya_live_auth\`).` et `let auth = super::ya_live_auth::auth_storage(&self.config.agent_dir);` |
+
+- **Total : +6 / −1** (attendu : environ +7 / −1).
+- **En production, rien ne change pour les autres appelants de cette fonction** (construction, changement de modèle, `Reload`) : `auth_storage(dir)` = `AuthStorage::create_with_oauth(dir, ProviderOAuth::new())`, exactement ce que fait `AuthStorage::create` (`crates/pa-core/src/auth/manager.rs:259-266`). Une intégration scriptée remplace `ProviderOAuth::new()` seulement en test (`#[cfg(test)]`, registre par dossier agent).
+- Aucune autre ligne upstream. Le reste est dans le module du fork.
+
+### I.3 Le code du push 2 (module du fork)
+
+`refresh_slot(engine)` :
+1. clé imposée par la création (`current_selection().api_key`) : rien ;
+2. sinon, modèle de l'emplacement. Si l'identifiant rangé est un OAuth expiré d'un des quatre fournisseurs rafraîchissables (lecture d'`auth.json` sans intégration OAuth, `NoOAuth`) : verrou entre processus d'abord ;
+   - fichier `<agent_dir>/auth.json.ya-refresh.<fournisseur>.lock` ;
+   - `pa_core::platform::try_lock_exclusive` (verrou du système, libéré à la fermeture ou à la mort du processus, `crates/pa-core/src/platform/lock_dir.rs:489-511`), retenté toutes les 50 ms pendant au plus 30 s ;
+   - **verrou non obtenu à temps : rien n'est résolu**, l'emplacement garde sa paire, et l'appel part avec l'ancien jeton (401, comme aujourd'hui) ;
+3. sous `reload_lock` (même règle que `Reload`), `resolve_request_key_and_headers_and_store_health(&model)`. Elle rafraîchit le jeton expiré par `lookup.rs`, qui relit le fichier sous le verrou et ne dépense pas le jeton de rafraîchissement si l'autre processus a déjà écrit ;
+4. si `auth.json` sert un identifiant valide : clé et en-têtes posés dans l'emplacement, si le modèle n'a pas bougé entre-temps. Sinon, la paire reste (`reload.rs:87-117`).
+
+### I.4 Point à trancher avant le push 2 : un Stop pendant la résolution
+
+- La boucle d'agent abandonne l'appel au flux sur un Stop : `race_with_abort(stream_fn(…), signal)` (`crates/pa-agent/src/agent_loop/response.rs:151`).
+- Or notre flux est enveloppé par deux enveloppes de `pa-core`, qui notent le début de la requête **avant** de l'attendre :
+  - `semantic_edges` : `request_started` dans le registre (`crates/pa-core/src/session_engine/semantic_edges/stream.rs:21-45`) ;
+  - `request_timing` : le résumé (`crates/pa-core/src/session_engine/request_timing.rs:343-403`).
+- Si l'appel est abandonné pendant notre attente, la requête reste « commencée » dans le registre, sans `failed`, et son résumé de timing ne part pas.
+  - C'est le défaut qu'upstream a corrigé dans `a05bcb695` par des gardes dans ces deux fichiers (« settle requests dropped mid-resolution »).
+  - Effet chez nous : le registre n'est lu par rien dans le produit (« nothing in the Rust product reads or derives edges yet », `crates/pa-core/src/session_engine/semantic_edges.rs:10-12`). Le résumé de timing n'est écrit que si `PI_REQUEST_TIMING` ou le réglage est actif. Il manquerait donc une ligne de diagnostic.
+- **Proposition** :
+  - **Résolution sans rafraîchissement** (le cas de presque tous les appels) : synchrone, dans l'appel au flux, sans `await`. La fenêtre est fermée, et ce sont deux lectures de fichier, comme la résolution que `build_session` fait déjà sur le chemin asynchrone (`lifecycle.rs:1038`).
+  - **Rafraîchissement réel** (une fois par durée de vie du jeton) : sur un fil bloquant (`spawn_blocking`), en course avec le Stop. Le test 12 tient : le Stop règle l'appel tout de suite. La fenêtre ne reste ouverte que pendant un rafraîchissement réel, avec l'effet ci-dessus.
+  - Aucune ligne upstream de plus. L'autre voie est de reprendre les gardes d'upstream dans `pa-core` (environ +87 lignes hors tests d'après `git show --stat a05bcb695`, fichiers upstream) : je ne la recommande pas.
+
+### I.5 Mesure du coût par appel (décision 6), méthode proposée
+
+- `PI_REQUEST_TIMING=1` écrit pour chaque requête la phase `request-sent` avec `phaseMs`, l'écart entre le prompt construit et la remise de la requête au client du fournisseur (`crates/pa-core/src/session_engine/request_timing/clock.rs:141-167`), dans `<agent_dir>/logs/agent.jsonl` (`request_timing.rs:71`). Notre résolution tombe dans cet écart.
+- Commande prévue : un script `bench/tools/capture/ya42_cost.py`. Il lance le binaire `main` puis le binaire de la branche, en mode `-p` d'abord écarté (non couvert), en ACP contre le serveur local du banc, avec `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short PI_REQUEST_TIMING=1`. Il fait N = 200 requêtes par binaire, avec un identifiant `api_key` rangé dans un `auth.json` factice, et rend médiane et p95 de `phaseMs` pour chacun, puis la différence.
+- **Règle** : différence des médianes < 10 ms, on garde la résolution à chaque appel.
+- Script lancé par Claude Code sur les deux binaires (règle 13), sortie au ticket.
