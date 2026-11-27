@@ -494,13 +494,13 @@ Aucune autre ligne upstream : `ya_turns.rs`, `ya_history.rs`, `ya_permissions.rs
 2. Un tour en cours (prompt de ce client, tour de l'agent ou steer) : `-32603`, « The agent is working: stop it before going back. » (texte d'Unharnessed).
 3. **Réponse 9**, autre client attaché qui répond (même vérification que C12, `ya_history::other_askers`, `ya_history.rs:170-187`, passée en `pub(super)`) : `-32603`, « This conversation is open in another window: close it there before going back. » (proposition, sur le modèle de C12, `ya_history.rs:149`). Démon trop ancien : refus de C12 (`ya_history.rs:162`).
 4. Action `rewind` du worker. Réponse `{}`, ou erreur reportée (`-32602` avec `data.details` pour une entrée hors de la branche, `-32603` sinon).
-5. Après le succès : le goal est republié, comme Unharnessed (`rewind.rs:64`), par `fetch_autonomous_status` (déjà `pub(super)`). Rien pour l'usage : l'indicateur de contexte est reporté (ligne du 21/11/2026).
+5. ~~Après le succès : le goal est republié, comme Unharnessed (`rewind.rs:64`), par `fetch_autonomous_status` (déjà `pub(super)`).~~ **Corrigé au push 9 (§N)** : le goal est republié **par le worker**, comme `handle_navigate_tree` (`crates/pa-daemon/src/worker/commands.rs:199-215`) : après la reconstruction, `goal_update_after_rebuild()` donne le goal rechargé depuis la branche, publié en événement `goal_update` avant la réponse au retour, puis en `_meta.goal` par le pont (`acp/wire_events.rs:260`). `fetch_autonomous_status` ne convenait pas : il attend la fin d'un travail sans tête. Rien pour l'usage : l'indicateur de contexte est reporté (ligne du 21/11/2026).
 
 **Worker, action `rewind { to }`** (sous-module `ya_permissions/rewind.rs`) :
 1. Sous le verrou du cœur :
    - refus « The agent is working: stop it before going back. » si `core.busy` ou `core.compacting` ;
    - refus « {to} is not in the conversation » si `to` n'est pas sur la branche active (`store.branch_file_entries()`, `session_tree.rs:210`).
-2. Toujours sous le verrou : `core.queued_input_suspended` est mis à vrai (`worker/session_core.rs:90-94`), en gardant l'ancienne valeur. Aucun tour (réveil, file) ne démarre pendant le déplacement. C'est l'équivalent du verrou d'Unharnessed (`rewind.rs:34-36`).
+2. ~~Toujours sous le verrou : `core.queued_input_suspended` est mis à vrai (`worker/session_core.rs:90-94`), en gardant l'ancienne valeur.~~ **Corrigé au push 9 (§N)** : l'action tient la pause de file d'upstream du début à la réponse, `hold_queued_work_pause("navigate")` (`crates/pa-daemon/src/session_input_pause.rs:131-144`), comme `handle_navigate_tree`. Aucun tour (réveil, file) ne démarre pendant le déplacement (`worker/turn.rs:59`). C'est l'équivalent du verrou d'Unharnessed (`rewind.rs:34-36`).
 3. `store.branch_to(Some(to))` (`session_tree.rs:140`), en mémoire comme Unharnessed (réponse 10) ; entrées de la branche relevées.
 4. Entrées abandonnées : celles de l'ancienne branche après `to`.
 5. **Remise en file** dans `core.pending_next_turn`, dans l'ordre :
@@ -508,7 +508,7 @@ Aucune autre ligne upstream : `ya_turns.rs`, `ya_history.rs`, `ya_permissions.rs
    - les lignes D2 déjà en file sont retirées (deux retours de suite : un seul texte) ;
    - puis le texte D2.
 6. Verrou rendu. `engine.rebuild_session_context(entrées, GoalBranchReload::FaithfulBranch)` sur un fil bloquant (`engine.rs:170`, comme `branch_navigation.rs:532-542`).
-7. `queued_input_suspended` remis à son ancienne valeur. Le runner est réveillé si la file n'est pas vide (mécanisme exact à établir au code ; test T11).
+7. ~~`queued_input_suspended` remis à son ancienne valeur.~~ **Corrigé au push 9 (§N)** : la pause est rendue quand la garde tombe, à la réponse ou à tout retour anticipé (`Drop`, `session_input_pause.rs:247-255`). La levée réveille le runner et réévalue la suite de goal due (`:156-170`). `queued_input_suspended` n'est jamais touché. Test T11.
 8. `usage_log::lookup(session_id)` (`usage_log.rs:728-732`), puis `note_invalidation({"cause": "rewind"})`.
    - `note_invalidation` remplace aujourd'hui la note en attente (`:491-493`) : il fusionnera, pour que la note du masquage ne l'efface pas (fichier du fork).
    - **À vérifier au code** : le journal du worker est-il enregistré dans le registre (`for_session`, `:451-470`) ? S'il ne l'est pas, je m'arrête et je propose une autre voie.
@@ -616,7 +616,7 @@ Celui du §G.6 (PR 1 et 2), d'abord lancé par Claude Code sur le binaire de la 
   - si la suspension était levée avant le retour, appelle `resume_queued_input()` à la fin ;
   - si elle était déjà posée (après un abort), la laisse posée et ne réveille rien ;
 - aucun point de contrôle n'est écrit au journal de reprise (`record_queue_checkpoint`, `:387`) : la suspension du retour ne vit qu'en mémoire. Un crash pendant le retour reprend l'état durable d'avant, non suspendu ;
-- **limite** : un abort reçu pendant la fenêtre du retour (session au repos) verrait sa suspension levée par la fin du retour. Le pont n'envoie pas de Stop au repos, et un autre client attaché fait refuser le retour (réponse 9).
+- ~~**limite** : un abort reçu pendant la fenêtre du retour (session au repos) verrait sa suspension levée par la fin du retour.~~ **Retirée au push 9 (§N)** : l'action ne touche plus `queued_input_suspended` ; elle tient la pause de file d'upstream, indépendante de la suspension des aborts.
 
 **Étape 8, journal d'usage (établi au code)** : le registre est indexé par l'id d'en-tête du fichier (`for_session`, `usage_log.rs:451-475`, `register` `:722-726`). Le moteur du worker reprend cet id (`crates/pa-daemon/src/agent_engine/lifecycle.rs:1074-1086`), le même que `store.session_id()`. `usage_log::lookup(store.session_id())` trouve donc le journal de la session.
 
@@ -922,6 +922,12 @@ installé
    - Attendu : refus « This conversation is open in another window: close it there before going back. »
    - Quitter le TUI, puis recommencer : le retour passe.
 9. (§I.7, 1) Taper `/refine`, puis modifier le message suivant : la ligne de résultat de `/refine` reste dans la conversation (`ya43_control.py`, I1, l'a vérifié par ACP).
+10. (Goal, push 9) Nouvelle conversation :
+    - envoyer « Réponds juste : un. », puis « /goal --budget 3000 Écris un haïku sur la mer, puis arrête. » ;
+    - la ligne du goal apparaît en haut de la boîte (objectif, minuteur, pause et fin), et elle reste après le tour (`complete` ou `budget_limited`) ;
+    - cliquer sur le message `/goal`, le remplacer par « Réponds juste : deux. », puis envoyer.
+    - Attendu : la ligne du goal disparaît dès le retour, avant la réponse à « deux ». La conversation ne reste pas « occupée » : un autre chat ouvert, celui-ci se met en veille après le délai habituel.
+    - Cas inverse (facultatif) : goal posé, puis `/goal clear` (la ligne disparaît), puis modifier le message `/goal clear` : la ligne du goal revient, dans son état d'avant (`ya_acp_rewind_e2e`, T14).
 
 Ce que le contrôle manuel ne peut pas voir : la requête elle-même. Le texte fixe une fois et le préfixe sont vérifiés par `ya43_rewind_check.py` et par les e2e T7, T5b, T5c et T9.
 

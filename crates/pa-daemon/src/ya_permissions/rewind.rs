@@ -13,10 +13,16 @@
 //!   which the turn writes to the session file (§L: parked rows alone never reach the model). The
 //!   next agent-loop call journals `invalidation: {"cause": "rewind"}`.
 //!
-//! Refused while a turn runs or a compaction is going on, and for an entry off the branch. The
-//! queued input is suspended while the leaf moves (Q-I5): no wake or queued turn starts meanwhile;
-//! the suspension is lifted and the runner woken after (`resume_queued_input`), unless it was on
-//! before. Nothing changes the system prompt or the tools.
+//! Refused while a turn runs or a compaction is going on, and for an entry off the branch. As
+//! `navigate_tree` (`worker/commands.rs:199-215`, push 9 of the ticket):
+//! - the whole rewind holds upstream's queued-work pause (`hold_queued_work_pause("navigate")`,
+//!   TS `acquireQueuedWorkPause`): the runner admits no queued work meanwhile (`worker/turn.rs:59`)
+//!   and is woken when the guard drops (`session_input_pause.rs:156-170`); the abort suspension
+//!   (`queued_input_suspended`) is never touched;
+//! - the goal reloaded from the branch is announced (`goal_update_after_rebuild`) before the
+//!   answer, so the client never shows the goal of the abandoned turns.
+//!
+//! Nothing changes the system prompt or the tools.
 
 use std::sync::Arc;
 
@@ -100,7 +106,9 @@ impl Worker {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let (branch, suspended_before, session_id, rows) = {
+        // Held to the answer: dropped on every return, which wakes the runner.
+        let _queued_work = self.hold_queued_work_pause("navigate");
+        let (branch, session_id, rows) = {
             let mut guard = self.core.lock().unwrap();
             let core = &mut *guard;
             if core.busy || core.compacting {
@@ -125,10 +133,7 @@ impl Worker {
                     .map(|entry| row_of(&entry.fields))
                     .collect()
             };
-            let suspended_before = core.queued_input_suspended;
-            core.queued_input_suspended = true;
             if let Err(error) = store.branch_to(Some(to.as_str())) {
-                core.queued_input_suspended = suspended_before;
                 return failure(&error.to_string());
             }
             let branch = store.branch_file_entries();
@@ -140,7 +145,7 @@ impl Worker {
                 .retain(|row| row.get("customType").and_then(Value::as_str) != Some(REWOUND_TYPE));
             core.pending_next_turn
                 .extend(rows.iter().filter_map(parked));
-            (branch, suspended_before, session_id, rows)
+            (branch, session_id, rows)
         };
         let engine = Arc::clone(&self.engine);
         let rebuilt = tokio::task::spawn_blocking(move || {
@@ -150,14 +155,14 @@ impl Worker {
             )
         })
         .await;
-        // Suspended before the rewind (an abort): it stays so, nothing is woken.
-        if !suspended_before {
-            self.resume_queued_input();
-        }
         match rebuilt {
             Ok(Ok(())) => {}
             Ok(Err(error)) => return failure(&format!("{error:#}")),
             Err(error) => return failure(&format!("context rebuild failed: {error}")),
+        }
+        // The goal of the point, announced before the answer (`handle_navigate_tree`).
+        if let Some(goal) = self.engine.goal_update_after_rebuild() {
+            self.emit_worker_event(json!({ "type": "goal_update", "goal": goal }));
         }
         // The same rows to the model, through the core session's mailbox (§L).
         if let Some(agent_engine) = self.agent_engine.as_ref() {
