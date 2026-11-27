@@ -868,9 +868,43 @@ Avant le correctif (binaire du push 3), les mêmes outils donnaient : `ya43_rewi
 
 ### M.3 Contrôle manuel pour Yusuf (§G.6 et §I.7)
 
-Préparation :
-- télécharger le build de la PR, par exemple `gh run download <run ya-build-macos-arm64 du dernier commit> --repo YusufByn/yusagent --dir <dossier>`, puis vérifier `SHA256SUMS` et extraire ;
-- dans VS Code, régler `yusagent.binaryPath` sur ce binaire, puis recharger la fenêtre. Un démon d'un autre build est remplacé s'il ne tient rien ; sinon, `yusagent shutdown` d'abord (ticket 29).
+Préparation (deux pièces de la PR : le binaire **et** l'extension, car `src/ya/methods.ts` change ; l'extension déjà installée refuse `_yus/session/rewind` sur place) :
+1. **Extension** : installer le `.vsix` du run `ya-extension` du dernier commit poussé, puis recharger la fenêtre :
+
+   ```
+   extensions/vscode/scripts/install-vsix.sh <id du run ya-extension du dernier commit>
+   ```
+
+   - Au dernier commit (`467c8e19c`), c'est le run **46005389185**. Son artefact s'appelle `yusagent-vsix-8468813…` : c'est le sha du commit de merge de la PR, normal pour un run `pull_request`.
+   - Le script vérifie la taille (< 5 Mo) et le contenu attendu avant d'installer.
+2. **Binaire** : télécharger le build macOS du dernier commit de code, vérifier `SHA256SUMS` et extraire :
+   - `gh run download 46002975887 --repo YusufByn/yusagent --dir <dossier>` (`ba5c1eb96` ; les commits suivants ne changent que ce ticket) ;
+   - dans VS Code, régler `yusagent.binaryPath` sur ce binaire, puis recharger la fenêtre ;
+   - un démon d'un autre build est remplacé s'il ne tient rien ; sinon, `yusagent shutdown` d'abord (ticket 29).
+3. Vérifier que l'édition est servie : un clic sur un message envoyé doit le remettre dans la boîte, avec le bandeau « Editing an earlier message ». Si l'envoi répond « It could not go back to the message: _yus/session/rewind : méthode pas encore servie par yusAgent », c'est l'ancienne extension.
+
+Lancement préalable par Claude Code (règle 13), dans un dossier d'extensions isolé, pour ne pas toucher au VS Code de Yusuf :
+
+```
+$ sh extensions/vscode/scripts/install-vsix.sh 46005389185 <dossier isolé>
+taille : 202181 octets (limite 5000000)
+sha256 : 27564a15dcd97322f2f6672404f9d72db02c34aaa8b5f1e102acd1ef96e4e01e
+contenu :
+  [Content_Types].xml
+  extension.vsixmanifest
+  extension/LICENSE.txt
+  extension/dist/extension.js
+  extension/dist/webview/main.css
+  extension/dist/webview/main.js
+  extension/media/icon.svg
+  extension/package.json
+  extension/readme.md
+Extension 'yusagent.vsix' was successfully installed.
+yusagent.yusagent@0.1.0
+installé
+```
+
+`extension/dist/extension.js` installé liste `"_yus/session/rewind"` parmi les méthodes servies, juste après `"_yus/session/steer"`.
 
 Étapes, avec ton modèle habituel :
 1. Nouvelle conversation. Envoyer « Réponds juste : un. »
