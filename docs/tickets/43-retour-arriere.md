@@ -656,6 +656,46 @@ Celui du §G.6 (PR 1 et 2), d'abord lancé par Claude Code sur le binaire de la 
 
 **Aucun lecteur existant ne change de comportement** : pas d'arrêt. `docs/usage.md:108` gagne la cause `rewind`, et le défaut d'`ab_stats.py` part dans un ticket à part.
 
+## J. PR 1 (PR #97) : relevé du push 1 (27/11/2026)
+
+Push 1 : `53a0b6ebf` sur `ya-43-retour-arriere-pr1`. Tests et squelette : `turnStart` sans `rewindTo`, et `_yus/session/rewind` répondu comme non servi (`-32601`). C'est le comportement de `main`.
+
+**Lignes upstream poussées : +5 / −1**, toutes dans `crates/pa-daemon/src/acp/daemon.rs` :
+- `:1175-1178` (+4) : aiguillage de `_yus/session/rewind`, après celui de `steer` ;
+- `:1637` (−1 +1) : `publish_prompt_start(&producer, turn_id, link, state)`.
+
+| Run | Résultat |
+|---|---|
+| `ci` 45987538022 | `fmt`, `check + clippy (workspace)`, `windows cross-check + clippy`, `deny` verts. Shards 1, 4, 5, 6, 7 verts. **Shard 2/8** : 1 478 réussis, 1 en échec. **Shard 3/8** : 1 268 réussis, 1 en échec. **Shard 8/8** : `ya_acp_rewind_e2e`, 0 réussi, 10 en échec ; rien d'autre en échec |
+| `ya-extension` 45987538056 | **extension** : `# tests 87`, `# pass 85`, `# fail 2`. **e2e vrai binaire** : 1 test en échec |
+| `ya-secret-guard-macos` 45987538229 | vert, scan des lancements compris |
+| `ya-build-macos-arm64` 45987502857 | vert |
+| `Changelog fragment` 45987538337 | en échec, attendu : le fragment arrive au push 2 |
+
+**Rouges, chacun sur son assertion** :
+
+| Test | Job | Ligne | Assertion |
+|---|---|---|---|
+| fusion `notes_of_different_causes_are_journaled_together` | shard 2/8 | `usage_log/tests.rs:710` | `left: {"cause": "rewind"}`, `right: [{"cause": "rewind"}, {"cause": "masking", "turn": 5, …}]` : la note remplace la précédente |
+| T6 `another_window_refuses_the_rewind` | shard 3/8 | `ya_turns/rewind.rs:80` | `left: None`, `right: Some("This conversation is open in another window: close it there before going back.")` |
+| T1 `a_prompt_turn_start_carries_the_leaf_before_it` | shard 8/8 | `ya_acp_rewind_e2e.rs:506` | « rewindTo is the leaf before the prompt: {"origin":"prompt"} », `left: Null`, `right: "7a09ec70"` |
+| T2/T7, T5a, T5b, T5c, T8, T9, T11 | shard 8/8 | `:432` (`accepted`) | « the rewind is accepted: … "code":-32601 … » |
+| T3 `a_rewind_is_refused_while_a_turn_runs` | shard 8/8 | `:565` | `left: Some(-32601)`, `right: Some(-32603)` |
+| T4 `a_rewind_to_an_entry_off_the_branch_is_invalid` | shard 8/8 | `:586` | `left: Some(-32601)`, `right: Some(-32602)` |
+| E1 « servi (features().rewind) » | extension | — | `actual: false`, `expected: true` |
+| E2 « modifier un message envoyé… » | extension | — | `actual: 0`, `expected: 1` : aucun rewind sur le fil, l'appel est refusé sur place |
+| E3 « retour en arrière (ticket 43)… » | e2e vrai binaire | — | « rewindTo du deuxième tour (turnStart) : {… "prompt":{"text":"second"…} …} » : absent |
+
+**Préconditions passées** :
+- T5a : la ligne custom écrite par `append_custom_message` sur le socket du démon est acceptée, et la feuille avant le prompt est bien cette ligne ;
+- T5b : l'annonce `[skills-changed]` part avec le deuxième prompt.
+
+Les deux tests s'arrêtent ensuite sur le refus du rewind.
+
+**Verts attendus, verts** : T6 `no_other_window_lets_the_rewind_go_on`, et tous les tests existants.
+
+**À noter pour le push 2** : le job `extension` s'arrête aux tests unitaires. L'e2e de l'extension contre l'agent factice (`test/e2e/suite.ts`), qui reçoit maintenant `rewindTo` dans chaque `turnStart`, n'a donc pas tourné à ce push. Il tournera quand E1 et E2 seront verts.
+
 ## Annexe : mesure préliminaire, git seul
 
 Script : `docs/tickets/43-retour-arriere/shadow_git_mesure.sh`.
