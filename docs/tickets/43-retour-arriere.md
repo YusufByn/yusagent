@@ -505,7 +505,6 @@ Aucune autre ligne upstream : `ya_turns.rs`, `ya_history.rs`, `ya_permissions.rs
 4. Entrées abandonnées : celles de l'ancienne branche après `to`.
 5. **Remise en file** dans `core.pending_next_turn`, dans l'ordre :
    - les lignes abandonnées de type `ya-resources-changed` (`ya_resource_notice.rs:36`), pour la cohérence de `Tracker.known` (§I.1) ;
-   - et `ipython_state_restored`, le kernel restauré restant vrai (`state_restore_notice.rs`), à valider (Q-I2) ;
    - les lignes D2 déjà en file sont retirées (deux retours de suite : un seul texte) ;
    - puis le texte D2.
 6. Verrou rendu. `engine.rebuild_session_context(entrées, GoalBranchReload::FaithfulBranch)` sur un fil bloquant (`engine.rs:170`, comme `branch_navigation.rs:532-542`).
@@ -526,10 +525,7 @@ Aucune autre ligne upstream : `ya_turns.rs`, `ya_history.rs`, `ya_permissions.rs
 - prompt de ce client : feuille lue par `leaf` juste avant `turnStart`. En cas d'échec de la lecture, `rewindTo` est absent et le tour part quand même ;
 - tour de l'agent : absent, comme Unharnessed (`uh:.../acp/prompt.rs:328`) ;
 - steer : absent, D3 du ticket 39 inchangé (écart déjà validé : Unharnessed le met) ;
-- rejeu de `session/load` : parent de l'entrée de chaque prompt rejoué.
-  - Les messages rejoués n'ont pas d'id d'entrée (`ya_history.rs:220-235`, `get_session_messages`) ;
-  - d'où un appel à `get_session_tree` au chargement (`branch_navigation.rs:63-75`) : branche active depuis `leafId`, puis le k-ième message user de la branche apparié au k-ième tour de prompt rejoué ;
-  - 0 ligne upstream ; une requête par chargement (Q-I4).
+- rejeu de `session/load` : **reporté dans un ticket à part** (Q-I4, §I.9) ; pas de `rewindTo` au rejeu dans la PR 1.
 
 **Extension** :
 - `"_yus/session/rewind"` ajouté aux méthodes servies (`src/ya/methods.ts:10-41`), d'où `features().rewind` vrai (`:57`) ;
@@ -544,7 +540,7 @@ Aucune autre ligne upstream : `ya_turns.rs`, `ya_history.rs`, `ya_permissions.rs
 | `crates/pa-daemon/src/acp/daemon.rs` | upstream | +5 −1 (§I.2) |
 | `crates/pa-daemon/src/acp/ya_turns.rs` | fork | `mod rewind;`, `publish_prompt_start`, `rewindTo` |
 | `crates/pa-daemon/src/acp/ya_turns/rewind.rs` | nouveau | méthode `_yus/session/rewind` |
-| `crates/pa-daemon/src/acp/ya_history.rs` | fork | `other_askers` en `pub(super)`, `rewindTo` au rejeu |
+| `crates/pa-daemon/src/acp/ya_history.rs` | fork | `other_askers` en `pub(super)` |
 | `crates/pa-daemon/src/ya_permissions.rs` | fork | `mod rewind;`, aiguillage des actions `rewind` et `leaf` |
 | `crates/pa-daemon/src/ya_permissions/rewind.rs` | nouveau | actions `rewind` et `leaf` |
 | `crates/pa-core/src/session_engine/usage_log.rs` | fork | `CAUSE_REWIND`, fusion dans `note_invalidation` |
@@ -569,7 +565,7 @@ Rust (`pa-daemon`, lien simulé du pont et worker de test) :
 - **T7** requête au fournisseur factice après un retour et un prompt : messages = branche jusqu'à `to`, puis D2, puis le nouveau prompt ; rien des tours abandonnés ; prompt système et tools identiques à la requête d'avant. Rouge.
 - **T8** journal d'usage : `invalidation.cause == "rewind"` sur l'appel `main` suivant, et sur lui seul ; avec le masquage actif, les deux causes sont présentes. Rouge.
 - **T9** reprise (redémarrage du démon) après un retour et un prompt : branche reprise = nouvelle. Contrôle, pas forcément rouge.
-- **T10** `rewindTo` au rejeu de `session/load` = parent de l'entrée de chaque prompt. Rouge : absent.
+- ~~T10~~ `rewindTo` au rejeu : retiré de la PR 1 (Q-I4, ticket à part).
 - **T11** avis `[bash-done]` arrivé pendant le retour : livré après, pas perdu (K-a). Contrôle de course.
 
 Extension :
@@ -603,6 +599,62 @@ Celui du §G.6 (PR 1 et 2), d'abord lancé par Claude Code sur le binaire de la 
 - **Q-I3** : texte du refus de la réponse 9 : « This conversation is open in another window: close it there before going back. »
 - **Q-I4** : `rewindTo` au rejeu de `session/load` (un `get_session_tree` par chargement) dans cette PR, ou reporté ? Sans lui, après « Relancer », seuls les nouveaux messages sont modifiables.
 - **Q-I5** : suspension de la file pendant le retour (`queued_input_suspended`, étape 2), ou course acceptée comme `navigate_tree` d'upstream ?
+
+### I.9 Réponses de Yusuf sur le plan (27/11/2026)
+
+- **Q-I1 : R-b0.** Un commentaire dans `ya_permissions.rs` dira que cette commande du fork porte aussi des actions hors permissions (`holds`, `rewind`, `leaf`).
+- **Q-I2 : seulement les lignes `ya-resources-changed`.** `ipython_state_restored` n'est pas remis en file (§I.3, étape 5, corrigée en conséquence).
+- **Q-I3 : texte validé** : « This conversation is open in another window: close it there before going back. »
+- **Q-I4 : reporté dans un ticket à part** (appariement fragile avec les steers). T10 est retiré de la PR 1.
+  - **Limite de la PR 1** : après « Relancer » ou une reprise depuis l'historique, seuls les nouveaux messages sont modifiables. Les tours rejoués n'ont pas de `rewindTo`, et l'extension ne rend pas leur message cliquable (`webview/Chat.tsx:184`).
+- **Q-I5 : suspension de la file pendant le retour.** Le mécanisme de réveil de l'étape 7 est établi au code (ci-dessous) : pas d'arrêt.
+
+**Étape 7, réveil de la file (établi au code)** :
+- `resume_queued_input()` (`crates/pa-daemon/src/worker/lifecycle.rs:426-437`) lève `queued_input_suspended` puis appelle `wake_queued_input()` (`:439-445`) ;
+- `wake_queued_input()` fait `work_notify.notify_one()` (réveil du runner) et `retry_owed_goal_continuation()` (suite de goal due). C'est le chemin de `resume_queue` (`:368-423`) ;
+- l'action `rewind` :
+  - si la suspension était levée avant le retour, appelle `resume_queued_input()` à la fin ;
+  - si elle était déjà posée (après un abort), la laisse posée et ne réveille rien ;
+- aucun point de contrôle n'est écrit au journal de reprise (`record_queue_checkpoint`, `:387`) : la suspension du retour ne vit qu'en mémoire. Un crash pendant le retour reprend l'état durable d'avant, non suspendu ;
+- **limite** : un abort reçu pendant la fenêtre du retour (session au repos) verrait sa suspension levée par la fin du retour. Le pont n'envoie pas de Stop au repos, et un autre client attaché fait refuser le retour (réponse 9).
+
+**Étape 8, journal d'usage (établi au code)** : le registre est indexé par l'id d'en-tête du fichier (`for_session`, `usage_log.rs:451-475`, `register` `:722-726`). Le moteur du worker reprend cet id (`crates/pa-daemon/src/agent_engine/lifecycle.rs:1074-1086`), le même que `store.session_id()`. `usage_log::lookup(store.session_id())` trouve donc le journal de la session.
+
+**Fusion dans `note_invalidation` : forme exacte**
+
+- **Forme du champ `invalidation` inchangée**, celle documentée depuis le ticket 24 (`docs/usage.md:108`, `merge_invalidations`, `usage_log.rs:382-390`) :
+  - absent sans cause ;
+  - **l'objet seul** pour une cause : `{"cause": "rewind"}` ;
+  - **un tableau de ces objets** pour plusieurs causes sur le même appel.
+- Ordre du tableau : changements de modèle ou d'effort (`changes_since`), puis les notes dans l'ordre où elles ont été posées. Par exemple, un retour en arrière puis un nouveau palier de masquage au même appel :
+
+  ```json
+  [{"cause": "rewind"}, {"cause": "masking", "turn": 9, "frontier": 4, "masked": 3}]
+  ```
+- **Ce qui change dans le code** (fichier du fork) :
+  - la note en attente devient une liste (`Mutex<Vec<Value>>`) ;
+  - `note_invalidation` **remplace une note de même `cause`** et ajoute les autres. Une seconde note de masquage avant l'appel remplace donc la première, comme aujourd'hui ; deux retours de suite donnent un seul `rewind` ;
+  - `take_invalidation()` garde sa signature (`Option<Value>`, l'objet seul ou le tableau), utilisée par les tests du masquage ;
+  - `take_main_invalidation` ajoute les notes une par une à ses entrées, pour ne pas imbriquer de tableau ;
+  - nouvelle constante `CAUSE_REWIND = "rewind"`.
+
+**Lecteurs de `invalidation`** (recherche de `invalidation` dans `bench/`, `crates/`, `extensions/`, `scripts/`) et effet :
+
+| Lecteur | Ce qu'il lit | Effet |
+|---|---|---|
+| `bench/smoke/metrics.py:109`, `:130`, `:147` | présence du champ (`"invalidation" in r`) | Aucun changement : présence seulement. Un appel après un retour en arrière sort des taux de cache, ce qui est voulu ; le banc (`-p`) n'en fait jamais |
+| `bench/smoke/tests/test_bench.py:69`, `:82` | objet `masking` construit par le test | Aucun |
+| `bench/smoke/tools/ab_stats.py:339` | `(record.get("invalidation") or {}).get("cause")` | **Aucun changement de comportement** : le banc ne fait pas de retour en arrière, et une seule note de masquage reste un objet. **Défaut existant, hors de ce ticket** : un tableau (déjà possible depuis le ticket 24, `model_change` et `thinking_level_change` au même appel) ferait échouer `.get` sur une liste. À corriger dans un ticket à part : lire l'objet ou chaque élément du tableau, comme `acp_resume.py:220-221` |
+| `bench/smoke/tools/check_warmup.py:132-133`, `bench/smoke/ab/ya14-codex-rereport-check.py:29` | compteurs du rapport (`report.json`) | Aucun |
+| `bench/tools/capture/acp_live_changes.py:183-187`, `acp_resume.py:220-221`, `:393-394` | objet ou tableau, chaque `cause` | Aucun : les deux formes sont déjà lues ; leurs scénarios ne font pas de retour en arrière |
+| `bench/tools/capture/masking_check.py:81`, `:99-101` | présence, valeur affichée | Aucun : cas `mask-*` sans retour en arrière |
+| `crates/pa-cli/tests/ya_acp_resume_e2e.rs:565-571` | objet `thinking_level_change` exact | Aucun : une seule cause |
+| `crates/pa-core/src/session_engine/usage_log/tests.rs:588-596` (une note), `:675-689` (trois causes, un tableau) | formes exactes | Aucun : une note reste un objet, et l'ordre `changes_since` puis notes est gardé |
+| `crates/pa-core/src/session_engine/masking/tests.rs:377-383` | `take_invalidation()` = l'objet `masking` | Aucun : une note, même signature |
+| Tableau de bord | — | Il n'y en a pas : l'indicateur de cache de l'extension est reporté (ligne du 21/11/2026) ; l'extension ne lit pas le journal d'usage |
+| `compare.py` | — | Ne lit pas `invalidation` (absent de la recherche) |
+
+**Aucun lecteur existant ne change de comportement** : pas d'arrêt. `docs/usage.md:108` gagne la cause `rewind`, et le défaut d'`ab_stats.py` part dans un ticket à part.
 
 ## Annexe : mesure préliminaire, git seul
 
