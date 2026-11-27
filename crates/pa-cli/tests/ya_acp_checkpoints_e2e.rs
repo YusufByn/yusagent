@@ -749,7 +749,7 @@ fn a_prompt_snapshots_the_workspace_before_and_after_its_turn() {
 /// what it removed come back; an ignored file and a file over the cap are left as they are.
 #[test]
 fn a_restore_brings_the_files_back_and_leaves_the_rest() {
-    let code = "import os\nopen('keep.txt', 'w').write('v2')\nos.remove('gone.txt')\nr = await bash('echo shell > shell.txt')\nprint(r.exit_code)\nprint(await edit('notes.txt', 'alpha', 'beta'))\nopen('ignored.log', 'a').write('+agent')\nwith open('big.bin', 'r+b') as handle:\n    handle.write(b'agent')\nprint('cell done')";
+    let code = "import os\nopen('keep.txt', 'w').write('v2')\nos.remove('gone.txt')\nr = await bash('echo shell > shell.txt')\nprint(r.exit_code)\ntry:\n    print(await edit('notes.txt', 'alpha', 'beta'))\nexcept Exception as error:\n    open('edit-error.txt', 'w').write(f'{type(error).__name__}: {error}')\nopen('ignored.log', 'a').write('+agent')\nwith open('big.bin', 'r+b') as handle:\n    handle.write(b'agent')\nprint('cell done')";
     let mut client = Client::spawn(
         &json!({ "engine": "faux", "responses": [
             cell("call-1", code),
@@ -770,7 +770,12 @@ fn a_restore_brings_the_files_back_and_leaves_the_rest() {
     // Push B (Yusuf's request): the writes of `bash()` and `edit()` in a version-2 cell, seen
     // before the restore.
     assert_eq!(read(&client.path("shell.txt")), "shell\n", "bash() wrote");
-    assert_eq!(read(&client.path("notes.txt")), "beta\n", "edit() wrote");
+    assert_eq!(
+        read(&client.path("notes.txt")),
+        "beta\n",
+        "edit() wrote; its error, if any: {:?}",
+        std::fs::read_to_string(client.path("edit-error.txt")).ok()
+    );
     assert!(
         !client.path("gone.txt").exists(),
         "the cell removed gone.txt"

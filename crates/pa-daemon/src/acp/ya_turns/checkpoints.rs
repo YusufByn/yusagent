@@ -201,8 +201,8 @@ async fn handle(state: &mut Result<repo::Repo, &'static str>, job: Job) {
             path,
             reply,
         } => {
-            let answer = match (state, path) {
-                (Err(reason), _) => Err(Refusal::Off(*reason)),
+            let answer = match (state.as_mut().map_err(|reason| *reason), path) {
+                (Err(reason), _) => Err(Refusal::Off(reason)),
                 (Ok(repo), Some(path)) => repo.before(&session, &to, &path).await,
                 (Ok(repo), None) => repo.preview(&session, &to).await,
             };
@@ -214,8 +214,8 @@ async fn handle(state: &mut Result<repo::Repo, &'static str>, job: Job) {
             force,
             reply,
         } => {
-            let answer = match state {
-                Err(reason) => Err(Refusal::Off(*reason)),
+            let answer = match state.as_mut().map_err(|reason| *reason) {
+                Err(reason) => Err(Refusal::Off(reason)),
                 Ok(repo) => repo.restore(&session, &to, force).await,
             };
             let _ = reply.send(answer);
@@ -289,10 +289,15 @@ pub(crate) async fn forget_session(workspace: &Path, session_id: &str) {
         )
         .await
     {
-        let deletes: String = String::from_utf8_lossy(&listed)
-            .lines()
-            .map(|name| format!("delete {name}\n"))
-            .collect();
+        let deletes =
+            String::from_utf8_lossy(&listed)
+                .lines()
+                .fold(String::new(), |mut deletes, name| {
+                    deletes.push_str("delete ");
+                    deletes.push_str(name);
+                    deletes.push('\n');
+                    deletes
+                });
         if !deletes.is_empty() {
             let _ = repo
                 .run(None, &["update-ref", "--stdin"], Some(deletes.as_bytes()))

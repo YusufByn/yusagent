@@ -306,6 +306,8 @@ impl Repo {
         self.limits = limits;
         if nested {
             self.remember_nested()?;
+            // Before the `add` that follows: a nested repository never enters the index.
+            self.write_exclude()?;
         }
         Ok(())
     }
@@ -371,20 +373,16 @@ impl Repo {
             self.limits.bytes = self.limits.bytes.saturating_sub(old);
         }
         if !removed.is_empty() {
-            let input = removed.join("\0");
+            // The index entries go as they are (a gitlink included), with no pathspec matching.
+            let input: String = removed.iter().fold(String::new(), |mut input, path| {
+                input.push_str(path);
+                input.push('\0');
+                input
+            });
             self.git()
                 .run(
                     Some(index),
-                    &[
-                        "--literal-pathspecs",
-                        "rm",
-                        "--cached",
-                        "-q",
-                        "-r",
-                        "--ignore-unmatch",
-                        "--pathspec-from-file=-",
-                        "--pathspec-file-nul",
-                    ],
+                    &["update-index", "--force-remove", "-z", "--stdin"],
                     Some(input.as_bytes()),
                 )
                 .await?;
@@ -402,7 +400,11 @@ impl Repo {
     }
 
     fn remember_nested(&self) -> Result<(), String> {
-        let listed: String = self.nested.iter().map(|path| format!("{path}\n")).collect();
+        let listed = self.nested.iter().fold(String::new(), |mut listed, path| {
+            listed.push_str(path);
+            listed.push('\n');
+            listed
+        });
         std::fs::write(self.dir.join("ya-nested"), listed).map_err(|error| error.to_string())
     }
 
