@@ -1822,6 +1822,65 @@ Mesures d'appoint, git seul (lancées par Claude Code, scripts dans le dossier t
     À coder et à remesurer, sans garantie de passer sous 150 ms dans ce cas ; fichiers du fork seulement.
   - (c) Seuil revu.
 
+**Réponse de Yusuf (Q-3a-4) : (a)**, le prompt envoyé après une pause fait foi : seuil tenu à 100 ms.
+- **Limite notée** : jusqu'à environ 180 ms si un prompt part juste à la fin du tour précédent (l'instantané de fin est dans la même file).
+- **Idée pour plus tard, pas de code maintenant** : quand un prompt arrive pendant que l'instantané de fin attend, n'en prendre qu'un, rangé sous les deux refs.
+
+### P.16 Après la réponse Q-3a-4 : ajout au plan de la 3b, relance de `main`, contrôle manuel court de 3a (27/11/2026)
+
+**Ajout au plan de la 3b (demande de Yusuf)** : un état visible dans l'extension pendant le premier instantané d'un workspace. Mesuré à 3 656 ms sur 10 000 fichiers (§P.15, binaire `749f22906`) ; le prompt n'est envoyé au worker qu'après. Le pont ne signale rien aujourd'hui pendant cette attente : le moyen (trame du pont, ou état déduit par l'extension entre `turnStart` et la première mise à jour) est à fixer au plan de la 3b.
+
+**Relance des jobs en échec du run 46021181469 de `main`** (faite par Yusuf) : **verte**.
+- Tentative 2 du run 46021181469 : `conclusion=success`. Les 8 shards, `check + clippy`, `windows cross-check + clippy`, `fmt`, `deny`, `runtime suite`, `test summary` et `trust gate audit` sont en succès (`gh run view 46021181469 --json attempt,conclusion,jobs`).
+- Dans le shard 3/8 de la relance (job 140737208706), `lxml` s'installe sans être construit (`+ lxml==6.2.0`), et l'erreur `libxml2` est absente (0 occurrence). Ça va dans le sens de l'hypothèse du §P.15 (roue pas encore disponible au premier essai), sans la prouver.
+
+**Contrôle manuel court de 3a avant merge**, sur le binaire de la PR (build `ya-build-macos-arm64` 46064694779, `27a96578a`, dernier commit qui touche le code : le code produit n'a pas changé depuis). Le contrôle passe par l'extension, donc par le pont : les tours du TUI ne prennent pas d'instantané (réponse 3).
+
+0. **Binaire** :
+   ```
+   D=$(mktemp -d) && gh run download 46064694779 --repo YusufByn/yusagent --dir "$D" \
+     && tar -xzf "$D"/yusagent-*/prime-agent-*.tar.gz -C "$D" && "$D"/yusagent --version
+   ```
+   Dans VS Code : réglage `"yusagent.binaryPath": "<D>/yusagent"`, puis « Developer: Reload Window ». Si le pont refuse parce que le démon d'une autre version tourne encore (ticket 29) : `"$D"/yusagent shutdown`, puis recharger.
+1. **Avant**, dans un projet git (idéalement avec un stash et une branche), dans le terminal à sa racine :
+   ```
+   E=$(python3 -c 'import hashlib, os; print(hashlib.sha256(os.path.realpath(os.getcwd()).encode()).hexdigest()[:16])')
+   { git status --porcelain; git for-each-ref; git stash list; } > /tmp/ya43-avant.txt
+   ls -ld ~/.yusagent/checkpoints/$E
+   ```
+   Le dossier est absent avant un premier essai sur ce projet.
+2. **Chat normal** dans l'extension : nouvelle conversation, un premier message qui ne demande pas d'écrire de fichier. Noter le délai entre l'envoi et le début de la réponse. Puis un second message, et noter son délai. L'écart donne une idée du premier instantané : environ 1,2 à 1,5 s pour les 2 285 fichiers de `~/Desktop/yusagent` (git seul, §P.3), 3,7 s pour 10 000 fichiers (§P.15).
+3. **Dépôt shadow** :
+   ```
+   ls -ld ~/.yusagent/checkpoints/$E                     # drwx------
+   cat ~/.yusagent/checkpoints/$E/workspace              # le chemin du projet
+   git --git-dir ~/.yusagent/checkpoints/$E for-each-ref --format='%(refname) %(committerdate:iso)' refs/ya/
+   ```
+   Attendu : une ref `refs/ya/<conversation>/debut/<id>` par message et une ref `refs/ya/<conversation>/fin`.
+4. **Projet inchangé** :
+   ```
+   { git status --porcelain; git for-each-ref; git stash list; } > /tmp/ya43-apres.txt
+   diff /tmp/ya43-avant.txt /tmp/ya43-apres.txt && echo identique
+   ```
+
+**Lancé d'abord par Claude Code sur le binaire (règle 13)**, au niveau du pont : `bench/tools/capture/ya43_3a_control.py`. Il rejoue les étapes 1 à 4 sur un projet git de contrôle (deux commits, une branche, un stash, un fichier non suivi), avec le serveur de capture pour modèle (aucun vrai modèle) et l'enveloppe active. Le dossier agent est celui du cas (`<travail>/agent-3a`), pas `~/.yusagent`.
+
+```
+$ DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/ya43_3a_control.py --binary <27a96578a>/yusagent --out <dossier neuf>
+1. avant : status '?? notes.txt\n' ; refs 3 ; stash 'stash@{0}: WIP on master: 7db3ee7 deux' ; commits 4
+2. premier prompt 282 ms (premier instantané compris) ; deuxième 198 ms
+3. dépôt shadow /Users/yusufyuss/.claude/jobs/3acd71ae/tmp/ya43work/agent-3a/checkpoints/ebf95f1782538e4f : existe True ; mode 0o700 ; workspace '/Users/yusufyuss/.claude/jobs/3acd71ae/tmp/ya43work/projet' ; refs ['refs/ya/01a21ed3-f6a1-7442-a48e-3c2c837abf0e/debut/ac554ac3', 'refs/ya/01a21ed3-f6a1-7442-a48e-3c2c837abf0e/debut/fcac7e5b', 'refs/ya/01a21ed3-f6a1-7442-a48e-3c2c837abf0e/fin']
+4. après : status '?? notes.txt\n' ; refs 3 ; stash 'stash@{0}: WIP on master: 7db3ee7 deux' ; commits 4
+depot_shadow_cree : oui
+fichier_workspace_nomme_le_projet : oui
+refs_des_deux_prompts_et_fin : oui
+projet_git_inchange : oui
+CONFORME
+```
+
+- Le premier prompt (282 ms) comprend le premier instantané d'un projet de 3 fichiers. Le délai de l'étape 2 dépendra de la taille du projet de Yusuf et du modèle.
+- Rien n'est affiché dans l'extension pendant le premier instantané : c'est l'objet de l'ajout à la 3b ci-dessus.
+
 ## Annexe : mesure préliminaire, git seul
 
 Script : `docs/tickets/43-retour-arriere/shadow_git_mesure.sh`.
