@@ -834,6 +834,63 @@ Visibilité (sans ligne upstream) : `pending_next_turn_rows` est un champ privé
 
 **Erreurs du script de contrôle, corrigées avant ce relevé** : G3 relançait sans `--resume` (« Relancer » passe par `--resume <fichier>`, ticket 28), et lisait mal le texte des messages rejoués (objet et non liste). Ce n'étaient pas des défauts du binaire.
 
+## M. Push 6 à 8 : correctif vert, comparaisons, contrôles (27/11/2026)
+
+### M.1 CI
+
+- **Push 6** (`6f573814e`, correctif) : e2e Rust (shard 8/8) et e2e de l'extension sur le vrai binaire verts, E3 compris. Le texte fixe et l'annonce arrivent maintenant dans la requête au modèle.
+  - Rouge restant : le test unitaire `pa-core` (`rewind.rs:103`, `left: 0`). Le test était mal monté : avec un `Agent` nu, la conversion par défaut ne garde que les messages user, assistant et résultat d'outil (`crates/pa-agent/src/agent_loop/mod.rs:150-160`) et retire les lignes custom avant la requête.
+- **Push 7** (`4a4382723`) : conversion des lignes custom donnée au test, mais avec les messages de session au lieu des messages de l'agent. Erreur de compilation (`E0308`, deux types `AgentMessage` homonymes), donc `check + clippy` et `windows cross-check` rouges.
+- **Push 8** (`ba5c1eb96`) : le test prend `messages::engine_convert_to_llm()` (`crates/pa-core/src/session_engine/messages.rs:464`), le convertisseur que le moteur donne à la boucle de l'agent.
+  - **Checks requis (`gh pr checks 97 --required`, ruleset `protect-main`) : 17/17 verts**, `test summary` compris ; `bench`, `build release binaries`, `report + regression gate` et `windows battery (on-demand)` sont en skipping (hors liste requise).
+  - Run `ci` 46002986992, tous verts :
+    - `pa-core` `the_rows_of_a_rewind_reach_the_next_request_once` et `notes_of_different_causes_are_journaled_together` (shard 2/8) ;
+    - T6 (shard 3/8) ;
+    - `acp_mode_e2e` corrigés (`acp_prompt_stream_completion_envelope_and_stop_reason_match_ts`, `acp_daemon_attached_cancels_mid_turn`) ;
+    - les 12 e2e de `ya_acp_rewind_e2e` : T1, T3, T4, T5a, T5b, T5c, T7, T8, T9, T11, T12 (shard 8/8).
+  - `ya-extension` : unitaires et e2e contre l'agent factice verts ; e2e vrai binaire vert, E3 compris.
+
+### M.2 Contrôles sur le binaire de la branche
+
+Binaire du push 6 (`0.10.2-continuous.6f573814e…`), au code produit identique aux pushs 7 et 8 : ces derniers ne changent qu'un test `pa-core`.
+
+| Commande (`DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I …`) | Résultat |
+|---|---|
+| `bench/tools/capture/ya43_rewind_check.py --binary <branche> --out <dossier>` | **CONFORME** : C1 à C6 « oui » ; texte fixe une fois et avant le prompt modifié ; préfixe identique jusqu'au point, marques comprises |
+| `bench/tools/capture/ya43_control.py --binary <branche> --out <dossier>` | **CONFORME** : G1 (texte fixe une fois dans la requête qui suit le retour, avant le renvoi ; rien des tours abandonnés ; le kernel garde `x`, `X_NOW 1`), G2 (refus pendant le tour, tour au bout), G3 (après « Relancer », rejeu de `premier`, `deuxième, modifié`, `x existe-t-il ?`), I1 (ligne de `/refine` gardée), I2 (refus avec le texte validé quand un autre client attaché répond, retour accepté une fois détaché) |
+| `bench/tools/capture/run.py --binary <main f7c4b3fb7>` puis `--binary <branche>`, puis `bench/tools/capture/compare.py <run main> <run branche> --all` | **TOUT IDENTIQUE** : 17 cas (dont `acp`, `acp-extension`, `tui`), chaque requête identique (UUID normalisés). Sans retour en arrière, rien ne change dans ce qui part au modèle |
+| `bench/tools/capture/acp_frames.py --binary <main>` puis `--binary <branche>`, puis `compare_frames.py <trames branche> --against <trames main> --expect '.params.update._meta.ai.primeintellect.prime-agent.turnStart.rewindTo'` | **écarts : 0** ; seul écart, attendu : `turnStart.rewindTo`, présent dans 4 trames (cas A, B, C) |
+| `compare_frames.py <trames branche>` (contre l'agent factice de l'extension) | **écarts : 0** ; notice, steer et `turnStart` identiques |
+
+Avant le correctif (binaire du push 3), les mêmes outils donnaient : `ya43_rewind_check.py` C4 NON ; `ya43_control.py` G1 « texte fixe une fois dans la requête » et « avant le renvoi » NON (§L.4).
+
+**Préfixe** : prompt système, tools et `yaRequest` inchangés (`compare.py --all`). Après un retour en arrière, la requête reprend le préfixe d'avant jusqu'au point de retour, octet pour octet, marques de cache comprises. Le texte fixe s'ajoute après, puis le prompt.
+
+### M.3 Contrôle manuel pour Yusuf (§G.6 et §I.7)
+
+Préparation :
+- télécharger le build de la PR, par exemple `gh run download <run ya-build-macos-arm64 du dernier commit> --repo YusufByn/yusagent --dir <dossier>`, puis vérifier `SHA256SUMS` et extraire ;
+- dans VS Code, régler `yusagent.binaryPath` sur ce binaire, puis recharger la fenêtre. Un démon d'un autre build est remplacé s'il ne tient rien ; sinon, `yusagent shutdown` d'abord (ticket 29).
+
+Étapes, avec ton modèle habituel :
+1. Nouvelle conversation. Envoyer « Réponds juste : un. »
+2. Envoyer « Crée une variable x = 1 dans le REPL Python et confirme. » : une cellule pose `x`.
+3. Envoyer « Réponds juste : trois. »
+4. Cliquer sur le deuxième message. Le bandeau « Editing an earlier message » apparaît, et les tours suivants sont atténués. Écrire « Ne crée rien, réponds juste : deux. », puis envoyer.
+   - Attendu : le deuxième et le troisième tour disparaissent, la nouvelle réponse s'affiche, et aucune ligne « conversation-rewound » n'est visible.
+5. Envoyer « La variable x existe-t-elle encore dans le REPL ? Vérifie avec une cellule, sans la recréer. »
+   - Attendu : la cellule affiche `x = 1`. Le modèle ne doit pas s'en étonner : il sait que le kernel a gardé son état (texte fixe).
+6. Envoyer « Lance une cellule qui dort 20 secondes. » Pendant la cellule, cliquer sur un message précédent : le clic ne fait rien tant que le tour tourne. Arrêter avec Stop.
+7. Recharger la fenêtre, puis rouvrir la conversation depuis l'historique.
+   - Attendu : l'historique est la nouvelle branche (« deux », pas « trois »).
+   - Limite de la PR 1 : les messages d'avant le rechargement ne sont plus modifiables, seuls les nouveaux le sont.
+8. Ouvrir la même conversation dans un terminal (`yusagent --resume <chemin du fichier de la conversation>`). Puis, dans l'extension, modifier un message envoyé depuis ce rechargement.
+   - Attendu : refus « This conversation is open in another window: close it there before going back. »
+   - Quitter le TUI, puis recommencer : le retour passe.
+9. (§I.7, 1) Taper `/refine`, puis modifier le message suivant : la ligne de résultat de `/refine` reste dans la conversation (`ya43_control.py`, I1, l'a vérifié par ACP).
+
+Ce que le contrôle manuel ne peut pas voir : la requête elle-même. Le texte fixe une fois et le préfixe sont vérifiés par `ya43_rewind_check.py` et par les e2e T7, T5b, T5c et T9.
+
 ## Annexe : mesure préliminaire, git seul
 
 Script : `docs/tickets/43-retour-arriere/shadow_git_mesure.sh`.
