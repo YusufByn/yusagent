@@ -517,3 +517,77 @@ Run `ci` 45971061847 :
 2. **`refresh_provider` lit `auth.json` pour tout fournisseur** avant de regarder s'il est rafraîchissable. Une lecture de plus par appel pour un fournisseur à clé, pour que la mesure (fournisseur à clé `capture`) couvre le même chemin que ChatGPT.
 3. **Test 16** : après le second appel, le test attend jusqu'à 2 s que le verrou de fichier soit libre. Le fil du rafraîchissement le lâche juste après l'écriture de l'emplacement.
 4. **Verrou de fichier** : `std::fs::File::try_lock` plutôt que `pa_core::platform::try_lock_exclusive`. Il faut distinguer « déjà pris » (attendre) d'« impossible » (système de fichiers sans verrou : on continue sans verrou, comme aujourd'hui), et la fonction de `pa-core` confond les deux dans une `io::Error`.
+
+## L. Push 2b : relevé de la CI, mesure du coût, captures, lignes upstream finales (27/11/2026)
+
+### L.1 CI du push 2b (`30355bb36`)
+
+- Run `ci` 45973386239 : **vert**. `fmt`, `check + clippy (workspace)`, `windows cross-check + clippy` et les 8 shards sont en succès, `test summary` aussi.
+- `gh pr checks 96 --required` : **16 checks requis en succès, aucun en « skipping »**. Sont verts aussi : `secret guard (macos-15)` (scan des lancements compris), `Check changelog fragment`, `extension (tsc, lint, tests, vsix, e2e)`, `e2e vrai binaire` et `build-aarch64-apple-darwin`.
+- **Tests du ticket, tous verts** (journaux des shards 3/8 et 4/8) :
+  - 9 `an_expired_chatgpt_token_is_refreshed_before_the_call` ;
+  - 10 `a_failed_refresh_keeps_the_pair` ;
+  - 11 `a_pinned_key_is_never_re_resolved` ;
+  - 12 `a_stop_during_a_refresh_settles_the_call_at_once` ;
+  - 13 `two_workers_spend_the_refresh_token_once` (et son enfant) ;
+  - 14 `an_unregistered_engine_streams_as_before` ;
+  - 16 `a_stopped_refresh_still_serves_the_next_call` ;
+  - 1a, 1b, 15, et le test 2 du ticket 40 (`set_api_key_pushes_the_key_into_the_running_session`).
+- Le test instable du shard 2/8 (§K.1) n'est pas retombé.
+
+### L.2 Coût par appel (décision 6)
+
+Binaires (artefacts de `ya-build-macos-arm64`, `shasum -a 256 -c SHA256SUMS` : OK) :
+- `main` : run 45961939645, `0.10.2-continuous.51bef376cf9a5b72433d3c03ea51f1470739c986` ;
+- branche : run 45973378563, `0.10.2-continuous.30355bb36cf479ee37482e4d1332bb9e8373ef9f`.
+
+Commande, lancée par Claude Code le 27/11/2026 :
+
+```
+DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short \
+  python3 -I bench/tools/capture/ya42_cost.py --main <main>/yusagent --branch <branche>/yusagent \
+    --out <dossier neuf> --blocks 10 --requests 20
+```
+
+Sortie (10 blocs de 20 requêtes par binaire, ordre alterné `main-00`, `branch-00`, `branch-01`, `main-01`, … ; chaque bloc finit en `end_turn`) :
+
+| Binaire | Requêtes | Clés conformes | Échantillons `phaseMs` | Médiane (ms) | p95 (ms) | Max (ms) |
+|---|---|---|---|---|---|---|
+| `main` | 200 | 10 (la 1re de chaque bloc) | 200 | 0,3 | 0,4 | 2,6 |
+| branche | 200 | **200** | 200 | 5,55 | 7,2 | 26,9 |
+
+- **Différence des médianes : +5,25 ms**, sous le seuil de 10 ms. **La résolution à chaque appel est gardée** (règle de la décision 6).
+- Sans la 1re requête de chaque bloc : `main` 0,3 / 0,4 ms, branche 5,5 / 7,2 ms (médiane / p95). Médianes par bloc de la branche : 6,85 ; 5,7 ; 5,5 ; 6,1 ; 5,5 ; 5,5 ; 5,5 ; 5,6 ; 5,5 ; 5,5.
+- **Preuve que chaque requête passe par la résolution** (§J.2) : sur la branche, les 200 requêtes portent la clé écrite dans `auth.json` juste avant elles. Sur `main`, seule la 1re requête de chaque bloc la porte (H1).
+- **Limites de la mesure** :
+  - `auth.json` change avant chaque requête, donc la lecture rate son cache à chaque appel : c'est le cas le plus lent ;
+  - fournisseur à clé (`capture`), sans rafraîchissement réel. Un vrai rafraîchissement, une fois par durée de vie du jeton, ajoute un aller-retour réseau, non mesuré ;
+  - une seule machine, celle de Yusuf (macOS arm64), sous `sandbox-exec`.
+
+### L.3 Préfixe (captures, règle 13)
+
+| Contrôle | Commande | Résultat |
+|---|---|---|
+| Capture `main` | `python3 -I bench/tools/capture/run.py --binary <main>/yusagent` | `runs/20261127T093813Z` ; chemins du préfixe `CONFORME` ; trames de l'extension `TOUT IDENTIQUE` |
+| Capture branche | idem sur `<branche>/yusagent` | `runs/20261127T093901Z` ; `CONFORME` ; `TOUT IDENTIQUE` ; `acp-resume` et `acp-live` `CONFORME` |
+| Toutes les requêtes, `main` contre branche | `python3 -I bench/tools/capture/compare.py runs/20261127T093813Z runs/20261127T093901Z --all` | **TOUT IDENTIQUE**. Seul `prompt_cache_key` change (UUID de session), comme entre deux runs du même binaire |
+| Trames ACP | `acp_frames.py --binary <branche>` puis `<main>`, dossiers neufs | `CONFORME` pour les deux |
+| Branche contre `main` | `python3 -I bench/tools/capture/compare_frames.py <branche> --against <main>` | **`écarts : 0`** (A, B et C identiques) |
+
+- Prompt système, tools, `yaRequest` et corps des requêtes : **inchangés**. Ce qui change est l'en-tête d'auth, quand `auth.json` porte un identifiant neuf : c'est le but.
+- **Écart de procédure, signalé** : un premier lancement d'`acp_frames.py` a refusé deux dossiers de sortie qui existaient déjà dans le dossier temporaire de la session (restes antérieurs). La comparaison faite sur ces restes (`écarts : 1`, `token` de `_yus/mcp/list`, d'avant le ticket 40) ne compte pas. Relancé avec des dossiers neufs (ligne ci-dessus).
+
+### L.4 Lignes upstream finales
+
+Mesure : `git diff --numstat origin/main...HEAD`, restreint aux fichiers présents dans `upstream/main`.
+
+| Fichier | Lignes | Où |
+|---|---|---|
+| `crates/pa-daemon/src/agent_engine.rs` | +2 | `:81-82` |
+| `crates/pa-daemon/src/agent_engine/lifecycle.rs` | +2 | `:1013-1014` |
+| `crates/pa-daemon/src/agent_engine/model.rs` | +2 / −1 | `:457-458` |
+| `.gitignore` | +3 | ligne vide, commentaire, `.DS_Store` (hors code) |
+
+- **Code : +6 / −1**, comme validé au §J.
+- `docs/fork-changes.md` disait +2 pour `.gitignore` : corrigé en +3.
+- Aucun autre fichier upstream touché dans la PR.

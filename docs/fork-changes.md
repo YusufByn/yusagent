@@ -1756,7 +1756,7 @@ Limites : la classe « exécution différée », les services locaux hors de yus
 
 Constat, décisions et plan : `docs/tickets/42-jeton-session-vivante.md` (§D.2, §H, §I, §J). Option 2 : réimplémentation minimale dans un module du fork, sans reprendre `a05bcb695` ni `dad2232cc` d'upstream. Avant chaque appel au modèle, le worker résout de nouveau la clé et les en-têtes de l'emplacement de la session, avec la règle de `/reload` (`reload.rs`) et une seule implémentation de la résolution (`resolve_request_key_and_headers_and_store_health`). Un jeton `OAuth` expiré d'un fournisseur rafraîchissable se rafraîchit sous un verrou entre processus (`auth.json.ya-refresh.<fournisseur>.lock`), sur un fil à part, en course avec le Stop.
 
-**Lignes upstream : +6 / −1 dans 3 fichiers** (validées au §J), plus `.gitignore` (+2, hors code).
+**Lignes upstream : +6 / −1 dans 3 fichiers** (validées au §J), plus `.gitignore` (+3, hors code : ligne vide, commentaire, `.DS_Store`).
 
 | Fichier | Type | Raison | Ticket |
 |---|---|---|---|
@@ -1766,7 +1766,7 @@ Constat, décisions et plan : `docs/tickets/42-jeton-session-vivante.md` (§D.2,
 | `crates/pa-daemon/src/agent_engine/ya_live_auth.rs` | nouveau | Résolution avant chaque appel : synchrone et sans attente quand rien n'est à rafraîchir ; sinon fil à part, verrou entre processus (attente au plus 30 s), Stop en course. Clé imposée par la création jamais résolue de nouveau ; moteur non enregistré inchangé. | YA-02, YA-10 (ticket 42) |
 | `crates/pa-daemon/src/agent_engine/ya_live_auth_tests.rs` | nouveau | Tests 9 à 14 et 16 : rafraîchissement Codex sur un point de jetons scripté (`ProviderOAuth::with_http`), échec, clé imposée, Stop, deux processus (enfants de `current_exe()`, test seulement), moteur non enregistré, Stop pendant un rafraîchissement. | YA-02, YA-10 (ticket 42) |
 | `crates/pa-cli/tests/ya_providers_acp_e2e.rs` | modif. (test du fork) | 1a et 1b réactivés ; test 15 (jeton renouvelé, absent de tout fichier sauf `auth.json`). | YA-02, YA-10 (ticket 42) |
-| `.gitignore` | modif. (fichier upstream, +2) | `.DS_Store` ignoré ; les `.DS_Store` suivis (`bench/`, `extensions/vscode/`) retirés de l'index. | YA-10 (ticket 42) |
+| `.gitignore` | modif. (fichier upstream, +3) | `.DS_Store` ignoré ; les `.DS_Store` suivis (`bench/`, `extensions/vscode/`) retirés de l'index. | YA-10 (ticket 42) |
 | `.changes/ya-42-jeton-session-vivante.md` | nouveau | Fragment de changelog. | YA-02, YA-10 (ticket 42) |
 | `bench/tools/capture/ya42_cost.py` | nouveau (outil du fork) | Coût par appel (décision 6) : `phaseMs` de la phase `request-sent` (`PI_REQUEST_TIMING=1`), `main` contre branche, blocs alternés ; clé neuve dans `auth.json` avant chaque requête, relevée par le serveur (preuve de la résolution). Réutilise `run.py` et `server.py` sans les modifier. | YA-02, YA-10 (ticket 42) |
 
