@@ -637,6 +637,7 @@ Si ce test retombe : relancer le shard une fois, et noter le run ici.
 | 45026623245 | `00f9653cc` (`ya-28-reprise`, PR #78), 22/11/2026 | 1 (job 137221049774) | échec du shard 2/8 |
 | 45026623245 | `00f9653cc` (`ya-28-reprise`, PR #78) | 2 (job 137228921531, relance du job seul, sans push, décidée par Yusuf) | réussi, aucun changement de code ; relance notée dans un commentaire de la PR #78 |
 | 45803883264 | `f5199e189` (`ya-40-x5`, PR #92), 26/11/2026 | 1 (job 139854091845) | échec du shard 2/8, même symptôme (`tests.rs:626`) ; pas de relance : run du push A′ de X5, rouge attendu sur ses tests, le push suivant relance tout |
+| 45971061847 | `f102b9378` (`ya-42-jeton-session-vivante`, PR #96), 27/11/2026 | 1 (job 140411829953) | échec du shard 2/8, même symptôme (`tests.rs:626`) ; pas de relance : run du push 2a du ticket 42 (test 16 seul, rouge attendu), le push 2b relance tout |
 
 Symptôme : « no storm body may land: every storm producer dropped at the reserve » à `tests.rs:626`. Le test sature la file du rédacteur de corps de requêtes (`fill_until_saturated`), lance `4 * REQUEST_PAYLOAD_CAPTURE_KEEP` producteurs en même temps, puis exige qu'aucun de leurs corps ne soit écrit. Hypothèse : sur un runner chargé, le corps « stall » finit de s'écrire pendant la rafale, une place se libère et un producteur passe. La PR #78 ne touche pas ce module.
 
@@ -1750,6 +1751,35 @@ Constat, décisions et plan : `docs/tickets/41-protection-secrets.md` (§R, §S,
 | `crates/pa-types/tests/ya_secret_guard_profile.rs`, `crates/pa-core/tests/ya_secret_guard_kernel.rs`, `ya_browser_scheme.rs`, `ya_process_launch_scan.rs` (et `ya_secret_guard/`), `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs`, `ya_secret_guard_hardlink_e2e.rs` | nouveau | Tests 1, 2, 3 et 7, conditions du §S.3, scan des lancements et de `Cargo.lock`. | YA-11 (ticket 41) |
 
 Limites : la classe « exécution différée », les services locaux hors de yusAgent et les clés passées par l'environnement (ticket, §J). Les lancements propres à Linux et le refus du kernel sous Linux sont levés à la PR C.
+
+## Jeton rafraîchi dans une session vivante, E-C (YA-02, YA-10, ticket 42)
+
+Constat, décisions et plan : `docs/tickets/42-jeton-session-vivante.md` (§D.2, §H, §I, §J). Option 2 : réimplémentation minimale dans un module du fork, sans reprendre `a05bcb695` ni `dad2232cc` d'upstream. Avant chaque appel au modèle, le worker résout de nouveau la clé et les en-têtes de l'emplacement de la session, avec la règle de `/reload` (`reload.rs`) et une seule implémentation de la résolution (`resolve_request_key_and_headers_and_store_health`). Un jeton `OAuth` expiré d'un fournisseur rafraîchissable se rafraîchit sous un verrou entre processus (`auth.json.ya-refresh.<fournisseur>.lock`), sur un fil à part, en course avec le Stop.
+
+**Lignes upstream : +6 / −1 dans 3 fichiers** (validées au §J), plus `.gitignore` (+2, hors code).
+
+| Fichier | Type | Raison | Ticket |
+|---|---|---|---|
+| `crates/pa-daemon/src/agent_engine.rs` | modif. (fichier upstream, +2) | `mod ya_live_auth;` (`:81-82`). | YA-02, YA-10 (ticket 42) |
+| `crates/pa-daemon/src/agent_engine/lifecycle.rs` | modif. (fichier upstream, +2) | Le flux de la session passe par `ya_live_auth::stream_fn` (`:1013-1014`). | YA-02, YA-10 (ticket 42) |
+| `crates/pa-daemon/src/agent_engine/model.rs` | modif. (fichier upstream, +2 / −1) | `resolve_request_key_and_headers_and_store_health` ouvre le magasin par `ya_live_auth::auth_storage` (`:457-458`) : `AuthStorage::create` en production, intégration `OAuth` scriptée en test. | YA-02, YA-10 (ticket 42) |
+| `crates/pa-daemon/src/agent_engine/ya_live_auth.rs` | nouveau | Résolution avant chaque appel : synchrone et sans attente quand rien n'est à rafraîchir ; sinon fil à part, verrou entre processus (attente au plus 30 s), Stop en course. Clé imposée par la création jamais résolue de nouveau ; moteur non enregistré inchangé. | YA-02, YA-10 (ticket 42) |
+| `crates/pa-daemon/src/agent_engine/ya_live_auth_tests.rs` | nouveau | Tests 9 à 14 et 16 : rafraîchissement Codex sur un point de jetons scripté (`ProviderOAuth::with_http`), échec, clé imposée, Stop, deux processus (enfants de `current_exe()`, test seulement), moteur non enregistré, Stop pendant un rafraîchissement. | YA-02, YA-10 (ticket 42) |
+| `crates/pa-cli/tests/ya_providers_acp_e2e.rs` | modif. (test du fork) | 1a et 1b réactivés ; test 15 (jeton renouvelé, absent de tout fichier sauf `auth.json`). | YA-02, YA-10 (ticket 42) |
+| `.gitignore` | modif. (fichier upstream, +2) | `.DS_Store` ignoré ; les `.DS_Store` suivis (`bench/`, `extensions/vscode/`) retirés de l'index. | YA-10 (ticket 42) |
+| `.changes/ya-42-jeton-session-vivante.md` | nouveau | Fragment de changelog. | YA-02, YA-10 (ticket 42) |
+| `bench/tools/capture/ya42_cost.py` | nouveau (outil du fork) | Coût par appel (décision 6) : `phaseMs` de la phase `request-sent` (`PI_REQUEST_TIMING=1`), `main` contre branche, blocs alternés ; clé neuve dans `auth.json` avant chaque requête, relevée par le serveur (preuve de la résolution). Réutilise `run.py` et `server.py` sans les modifier. | YA-02, YA-10 (ticket 42) |
+
+Limites (§H.1, §J.1) :
+- pas de rafraîchissement forcé sur un 401 d'un jeton encore valide localement (`dad2232cc` d'upstream) ;
+- `-p` non couvert : clé résolue une fois au lancement (`crates/pa-cli/src/print_runtime.rs:694`) ;
+- un Stop pendant un vrai rafraîchissement laisse la requête « commencée » sans fin dans le registre `semantic_edges` et sans ligne de timing (gardes de `a05bcb695` non reprises) ;
+- la construction de la session, `set_model` et `Reload` rafraîchissent encore sans le verrou entre processus.
+
+### À revoir à chaque reprise d'upstream
+
+- Un commit qui touche `resolve_request_key_and_headers_and_store_health` (`model.rs`) ou la création du flux dans `build_session` (`lifecycle.rs`) entre en conflit de façon visible.
+- Si `a05bcb695` est repris un jour : retirer le module, ses trois points de branchement et ses tests (la résolution à chaque appel d'upstream les remplace).
 
 ## Code repris d'Unharnessed
 
