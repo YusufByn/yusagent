@@ -1785,11 +1785,12 @@ Limites (§H.1, §J.1) :
 
 Constat, décisions et plan : `docs/tickets/43-retour-arriere.md` (§H, §I, §I.9). Retour de la conversation comme Unharnessed : `rewindTo` (feuille avant le prompt) dans le `turnStart` d'un prompt, `_yus/session/rewind { sessionId, to }`, feuille déplacée par les actions `rewind` et `leaf` de la commande du fork `ya_permissions` (R-b0), texte fixe D2 en fin d'historique, annonces `ya-resources-changed` abandonnées remises en file, `invalidation: rewind` au journal d'usage. Push 1 : tests et squelette ; push 2 : implémentation.
 
-**Lignes upstream : +5 / −1 dans 1 fichier** (§I.2).
+**Lignes upstream : +9 / −3 dans 2 fichiers** (§I.2, §K) : `daemon.rs` +5 / −1, et `acp_mode_e2e.rs` +4 / −2 (assertions du ticket 25 adaptées, validé par Yusuf).
 
 | Fichier | Type | Raison | Ticket |
 |---|---|---|---|
 | `crates/pa-daemon/src/acp/daemon.rs` | modif. (fichier upstream, +5 / −1) | Aiguillage de `_yus/session/rewind` après celui de `steer` (`:1175-1178`, +4) ; le `turnStart` d'un prompt passe par `ya_turns::publish_prompt_start(&producer, turn_id, link, state)` (`:1637`, −1 +1). | YA-18 (ticket 43) |
+| `crates/pa-cli/tests/acp_mode_e2e.rs` | modif. (test upstream, +4 / −2) | Les assertions du ticket 25 (sa ligne, section « Tours lancés par l'agent », plus haut) comparaient le `turnStart` entier à `{"origin": "prompt"}` ; il porte maintenant `rewindTo` : `acp_prompt_stream_completion_envelope_and_stop_reason_match_ts` (`:390-397`) et `acp_daemon_attached_cancels_mid_turn` (`:911-916`) comparent `turnStart.origin` à `"prompt"`. | YA-18 (ticket 43) |
 | `crates/pa-daemon/src/acp/ya_turns.rs` | modif. (fichier du fork) | `mod rewind;` ; `publish_prompt_start` lit la feuille (action `leaf`) et la publie en `rewindTo`. | YA-18 (ticket 43) |
 | `crates/pa-daemon/src/acp/ya_turns/rewind.rs` | nouveau | Méthode `_yus/session/rewind` : refus (session inconnue, tour en cours, autre fenêtre, entrée hors de la branche), action `rewind` du worker ; tests T6 (`scripted_link`). | YA-18 (ticket 43) |
 | `crates/pa-daemon/src/acp/ya_history.rs` | modif. (fichier du fork) | `other_askers` en `pub(super)` (refus de la réponse 9, même vérification que C12). | YA-18 (ticket 43) |
@@ -1799,7 +1800,8 @@ Constat, décisions et plan : `docs/tickets/43-retour-arriere.md` (§H, §I, §I
 | `extensions/vscode/src/ya/methods.ts` | modif. (fichier du fork) | `_yus/session/rewind` servie : `features().rewind` vrai. | YA-18, YA-10 (ticket 43) |
 | `docs/usage.md` | doc | Cause `rewind` du champ `invalidation`. | YA-18 (ticket 43) |
 | `.changes/ya-43-retour-arriere.md` | nouveau | Fragment de changelog. | YA-18 (ticket 43) |
-| `crates/pa-cli/tests/ya_acp_rewind_e2e.rs` | nouveau (test du fork) | T1 à T5, T7 à T9, T11 (§I.5), vrai binaire, fournisseur factice, kernel réel. | YA-18 (ticket 43) |
+| `crates/pa-cli/tests/ya_acp_rewind_e2e.rs` | nouveau (test du fork) | T1 à T5, T7 à T9, T11 (§I.5), T12 (premier prompt d'une session), vrai binaire, fournisseur factice, kernel réel. | YA-18 (ticket 43) |
+| `bench/tools/capture/ya43_rewindto_cost.py`, `ya43_rewind_check.py` | nouveaux (outils du fork) | Coût de `rewindTo` par prompt (`main` contre branche, blocs alternés) ; requêtes reçues avant et après un retour en arrière (préfixe, texte fixe, invalidation). | YA-18 (ticket 43) |
 | `extensions/vscode/test/unit/agent.test.ts`, `test/fake-agent/fake-agent.mjs`, `test/e2e/suite-real.ts` | modif. (tests du fork) | E1, E2 (agent factice : `rewindTo` dans `turnStart`, `_yus/session/rewind` accepté) ; E3 (vrai binaire) ; le cas « méthode non servie » passe sur `_yus/kernel/tail`. | YA-18, YA-10 (ticket 43) |
 
 Limites (§I.9, §K) : pas de republication du goal après un retour (le pont n'a pas de lecture du goal à republier ; écart au §I.3) ; pas de `rewindTo` au rejeu de `session/load` (ticket à part) : après « Relancer » ou une reprise depuis l'historique, seuls les nouveaux messages sont modifiables ; feuille non inscrite avant le prompt suivant (comme Unharnessed, à rouvrir avec les instantanés du workspace).

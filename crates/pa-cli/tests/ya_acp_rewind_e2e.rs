@@ -19,6 +19,8 @@
 //! T9. A resume after a rewind and a prompt (daemon restarted): the branch resumed is the new one.
 //! T11. A `[bash-done]` of a command started in the abandoned turn is delivered after the rewind
 //!     (K-a), on the new branch.
+//! T12. The first prompt of a session: `rewindTo` is the creation's last entry; a rewind there
+//!     starts the conversation again.
 //!
 //! Listed in `docs/fork-changes.md`.
 
@@ -228,20 +230,16 @@ fn daemon_request(socket: &Path, id: &str, command: &Value) -> Value {
         .unwrap_or_else(|| panic!("the daemon closed without answering {id}"))
 }
 
-/// Stops the test's daemon and waits until its socket no longer answers.
+/// Stops the test's daemon and waits until its socket no longer answers. The connection stays
+/// open until the shutdown's response (the supervisor exits after it, as `acp_mode_e2e.rs`).
 fn shutdown_daemon(socket: &Path) {
-    if let Ok(mut stream) = pa_types::platform::transport::connect_blocking(socket) {
-        let frame = json!({
-            "type": "command", "id": "shutdown-test",
-            "protocol": { "name": "prime-agent.daemon", "version": pa_types::daemon::DAEMON_PROTOCOL_VERSION },
-            "command": { "type": "shutdown" },
-        });
-        let _ = writeln!(stream, "{frame}");
-        let _ = stream.flush();
-    }
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let answer = daemon_request(socket, "shutdown-t9", &json!({ "type": "shutdown" }));
+    let deadline = Instant::now() + Duration::from_secs(30);
     while pa_types::platform::transport::connect_blocking(socket).is_ok() {
-        assert!(Instant::now() < deadline, "the daemon did not stop");
+        assert!(
+            Instant::now() < deadline,
+            "the daemon did not stop: {answer}"
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -818,5 +816,52 @@ fn a_bash_notice_of_the_abandoned_turn_comes_after_the_rewind() {
     assert!(
         !rows.iter().any(|row| row == "user:launch a command"),
         "the abandoned prompt is off the branch: {rows:?}"
+    );
+}
+
+/// T12. The first prompt of a session: its `rewindTo` is the last entry the worker writes at the
+/// creation (`service_tier_change`, `crates/pa-daemon/src/worker/create.rs:838-853`), the parent of
+/// the prompt's row; a rewind there starts the conversation again, with the fixed text only.
+#[test]
+fn a_rewind_to_before_the_first_prompt_starts_the_conversation_again() {
+    let mut client = Client::spawn(&json!({ "engine": "faux", "responses": [
+        { "text": "one" },
+        { "text": "two" },
+    ] }));
+    let (session_id, file) = client.open_session();
+    let first = client.prompt(&session_id, "first");
+    let at = client.wait_for(0, "the first prompt's turnStart", |frame| {
+        origin_is(frame, "prompt")
+    });
+    let start = turn_start(&client.seen[at]).cloned().unwrap();
+    let _ = client.wait_response(first);
+    let all = entries(&file);
+    let row = all
+        .iter()
+        .find(|entry| shown(entry).as_deref() == Some("user:first"))
+        .unwrap_or_else(|| panic!("the first prompt's row: {all:?}"));
+    let parent = row["parentId"].as_str().expect("a parent").to_string();
+    let parent_type = all
+        .iter()
+        .find(|entry| entry["id"].as_str() == Some(parent.as_str()))
+        .map(|entry| entry["type"].clone());
+    assert_eq!(
+        start["rewindTo"],
+        json!(parent),
+        "rewindTo is the parent of the first prompt's row: {start}"
+    );
+    assert_eq!(
+        parent_type,
+        Some(json!("service_tier_change")),
+        "the last entry of the creation"
+    );
+    let rewind = client.rewind(&session_id, &parent);
+    client.accepted(rewind);
+    client.ask(&session_id, "first, changed");
+    let custom = format!("custom:{REWOUND_TYPE}");
+    assert_eq!(
+        conversation(&file),
+        vec![custom.as_str(), "user:first, changed", "assistant:two"],
+        "the conversation starts again"
     );
 }

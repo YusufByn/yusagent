@@ -696,6 +696,65 @@ Les deux tests s'arrêtent ensuite sur le refus du rewind.
 
 **À noter pour le push 2** : le job `extension` s'arrête aux tests unitaires. L'e2e de l'extension contre l'agent factice (`test/e2e/suite.ts`), qui reçoit maintenant `rewindTo` dans chaque `turnStart`, n'a donc pas tourné à ce push. Il tournera quand E1 et E2 seront verts.
 
+## K. PR 1 (PR #97) : relevé du push 2 (27/11/2026), arrêt
+
+Push 2 : `29a78549e`, avec le relevé `c8b90d142`. Implémentation, fragment `.changes/ya-43-retour-arriere.md`, `docs/usage.md`, `docs/fork-changes.md`.
+
+**Lignes upstream du diff contre `main`** (`git diff --numstat origin/main...HEAD`) : `crates/pa-daemon/src/acp/daemon.rs` +5 −1, conforme. Tous les autres fichiers touchés sont du fork.
+
+| Run | Résultat |
+|---|---|
+| `ci` 45990806492 | `fmt`, `check + clippy`, `windows cross-check`, `deny` verts. Shards 1, 2, 4, 5, 6, 7 verts. **Shard 3/8** : `acp_mode_e2e`, 45 réussis, 2 en échec. **Shard 8/8** : `ya_acp_rewind_e2e`, 9 réussis, 1 en échec |
+| `ya-extension` 45990806431 | **extension** vert : unitaires 87/87 ; **e2e contre l'agent factice (`test/e2e/suite.ts`) : a tourné, « e2e : 21/21 réussis »**. **e2e vrai binaire** vert : « e2e vrai binaire : 20/20 réussis », E3 compris |
+| `ya-secret-guard-macos`, `ya-build-macos-arm64`, `Changelog fragment` | verts |
+
+**Les 14 tests du ticket** :
+- **13 verts** : fusion des notes (shard 2/8), T6 (shard 3/8), T1, T2/T7, T3, T4, T5a, T5b, T5c, T8, T11 (shard 8/8), E1, E2, E3 ;
+- **T9 rouge**, `ya_acp_rewind_e2e.rs:244`, « the daemon did not stop ». C'est l'aide d'arrêt du test qui est en cause, pas le retour en arrière :
+  - elle fermait la connexion juste après avoir envoyé `shutdown`, et le démon répondait encore 15 s après ;
+  - l'aide upstream (`acp_mode_e2e.rs:1672-1685`) garde la connexion ouverte jusqu'à la réponse (« The supervisor exits after the shutdown response ») ;
+  - correction préparée dans le fichier du fork, non poussée : attendre la réponse de `shutdown` (`daemon_request`), puis jusqu'à 30 s que la socket ne réponde plus.
+
+**Deux tests existants rouges, dans un fichier upstream** :
+- **où** : `crates/pa-cli/tests/acp_mode_e2e.rs`, assertions ajoutées par le fork au ticket 25 (`docs/fork-changes.md:1337`) ;
+- **pourquoi** : elles comparent le `turnStart` entier à `{"origin": "prompt"}`, et il porte maintenant `rewindTo` :
+  - `acp_prompt_stream_completion_envelope_and_stop_reason_match_ts` (`:390`) : `left: {"origin": "prompt", "rewindTo": "3d5bbc21"}`, `right: {"origin": "prompt"}` ;
+  - `acp_daemon_attached_cancels_mid_turn` (`:910`) : même cause ;
+- **correction préparée (non poussée), +4 −2** : comparer `turnStart.origin` à `"prompt"`, même sens qu'avant pour l'origine :
+
+```diff
+@@ -390,9 +390,10 @@ fn acp_prompt_stream_completion_envelope_and_stop_reason_match_ts() {
+             update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["turnStart"]
++                ["origin"]
+                 .clone()
+         }),
+-        Some(json!({ "origin": "prompt" }))
++        Some(json!("prompt"))
+@@ -910,7 +911,8 @@ fn acp_daemon_attached_cancels_mid_turn() {
+             update["params"]["update"]["_meta"]["ai.primeintellect.prime-agent"]["turnStart"]
+-                == json!({ "origin": "prompt" })
++                ["origin"]
++                == "prompt"
+```
+
+**Lignes upstream après cette correction : +9 −3** :
+- `daemon.rs` +5 −1 ;
+- `acp_mode_e2e.rs` +4 −2 (test upstream, lignes du fork du ticket 25).
+
+C'est différent des +5 −1 annoncés : **arrêt, en attente de Yusuf** avant le push 3.
+
+**Décision de Yusuf (27/11/2026)** : +4 −2 dans `acp_mode_e2e.rs` validés, soit un total upstream de +9 −3. Ligne ajoutée dans la section du ticket 43 de `docs/fork-changes.md`, qui renvoie à la ligne du ticket 25. Au push 3 : les deux corrections, et T12 (premier prompt d'une session).
+
+**Ce que vérifient T9 et T11 maintenant que la méthode est servie** :
+- **T9** (une fois l'aide d'arrêt corrigée) : après un retour et un prompt, le démon est arrêté pour de bon. Un nouveau worker relit le fichier de session au `--resume`, et le prompt suivant part de la nouvelle branche ; le prompt abandonné en est absent.
+  - Il prouve que la feuille déplacée en mémoire est inscrite dans le fichier par l'ajout suivant (le nouveau prompt a pour parent le point de retour), et qu'une vraie reprise la suit.
+  - Il ne couvre pas un retour **sans** prompt suivant avant la reprise (limite acceptée, réponse 10).
+- **T11** (vert) : un `bash()` lancé dans le tour abandonné (3 s) finit après le retour. Son avis `[bash-done]` réveille quand même la session : tour `wake` jusqu'à sa frontière, avis et réponse sur la nouvelle branche, prompt abandonné absent. C'est K-a.
+  - Il vérifie aussi l'étape 7 : si la suspension de la file posée pendant le retour n'était pas levée et le runner réveillé, l'avis resterait en file et le test échouerait faute de tour `wake`.
+  - Il ne vérifie pas où se place le texte D2 par rapport à l'avis.
+
+Mesures et contrôles (`ya43_rewindto_cost.py`, `ya43_rewind_check.py`, `compare.py --all`, `compare_frames.py`, scripts des §G.6 et §I.7) : pas lancés, en attente du push 3.
+
 ## Annexe : mesure préliminaire, git seul
 
 Script : `docs/tickets/43-retour-arriere/shadow_git_mesure.sh`.
