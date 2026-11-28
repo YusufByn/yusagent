@@ -4,7 +4,8 @@
 
 //! yusAgent (YA-11, ticket 41, PR A): the kernel and everything it launches cannot read or write
 //! the credential files, nor reach the daemon's socket directory, nor write the running binary
-//! (test 2 of the ticket, and condition 2 of §S.3).
+//! (test 2 of the ticket, and condition 2 of §S.3), nor write the workspace snapshots'
+//! directory (`<agent>/checkpoints`, ticket 43, PR 3a, T19b).
 //!
 //! A real kernel (`IpythonKernelProvisioner`, the CI kernel venv) runs one cell that tries each
 //! access and prints `denied` or `ok` for each. With the guard, every access is `denied`; the
@@ -58,6 +59,7 @@ fn cell(agent: &Path, project: &Path, socket: &Path, outside: &Path, exe: &Path)
     let link = project.join("auth-link");
     let package = exe.with_file_name("package.json");
     let moved = agent.with_file_name("agent-moved");
+    let checkpoint = agent.join("checkpoints").join("probe");
     format!(
         r#"import json, os, socket
 results = {{}}
@@ -93,6 +95,7 @@ def connect_outside():
 check("connect to a daemon socket outside the default dir", connect_outside)
 check("write the running binary", lambda: open({exe:?}, "ab").close())
 check("write package.json next to it", lambda: open({package:?}, "ab").close())
+check("write into the checkpoints dir", lambda: open({checkpoint:?}, "w").close())
 shell = await bash("cat " + {auth:?})
 results["bash cat auth.json"] = "ok" if shell.exit_code == 0 else "denied"
 check("rename the agent dir", lambda: os.rename({agent:?}, {moved:?}))
@@ -107,6 +110,7 @@ print("YA41=" + json.dumps(results))"#,
         exe = exe.display().to_string(),
         package = package.display().to_string(),
         moved = moved.display().to_string(),
+        checkpoint = checkpoint.display().to_string(),
     )
 }
 
@@ -160,6 +164,9 @@ async fn the_kernel_cannot_reach_the_credentials_the_socket_or_the_binary() {
     .unwrap();
     // The daemon's atomic write leaves a temp file for a moment (`settings/storage.rs:291`).
     std::fs::write(agent.join("auth.json.tmp123"), SENTINEL).unwrap();
+    // yusAgent (YA-18, ticket 43, PR 3a, T19b): the workspace snapshots' directory, which only
+    // the checkpoints' git may write (answer 8).
+    std::fs::create_dir_all(agent.join("checkpoints")).unwrap();
 
     // A socket in the daemon's socket directory (`$TMPDIR/yusagent-<uid>`).
     let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());

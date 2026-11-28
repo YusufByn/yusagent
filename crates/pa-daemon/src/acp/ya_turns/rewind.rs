@@ -28,6 +28,12 @@ use crate::ya_permissions::COMMAND;
 /// The method's name.
 pub(crate) const METHOD: &str = "_yus/session/rewind";
 
+/// yusAgent (YA-18, ticket 43, PR 3a): the methods the bridge's arm routes here, the rewind and
+/// the workspace snapshots' (`super::checkpoints`), so that the bridge keeps one arm.
+pub(crate) fn serves(method: &str) -> bool {
+    method == METHOD || super::checkpoints::serves(method)
+}
+
 /// The refusal when another window answers this session (answer 9, text of Q-I3).
 const OTHER_WINDOW: &str =
     "This conversation is open in another window: close it there before going back.";
@@ -41,8 +47,8 @@ fn invalid(id: &Value, details: &str) -> Value {
     )
 }
 
-/// One action of the worker's fork command (`leaf`, `rewind`).
-async fn worker_action(
+/// One action of the worker's fork command (`leaf`, `rewind`, `restored`).
+pub(super) async fn worker_action(
     link: &DaemonLink,
     daemon_session_id: &str,
     action: &str,
@@ -66,14 +72,27 @@ async fn worker_action(
     }
 }
 
-/// The session's leaf (`rewindTo` of a prompt's `turnStart`); `None` when the worker cannot tell.
-pub(super) async fn leaf(link: &DaemonLink, daemon_session_id: &str) -> Option<String> {
+/// The session's leaf (`rewindTo` of a prompt's `turnStart`), its file's id and its working
+/// directory (the workspace snapshots, PR 3a); `None` when the worker cannot tell.
+pub(super) async fn context(
+    link: &DaemonLink,
+    daemon_session_id: &str,
+) -> Option<super::checkpoints::Context> {
     let data = worker_action(link, daemon_session_id, "leaf", Map::new())
         .await
         .ok()?;
-    data.get("leafId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    Some(super::checkpoints::Context {
+        leaf_id: data
+            .get("leafId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        session_id: data
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        cwd: std::path::PathBuf::from(data.get("cwd").and_then(Value::as_str).unwrap_or_default()),
+    })
 }
 
 /// Answer 9 (ticket 43, §H): the refusal when another client that answers this session's
@@ -90,19 +109,21 @@ pub(super) async fn other_window_refusal(
     }
 }
 
-/// Serves one `_yus/session/rewind` request.
-pub(crate) async fn serve(
+/// The refusals a rewind and a restore share (ticket 43, §I.3; PR 3a): an unknown session; when
+/// `changing`, a turn running and another window answering this session. The daemon's session id
+/// when the request may go on; otherwise the refusal is sent.
+pub(super) async fn admit(
     id: &Value,
     params: &Value,
     link: &Arc<DaemonLink>,
     state: &Arc<Mutex<DaemonAcpState>>,
     tx: &FrameSink,
-) {
+    changing: bool,
+) -> Option<String> {
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let to = params.get("to").and_then(Value::as_str).unwrap_or_default();
     let daemon_session_id = {
         let guard = state.lock().await;
         let Some(hosted) = guard
@@ -114,18 +135,44 @@ pub(crate) async fn serve(
                 id,
                 &format!("Unknown ACP session: {session_id}"),
             ));
-            return;
+            return None;
         };
-        if hosted.producer.active_prompt_turn().await != 0 || hosted.ya_turns.running.is_some() {
+        if changing
+            && (hosted.producer.active_prompt_turn().await != 0
+                || hosted.ya_turns.running.is_some())
+        {
             let _ = tx.send(super::super::internal_error(id, WORKING));
-            return;
+            return None;
         }
         hosted.daemon_active_session_id.clone()
     };
-    if let Some(refusal) = other_window_refusal(link, &daemon_session_id).await {
-        let _ = tx.send(super::super::internal_error(id, &refusal));
+    if changing {
+        if let Some(refusal) = other_window_refusal(link, &daemon_session_id).await {
+            let _ = tx.send(super::super::internal_error(id, &refusal));
+            return None;
+        }
+    }
+    Some(daemon_session_id)
+}
+
+/// Serves one request of [`serves`]: `_yus/session/rewind` here, the snapshots' in
+/// `super::checkpoints`.
+pub(crate) async fn serve(
+    method: &str,
+    id: &Value,
+    params: &Value,
+    link: &Arc<DaemonLink>,
+    state: &Arc<Mutex<DaemonAcpState>>,
+    tx: &FrameSink,
+) {
+    if super::checkpoints::serves(method) {
+        super::checkpoints::serve(method, id, params, link, state, tx).await;
         return;
     }
+    let to = params.get("to").and_then(Value::as_str).unwrap_or_default();
+    let Some(daemon_session_id) = admit(id, params, link, state, tx, true).await else {
+        return;
+    };
     let mut rest = Map::new();
     rest.insert("to".to_string(), json!(to));
     let frame = match worker_action(link, &daemon_session_id, "rewind", rest).await {

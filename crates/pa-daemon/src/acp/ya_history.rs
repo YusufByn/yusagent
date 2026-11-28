@@ -321,6 +321,11 @@ impl Replay {
                         self.pending_updates.push(notice);
                         continue;
                     }
+                    // yusAgent (YA-18, ticket 43, PR 3a, L-b): the fixed texts of a rewind or a
+                    // restore are written at once; one at the end of the file starts no wake.
+                    if is_restore_row(message) {
+                        continue;
+                    }
                     if !self.run_open && self.pending_wake.is_none() {
                         self.pending_wake = Some(message.clone());
                     }
@@ -583,6 +588,16 @@ pub(crate) fn serves(method: &str) -> bool {
     matches!(method, "session/list" | DELETE_METHOD)
 }
 
+/// yusAgent (YA-18, ticket 43, PR 3a): a fixed text of a rewind or of a restore of the workspace
+/// files (written at once since L-b), which the replay does not show.
+fn is_restore_row(message: &Value) -> bool {
+    use pa_core::session_engine::ya_resource_notice::rewind::{RESTORED_TYPE, REWOUND_TYPE};
+    matches!(
+        message.get("customType").and_then(Value::as_str),
+        Some(REWOUND_TYPE | RESTORED_TYPE)
+    )
+}
+
 /// Answer `session/list` or the delete on `tx`.
 pub(crate) async fn serve(
     bound: &Bound<'_>,
@@ -593,7 +608,13 @@ pub(crate) async fn serve(
 ) {
     let response = if method == DELETE_METHOD {
         match delete(bound.link, bound.daemon_session_id, bound.file, params).await {
-            Ok(()) => super::jsonrpc::response(id, &json!({})),
+            Ok(()) => {
+                // yusAgent (YA-18, ticket 43, PR 3a): its workspace snapshots go with it.
+                if let Some(target) = params.get("sessionId").and_then(Value::as_str) {
+                    super::ya_turns::checkpoints::forget_session(bound.actual_cwd, target).await;
+                }
+                super::jsonrpc::response(id, &json!({}))
+            }
             Err(DeleteRefusal::Invalid(details)) => super::jsonrpc::error_response(
                 id,
                 super::jsonrpc::INVALID_PARAMS,

@@ -1173,8 +1173,8 @@ async fn handle_incoming(
             super::ya_turns::steer::serve(&id, &params, link, state, &tx).await;
         }
         // yusAgent (YA-18, ticket 43): going back to before a prompt.
-        super::ya_turns::rewind::METHOD => {
-            super::ya_turns::rewind::serve(&id, &params, link, state, &tx).await;
+        other if super::ya_turns::rewind::serves(other) => {
+            super::ya_turns::rewind::serve(other, &id, &params, link, state, &tx).await;
         }
         "session/set_config_option" => {
             handle_set_config_option(id, params, link, state, tx).await;

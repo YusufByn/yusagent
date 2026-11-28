@@ -17,9 +17,6 @@
 //!   are past before any message is registered;
 //! - the settle drops the registered messages with the agent's queue: none survives its run.
 //!
-// yusAgent (YA-18, ticket 43, option C): the rows of a rewind, to the core session's mailbox.
-mod rewind;
-
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, PoisonError};
 

@@ -355,6 +355,8 @@ impl Worker {
         match payload.get("action").and_then(Value::as_str) {
             Some("rewind") => return self.ya_rewind(payload).await,
             Some("leaf") => return self.ya_leaf(),
+            // yusAgent (YA-18, ticket 43, PR 3a): after a restore of the workspace files only.
+            Some("restored") => return self.ya_restored().await,
             _ => {}
         }
         let Some(engine) = self.agent_engine.as_ref() else {

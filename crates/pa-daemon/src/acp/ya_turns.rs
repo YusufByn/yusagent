@@ -32,6 +32,8 @@ use super::types::AcpSessionUpdate;
 pub(super) mod steer;
 // yusAgent (YA-18, ticket 43): `_yus/session/rewind`, back to before a prompt.
 pub(super) mod rewind;
+// yusAgent (YA-18, ticket 43, PR 3a): workspace snapshots, their preview and their restore.
+pub(super) mod checkpoints;
 
 /// How often a prompt of this client checks whether a turn it did not start ended (the
 /// Unharnessed admission retry, `prompt.rs:38-61`).
@@ -161,6 +163,8 @@ impl AgentTurns {
         if event_type(event) != Some("agent_end") {
             return None;
         }
+        // yusAgent (YA-18, ticket 43, PR 3a): the workspace at the end of any turn, queued.
+        checkpoints::end(daemon_session_id);
         let turn = self.running.take()?;
         if turn.stopped {
             producer.finish_prompt(turn.turn_id).await;
@@ -250,7 +254,8 @@ pub(crate) fn prompt_start() -> TurnStartMeta {
 /// yusAgent (YA-18, ticket 43): publishes the `turnStart` of a prompt of this client, with
 /// `rewindTo`, the session's leaf before the prompt (Unharnessed's `prompt.rs:320-350`), read by
 /// the worker's action `leaf`. Without the leaf (a worker that does not serve it, a failed read),
-/// the turn starts without `rewindTo`: its message cannot be changed.
+/// the turn starts without `rewindTo`: its message cannot be changed. Then (PR 3a) the snapshot of
+/// the workspace before the prompt, waited for.
 pub(crate) async fn publish_prompt_start(
     producer: &UpdateProducer,
     turn_id: u64,
@@ -264,10 +269,17 @@ pub(crate) async fn publish_prompt_start(
         .as_ref()
         .map(|hosted| hosted.daemon_active_session_id.clone());
     let mut start = prompt_start();
-    if let Some(daemon_session_id) = daemon_session_id {
-        start.rewind_to = rewind::leaf(link, &daemon_session_id).await;
-    }
+    let context = match daemon_session_id.as_deref() {
+        Some(daemon_session_id) => rewind::context(link, daemon_session_id).await,
+        None => None,
+    };
+    start.rewind_to = context.as_ref().and_then(|context| context.leaf_id.clone());
     publish_turn_start(producer, turn_id, start).await;
+    // yusAgent (YA-18, ticket 43, PR 3a): the workspace before the prompt, waited for: the prompt
+    // goes to the worker after it, so its cells run after the snapshot.
+    if let (Some(daemon_session_id), Some(context)) = (daemon_session_id, context) {
+        checkpoints::start(&daemon_session_id, &context).await;
+    }
 }
 
 /// A prompt of this client takes its turn id once no turn it did not start runs (T3, E7); the

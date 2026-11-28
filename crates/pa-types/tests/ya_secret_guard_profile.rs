@@ -5,7 +5,9 @@
 //! - sockets: the exact paths in use and the default directories, for connect and creation;
 //! - the running binary and its `package.json`, and their directory;
 //! - `LaunchServices` refused in the full profile, left open in the browser variant;
-//! - `/bin/ps` and `/usr/bin/top` (setuid) allowed outside the sandbox, nothing else.
+//! - `/bin/ps` and `/usr/bin/top` (setuid) allowed outside the sandbox, nothing else;
+//! - ticket 43 (YA-18, answer 8): the checkpoints directory (`<agent>/checkpoints`) refused to
+//!   write, in the full and the browser profiles (only the checkpoints' git may write it).
 //!
 //! Text only: runs on every platform. Listed in `docs/fork-changes.md`.
 
@@ -83,5 +85,32 @@ fn the_browser_variant_keeps_the_refusals_but_leaves_launchservices_open() {
     assert!(
         !browser.contains("com.apple.coreservices."),
         "the browser variant must leave LaunchServices open:\n{browser}"
+    );
+}
+
+/// yusAgent (YA-18, ticket 43, PR 3a, T19): every launch but the checkpoints' git is refused
+/// writing the shadow repositories of the workspace snapshots (answer 8,
+/// `docs/tickets/43-retour-arriere.md`, §P.5).
+#[test]
+fn the_full_and_the_browser_profiles_refuse_writing_the_checkpoints() {
+    let refusal = r#"(deny file-write* (subpath "/Users/u/.yus+agent/checkpoints"))"#;
+    assert_has(&profile(&paths(), Variant::Full), refusal);
+    assert_has(&profile(&paths(), Variant::Browser), refusal);
+}
+
+/// T19, the variant: the checkpoints' git may write the checkpoints directory and keeps every
+/// other refusal of the full profile, `LaunchServices` included.
+#[test]
+fn the_checkpoints_variant_writes_the_checkpoints_and_keeps_the_other_refusals() {
+    let variant = profile(&paths(), Variant::Checkpoints);
+    assert!(
+        !variant.contains("checkpoints"),
+        "the checkpoints' git may write them:\n{variant}"
+    );
+    assert_has(&variant, r#"(regex #"^/Users/u/\.yus\+agent/auth\.json")"#);
+    assert_has(&variant, r#"(literal "/Users/u/bin/yusagent")"#);
+    assert_has(
+        &variant,
+        r#"(global-name-prefix "com.apple.coreservices.")"#,
     );
 }

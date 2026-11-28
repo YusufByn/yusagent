@@ -41,6 +41,7 @@ Sources :
   4. panneau du kernel.
   
   Détail au §G. Questions au §G.7 ; réponses de Yusuf au §H ; plan de code de la PR 1 au §I.
+- **PR 3 (instantanés du workspace)** : constat, mesures sur `~/Desktop/yusagent` et plan de code au §P, questions au §P.10. Réponses au §P.11 ; plan de code de 3a (pont) au §P.12, questions au §P.12.9.
 
 ## A. Ce qui existe déjà
 
@@ -993,6 +994,892 @@ Ce que le contrôle manuel ne peut pas voir : la requête elle-même. Le texte f
   - `bench/tools/capture/run.py --binary <branche 84fecf29d>` puis `compare.py <run main f7c4b3fb7> <run branche> --all` : **TOUT IDENTIQUE** (17 cas, chaque requête identique).
 - **`.vsix` du push 9b** : `install-vsix.sh 46010873742` lancé dans un dossier d'extensions isolé (règle 13), sortie au §M.3 ; `extension.js` installé sert `_yus/session/rewind`.
 - **Contrôle manuel** : étape 10 (goal) ajoutée au §M.3, et préparation sur les runs du push 9b.
+
+## O. Contrôle manuel de Yusuf et merge de la PR #97 (27/11/2026)
+
+**Contrôle manuel** (§M.3), sur le binaire `84fecf29d` (run `ya-build-macos-arm64` 46010862163) et le `.vsix` du run `ya-extension` 46010873742 :
+- **étapes 1 à 8 et 10 : conformes** ;
+- **étape 6** : faite avec un calcul long (`sum(i*i for i in range(400_000_000))`), car le modèle a refusé deux fois une cellule bloquante `time.sleep(60)` / `time.sleep(90)` (« Je ne peux pas bloquer le tour ») ;
+- **étape 8** : un second refus juste après la fermeture du TUI, puis le retour passe. C'est le délai de détachement d'un client, comme pour C12 (ticket 28) ;
+- **étape 9 sautée** : `/refine` est désactivé dans les réglages de Yusuf (« Harness refinements are disabled in /settings ») ; le cas est couvert par T5a (`ya_acp_rewind_e2e`) et I1 (`ya43_control.py`).
+
+Compte rendu en commentaire de la PR : https://github.com/YusufByn/yusagent/pull/97#issuecomment-7221537488.
+
+**CI avant le merge** :
+- sur `e1b6c4d34` (commit de doc), `runtime suite (python 3.11)` a échoué une fois sur `test_harness.HarnessStateTest.test_concurrent_subprocess_creates_all_land` (`prime-agent-runtime/test/test_harness.py:555`, verrou de l'état du harness non obtenu entre sous-processus) ;
+- relance unique du job par Yusuf, en exception à la règle (option 1), notée en commentaire de la PR avec le journal (https://github.com/YusufByn/yusagent/pull/97#issuecomment-7220753143) ;
+- relance verte (job 140561850267), et 17/17 checks requis verts (https://github.com/YusufByn/yusagent/pull/97#issuecomment-7220790528).
+
+**Merge** : PR #97 mergée le 27/11/2026 à 15:01:38 UTC, avec `--match-head-commit e1b6c4d347ffca7e8a69d0c21beb4040b1d118d9`. Le premier essai a reçu une erreur GraphQL de GitHub (`E2E3:C8AC8:142083D:1E2CE52:6B099B40`) sans effet ; le second a mergé. **`main` = `c6f0b82785618f0e92e7fcc731e24d3bb8ef0749`.**
+
+**Build macOS de `main`** : run `ya-build-macos-arm64` **46021226712**, lancé à la main (`workflow_dispatch`) sur `c6f0b8278`.
+
+**Tickets à part ouverts par ce ticket** :
+1. **Le modèle refuse une cellule bloquante** (`time.sleep(60)`, « Je ne peux pas bloquer le tour ») : observation du contrôle manuel. Constat à faire : texte du prompt (règles du kernel sur les attentes longues) ou garde du runtime qui rejette les longs `sleep` (upstream `3085b841d` « async L1: reject long sleeps and direct process calls before a cell runs », et `b0c4359df` « sleep re-allowed » dans `upstream/main`). Non mesuré.
+2. **`test_concurrent_subprocess_creates_all_land`** (test upstream du runtime) : un échec sur onze runs de la branche, même code vert avant et après. À surveiller ; s'il échoue de nouveau, candidat à « Instabilité probable » de `docs/fork-changes.md`.
+3. **`rewindTo` au rejeu de `session/load`** (Q-I4) : après « Relancer » ou une reprise depuis l'historique, seuls les nouveaux messages sont modifiables.
+4. **`ab_stats.py:339`** : `.get("cause")` échoue sur un tableau d'invalidations (forme possible depuis le ticket 24), défaut existant du banc.
+
+**Suite du ticket 43** : PR 3 (instantanés du workspace dans un dépôt git shadow, YA-18), puis PR 4 (panneau du kernel), selon les décisions du §H.
+
+## P. PR 3 : instantanés du workspace (YA-18), constat et plan de code, sans code (27/11/2026)
+
+Branche `ya-43-instantanes`, depuis `main` à `c6f0b8278`. Premier commit : `b3b0528a7` (§O) reporté par cherry-pick, sans conflit (`7925aa0b3`).
+
+Écarts de mise en place, signalés :
+- la `main` locale était restée à `1ece0ff04` (merge de la PR #90), ancêtre de `origin/main`. Un premier essai de cherry-pick sur cette base a donné un conflit (le ticket n'y existe pas encore). Je l'ai annulé, puis j'ai avancé la `main` locale en fast-forward sur `c6f0b8278` et refait la branche : cherry-pick propre ;
+- **la suppression de la branche locale `ya-43-doc-a-reporter` a été refusée** par le contrôle des permissions de la session. Elle existe toujours, et son seul commit est maintenant dans cette branche. À supprimer à la main : `git branch -D ya-43-doc-a-reporter`.
+
+**Constat et plan seulement** : aucun code produit, rien compilé, aucun appel de modèle, rien dans `docs/fork-changes.md`. Une pièce jointe : le script de mesure `docs/tickets/43-retour-arriere/shadow_git_workspace.py`, lancé par Claude Code (§P.3). Les lignes citées sont celles de `main` à `c6f0b8278`. Upstream récupéré le 27/11/2026 : `upstream/main` à `4b347d96d`.
+
+### P.1 Mécanisme d'upstream, cherché d'abord
+
+- **Aucun mécanisme d'instantané ni d'annulation chez upstream.** Méthode :
+  - `git log c83ac68b3..upstream/main | grep -iE 'checkpoint|snapshot|undo|rewind|restore|shadow|revert|rollback'` ;
+  - `git grep -il -E 'shadow.?(git|repo)|checkpoint' upstream/main` ;
+  - aux deux, seulement les points de reprise de compaction et de file, le noyau rechargé, `workspace_snapshot` (supprimé, `20b4ad74b`) et l'empreinte des gates autonomes.
+- **À reprendre : `a3e261c27`** (précisé au §P.11 : ses options git sont reprises dans le module du fork, sans cherry-pick du commit) (11/11/2026, après la base du fork, absent chez nous : `grep fsmonitor crates/pa-core/src/autonomous/gates.rs` ne trouve rien). Il protège les appels git d'upstream contre les programmes que la config d'un dépôt peut lancer (`upstream/main:crates/pa-core/src/autonomous/gates.rs:1-9`, `:284-299`, `:354-367`) :
+  - `-c core.fsmonitor=false` ;
+  - pas de hook (`diff.autoRefreshIndex=false`, `--no-optional-locks`) ;
+  - `GIT_ALLOW_PROTOCOL=""` et `GIT_NO_LAZY_FETCH=1`.
+  
+  Upstream laisse un risque ouvert : les filtres `clean`/`process` de `.gitattributes` (`gates.rs:7-9`). **Chez nous, ce risque est fermé par construction** : un pilote de filtre n'existe que dans une config git. Or le git des instantanés ne lit aucune config hors de celle du dépôt shadow :
+  - `GIT_CONFIG_NOSYSTEM=1` et `GIT_CONFIG_GLOBAL=/dev/null` ;
+  - `core.excludesFile=/dev/null` ;
+  - `GIT_DIR` = le dépôt shadow, donc le `.git/config` du projet n'est jamais lu.
+  
+  `core.hooksPath=/dev/null` est ajouté par prudence, même si le dépôt shadow n'a pas de hook.
+- **Variables d'environnement** : `workspace_snapshot/git.rs:111-126` retire 7 variables `GIT_*`. Le plan va plus loin : `env_clear()`, puis seulement `HOME`, `PATH`, `TMPDIR`, `LANG=C` et les variables ci-dessus. Aucune variable héritée (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`, …) ne passe.
+- **Plafonds de référence** : `workspace_snapshot` bornait à 20 000 entrées, 512 Mio au total et 64 Mio par fichier (`crates/pa-core/src/workspace_snapshot/mod.rs:66-78`). Ces bornes servent de point de départ au §P.3.
+- **Feuille de session** : le seul moyen d'upstream d'inscrire une feuille tout de suite est `append_branch_summary` (`crates/pa-daemon/src/session_tree.rs:160`). Il ajoute un résumé, qui change ce que reçoit le modèle. Écarté (§P.7).
+- **Réponse 11** : `workspace_snapshot` reste tel quel. Rien n'en est importé : seules l'idée du nettoyage de l'environnement et les bornes sont reprises.
+
+### P.2 Accroches dans le pont : zéro ligne upstream pour les instantanés
+
+- **Instantané de début** (réponse 3) : dans `publish_prompt_start` (fork, `crates/pa-daemon/src/acp/ya_turns.rs:254-271`), après la lecture de la feuille.
+  - Cette fonction est attendue avant l'envoi de `PromptAndWait` au worker (`crates/pa-daemon/src/acp/daemon.rs:1637`, puis `:1641`). L'instantané est donc pris **avant toute cellule du tour**.
+  - Il attend la fin de l'instantané, sans délai de garde ; le coût est mesuré au §P.6. Q-P2.
+  - Si l'instantané échoue (git absent, plafond dépassé, erreur), le tour part quand même. Ce tour n'a alors pas de point de restauration des fichiers.
+- **Instantané de fin** : dans `AgentTurns::close` (fork, `ya_turns.rs:154-198`), à chaque `agent_end`, avant `self.running.take()?` (`:161-163`). `close` voit tous les `agent_end` :
+  - ceux d'un prompt de ce client (alors `running` est vide) ;
+  - ceux d'un réveil ;
+  - ceux d'un prompt du TUI.
+  
+  L'instantané de fin suit donc le dernier tour, quel qu'il soit.
+- **Ordre** : une file série par workspace (un canal et une tâche dans le pont). `close` y range le travail de fin **de façon synchrone**, avant que le prompt suivant puisse ranger son début. Le contrôle et la restauration passent par la même file.
+- **Limites de la réponse 3** :
+  - un prompt du TUI ou de `-p` n'a pas d'instantané de début. Il n'a pas non plus de `rewindTo` : il n'est pas un point de retour ;
+  - un `bash()` en arrière-plan qui écrit après la fin du tour est pris par l'instantané suivant (§C) ;
+  - pendant une restauration, il peut encore écrire (K-a, réponse 2).
+- **Dossier du workspace et identifiant de session** : `publish_prompt_start` n'a ni l'un ni l'autre, et le pont ne les range pas dans `state` (`daemon.rs:307-314`). L'action `leaf` du worker (fork, `crates/pa-daemon/src/ya_permissions/rewind.rs:92-100`) renverra `{ leafId, sessionId, cwd }` :
+  - `store.session_id()` : l'id d'en-tête du fichier, stable d'un chargement à l'autre (§I.9, étape 8) ;
+  - `core.cwd` (`crates/pa-daemon/src/worker/session_core.rs:18`).
+  
+  Pas d'aller-retour en plus : `leaf` est déjà lu à chaque prompt. Un registre du processus (id de session du démon → contexte) sert à `close` et aux méthodes.
+
+### P.3 Mesures sur `~/Desktop/yusagent`, exclusions et plafonds (réponse 6)
+
+Script : `docs/tickets/43-retour-arriere/shadow_git_workspace.py`. Il n'écrit jamais le workspace mesuré : git n'y fait que lire, et le dépôt shadow et l'index sont dans le dossier de travail.
+- La restauration est mesurée sur une copie des fichiers candidats.
+- Le profil Seatbelt est **reconstitué à la main** d'après `ya_guard.rs:278-327`, avec des sockets et un binaire factices. C'est une approximation du binaire : la mesure sur le binaire est au §P.6.
+- Pas de modèle.
+
+Commande et sortie du lancement par Claude Code (27/11/2026, macOS 27.0.1, Apple M5, git 2.55.0) :
+
+```
+$ D=$(mktemp -d) && python3 -I docs/tickets/43-retour-arriere/shadow_git_workspace.py ~/Desktop/yusagent "$D" 5
+workspace /Users/yusufyuss/Desktop/yusagent ; git 2.55.0 ; répétitions 5
+[1] .gitignore respecté : 2285 fichiers, 40.9 Mio, {'p50': 10575, 'p99': 125796, 'p99.9': 1250694, 'max': 1881634}
+[1] liste par défaut seule (sans .gitignore) : 47736 fichiers, 4811.0 Mio, {'p50': 1973, 'p99': 2148387, 'p99.9': 15078443, 'max': 195780624} ; > 8 Mio : 119 ; > 64 Mio : 2
+[2] workspace réel, sans profil : premier instantané 1451 ms ; sans changement [43, 42, 44, 41, 42] ms (médiane 42) ; dépôt shadow 19700 Kio
+[2] workspace réel, avec profil : premier instantané 1234 ms ; sans changement [66, 63, 64, 63, 64] ms (médiane 64) ; dépôt shadow 19700 Kio
+[3] copie, sans profil, rép. 1 : instantané début 47 ms ; fin 103 ms ; contrôle 69 ms (1 fichier(s) hors agent) ; aperçu 12 ms (81 lignes) ; restauration 45 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, sans profil, rép. 2 : instantané début 61 ms ; fin 109 ms ; contrôle 80 ms (1 fichier(s) hors agent) ; aperçu 12 ms (80 lignes) ; restauration 47 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, sans profil, rép. 3 : instantané début 72 ms ; fin 127 ms ; contrôle 64 ms (1 fichier(s) hors agent) ; aperçu 14 ms (81 lignes) ; restauration 49 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, sans profil, rép. 4 : instantané début 60 ms ; fin 115 ms ; contrôle 80 ms (1 fichier(s) hors agent) ; aperçu 12 ms (81 lignes) ; restauration 55 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, sans profil, rép. 5 : instantané début 70 ms ; fin 118 ms ; contrôle 90 ms (1 fichier(s) hors agent) ; aperçu 12 ms (81 lignes) ; restauration 50 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, sans profil : premier instantané 1187 ms ; dépôt shadow 23176 Kio
+[3] copie, avec profil, rép. 1 : instantané début 67 ms ; fin 130 ms ; contrôle 102 ms (1 fichier(s) hors agent) ; aperçu 17 ms (81 lignes) ; restauration 49 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, avec profil, rép. 2 : instantané début 85 ms ; fin 135 ms ; contrôle 79 ms (1 fichier(s) hors agent) ; aperçu 17 ms (80 lignes) ; restauration 47 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, avec profil, rép. 3 : instantané début 82 ms ; fin 136 ms ; contrôle 108 ms (1 fichier(s) hors agent) ; aperçu 17 ms (81 lignes) ; restauration 51 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, avec profil, rép. 4 : instantané début 95 ms ; fin 142 ms ; contrôle 80 ms (1 fichier(s) hors agent) ; aperçu 17 ms (81 lignes) ; restauration 47 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, avec profil, rép. 5 : instantané début 82 ms ; fin 135 ms ; contrôle 107 ms (1 fichier(s) hors agent) ; aperçu 16 ms (81 lignes) ; restauration 52 ms ; écart restant 0 (le fichier de l'utilisateur, non suivi au début, est retiré : [])
+[3] copie, avec profil : premier instantané 1232 ms ; dépôt shadow 23248 Kio
+[4] écriture de checkpoints/probe, variante kernel : code 1 touch: /Users/yusufyuss/.claude/jobs/3acd71ae/tmp/ya43ws.uhIT/agent/checkpoints/probe: Operation not permitted
+[4] écriture de checkpoints/probe, variante git des instantanés : code 0 
+[4] faux dossier agent dans le workspace, non exclu : add code 128 "fatal: unable to stat '.yusagent/auth.json': Operation not permitted" ; secret dans les objets : False ; index : []
+[4] faux dossier agent dans le workspace, exclu : add code 0 '' ; secret dans les objets : False ; index : ['code.py']
+[5] nouvelle session, essai 1 : index copié 17 ms ; index neuf (objets déjà dans le dépôt) 186 ms
+[5] nouvelle session, essai 2 : index copié 18 ms ; index neuf (objets déjà dans le dépôt) 164 ms
+[5] nouvelle session, essai 3 : index copié 17 ms ; index neuf (objets déjà dans le dépôt) 164 ms
+```
+
+Le chemin `$D` (`mktemp -d` dans le dossier temporaire du job) apparaît dans la ligne `[4]`.
+- **Workspace intact** : `git status --porcelain | wc -l` donne 6 avant et après. Les 6 lignes sont les 5 fichiers locaux non suivis de la passation et le script lui-même.
+- **Ligne `[3]`, lecture** : « écart restant 0 » signifie que l'arbre après la restauration égale l'instantané de début. Le fichier créé par « l'utilisateur » après la fin du tour (`ya43_user_<r>.txt`) **est supprimé par la restauration**, parce qu'il n'était pas dans l'instantané de début. C'est le cas `force` (§P.5) : il reste récupérable dans la ref `avant-restauration`. Le libellé de la sortie est maladroit ; il sera corrigé si le script est relancé.
+
+Inventaire complémentaire des dossiers ignorés (`find <d> -type f | wc -l` et `du -sh <d>`, même jour) :
+
+| Dossier ignoré | Fichiers | Taille |
+|---|---|---|
+| `bench/smoke/runs` | 22 261 | 3,2 Go |
+| `bench/tools/capture/runs` | 20 574 | 775 Mo |
+| `extensions/vscode/node_modules` | 17 081 | 191 Mo |
+| `extensions/vscode/.vscode-test` | 3 436 | 1,0 Go |
+| `target` | 2 294 | 959 Mo |
+| `prime-agent-runtime/.venv` | 1 684 | 37 Mo |
+
+Six `.gitignore` sont suivis (`git ls-files '*.gitignore'`). Aucun dépôt imbriqué (`find . -path ./.git -prune -o -name .git -print` : vide).
+
+**Ce que les mesures disent** :
+- Avec `.gitignore` : 2 285 fichiers, 40,9 Mio, le plus gros à 1,9 Mo. Un tour complet (début, tour, fin, contrôle, aperçu, restauration) reste sous 500 ms avec le profil.
+- **Sans `.gitignore`, la liste par défaut ne suffit pas** : 47 736 fichiers et 4,8 Go, à cause des sorties propres au projet (`bench/*/runs`, `.vscode-test`). Les plafonds sont indispensables.
+- **Coût du profil** : +22 ms en médiane sur l'instantané sans changement (42 → 64 ms). Pas d'écart visible sur la restauration (45 à 55 ms sans le profil, 47 à 52 ms avec).
+- **Premier instantané** : 1,2 à 1,5 s ici, environ 3 s sur 10 000 fichiers (annexe). **Copier l'index d'une autre session** ramène le premier instantané d'une nouvelle session à 17-18 ms, contre 164 à 186 ms pour un index neuf.
+
+**Valeurs proposées** (Q-P3) :
+
+| Réglage | Valeur | Justification |
+|---|---|---|
+| `.gitignore` | ceux du workspace, à tous les niveaux (git natif) | Réponse 6. Le `.git/info/exclude` du dépôt de l'utilisateur et l'`excludesFile` global ne sont pas lus (`core.excludesFile=/dev/null`) : le résultat ne dépend que du workspace |
+| Liste par défaut | seulement si le workspace **n'a pas de `.gitignore` à sa racine** : `node_modules/ target/ .venv/ venv/ __pycache__/ .mypy_cache/ .pytest_cache/ .ruff_cache/ .tox/ .gradle/ .next/ .nuxt/ .cache/ dist/ build/ coverage/ .DS_Store *.pyc` | Couvre `node_modules`, `target` et `.venv` mesurés ici (environ 21 000 fichiers et 1,2 Go à eux trois) |
+| Toujours exclus (`info/exclude` du dépôt shadow) | le dossier agent s'il est dans le workspace (chemin relatif), et le dossier `checkpoints` | Ligne `[4]` : sans exclusion, `git add` **échoue en entier** sur `auth.json` refusé par le profil |
+| Par fichier | **8 Mio** : un fichier plus gros n'est ni capturé ni supprimé par une restauration. ~~L'aperçu le liste comme « non suivi (trop gros) »~~ **Corrigé (réponse Q-P3)** : l'aperçu le liste comme « non couvert » (`uncovered`) | Le plus gros fichier ici fait 1,9 Mo. Sans `.gitignore`, 119 fichiers dépassent 8 Mio. Les 64 Mio d'upstream coûteraient jusqu'à 64 Mio d'objets par tour pour un fichier modifié à chaque tour (estimation) |
+| Nombre de fichiers candidats | **20 000** (borne d'upstream, deux fois le critère du CDC) : au-delà, instantanés désactivés pour ce workspace, avec un message | Ici 2 285. Sans `.gitignore`, 47 736 : désactivé, ce qui est voulu. Le compte se fait par `git ls-files -z --cached --others --exclude-standard` avant le premier instantané, coût mesuré au §P.6 |
+| Taille totale | ~~pas de plafond à part~~ **Corrigé (réponse Q-P3) : 512 Mio** (borne d'upstream) ; au-delà, instantanés désactivés avec un message | Ici 41,0 Mio. Le compte demande la taille de chaque candidat : listage et `lstat` mesurés à 17 + 4 ms ici (§P.12), tenus à jour de façon incrémentale ensuite (§P.12) |
+| Conservation | 30 jours (CDC) | §P.5 |
+
+Le plafond par fichier se vérifie avant `git add` :
+- les chemins changés viennent de git (`ls-files -o -m --exclude-standard -z`) ;
+- le pont lit leur taille (`lstat`, métadonnées seulement, sans lire le contenu) ;
+- ceux qui dépassent sont passés en `:(exclude)` à `git add`.
+
+**Dépôts imbriqués** (réponse 6, limite à documenter) : git enregistre un dépôt imbriqué comme un *gitlink*, sans son contenu. Le plan :
+- après chaque `add`, `git ls-files -s` repère les entrées `160000` ;
+- il les retire de l'index (`rm --cached`) et les ajoute à `info/exclude` ;
+- leur contenu n'est donc ni capturé ni restauré, et une restauration ne touche pas leur dossier. C'est le test T34.
+
+**Liens symboliques** : `core.symlinks=true`. Git garde le texte du lien, pas sa cible. Un lien vers `auth.json` ne fait pas lire le secret (T27).
+
+### P.4 Réponses prises et traduction au code
+
+- **R3, instantanés dans le pont** : §P.2. Zéro ligne upstream pour les instantanés.
+- **R4, un dépôt shadow par workspace, un index par session** :
+  - dépôt nu `<dossier agent>/checkpoints/<16 premiers hex du SHA-256 du chemin canonique du workspace>/` ;
+  - un fichier `workspace` y garde le chemin, pour la purge ;
+  - index `ya-index/<id de session>` ;
+  - **index d'une nouvelle session** : copie de l'index le plus récent du dépôt, s'il y en a un (17-18 ms au lieu de 164-186 ms, §P.3) ;
+  - **refs** :
+    - `refs/ya/<session>/debut/<rewindTo>` : l'instantané de début, sous la clé du point de retour ; `restore { to }` le trouve directement ;
+    - `refs/ya/<session>/fin` : la dernière fin de tour, pour le contrôle ;
+    - `refs/ya/<session>/avant-restauration/<n>`.
+  - chaque ref vise un commit (`commit-tree`, auteur fixe `yusagent <checkpoints@yusagent.invalid>`, date du moment). La date de commit sert à la purge des 30 jours.
+  - **Écart au §G.2, à valider (Q-P9)** :
+    - le §G.2 prévoyait `refs/ya/<session>/<tour>/{debut,fin}` ;
+    - ici, la clé est le `rewindTo`, et il n'y a qu'une seule ref `fin` ;
+    - conséquence : après un retour en arrière, un prompt envoyé depuis le même point **remplace** l'instantané de ce point. L'ancien appartenait à la branche abandonnée, que l'extension retire et qu'on ne peut plus cliquer (`extensions/vscode/src/chat.ts:609-613`).
+  - deux fenêtres sur le même workspace sont deux processus : index et refs séparés par session, objets partagés. Git sait écrire des objets en parallèle.
+- **R5, sans git** :
+  - le pont résout `git` dans son `PATH`, une fois ;
+  - sous macOS, si c'est `/usr/bin/git` (le relais qui ouvre l'installateur des outils en ligne de commande), il lance d'abord `xcode-select -p` par `ya_guard`. En cas d'échec, les instantanés sont désactivés ;
+  - message sur la sortie d'erreur du pont (onglet Output de l'extension), une fois par processus ;
+  - et `available: false, reason` dans l'aperçu, que l'extension affiche ;
+  - le retour de la conversation reste possible.
+- **R6** : §P.3.
+- **R8** : §P.5.
+- **R10** : rouverte au §P.7.
+- **R11** : §P.1.
+
+### P.5 Profil : variante pour git, et refus d'écriture pour le kernel (réponse 8)
+
+**Fichier du fork `crates/pa-types/src/platform/ya_guard.rs` seulement, zéro ligne upstream. Environ +17 −1 au total.** C'est sous le seuil de « quelques lignes » de la réponse 8 : pas d'arrêt.
+
+1. `Variant` (`:37-42`), +4 :
+   ```rust
+       /// yusAgent (YA-18, ticket 43, answer 8): the checkpoints' `git`: the full profile with the
+       /// checkpoints directory left writable; every other launch (the kernel included) is refused
+       /// writing it.
+       Checkpoints,
+   ```
+2. Constante, +2 :
+   ```rust
+   /// The checkpoints directory under the agent directory (ticket 43).
+   pub const CHECKPOINTS_DIR: &str = "checkpoints";
+   ```
+3. Dans `profile` (`:278`), après le refus des fichiers d'identifiants (`:281-286`), +7 :
+   ```rust
+       if variant != Variant::Checkpoints {
+           let _ = writeln!(
+               text,
+               "(deny file-write* (subpath {}))",
+               quoted(&agent.join(CHECKPOINTS_DIR))
+           );
+       }
+   ```
+   `subpath` couvre le dossier lui-même : son renommage et sa suppression sont refusés. Le renommage du dossier agent est déjà refusé (`:290-294`).
+4. `LaunchServices` refusé aussi à la variante : `:312`, **−1 +1** :
+   ```rust
+   -    if variant == Variant::Full {
+   +    if variant != Variant::Browser {
+   ```
+5. Lanceur, +5 (après `tokio`, `:100-103`) :
+   ```rust
+   /// The checkpoints' `git` (ticket 43, answer 8): [`Variant::Checkpoints`].
+   #[must_use]
+   pub fn checkpoints_tokio(program: impl AsRef<OsStr>) -> tokio::process::Command {
+       tokio::process::Command::from(wrapped(program.as_ref(), Variant::Checkpoints, false))
+   }
+   ```
+
+Effets :
+- le kernel, `exec_command`, le navigateur et tous les autres lancements gardent les profils `Full` ou `Browser`, qui refusent l'écriture de `checkpoints` ;
+- seul le git des instantanés, lancé par le pont, l'obtient ;
+- le pont n'est pas lui-même sous l'enveloppe : il est lancé par l'extension ;
+- le scan des lancements (`crates/pa-core/tests/ya_process_launch_scan.rs`) reconnaît `ya_guard::` sans nouvelle exception ;
+- interrupteur `off` : git est lancé sans profil, comme tout le reste (`wrapped`, `:165-168`).
+
+La ligne `[4]` du §P.3 montre le mécanisme : `touch` dans `checkpoints` est refusé sous la variante « kernel » (code 1) et passe sous la variante « git » (code 0). La lecture reste permise au kernel : le dépôt ne contient que des fichiers du workspace, et la réponse 8 ne porte que sur l'écriture.
+
+### P.6 Restauration, aperçu, contrôle « modifié hors de l'agent », bench des 2 s
+
+**Méthodes** (noms du §G.2), servies par un nouveau module du fork, `crates/pa-daemon/src/acp/ya_turns/checkpoints.rs`, déclaré dans `ya_turns.rs` comme `steer` et `rewind` (`:32-34`) :
+
+- **`_yus/session/restore_preview { sessionId, to, path? }`** :
+  - **sans `path`** : `{ available, reason?, files: [{ path, status }], modifiedOutside: [path], uncovered: [path] }` (~~`skipped`~~ renommé, réponse Q-P3) ;
+    - un instantané temporaire `T` de l'état actuel (le même que `avant-restauration`, non gardé) ;
+    - `files` = `diff-tree -r --name-status T <debut>` : ce que la restauration changerait. `M` modifié, `A` recréé, `D` supprimé ;
+    - `modifiedOutside` = `diff-tree -r --name-only <fin> T` ;
+    - `uncovered` (« non couverts ») = les fichiers au-delà du plafond par fichier, et les dépôts imbriqués ;
+    - sans instantané pour `to` (tour d'un binaire antérieur, ou feuille illisible) : `available: false`, avec la raison ;
+  - **avec `path`** : `{ before: <texte> | null, binary }` par `cat-file blob <debut>:<path>`, sous la variante. L'extension ouvre `vscode.diff` entre ce texte et le fichier sur disque. Elle réutilise `DiffDocuments` et `showDiff` (`extensions/vscode/src/ya/diff-files-vscode.ts:15-36`, `:64-72`, ticket 24).
+- **`_yus/session/restore { sessionId, to, files, conversation, force? }`** :
+  1. Refus repris de `_yus/session/rewind` (`crates/pa-daemon/src/acp/ya_turns/rewind.rs`), mêmes textes :
+     - session inconnue ;
+     - un tour en cours ;
+     - une autre fenêtre (réponse 9).
+     
+     Si `files` est demandé sans instantané : `-32602`, `data.details` « no snapshot for {to} ». Si les instantanés sont désactivés : `-32603`, avec la raison.
+  2. Si `files` :
+     - dans la file du workspace, instantané `avant-restauration/<n>` (gardé 30 jours : c'est l'annulation possible de la restauration). **Rangement (réponse Q-P6)** : ref `refs/ya/<session>/avant-restauration/<n>` du dépôt shadow `<dossier agent>/checkpoints/<empreinte>/`, `n` croissant par session, pris dans la file du workspace juste avant **chaque** restauration, même sans `force` ;
+     - si `modifiedOutside` n'est pas vide et que `force` est absent : refus `-32603`, « Files changed outside the agent since its last turn. », `data.modifiedOutside` ;
+     - sinon `read-tree -u --reset <debut>` avec l'index de la session ;
+     - les fichiers ignorés, hors plafond ou non suivis au moment du contrôle ne sont pas touchés : `--reset` ne retire que ce qui est dans l'index.
+  3. Si `conversation` : action `rewind { to, files }` du worker. Le texte D2 prend la phrase validée au §D, « Workspace files were restored to how they were at that point. », quand `files` a réussi.
+  4. **Fichiers seuls** : nouvelle action `restored` du worker, qui range un texte pour le modèle. Proposition, Q-P5 :
+     > `[workspace-restored]` The user restored the workspace files to how they were before an earlier turn; files may no longer match what this conversation shows.
+  5. **Ordre** : les fichiers d'abord, puis la conversation. Si le retour de la conversation échoue après la restauration des fichiers (course avec un réveil), le pont range le texte « fichiers seuls », pour que le modèle sache que les fichiers ont changé. La réponse porte l'erreur avec `data.filesRestored: true`.
+  6. Réponse : `{ restored: [path], uncovered: [path] }`.
+- **Contrôle « modifié hors de l'agent »** : il compare l'état actuel à la **dernière fin de tour**, celle de n'importe quel tour (§P.2). La ligne `[3]` le mesure à 64 à 108 ms (1 fichier détecté sur 1).
+
+~~**Aiguillage : +4 lignes upstream**~~ **Corrigé (réponse Q-P1) : zéro ligne upstream de plus**, le bras de `rewind` devient une garde (§P.11, §P.12.1). Proposition initiale, abandonnée : +4 lignes dans `crates/pa-daemon/src/acp/daemon.rs`, après le bras de `rewind` (`:1175-1178`), sur le modèle de `ya_history` (`:1149`) :
+```rust
+        // yusAgent (YA-18, ticket 43): workspace snapshots, preview and restore.
+        other if super::ya_turns::checkpoints::serves(other) => {
+            super::ya_turns::checkpoints::serve(other, &id, &params, link, state, &tx).await;
+        }
+```
+~~Variante à zéro ligne (Q-P1) : des paramètres facultatifs `files`, `force` et `preview` sur `_yus/session/rewind`, déjà aiguillé. C'est moins clair pour l'extension, et ça s'écarte des noms du §G.2.~~
+
+**Nettoyage (30 jours)**, dans le pont, sans ligne upstream :
+- au premier travail de la file d'un processus, une tâche de fond parcourt `<dossier agent>/checkpoints/*` ;
+- elle supprime les refs dont la date de commit a plus de 30 jours ;
+- elle supprime le dossier entier si le workspace noté n'existe plus, ou s'il ne reste aucune ref ;
+- puis `gc --prune=now --quiet` si des refs sont parties (`gc.auto=0` partout ailleurs) ;
+- la suppression d'une conversation (`_yus/sessions/delete`, fork, `crates/pa-daemon/src/acp/ya_history.rs:574-584`, `Bound` a `actual_cwd`) supprime ses refs et son index.
+
+**Bench des 2 s sur le binaire** (test 16, critère du CDC), nouveau `bench/tools/capture/ya43_restore_bench.py`, sur le modèle de `ya43_control.py` :
+- vrai moteur, vrai kernel ; le modèle est `server.py`, avec un nouveau scénario `ya43-restore` : le prompt `EDIT <k>` donne une cellule qui modifie 50 fichiers, en crée 20 et en supprime 10 ; `EDIT-MANY` en modifie 5 000 ;
+- workspace de 10 000 fichiers (générés comme à l'annexe), dans un dépôt git de l'utilisateur, avec un commit, une branche et un stash ;
+- 5 répétitions : prompt, `restore_preview`, puis `restore { files: true, conversation: true }`. Chronométré côté client, de l'envoi à la réponse ;
+- **conforme si** :
+  - chaque restauration (le maximum, pas la médiane) prend moins de 2 s, aussi pour `EDIT-MANY` ;
+  - les fichiers sont identiques à l'état d'avant le prompt (empreinte de chaque fichier) ;
+  - dans le dépôt de l'utilisateur, `rev-list --all --count`, `for-each-ref`, `stash list` et `status --porcelain` sont identiques à leur état d'avant le prompt ;
+- **coût de l'instantané de début** : blocs alternés `main` et branche, comme `ya43_rewindto_cost.py`. Délai côté client entre l'envoi de `session/prompt` et l'arrivée de la première requête au serveur. Proposition de seuil, Q-P2 : surcoût médian inférieur à 150 ms sur 10 000 fichiers (git seul, annexe : 91 à 130 ms sans changement). Le premier prompt d'un workspace neuf est mesuré à part ;
+- toujours `DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short`. Lancé par Claude Code sur le binaire de la branche, commande et sortie au ticket (règle 13).
+
+### P.7 Feuille non inscrite avant le prompt suivant (réponse 10, rouverte)
+
+**Pourquoi la rouvrir** : avec la PR 3, le défaut s'aggrave. Après une restauration des fichiers et de la conversation, une reprise avant le prompt suivant (« Relancer », démon redémarré) revient à l'ancienne branche (§A.2), alors que les fichiers sont au point de retour. Le modèle voit des tours qui ont modifié des fichiers revenus en arrière, sans aucun texte pour le dire.
+
+| Option | Effet | Coût |
+|---|---|---|
+| **L-a** garder (Unharnessed) | Défaut ci-dessus | Aucun |
+| **L-b** (recommandée) inscrire D2 au retour | L'action `rewind` écrit **tout de suite** les lignes custom (annonces `ya-resources-changed` remises, puis D2) **dans le fichier**, comme enfants de `to`. Même forme que `append_custom_message` (`crates/pa-daemon/src/session_custom.rs:17-31`) et `/refine`, mais **sans diffusion d'événement** : pas d'annonce remontrée par `ya_notice`. Puis le contexte est reconstruit depuis la branche, qui les contient. La feuille est inscrite : c'est la dernière ligne écrite | Fichiers du fork seulement (`ya_permissions/rewind.rs`, `ya_history.rs`). La forme du fichier ne change pas : les lignes `custom_message` existent déjà |
+| L-c `append_branch_summary` d'upstream | Inscrit la feuille avec un résumé de branche | Change ce que reçoit le modèle, et demande un résumé : écarté |
+
+**Détail de L-b, et écarts au code de la PR 1, à valider** :
+- Les lignes ne passent plus par `pending_next_turn` ni par la boîte du moteur (`ya_queue_rewind_rows`, `ya_permissions/rewind.rs:141-147`, `:168-170`). Elles sont dans la branche avant `rebuild_session_context`. T5a montre qu'une ligne custom de la branche atteint la requête (§I.5). Les tests T5 et T7 vérifient qu'il n'y a pas de doublon.
+- Un retour vers une ligne D2 (deux retours depuis le même point) n'écrit rien de plus : `branch_to` seul, un seul texte.
+- **Rejeu de `session/load`** : une ligne custom finale, sans prompt après, ouvre un tour de réveil (`ya_history.rs:270-276`). Le rejeu ignorera les lignes `ya-conversation-rewound` et `ya-workspace-restored` (fichier du fork). C'est le test T30.
+- Le texte est écrit au retour, et non plus au prompt suivant. Un retour sans prompt après laisse donc D2 en fin de branche.
+
+### P.8 Tests, rouges sur leur assertion avant le code
+
+Principe (leçon du §L) : tester ce qui est **écrit sur disque** (fichiers du workspace, objets et refs du dépôt shadow, fichier de session) et ce qui est **envoyé au modèle** (corps gardés par `ModelServer`, `crates/pa-cli/tests/ya_acp_rewind_e2e.rs`). Les tests sont écrits contre l'interface ACP et le profil existants, pour qu'ils **compilent avant le code et soient rouges sur leur assertion** (`-32601`, dossier absent, `ok` au lieu de `denied`). Ils sont poussés seuls d'abord, comme au push 9a.
+
+Rust :
+- **T19** texte du profil (`crates/pa-types/tests/ya_secret_guard_profile.rs`) : `Full` et `Browser` contiennent `(deny file-write* (subpath ".../checkpoints"))`. Rouge : absent. La partie `Variant::Checkpoints` (pas de refus, mais les identifiants et `LaunchServices` refusés) vient avec le code : elle ne compile pas avant.
+- **T19b** kernel réel (`crates/pa-core/tests/ya_secret_guard_kernel.rs`, CI macOS) : la cellule écrit `<agent>/checkpoints/x`. Rouge : `ok` au lieu de `denied`.
+- Nouveau `crates/pa-cli/tests/ya_acp_checkpoints_e2e.rs` (vrai binaire, `ModelServer` dont la réponse contient une cellule `python_repl`) :
+  - **T20** disque : après un prompt dont la cellule écrit, `refs/ya/<session>/debut/<rewindTo>` vise l'arbre d'avant le prompt, et `fin` celui d'après. Le test lit par `git ls-tree`. Rouge : dossier absent.
+  - **T21** (test 10 du §G.5) : écritures par `open()`, `bash("echo x > f")` et `edit()`, plus une suppression. `restore { files: true, conversation: false }` : octets identiques à l'état d'avant, fichier supprimé revenu, fichier créé retiré. Un fichier ignoré et un fichier de 8 Mio + 1 octet ne sont pas touchés. Rouge : `-32601`.
+  - **T22** (test 11) : un fichier écrit par le test après le tour figure dans `modifiedOutside`. `restore` sans `force` est refusé avec `data.modifiedOutside`. Avec `force` : restauré, et l'arbre de `avant-restauration/1` contient le fichier du test. Rouge.
+  - **T23** modèle : `restore { files, conversation }` puis prompt. La requête reçue contient la branche jusqu'à `to`, puis D2 **avec** la phrase des fichiers, une fois, puis le prompt. Fichiers seuls : `[workspace-restored]` une fois. Prompt système et tools identiques à la requête d'avant. Rouge.
+  - **T24** (test 9, critère 1) : le workspace est un dépôt git avec deux commits, une branche et un stash. Après deux prompts et une restauration : `rev-list --all --count`, `for-each-ref`, `stash list` identiques, et `status --porcelain` égal à celui d'avant le premier prompt. Rouge : `-32601`.
+  - **T25** (test 12) : T21 dans un dossier sans `.git`. Rouge.
+  - **T26** (test 13) : `PATH` sans git. L'aperçu donne `available: false` avec la raison, et `_yus/session/rewind` passe toujours. Rouge : `-32601`.
+  - **T27** (test 14) : le dossier agent du test est **dans** le workspace (variable du dossier agent), avec un `auth.json` sentinelle et un lien symbolique vers lui. Les instantanés réussissent ; aucun objet ne contient la sentinelle (`cat-file --batch-all-objects --batch`) ; une restauration n'écrit pas `auth.json`. Rouge.
+  - **T28** (test 15) : refs antidatées de 31 jours (`GIT_COMMITTER_DATE`) supprimées, refs récentes gardées, dossier d'un workspace disparu supprimé. Rouge.
+  - **T29** : `_yus/sessions/delete` supprime les refs et l'index de la session. Rouge.
+  - **T30** (L-b) : retour en arrière, puis `session/load` par un autre processus sans prompt entre les deux. Le rejeu montre la nouvelle branche sans tour de réveil, et la requête suivante porte D2 une fois. Rouge aujourd'hui : ancienne branche.
+  - **T31** plafonds : un workspace de 20 001 fichiers candidats donne `available: false`. Rouge.
+  - **T32** config isolée : `.gitattributes` `* filter=evil`, `HOME` du test avec un `.gitconfig` où `filter.evil.clean` crée un témoin, et un `.git/config` du projet avec `core.fsmonitor` vers un script témoin. Après un prompt : l'instantané existe et aucun témoin n'est créé. Rouge : pas d'instantané.
+  - **T33** refus : pendant un tour, avec une autre fenêtre ; textes de `rewind`. Rouge : `-32601`.
+  - **T34** dépôt imbriqué : `sub/.git` avec un fichier. Le fichier n'est pas dans l'arbre, et une restauration ne touche pas `sub/`. Rouge.
+- Unitaires du module (file série, clé `rewindTo`, plafond, liste par défaut seulement sans `.gitignore` racine) : `scripted_link`, comme `rewind.rs`.
+
+Extension :
+- **X1** `features().restore` vrai quand les deux méthodes sont servies. Le drapeau est ajouté à `Features` et `NO_FEATURES` (`extensions/vscode/src/protocol.ts:527-536`, `webview/ya-features.tsx:6-14`).
+- **X2** (agent factice) : clic sur un vrai `<button>` « Restore to here » sous le message. `userClick` ne vise que les `<button>` (`webview/ya-probe.ts:104-107`). Puis `restore_preview`, puis la boîte de confirmation qui liste `modifiedOutside` et propose « fichiers / conversation / les deux ». Puis `_yus/session/restore` avec les bons paramètres, et `vscode.diff` ouvert par fichier. Rouge : méthode refusée sur place.
+- **X3** (e2e vrai binaire) : trois prompts qui écrivent des fichiers, restauration au deuxième. Fichiers sur disque identiques, et requête au modèle conforme à T23.
+
+Capture : `compare.py --all` contre `main` donne `TOUT IDENTIQUE` (les instantanés ne touchent pas le préfixe), et `compare_frames.py` montre les trames inchangées.
+
+### P.9 Fichiers
+
+| Fichier | Statut | Changement |
+|---|---|---|
+| `crates/pa-types/src/platform/ya_guard.rs` | fork | §P.5, environ +17 −1 |
+| `crates/pa-daemon/src/acp/daemon.rs` | **upstream** | ~~**+4**~~ **Corrigé (Q-P1)** : 2 lignes du fork (bras de la PR 1) modifiées, aucune ligne upstream de plus (§P.12.1) |
+| `crates/pa-daemon/src/acp/ya_turns.rs` | fork | `mod checkpoints;` ; instantané de début dans `publish_prompt_start`, de fin dans `close` |
+| `crates/pa-daemon/src/acp/ya_turns/checkpoints.rs` et `checkpoints/{git,refs,restore}.rs` | nouveaux | file série, lancement de git, refs, purge, méthodes |
+| `crates/pa-daemon/src/acp/ya_turns/rewind.rs` | fork | contexte `{ leafId, sessionId, cwd }` lu par `leaf` |
+| `crates/pa-daemon/src/ya_permissions/rewind.rs` | fork | `leaf` étendu ; `rewind { to, files }` ; action `restored` ; L-b |
+| `crates/pa-core/src/session_engine/ya_resource_notice/rewind.rs` | fork | type et texte `ya-workspace-restored`, phrase des fichiers de D2 |
+| `crates/pa-daemon/src/acp/ya_history.rs` | fork | suppression des refs avec la conversation ; rejeu sans les lignes D2 (L-b) |
+| `crates/pa-types/tests/ya_secret_guard_profile.rs`, `crates/pa-core/tests/ya_secret_guard_kernel.rs`, `crates/pa-cli/tests/ya_acp_checkpoints_e2e.rs` | fork / nouveau | §P.8 |
+| `extensions/vscode/src/{ya/methods.ts,protocol.ts,chat.ts,view.ts}`, `webview/{Chat.tsx,ya-features.tsx}`, `test/fake-agent/fake-agent.mjs`, tests | fork | bouton, aperçu, confirmation, choix, diff |
+| `bench/tools/capture/ya43_restore_bench.py`, `server.py` (scénario `ya43-restore`) | nouveau / fork | §P.6 |
+| `docs/fork-changes.md`, `docs/usage.md` si besoin | doc | une ligne par fichier, lignes upstream numérotées |
+
+~~**Lignes upstream : +4** dans `daemon.rs` (ou 0, Q-P1).~~ **Corrigé (Q-P1)** : aucune ligne upstream de plus ; 2 lignes du fork modifiées dans `daemon.rs` (total du fichier depuis la PR 1 inchangé, +5 −1). Rien dans la couche providers, rien dans le worker upstream.
+
+**Préfixe** : prompt système, tools et `yaRequest` inchangés. Rien de volatil n'entre dans le prompt (ni chemin, ni date, ni état git). Les seuls textes nouveaux arrivent en fin d'historique, après une restauration (D2 avec sa phrase, ou `[workspace-restored]`).
+
+### P.10 Questions
+
+- **Q-P1** : aiguillage des deux méthodes `_yus/session/restore` et `restore_preview` (+4 lignes upstream, recommandé), ou paramètres en plus sur `_yus/session/rewind` (0 ligne) ?
+- **Q-P2** : instantané de début **attendu avant l'envoi du prompt au worker** (couvre la première cellule à coup sûr), avec un seuil de surcoût médian inférieur à 150 ms sur 10 000 fichiers mesuré sur le binaire ? Ou lancé en parallèle de l'appel au modèle, avec une course possible sur la première cellule (seule voie sans attente sans toucher le worker, réponse 3) ?
+- **Q-P3** : valeurs du §P.3 :
+  - 8 Mio par fichier ;
+  - 20 000 fichiers candidats, au-delà de quoi les instantanés sont désactivés pour ce workspace ;
+  - la liste par défaut seulement sans `.gitignore` à la racine ;
+  - pas de plafond de taille totale, ou les 512 Mio d'upstream ?
+- **Q-P4** : réponse 10 rouverte : **L-b** (D2 inscrit au retour, recommandé) ou L-a ? L-b change le code de la PR 1 (fichiers du fork seulement, §P.7).
+- **Q-P5** : texte pour une restauration des fichiers seuls : « `[workspace-restored]` The user restored the workspace files to how they were before an earlier turn; files may no longer match what this conversation shows. » ?
+- **Q-P6** : `force` écrase les changements faits hors de l'agent. Ils restent 30 jours dans `avant-restauration/<n>`. Faut-il un « annuler la restauration » dans l'extension dès cette PR (non recommandé : PR suivante si besoin), ou une simple mention dans la boîte de confirmation ?
+- **Q-P7** : premier instantané d'un workspace au premier prompt (1,2 à 1,5 s ici, environ 3 s sur 10 000 fichiers, une seule fois par workspace grâce à la copie d'index) : accepté ? L'alternative, le lancer à l'ouverture de la session, demande une accroche dans `handle_session_new` (upstream).
+- **Q-P8** : une seule PR (pont et extension, comme la PR 1), ou 3a (pont) puis 3b (extension) ?
+- **Q-P9** : écart au §G.2 : refs sous la clé du `rewindTo`, une seule ref `fin`, et l'instantané d'un point remplacé par un nouveau prompt depuis ce point (§P.4) ?
+
+### P.11 Réponses de Yusuf au §P.10 (27/11/2026)
+
+- **Q-P1 : zéro ligne upstream de plus si possible.** Le bras `_yus/session/rewind` de `daemon.rs` (lignes du fork, PR 1) devient une garde qui couvre les trois méthodes ; l'aiguillage se fait dans le module du fork. Sinon, +4 accepté. **Résultat : la garde tient, zéro ligne upstream de plus** (détail ci-dessous).
+- **Q-P2 : instantané de début attendu avant l'envoi du prompt.** Surcoût mesuré au bench (médiane et p95), seuil de 150 ms en médiane sur 10 000 fichiers.
+- **Q-P3** :
+  - 8 Mio par fichier ;
+  - 20 000 fichiers ;
+  - liste par défaut seulement sans `.gitignore` à la racine ;
+  - **plafond total de 512 Mio** ;
+  - au-delà d'un plafond de workspace : instantanés désactivés avec un message ;
+  - fichiers exclus par le plafond par fichier : listés comme **« non couverts »** dans l'aperçu.
+  
+  §P.3 et §P.6 corrigés.
+- **Q-P4 : L-b**, avec ces tests : D2 une seule fois dans la requête au modèle, en session vivante **et** après reprise ; préfixe intact (`compare.py`).
+- **Q-P5 : texte validé** : « `[workspace-restored]` The user restored the workspace files to how they were before an earlier turn; files may no longer match what this conversation shows. »
+- **Q-P6 : mention dans la boîte de confirmation** (3b), à condition qu'un instantané de l'état courant soit pris juste avant chaque restauration. **Rangement** : ref `refs/ya/<session>/avant-restauration/<n>` du dépôt shadow `<dossier agent>/checkpoints/<empreinte du workspace>/`, gardée 30 jours, prise dans la file du workspace avant chaque `read-tree`, avec ou sans `force` (§P.6, corrigé). « Annuler la restauration » : ticket à part.
+- **Q-P7 : accepté** (premier instantané payé au premier prompt, une fois par workspace).
+- **Q-P8 : 3a (pont) puis 3b (extension).** Contrôle manuel à 3b.
+- **Q-P9 : accepté.** Écart au §G.2 noté : refs sous la clé du `rewindTo`, une seule ref `fin`, et l'instantané d'un point remplacé par un nouveau prompt depuis ce point (§P.4).
+
+**Q-P1, la garde** (`crates/pa-daemon/src/acp/daemon.rs:1175-1178`, lignes de la PR 1) :
+```rust
+        // yusAgent (YA-18, ticket 43): going back to before a prompt.
+-        super::ya_turns::rewind::METHOD => {
+-            super::ya_turns::rewind::serve(&id, &params, link, state, &tx).await;
++        other if super::ya_turns::rewind::serves(other) => {
++            super::ya_turns::rewind::serve(other, &id, &params, link, state, &tx).await;
+         }
+```
+- La deuxième ligne fait 88 caractères : rustfmt la garde sur une ligne (largeur 100).
+- La garde reste à la même place, avant `"session/set_config_option"`. Les gardes placées avant elle sont des listes exactes de méthodes, et aucune ne contient `_yus/session/restore*` :
+  - `ya_history::serves` : `session/list` et la suppression (`ya_history.rs:582-584`) ;
+  - `ya_resources::serves` : les constantes des skills, du MCP et des réglages (`ya_resources.rs:58`) ;
+  - `ya_providers::serves` : `REQUESTS.contains` (`daemon/ya_providers.rs:168-170`).
+- `rewind::serves` couvre `_yus/session/rewind`, `_yus/session/restore` et `_yus/session/restore_preview`. `rewind::serve(method, …)` aiguille les deux dernières vers `ya_turns/checkpoints.rs`.
+- Le commentaire de `:1175` n'est pas touché.
+- **Bilan** : dans `daemon.rs`, deux lignes du fork modifiées. L'écart du fichier à upstream reste celui de la PR 1 (+5 −1 pour le ticket 43). `docs/fork-changes.md` (ligne du ticket 43 sur `daemon.rs`) est mis à jour en conséquence.
+
+**`a3e261c27`, les faits demandés** :
+- **Ce que le §P.1 voulait dire par « à reprendre »** : reprendre ses **options git** dans le module du fork des instantanés, pas cherry-picker le commit. Elles portent sur le git des gates autonomes, une autre fonction. Lignes exactes dans `a3e261c27:crates/pa-core/src/autonomous/gates.rs` :
+  - `:293-299`, `SNAPSHOT_GIT_OVERRIDES` : `-c core.fsmonitor=false` (`:295`), `-c diff.autoRefreshIndex=false` (`:297`), `--no-optional-locks` (`:298`) ;
+  - `:366` : `GIT_ALLOW_PROTOCOL=""` et `GIT_NO_LAZY_FETCH=1` ;
+  - `:319-324`, propres au `diff` des gates : `--no-ext-diff`, `--no-textconv`, `--submodule=short`, `--ignore-submodules=none`. Sans objet ici : les instantanés ne lancent pas de `diff` vers le worktree, seulement `diff-tree` entre deux arbres du dépôt shadow, sans textconv puisque aucune config n'en déclare.
+  
+  Le module des instantanés reprend `core.fsmonitor=false`, `GIT_ALLOW_PROTOCOL=""` et `GIT_NO_LAZY_FETCH=1`, et ajoute `core.hooksPath=/dev/null`, `core.excludesFile=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null` et `env_clear()` (§P.1). `diff.autoRefreshIndex` et `--no-optional-locks` ne s'appliquent pas : les instantanés **écrivent** leur propre index, dans le dépôt shadow, et il n'y a aucun hook.
+- **Le commit lui-même, s'il était cherry-pické** :
+  - fichiers : `.changes/security-autonomous-gates-git-safe-path.md` (nouveau, +1) et `crates/pa-core/src/autonomous/gates.rs` (+304 −32 : +77 −32 hors du module de tests, +227 dans `mod tests`), mesuré par `git show --numstat a3e261c27` ;
+  - il ne s'applique pas tel quel : `git show a3e261c27 | git apply --check` échoue à `gates.rs:393`, sur le seul hunk qui touche la ligne du fork du ticket 41 (`ya_guard::tokio(program)`, `gates.rs:403`). La résolution garde cette ligne et ajoute `.envs(envs.iter().copied())` ;
+  - aucun commit d'upstream sur `gates.rs` entre la base du fork et lui (`git log c83ac68b3..a3e261c27 -- gates.rs` ne montre que lui). Un seul commit après (`2eebeb4f9`, dépendances, +14 −2 sur ce fichier), non requis.
+- **Total upstream de la PR 3a** :
+  - **sans le cherry-pick** (plan) : 0 ligne upstream de plus, 2 lignes du fork modifiées dans `daemon.rs` ;
+  - **avec le cherry-pick** : en plus, le diff d'upstream lui-même dans `gates.rs` (+304 −32) et `.changes/…` (+1), qui **rapproche** le fork d'upstream au lieu de l'en écarter. L'écart propre au fork dans `gates.rs` reste 1 ligne (`ya_guard`).
+  - **Recommandation** : pas dans 3a. Les instantanés n'en dépendent pas, et la règle 1 limite le périmètre au ticket. Cherry-pick dans un ticket à part, comme `20b4ad74b` (réponse 11). À trancher (Q-P10).
+
+### P.12 Plan de code de 3a (pont), sans code
+
+#### P.12.1 Branche, périmètre, lignes upstream
+
+- **Branche de code** : `ya-43-instantanes-3a`, depuis `ya-43-instantanes` (avec ses commits de doc). PR vers `main`.
+  - Push A : les tests seuls, vus rouges sur leur assertion.
+  - Push B : le code.
+- **Dans 3a** : le pont, le worker (fichiers du fork), le profil, les tests, le bench.
+- **Hors de 3a** :
+  - l'extension (3b, avec le contrôle manuel) ;
+  - « annuler la restauration » (ticket à part, Q-P6) ;
+  - le cherry-pick de `a3e261c27` (Q-P10).
+- **Lignes upstream : aucune de plus.** Dans `daemon.rs`, les 2 lignes du fork de la garde (§P.11) sont modifiées. Rien dans la couche providers, rien dans le worker upstream. Seule fonction upstream appelée en plus : `persist_custom_row` (`crates/pa-daemon/src/worker/summary.rs:264-279`, déjà `pub(crate)`), sans modification.
+- **Préfixe** : prompt système, tools et `yaRequest` inchangés. Les textes nouveaux n'arrivent qu'après un retour ou une restauration, en fin d'historique.
+
+#### P.12.2 Coût du listage (plafonds de workspace, réponse Q-P3)
+
+Les plafonds de 20 000 fichiers et de 512 Mio demandent la liste des candidats et leur taille. Commande et sortie du lancement par Claude Code (27/11/2026, même machine) :
+
+```
+$ python3 -I docs/tickets/43-retour-arriere/listing_cost.py ~/Desktop/yusagent
+2286 chemins, 41.0 Mio ; ls-files ms [38, 17, 18, 15, 16, 15, 15] (médiane 16) ; lstat ms [4, 4, 4, 4, 3, 4, 3] (médiane 4)
+```
+
+- Environ 20 ms pour 2 286 fichiers.
+- **Estimation** par règle de trois : environ 90 ms sur 10 000 fichiers. Ajoutés aux 91 à 130 ms de l'instantané (annexe), ils mettraient en danger le seuil de 150 ms (Q-P2).
+- **Décision du plan** : le listage complet n'est fait qu'au **premier instantané d'un workspace dans le processus**. Ensuite, le compte et la taille sont tenus à jour à partir des seuls chemins changés (§P.12.3). Le bench le vérifie (médiane et p95).
+
+#### P.12.3 Le module `crates/pa-daemon/src/acp/ya_turns/checkpoints.rs` (nouveau)
+
+Déclaré dans `ya_turns.rs` (`pub(super) mod checkpoints;`, à côté de `:32-34`). Sous-modules :
+
+| Fichier | Rôle |
+|---|---|
+| `checkpoints.rs` | Registre du processus : id de session du démon → `Session { file_id, workspace }`, et chemin canonique → `Workspace`. Une file série par workspace (canal non borné et une tâche). API : `context`, `start`, `end`, `preview`, `restore`, `forget_session`, purge |
+| `checkpoints/git.rs` | Résolution de git et lancement (ci-dessous) |
+| `checkpoints/repo.rs` | Dépôt, `info/exclude`, index par session, instantané, refs |
+| `checkpoints/limits.rs` | Liste par défaut, plafonds, mise à jour incrémentale |
+| `checkpoints/restore.rs` | Aperçu, contenu d'un fichier, restauration |
+| `checkpoints/purge.rs` | 30 jours, workspaces disparus, suppression d'une conversation |
+
+**Lancement de git** (`git.rs`) :
+- **Résolution, une fois par processus** :
+  - premier `git` exécutable du `PATH` du pont ;
+  - sous macOS, s'il est `/usr/bin/git`, `ya_guard::command("/usr/bin/xcode-select").arg("-p")` doit réussir ;
+  - sinon : `Disabled(reason)`.
+  - Q-3a-1 : une variable de test, ~~`YUSAGENT_CHECKPOINTS_GIT`~~ **`PRIME_AGENT_TEST_CHECKPOINTS_GIT`** (corrigé, §P.13), qui remplace la résolution (T26).
+- **Commande** : `ya_guard::checkpoints_tokio(<git résolu>)` (§P.5), avec :
+  - `env_clear()`, puis `HOME`, `PATH`, `TMPDIR` et `LANG=C` repris du pont ;
+  - `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ALLOW_PROTOCOL=` (vide), `GIT_NO_LAZY_FETCH=1` ;
+  - `GIT_INDEX_FILE=<dépôt>/ya-index/<session>` ;
+  - `GIT_AUTHOR_*` et `GIT_COMMITTER_*` = `yusagent <checkpoints@yusagent.invalid>` ;
+  - arguments : `--git-dir=<dépôt> --work-tree=<workspace> -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.excludesFile=/dev/null -c gc.auto=0 -c core.autocrlf=false -c core.symlinks=true` ;
+  - `kill_on_drop(true)`, sortie lue en entier (`output()`) ;
+  - délai de 60 s par appel. **Estimation** : le premier instantané de 10 000 fichiers prend environ 3 s (annexe) ;
+  - dépassement ou code non nul : erreur, avec la sortie d'erreur tronquée à 500 caractères.
+
+**Dépôt** (`repo.rs`) :
+- `<dossier agent>/checkpoints/<16 premiers hex du SHA-256 du chemin canonique>/`, créé en 0700 puis `git init -q --bare`.
+- Sous macOS : `core.ignorecase=true` et `core.precomposeunicode=true` dans sa config. `init --bare` ne sonde pas le système de fichiers. **Limite** : un volume sensible à la casse aura `ignorecase=true`.
+- Fichier `workspace` : le chemin canonique, pour la purge.
+- **`info/exclude`**, réécrit à chaque instantané s'il a changé :
+  - le dossier agent, en chemin relatif, s'il est dans le workspace. C'est le cas de tous les tests e2e : le dossier agent du harnais est `home/.yusagent` et le workspace est `home` (`crates/pa-cli/tests/ya_acp_rewind_e2e.rs:453`, `:485-497`) ;
+  - les dépôts imbriqués repérés ;
+  - la liste par défaut (§P.3) **si `<workspace>/.gitignore` n'existe pas**.
+- **Index de session** : absent → copie de l'index le plus récent (`mtime`) de `ya-index/`, s'il y en a un.
+
+**Instantané** (`repo.rs`, `limits.rs`) : un travail de la file.
+1. Git désactivé, ou workspace désactivé dans ce processus : rien. Le message est écrit une fois sur la sortie d'erreur du pont.
+2. **Premier instantané du workspace dans le processus** :
+   - `ls-files -z --cached --others --exclude-standard`, puis `lstat` de chaque chemin ;
+   - les fichiers de plus de 8 Mio forment l'ensemble « non couverts » ;
+   - compte et taille des fichiers couverts ;
+   - au-delà de 20 000 fichiers ou de 512 Mio : workspace désactivé, avec message.
+3. `prev = write-tree` : l'état de l'index, c'est-à-dire le dernier instantané (rapide : arbre en cache).
+4. `add -A -- . ':(exclude,literal)<non couvert>'…`
+5. `diff-index --cached -z --raw --no-renames <prev>` donne les chemins ajoutés, modifiés ou supprimés, avec leur mode :
+   - mode `160000` (dépôt imbriqué) : `rm --cached -q --` et ajout à `info/exclude` ;
+   - ajoutés ou modifiés de plus de 8 Mio (`lstat`) : `rm --cached -q --` et ajout aux non couverts ;
+   - compte et taille mis à jour. Anciennes tailles par `ls-tree -z -l <prev> -- <chemins>`, seulement s'il y en a ;
+   - plafond franchi : workspace désactivé, avec message, et l'instantané n'est pas inscrit ;
+   - les non couverts sont relus par `lstat` : un fichier revenu sous 8 Mio sort de l'ensemble et sera pris au suivant.
+6. `write-tree`, `commit-tree` (message : la sorte d'instantané), `update-ref`.
+7. Un échec ne fait pas échouer le tour : ligne sur la sortie d'erreur du pont, aucune ref inscrite.
+
+**Refs** :
+- `refs/ya/<session>/debut/<rewindTo>` ;
+- `refs/ya/<session>/fin` ;
+- `refs/ya/<session>/avant-restauration/<n>`.
+
+`<session>` et `<rewindTo>` doivent tenir dans `[A-Za-z0-9_-]` (ids de session et d'entrée). Sinon, pas d'instantané pour ce point, et une ligne d'erreur.
+
+#### P.12.4 Accroches (fichiers du fork)
+
+- **`publish_prompt_start`** (`ya_turns.rs:254-271`) :
+  - `rewind::leaf` devient `rewind::context` → `{ leafId, sessionId, cwd }` ;
+  - `turnStart` est publié d'abord (`rewindTo` = `leafId`, comme aujourd'hui) ;
+  - puis `checkpoints::start(&context, leaf_id).await`, qui range le travail et attend sa fin ;
+  - puis retour, et `PromptAndWait` part (`daemon.rs:1641`) ;
+  - sans contexte (worker ancien, lecture en échec) : ni `rewindTo`, ni instantané.
+- **`AgentTurns::close`** (`ya_turns.rs:161-163`) : après le test `agent_end`, avant `self.running.take()?`, `checkpoints::end(daemon_session_id)`. Fonction **non async** : elle range le travail de fin dans la file sous un verrou std, sans attendre. Une session pas encore connue du registre (aucun prompt de ce client depuis le démarrage du pont) n'a pas d'instantané de fin.
+- **`ya_turns/rewind.rs`** :
+  - `serves(method)` : les trois méthodes ;
+  - `serve(method, …)` : `METHOD` → le code actuel ; les deux autres → `checkpoints::restore`. Les refus communs (session inconnue, tour en cours, autre fenêtre) sont factorisés.
+- **`ya_history.rs`** (fork) :
+  - suppression (`delete`, `:746`) réussie → `checkpoints::forget_session(bound.actual_cwd, target)` : `update-ref -d` des refs de `refs/ya/<target>/`, et suppression de `ya-index/<target>` ;
+  - rejeu : dans le bras `custom` (`:317-327`), les lignes `ya-conversation-rewound` et `ya-workspace-restored` sont sautées (`continue`), avant `pending_wake` (L-b, T30).
+
+#### P.12.5 Worker (fichiers du fork)
+
+`crates/pa-daemon/src/ya_permissions/rewind.rs` et `crates/pa-core/src/session_engine/ya_resource_notice/rewind.rs` :
+- **`leaf`** (`:92-100`) → `{ leafId, sessionId: store.session_id(), cwd: core.cwd }`.
+- **`rewind { to, files? }`**, avec L-b :
+  - sous le verrou, après `branch_to(to)` : les lignes remises (`ya-resources-changed`) puis la ligne D2 sont écrites dans le fichier par `persist_custom_row`, **sans** `broadcast_custom_row_locked`. Elles deviennent enfants de `to`, et la dernière est la feuille inscrite ;
+  - texte D2 : celui du §H, suivi de « Workspace files were restored to how they were at that point. » si `files` vaut vrai ;
+  - si `to` est déjà une ligne D2 (deux retours depuis le même point) : pas de nouvelle D2. Si `files` vaut vrai, une ligne `[workspace-restored]` à la place ;
+  - **retiré** : `pending_next_turn.retain/extend` (`:144-147`) et `ya_queue_rewind_rows` (`:168-170`). La branche relue (`branch_file_entries`) contient les lignes, et `rebuild_session_context` les donne au modèle ;
+  - goal, pause de file et `invalidation: rewind` : inchangés.
+- **`restored`** (nouvelle action, restauration des fichiers seuls) :
+  - refus pendant un tour (`WORKING`) ;
+  - sinon, la ligne `ya-workspace-restored` (texte validé à Q-P5) est écrite par `persist_custom_row`, puis le contexte est reconstruit depuis la branche, comme `rewind`. Le texte atteint le modèle et survit à une reprise (Q-3a-3) ;
+  - pas de note d'invalidation : le préfixe ne change pas, une ligne s'ajoute en fin.
+- **pa-core** : constantes `RESTORED_TYPE = "ya-workspace-restored"`, `RESTORED_TEXT`, `FILES_RESTORED` (la phrase de D2).
+
+#### P.12.6 Restauration et aperçu : comportement exact
+
+Le §P.6 tel que corrigé, avec ces précisions :
+- **Après une restauration des fichiers, `fin` = l'instantané de début restauré.** Sinon, l'aperçu suivant donnerait tous les fichiers restaurés comme modifiés hors de l'agent. Q-3a-2, test T22b.
+- **Ordre** : refus communs ; si `files`, dans la file :
+  1. `avant-restauration/<n>` ;
+  2. contrôle (`diff-tree <fin> <avant-restauration/n>`) ;
+  3. refus sans `force` ;
+  4. `read-tree -u --reset <debut>` ;
+  5. `fin` mis à jour.
+  
+  Puis, si `conversation` : `rewind { to, files }` ; sinon `restored`. Si le retour échoue après les fichiers : `restored`, puis erreur avec `data.filesRestored: true`.
+- **Textes** (anglais, comme ceux du pont) :
+  - `-32602`, `data.details` « no snapshot for {to} » ;
+  - `-32603` :
+    - « Workspace snapshots are off: git was not found. » ;
+    - « Workspace snapshots are off: the command line developer tools are not installed. » ;
+    - « Workspace snapshots are off in this folder: more than 20000 files. » ;
+    - « Workspace snapshots are off in this folder: more than 512 MiB of files. » ;
+  - `-32603` « Files changed outside the agent since its last turn. », avec `data.modifiedOutside`.
+- **Aperçu sans `path`** : `{ available, reason?, files: [{ path, status }], modifiedOutside, uncovered }`, calculé sur un instantané temporaire de l'état courant. Cet instantané est écrit dans l'index de session mais n'est pas gardé en ref : l'index de session reflète déjà l'état courant au prochain `add`.
+- **Aperçu avec `path`** : `{ before, binary }`. `cat-file -s` doit être au plus 8 Mio. Binaire : un octet NUL dans les 8 000 premiers octets (même règle que git). `before: null` si le fichier n'existait pas.
+
+#### P.12.7 Tests rouges prévus (3a)
+
+Push A, **tests seuls**. Chacun compile sur `main` et échoue sur son assertion :
+
+| Test | Fichier | Ce qu'il vérifie | Rouge avant le code |
+|---|---|---|---|
+| T19 | `crates/pa-types/tests/ya_secret_guard_profile.rs` | `Full` et `Browser` contiennent `(deny file-write* (subpath "/Users/u/.yus+agent/checkpoints"))` | `assert_has` : absent |
+| T19b | `crates/pa-core/tests/ya_secret_guard_kernel.rs` (workflow macOS) | La cellule écrit `<agent>/checkpoints/x` : `denied` | `ok` |
+| T20 | nouveau `crates/pa-cli/tests/ya_acp_checkpoints_e2e.rs` (moteur factice et vrai kernel, cellules comme `ya_acp_rewind_e2e.rs:79-82`) | `refs/ya/<session>/debut/<rewindTo>` vise l'arbre d'avant le prompt, `fin` celui d'après (`git ls-tree` par le test) | dépôt absent |
+| T21 | idem (dossier sans `.git` : celui du harnais) | `open()`, `bash("echo x > f")`, `edit()` et une suppression ; `restore { files: true, conversation: false }` → octets d'avant, fichier supprimé revenu, fichier créé retiré, fichier ignoré et fichier de 8 Mio + 1 octet (creux) intacts, ce dernier dans `uncovered` | `-32601` |
+| T22 | idem | Fichier écrit par le test après le tour : dans `modifiedOutside` ; `restore` sans `force` refusé avec la liste ; avec `force`, restauré, et `avant-restauration/1` contient le fichier du test | `-32601` |
+| T22b | idem | Aperçu juste après une restauration : `modifiedOutside` vide | `-32601` |
+| T23 | idem, `ModelServer` | `restore { files, conversation }` puis prompt : D2 avec la phrase des fichiers **une fois** dans la requête reçue (session vivante, Q-P4), rien des tours abandonnés, prompt système et tools identiques ; fichiers seuls : `[workspace-restored]` une fois | `-32601` |
+| T24 | idem | Workspace dépôt git (deux commits, une branche, un stash) : après deux prompts et une restauration, `rev-list --all --count`, `for-each-ref`, `stash list` identiques, et `status --porcelain` égal à celui d'avant le premier prompt | `-32601` |
+| T26 | idem | ~~`YUSAGENT_CHECKPOINTS_GIT`~~ `PRIME_AGENT_TEST_CHECKPOINTS_GIT=/nonexistent` (Q-3a-1, §P.13) : aperçu `available: false` avec le texte ; `_yus/session/rewind` passe | `-32601` |
+| T27 | idem (dossier agent dans le workspace, `auth.json` sentinelle et lien vers lui) et ~~nouveau `crates/pa-cli/tests/ya_secret_guard_checkpoints_e2e.rs` (enveloppe forcée, ajouté à `.github/workflows/ya-secret-guard-macos.yml`)~~ **corrigé (§P.13)** : un second test dans `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs` (enveloppe forcée, déjà lancé par le workflow macOS) | Instantanés réussis ; aucun objet ne contient la sentinelle (`cat-file --batch-all-objects --batch`) ; une restauration n'écrit pas `auth.json` | dépôt absent |
+| T28 | idem | Refs antidatées de 31 jours (`GIT_COMMITTER_DATE`, posées par le test) supprimées au premier prompt, refs récentes gardées, dossier d'un workspace disparu supprimé | refs encore là |
+| T29 | idem | `_yus/sessions/delete` d'une conversation : ses refs et son index supprimés | refs encore là |
+| T30 | `crates/pa-cli/tests/ya_acp_rewind_e2e.rs` (`ModelServer`) | **L-b, après reprise** : retour, puis `session/load` par un autre processus sans prompt entre les deux. Le rejeu montre la nouvelle branche, sans tour de réveil ; la requête suivante porte D2 **une fois** ; la dernière entrée du fichier est D2, enfant de `to` | ancienne branche rejouée |
+| T31 | `ya_acp_checkpoints_e2e.rs` | 20 001 fichiers vides, puis 65 fichiers creux de 8 Mio (520 Mio) : `available: false` avec le texte | `-32601` |
+| T32 | idem | `.gitattributes` `* filter=evil`, `.gitconfig` du `HOME` du test avec `filter.evil.clean` qui crée un témoin, et `.git/config` du projet avec `core.fsmonitor` vers un script témoin : l'instantané existe et aucun témoin n'est créé | dépôt absent |
+| T33 | idem | Refus pendant un tour et avec une autre fenêtre : textes de `rewind` | `-32601` |
+| T34 | idem | `sub/.git` avec un fichier : absent de l'arbre, `sub/` intact après une restauration | dépôt absent |
+| T35 (ajout de Yusuf, §P.13) | idem | Compte tenu à jour depuis les chemins changés : après un premier prompt (instantanés pris), le test crée à la main un dossier non ignoré qui fait passer le plafond de 20 000 fichiers ; au prompt suivant, pas d'instantané de début, aperçu `available: false` avec « Workspace snapshots are off in this folder: more than 20000 files. » | `-32601` |
+
+Contrôles, **verts avant et après** (non-régression de L-b, Q-P4) : T5a, T5b, T5c, T7 et T9 de `ya_acp_rewind_e2e.rs` (D2 une fois en session vivante, annonces remises une fois). Ils passent de la file au fichier sans changer d'assertion.
+
+Push B, **avec le code** (ne compilent pas avant) :
+- la partie `Variant::Checkpoints` de T19 ;
+- les unitaires de `checkpoints/` : liste par défaut seulement sans `.gitignore` racine, noms de ref, arithmétique incrémentale, file série (une fin rangée avant un début qui suit), registre ;
+- l'action `leaf` étendue (scripted_link).
+
+Banc et capture (règle 13, lancés par Claude Code sur le binaire de la branche, commande et sortie au ticket) :
+- `compare.py --all` contre `main` donne `TOUT IDENTIQUE` (Q-P4) ;
+- `ya43_rewind_check.py` et `ya43_control.py` restent CONFORME ;
+- `ya43_restore_bench.py` (§P.6) :
+  - surcoût de l'instantané de début (médiane et p95, seuil de 150 ms en médiane sur 10 000 fichiers) ;
+  - restauration (maximum sous 2 s, aussi pour 5 000 fichiers changés) ;
+  - dépôt de l'utilisateur intact.
+  
+  Au-delà d'un seuil : arrêt, chiffres au ticket.
+
+#### P.12.8 Fichiers de 3a
+
+| Fichier | Statut | Changement |
+|---|---|---|
+| `crates/pa-daemon/src/acp/daemon.rs` | upstream | 2 lignes du fork modifiées (garde, §P.11) |
+| `crates/pa-types/src/platform/ya_guard.rs` | fork | §P.5 |
+| `crates/pa-daemon/src/acp/ya_turns.rs` | fork | `mod checkpoints;`, accroches de début et de fin |
+| `crates/pa-daemon/src/acp/ya_turns/checkpoints.rs`, `checkpoints/{git,repo,limits,restore,purge}.rs` | nouveaux | §P.12.3 |
+| `crates/pa-daemon/src/acp/ya_turns/rewind.rs` | fork | `serves`, `serve(method…)`, `context` |
+| `crates/pa-daemon/src/acp/ya_history.rs` | fork | suppression, rejeu |
+| `crates/pa-daemon/src/ya_permissions/rewind.rs`, `crates/pa-daemon/src/ya_permissions.rs` | fork | `leaf` étendu, L-b, action `restored`, aiguillage |
+| `crates/pa-core/src/session_engine/ya_resource_notice/rewind.rs` | fork | constantes |
+| `crates/pa-daemon/src/agent_engine/ya_steer/rewind.rs` | fork | `ya_queue_rewind_rows` retiré s'il n'a plus d'appelant |
+| tests du §P.12.7, `.github/workflows/ya-secret-guard-macos.yml` | fork / nouveaux | |
+| `bench/tools/capture/ya43_restore_bench.py`, `server.py` (scénario `ya43-restore`) | nouveau / fork | |
+| `docs/fork-changes.md` | doc | une ligne par fichier ; ligne du ticket 43 sur `daemon.rs` mise à jour |
+
+#### P.12.9 Questions sur ce plan
+
+- **Q-3a-1** : variable de test ~~`YUSAGENT_CHECKPOINTS_GIT`~~ (nommée `PRIME_AGENT_TEST_CHECKPOINTS_GIT`, §P.13) (chemin de git) pour T26, plutôt qu'un `PATH` sans git, qui casserait les autres lancements du démon ?
+- **Q-3a-2** : après une restauration des fichiers, la ref `fin` prend l'instantané restauré, pour que l'aperçu suivant ne liste pas les fichiers restaurés comme modifiés hors de l'agent ?
+- **Q-3a-3** : la restauration des fichiers seuls écrit `[workspace-restored]` dans le fichier et reconstruit le contexte, comme L-b (le texte survit à une reprise) ?
+- **Q-P10** : cherry-pick de `a3e261c27` dans un ticket à part (recommandé), ou dans 3a (§P.11) ?
+
+### P.13 Réponses de Yusuf au §P.12.9 (27/11/2026)
+
+- **Q-3a-1 : d'accord pour une variable de test**, nommée comme les variables du fork, listée dans `docs/fork-changes.md`, lue par le démon seulement.
+  - **Nom** : `PRIME_AGENT_TEST_CHECKPOINTS_GIT`, au format des variables du fork (`PRIME_AGENT_SECRET_GUARD`, `PRIME_AGENT_TEST_PERMISSIONS`, `docs/fork-changes.md`). Le plan est corrigé (§P.12.3, §P.12.7, §P.12.9).
+  - **Lecteur** : le code des instantanés, dans la crate `pa-daemon` (`acp/ya_turns/checkpoints/git.rs`), qui tourne dans le processus du pont ACP (réponse 3). **Précision à valider** : c'est le pont du démon, pas le worker.
+  - Le kernel ne la reçoit pas : son environnement est une liste blanche de noms explicites (`crates/pa-core/src/kernel/env_allowlist.rs:66-72`), qui ne la contient pas.
+- **Q-3a-2 : d'accord** (`fin` = l'instantané restauré).
+- **Q-3a-3 : d'accord** (fichiers seuls : ligne écrite et contexte reconstruit).
+- **Q-P10 : ticket à part pour `a3e261c27`.**
+- **Test ajouté au push A, T35** : compte et taille tenus à jour depuis les chemins changés. Un changement hors de l'agent entre deux tours (un gros dossier non ignoré créé à la main) fait passer un plafond de workspace et désactive les instantanés avec le message. Rouge sur son assertion avant le code (§P.12.7, ligne ajoutée).
+
+**Écart au plan, signalé** : T27 sous enveloppe va dans un second test de `crates/pa-cli/tests/ya_secret_guard_acp_e2e.rs`, déjà lancé par le workflow macOS (`.github/workflows/ya-secret-guard-macos.yml:56-58`), plutôt que dans un nouveau fichier ajouté au workflow : même harnais, pas de changement de workflow (§P.12.7 corrigé).
+
+**Branche** : `ya-43-instantanes-3a` part de `ya-43-instantanes`, c'est-à-dire de `main` (`c6f0b8278`) avec les commits de doc du ticket, dont ce §P.13.
+
+### P.14 PR 3a (PR #98) : relevé du push A (27/11/2026)
+
+Push A : `0deef11f0` sur `ya-43-instantanes-3a` (depuis `ya-43-instantanes` : `main` à `c6f0b8278` et les commits de doc du ticket). PR #98 ouverte prête (non brouillon), comme la PR #97 au push 1, pour que la CI complète tourne. Tests et squelette : `_yus/session/restore` et `_yus/session/restore_preview` arrivent à `ya_turns/checkpoints.rs` par le bras de `rewind` et sont répondues `-32601`, comme sur `main`.
+
+**Lignes upstream réelles : aucune de plus.** Le seul fichier upstream touché est `crates/pa-daemon/src/acp/daemon.rs`, 2 lignes modifiées (`git diff main..0deef11f0 -- crates/pa-daemon/src/acp/daemon.rs`) :
+```
+-        super::ya_turns::rewind::METHOD => {
+-            super::ya_turns::rewind::serve(&id, &params, link, state, &tx).await;
++        other if super::ya_turns::rewind::serves(other) => {
++            super::ya_turns::rewind::serve(other, &id, &params, link, state, &tx).await;
+```
+Ce sont des lignes du fork : `git blame -L 1175,1178 main` les attribue à `53a0b6ebf` (PR 1, push 1). L'écart du fichier pour le ticket 43 reste +5 −1. Les autres fichiers (`git diff --stat main..0deef11f0 -- crates`, 9 fichiers, +1 615 −5) sont des fichiers du fork ou des tests du fork.
+
+| Run | Résultat |
+|---|---|
+| `ci` 46056573461 | `fmt`, `check + clippy (workspace)` (tests compris, Clippy pédant), `windows cross-check + clippy`, `deny`, `historical upgrade packaging` verts. Shards 1, 3, 4, 5, 6 et 7 verts. **Shard 2/8** : `ya_acp_checkpoints_e2e`, 0 réussi, 15 en échec. **Shard 8/8** : `ya_acp_rewind_e2e`, 13 réussis, 1 en échec ; `ya_secret_guard_profile`, 2 réussis, 1 en échec. **`runtime suite (python 3.11)`** : 1 erreur, **inattendue** (ci-dessous) |
+| `ya-secret-guard-macos` 46056573442 | 3 rouges attendus (ci-dessous) ; `ya_process_launch_scan`, `ya_browser_scheme` et le premier test de `ya_secret_guard_acp_e2e` verts |
+| `ya-extension` 46056573627 | vert (le push ne touche pas l'extension) |
+| `ya-build-macos-arm64` 46056566834 | vert |
+| `windows-runtime-triage`, `codebase-health`, `Contribution gate` | verts |
+| `Changelog fragment` 46056573453 | en échec, attendu : le fragment arrive au push B |
+
+**Rouges, chacun sur son assertion** :
+
+| Test | Job | Ligne | Assertion |
+|---|---|---|---|
+| T20, T22, T27, T28, T29, T32, T34, T35 | shard 2/8 | `ya_acp_checkpoints_e2e.rs:194` (`wait_repo`) | « no checkpoints repository for /tmp/.tmp… under /tmp/.tmp…/.yusagent/checkpoints » : aucun dépôt shadow |
+| T21, T23, T24 | shard 2/8 | `:250` (`result_of`) | « the restore … is answered: {… "code":-32601, "message":"\"Method not found\": _yus/session/restore" …} » |
+| T26, T31 (a) et (b) | shard 2/8 | `:250` | « the preview is answered: {… "code":-32601 … _yus/session/restore_preview …} » |
+| T33 | shard 2/8 | `:1258` | `left == right` : `-32601` au lieu de `-32603` |
+| T30 | shard 8/8 | `ya_acp_rewind_e2e.rs:1096` | « the fixed text is in the file from the rewind on, the child of "df48ad79": {"type":"message", … "role":"assistant", … "answer 2" …} » : la dernière entrée est encore la réponse du tour abandonné |
+| T19 | shard 8/8 et macOS | `ya_secret_guard_profile.rs:35` | « missing "(deny file-write* (subpath \"/Users/u/.yus+agent/checkpoints\"))" in the profile » |
+| T19b | macOS | `ya_secret_guard_kernel.rs:211` | « the kernel reached what the guard refuses: write into the checkpoints dir: "ok" » : seule ligne non refusée, les autres accès restent `denied` |
+| T27 sous l'enveloppe | macOS | `ya_secret_guard_acp_e2e.rs:259` | « no snapshot refs/ya/01a21e81-3ed3-77e2-96b1-886795ea2298/fin for /private/var/folders/… » |
+
+**Préconditions passées** :
+- T21 : la cellule a tourné (`keep.txt` vaut `v2` avant la restauration). Que `edit()` et `bash()` aient écrit n'est pas encore observé : le test s'arrête au refus de la restauration.
+- T33 : le refus arrive pendant la cellule lente (fichier `started` écrit).
+- T26, T31 : deux prompts répondus avant l'aperçu.
+
+**Verts attendus, verts** : les 13 tests existants de `ya_acp_rewind_e2e` (T1 à T14, dont T5a, T5b, T5c, T7 et T9, contrôles de L-b), les 2 tests existants du profil, les autres contrôles de l'enveloppe macOS, et tous les autres tests de la CI.
+
+**Inattendu, bloquant d'après la règle** : `runtime suite (python 3.11)`, job 140700477478.
+- Échec : `test_bash.BashTest.test_journal_partial_writes_complete_the_record` (`prime-agent-runtime/test/test_bash.py:1370`, `json.decoder.JSONDecodeError: Extra data: line 2 column 1 (char 132)`) ; 823 tests, 1 erreur.
+- Le push ne touche aucun fichier Python (`git diff --stat c6f0b8278 0deef11f0 -- prime-agent-runtime` : vide).
+- Ce test n'est pas listé en « Instabilité probable » dans `docs/fork-changes.md`, et l'échec n'est pas une panne d'infrastructure.
+- **Pas de relance** (règle de la boucle de dev) : à trancher par Yusuf.
+- Pour mémoire, sans lien avec ce test : le run `ci` de `main` sur `c6f0b8278` (46021181469, après le merge de la PR #97) est rouge sur 7 shards. Ils ont échoué à l'amorçage du kernel venv (`lxml 6.2.0` construit sans `libxml2`, « Failed to set up the Python kernel runtime »), avant tout test.
+
+**Écart au plan, signalé** : T33 ne couvre que le refus pendant un tour. Le refus « autre fenêtre » passe par le même code que `rewind` (factorisé, §P.12.4). Le provoquer en e2e demande un second client qui répond aux permissions. Il sera couvert par un test unitaire au push B (`scripted_link`, comme T6 de la PR 1).
+
+### P.15 PR 3a (PR #98) : relevé des push B, B2 et B3, bench des 2 s, arrêt sur le surcoût (27/11/2026)
+
+**Commentaire sur la PR** (consigne de Yusuf) : `runtime suite` est passé sur `a26d528b4` (`Ran 823 tests`, `OK`, job 140706872002). Commentaire posté : https://github.com/YusufByn/yusagent/pull/98#issuecomment-7227014997 (échec unique au push A, test upstream, candidat à « Instabilité probable », à surveiller).
+
+**Run de `main` rouge** (question de Yusuf) :
+- run `ci` **46021181469** (push de `c6f0b8278`, 15:01 UTC) ;
+- 7 shards en échec (2 à 8), tous sur la même erreur à l'installation du kernel venv : `Building lxml version 6.2.0`, « Please make sure the libxml2 and libxslt development packages are installed », puis « Failed to set up the Python kernel runtime » ;
+- le shard 1 a installé `lxml==6.2.0` sans le construire (15:03:36). Les 7 autres ont échoué entre 15:03:20 et 15:03:32 ;
+- **depuis, aucun autre run ne montre cette erreur** : les 8 shards des runs du push A (46056573461, 19:27) installent `+ lxml==6.2.0` ; `grep` de « libxml2 and libxslt development packages » sur leurs journaux : 0 ;
+- les seuls runs `ci` depuis sont ceux de cette PR ;
+- **hypothèse non vérifiée** : la roue de `lxml 6.2.0` n'était pas encore disponible pour ces jobs.
+
+**Push B** (`02d819c6c`, implémentation du §P.12) :
+- run `ci` 46061223617 ;
+- Clippy rouge, 4 erreurs dans mon code : `format!` dans un `collect` (`checkpoints/repo.rs:405`, `checkpoints.rs:292`) et deux déréférencements explicites (`checkpoints.rs:205`, `:218`) ;
+- shard 2 : 15 tests sur 17 du fichier des instantanés verts, dont T33b. Rouges :
+  - T34 : `sub` encore dans l'arbre. `git rm --cached` n'avait pas retiré le gitlink ;
+  - T21 : `edit()` n'avait pas écrit ;
+- shard 8 vert (T30, T19), `ya-secret-guard-macos` vert (T19, T19b, T27 sous l'enveloppe), build macOS vert.
+
+**Push B2** (`749f22906`) :
+- Clippy corrigé ;
+- gitlinks et fichiers trop gros retirés de l'index par `update-index --force-remove -z --stdin` ;
+- exclusion des dépôts imbriqués écrite dès le listage, avant `add` ;
+- T21 note l'exception de `edit()`. Run `ci` 46063084195 : seul T21 rouge, avec « RuntimeError: Python skill edit is unavailable in this kernel. Import error: No module named 'edit' ».
+
+**Push B3** (`27a96578a`) :
+- T21 : le skill `edit` sur le `PYTHONPATH` du kernel, comme `ya_prompt_v2_e2e.rs:55-70`. Un binaire de test n'a pas de `skills/` empaqueté à côté de lui ; le binaire du bench en a un ;
+- run `ci` **46064701404 vert** (17 jobs) ; `gh pr checks 98` : 29 réussis, 4 sautés ;
+- T21 montre maintenant les écritures de `bash()` et `edit()` en prompt v2 jusqu'à la restauration (demande de Yusuf).
+
+**Lignes upstream réelles** : aucune de plus. Le seul fichier de la PR présent chez upstream est `crates/pa-daemon/src/acp/daemon.rs` (2 lignes du fork modifiées, §P.14). Vérifié par `git cat-file -e upstream/main:<fichier>` sur chaque fichier de `git diff --name-only main..HEAD -- crates`.
+
+**Écarts au plan, signalés** :
+- `ya_guard.rs` : +24 −1 au lieu d'environ +17 −1 (§P.5) : 3 lignes de doc de module et la doc des nouveaux éléments ;
+- T33b en e2e, avec un second client attaché par le socket du démon (comme I2), au lieu d'un test unitaire (§P.14). Un test unitaire de `admit` demanderait une fonction d'aide de test dans `daemon.rs` (upstream) : les champs de `HostedSession` ne sont pas visibles hors du fichier ;
+- retrait de l'index par `update-index --force-remove` au lieu de `rm --cached` (§P.12.3) ;
+- relais `ya_queue_rewind_rows` du démon supprimé (sans appelant avec L-b). Celui du moteur reste, public et testé.
+
+**Bench des 2 s sur le binaire** (`bench/tools/capture/ya43_restore_bench.py`, scénario `ya43-control` avec les cellules `BENCH-EDIT` et `BENCH-MANY` ajoutées à `server.py`) :
+- binaire de `749f22906`, run `ya-build-macos-arm64` 46063077474. Le code produit est identique à `27a96578a` : B3 ne change qu'un test (`git diff --stat 749f22906 27a96578a` : 1 fichier, le test) ;
+- `main` : run 46021226712 (`c6f0b8278`) ;
+- enveloppe active, lancé par Claude Code le 27/11/2026, macOS 27.0.1, Apple M5.
+
+```
+$ DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/ya43_restore_bench.py --binary <749f22906>/yusagent --main <c6f0b8278>/yusagent --out <dossier neuf> --files 10000 --reps 5 --blocks 2 --prompts 10
+rép. 1 : cellule a changé le workspace True ; aperçu 126 ms (80 fichiers) ; restauration 223 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. 2 : cellule a changé le workspace True ; aperçu 155 ms (79 fichiers) ; restauration 253 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. 3 : cellule a changé le workspace True ; aperçu 160 ms (80 fichiers) ; restauration 269 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. 4 : cellule a changé le workspace True ; aperçu 121 ms (80 fichiers) ; restauration 218 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. 5 : cellule a changé le workspace True ; aperçu 155 ms (80 fichiers) ; restauration 250 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+rép. many : cellule a changé le workspace True ; aperçu 1607 ms (5000 fichiers) ; restauration 771 ms ; fichiers identiques True ; dépôt de l'utilisateur identique True
+premier prompt (instantané à froid) : 3656 ms ; restauration BENCH-EDIT : médiane 250 ms, max 269 ms
+bloc 0 main : [33, 48, 65, 60, 50, 38, 31, 35, 34, 34]
+bloc 0 branche : [210, 211, 212, 212, 210, 211, 216, 212, 213, 213]
+bloc 1 main : [29, 28, 28, 28, 28, 27, 27, 27, 27, 27]
+bloc 1 branche : [210, 212, 212, 210, 222, 211, 211, 210, 212, 215]
+surcoût : main médiane 30 ms (p95 65) ; branche médiane 212 ms (p95 222) ; écart des médianes 182 ms
+restaurations_sous_2_s : oui
+restaurations_acceptees : oui
+cellules_ont_change_le_workspace : oui
+workspace_restaure_a_l_identique : oui
+depot_utilisateur_intact : oui
+surcout_median_sous_150_ms : NON
+```
+
+Diagnostic du surcoût, la même mesure avec 2 s entre les prompts (option `--pause`, ajoutée pour ce diagnostic) :
+
+```
+$ DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/ya43_restore_bench.py --binary <749f22906>/yusagent --main <c6f0b8278>/yusagent --out <dossier neuf> --files 10000 --blocks 2 --prompts 10 --pause 2 --overhead-only
+bloc 0 main : [56, 52, 54, 52, 55, 53, 43, 51, 27, 53]
+bloc 0 branche : [155, 140, 153, 154, 148, 138, 152, 163, 154, 140]
+bloc 1 main : [53, 53, 39, 52, 50, 52, 52, 52, 52, 46]
+bloc 1 branche : [147, 154, 153, 147, 148, 152, 152, 152, 155, 154]
+surcoût : main médiane 52 ms (p95 56) ; branche médiane 152 ms (p95 163) ; écart des médianes 100 ms
+surcout_median_sous_150_ms : oui
+CONFORME
+```
+
+Mesures d'appoint, git seul (lancées par Claude Code, scripts dans le dossier temporaire du job ; **ce sont des estimations** pour choisir la suite, pas la mesure du critère) :
+- coût d'un lancement : `git --version` 3,7 ms, sous `sandbox-exec` avec un profil du même type 8,8 ms (médianes sur 20) ;
+- 10 000 fichiers sans changement, sans enveloppe : `add -A` médiane 21 ms ; l'instantané entier (6 lancements : `write-tree`, `add`, `diff-index`, `write-tree`, `commit-tree`, `update-ref`) médiane 79 ms. Avec `core.untrackedCache=true` : 19 et 65 ms.
+
+**Ce que disent les chiffres** :
+- **Restauration : critère tenu largement.**
+  - 218 à 269 ms pour un tour de 80 fichiers (5 répétitions), 771 ms pour 5 000 fichiers changés, sur 10 000 fichiers et enveloppe active ;
+  - chaque fois, le workspace revient à l'identique (empreinte de chaque fichier) et le dépôt de l'utilisateur garde ses commits, refs, stash et statut ;
+  - aperçu : 121 à 160 ms (80 fichiers), 1 607 ms (5 000 fichiers) ;
+  - premier prompt d'un workspace neuf : 3 656 ms (premier instantané, à froid, une fois par workspace, Q-P7).
+- **Surcoût de l'instantané de début : seuil de Q-P2 (médiane inférieure à 150 ms) dépassé quand les prompts s'enchaînent sans pause, tenu avec une pause** :
+  - **sans pause** : écart des médianes 182 ms (branche 212, p95 222 ; `main` 30, p95 65) ;
+  - **avec 2 s de pause** : écart 100 ms (branche 152, p95 163 ; `main` 52, p95 56) ;
+  - les 82 ms de différence viennent de l'instantané de fin du tour précédent : il est dans la même file, et l'instantané de début l'attend quand le prompt suivant arrive tout de suite. Vérifié par la mesure avec pause ;
+  - les 100 ms restants sont l'instantané lui-même : 6 lancements de git sous l'enveloppe et le travail de git. **Estimation** à partir des mesures d'appoint.
+
+**Arrêt (règle du §P.12.7)** : seuil dépassé dans la mesure sans pause. Question Q-3a-4 ci-dessous.
+
+- **Q-3a-4** : quel cas fait foi pour le seuil de 150 ms ?
+  - (a) **Prompt envoyé après une pause** (2 s, cas d'un message tapé à la main) : tenu, 100 ms.
+  - (b) **Prompts enchaînés** : 182 ms. Pour le tenir :
+    - réduire les lancements de git de l'instantané (6 vers 3 ou 4 : arbre précédent gardé en mémoire ; chemins changés lus dans la sortie de `add -A -v` au lieu de `diff-index` et `cat-file`). Gain **estimé** de 20 à 40 ms par instantané, sur le début et sur la fin ;
+    - et/ou `core.untrackedCache=true` (−14 ms git seul, mesure d'appoint).
+    
+    À coder et à remesurer, sans garantie de passer sous 150 ms dans ce cas ; fichiers du fork seulement.
+  - (c) Seuil revu.
+
+**Réponse de Yusuf (Q-3a-4) : (a)**, le prompt envoyé après une pause fait foi : seuil tenu à 100 ms.
+- **Limite notée** : jusqu'à environ 180 ms si un prompt part juste à la fin du tour précédent (l'instantané de fin est dans la même file).
+- **Idée pour plus tard, pas de code maintenant** : quand un prompt arrive pendant que l'instantané de fin attend, n'en prendre qu'un, rangé sous les deux refs.
+
+### P.16 Après la réponse Q-3a-4 : ajout au plan de la 3b, relance de `main`, contrôle manuel court de 3a (27/11/2026)
+
+**Ajout au plan de la 3b (demande de Yusuf)** : un état visible dans l'extension pendant le premier instantané d'un workspace. Mesuré à 3 656 ms sur 10 000 fichiers (§P.15, binaire `749f22906`) ; le prompt n'est envoyé au worker qu'après. Le pont ne signale rien aujourd'hui pendant cette attente : le moyen (trame du pont, ou état déduit par l'extension entre `turnStart` et la première mise à jour) est à fixer au plan de la 3b.
+
+**Relance des jobs en échec du run 46021181469 de `main`** (faite par Yusuf) : **verte**.
+- Tentative 2 du run 46021181469 : `conclusion=success`. Les 8 shards, `check + clippy`, `windows cross-check + clippy`, `fmt`, `deny`, `runtime suite`, `test summary` et `trust gate audit` sont en succès (`gh run view 46021181469 --json attempt,conclusion,jobs`).
+- Dans le shard 3/8 de la relance (job 140737208706), `lxml` s'installe sans être construit (`+ lxml==6.2.0`), et l'erreur `libxml2` est absente (0 occurrence). Ça va dans le sens de l'hypothèse du §P.15 (roue pas encore disponible au premier essai), sans la prouver.
+
+**Contrôle manuel court de 3a avant merge**, sur le binaire de la PR (build `ya-build-macos-arm64` 46064694779, `27a96578a`, dernier commit qui touche le code : le code produit n'a pas changé depuis). Le contrôle passe par l'extension, donc par le pont : les tours du TUI ne prennent pas d'instantané (réponse 3).
+
+0. **Binaire** :
+   ```
+   D=$(mktemp -d) && gh run download 46064694779 --repo YusufByn/yusagent --dir "$D" \
+     && tar -xzf "$D"/yusagent-*/prime-agent-*.tar.gz -C "$D" && "$D"/yusagent --version
+   ```
+   Dans VS Code : réglage `"yusagent.binaryPath": "<D>/yusagent"`, puis « Developer: Reload Window ». Si le pont refuse parce que le démon d'une autre version tourne encore (ticket 29) : `"$D"/yusagent shutdown`, puis recharger.
+1. **Avant**, dans un projet git (idéalement avec un stash et une branche), dans le terminal à sa racine :
+   ```
+   E=$(python3 -c 'import hashlib, os; print(hashlib.sha256(os.path.realpath(os.getcwd()).encode()).hexdigest()[:16])')
+   { git status --porcelain; git for-each-ref; git stash list; } > /tmp/ya43-avant.txt
+   ls -ld ~/.yusagent/checkpoints/$E
+   ```
+   Le dossier est absent avant un premier essai sur ce projet.
+2. **Chat normal** dans l'extension : nouvelle conversation, un premier message qui ne demande pas d'écrire de fichier. Noter le délai entre l'envoi et le début de la réponse. Puis un second message, et noter son délai. L'écart donne une idée du premier instantané : environ 1,2 à 1,5 s pour les 2 285 fichiers de `~/Desktop/yusagent` (git seul, §P.3), 3,7 s pour 10 000 fichiers (§P.15).
+3. **Dépôt shadow** :
+   ```
+   ls -ld ~/.yusagent/checkpoints/$E                     # drwx------
+   cat ~/.yusagent/checkpoints/$E/workspace              # le chemin du projet
+   git --git-dir ~/.yusagent/checkpoints/$E for-each-ref --format='%(refname) %(committerdate:iso)' refs/ya/
+   ```
+   Attendu : une ref `refs/ya/<conversation>/debut/<id>` par message et une ref `refs/ya/<conversation>/fin`.
+4. **Projet inchangé** :
+   ```
+   { git status --porcelain; git for-each-ref; git stash list; } > /tmp/ya43-apres.txt
+   diff /tmp/ya43-avant.txt /tmp/ya43-apres.txt && echo identique
+   ```
+
+**Lancé d'abord par Claude Code sur le binaire (règle 13)**, au niveau du pont : `bench/tools/capture/ya43_3a_control.py`. Il rejoue les étapes 1 à 4 sur un projet git de contrôle (deux commits, une branche, un stash, un fichier non suivi), avec le serveur de capture pour modèle (aucun vrai modèle) et l'enveloppe active. Le dossier agent est celui du cas (`<travail>/agent-3a`), pas `~/.yusagent`.
+
+```
+$ DO_NOT_TRACK=1 PI_OFFLINE=1 PI_CACHE_RETENTION=short python3 -I bench/tools/capture/ya43_3a_control.py --binary <27a96578a>/yusagent --out <dossier neuf>
+1. avant : status '?? notes.txt\n' ; refs 3 ; stash 'stash@{0}: WIP on master: 7db3ee7 deux' ; commits 4
+2. premier prompt 282 ms (premier instantané compris) ; deuxième 198 ms
+3. dépôt shadow /Users/yusufyuss/.claude/jobs/3acd71ae/tmp/ya43work/agent-3a/checkpoints/ebf95f1782538e4f : existe True ; mode 0o700 ; workspace '/Users/yusufyuss/.claude/jobs/3acd71ae/tmp/ya43work/projet' ; refs ['refs/ya/01a21ed3-f6a1-7442-a48e-3c2c837abf0e/debut/ac554ac3', 'refs/ya/01a21ed3-f6a1-7442-a48e-3c2c837abf0e/debut/fcac7e5b', 'refs/ya/01a21ed3-f6a1-7442-a48e-3c2c837abf0e/fin']
+4. après : status '?? notes.txt\n' ; refs 3 ; stash 'stash@{0}: WIP on master: 7db3ee7 deux' ; commits 4
+depot_shadow_cree : oui
+fichier_workspace_nomme_le_projet : oui
+refs_des_deux_prompts_et_fin : oui
+projet_git_inchange : oui
+CONFORME
+```
+
+- Le premier prompt (282 ms) comprend le premier instantané d'un projet de 3 fichiers. Le délai de l'étape 2 dépendra de la taille du projet de Yusuf et du modèle.
+- Rien n'est affiché dans l'extension pendant le premier instantané : c'est l'objet de l'ajout à la 3b ci-dessus.
 
 ## Annexe : mesure préliminaire, git seul
 
